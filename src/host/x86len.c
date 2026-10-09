@@ -119,7 +119,9 @@ static UINT X86TwoByteEntry(BYTE opcode)
 static UINT X86ModrmLength(const BYTE *bytes, UINT offset, UINT length, INT isAddress32)
 {
     BYTE modrm;
-    UINT mode, registerMemory, modrmLength = 1;
+    UINT mode;
+    UINT registerMemory;
+    UINT modrmLength = 1;
 
     if (offset >= length)
         return 0;
@@ -161,8 +163,13 @@ static UINT X86ModrmLength(const BYTE *bytes, UINT offset, UINT length, INT isAd
 
 UINT X86InstructionLength(const BYTE *bytes, UINT offset, UINT length, INT isDefault32)
 {
-    UINT start = offset, prefixCount = 0, entry, immediateSize;
-    INT isOperand32 = isDefault32, isAddress32 = isDefault32, registerField = -1;
+    UINT start = offset;
+    UINT prefixCount = 0;
+    UINT entry;
+    UINT immediateSize;
+    INT isOperand32 = isDefault32;
+    INT isAddress32 = isDefault32;
+    INT registerField = -1;
     BYTE opcode;
 
     while (offset < length && X86IsPrefix(bytes[offset]))
@@ -264,7 +271,9 @@ UINT X86InstructionLength(const BYTE *bytes, UINT offset, UINT length, INT isDef
 INT X86IsInstructionStart(const BYTE *bytes, UINT offset, UINT length, INT isDefault32)
 {
     UINT span = (offset < X86_BOUNDARY_SPAN) ? offset : X86_BOUNDARY_SPAN;
-    UINT streamStart, tries = 0, votes = 0;
+    UINT streamStart;
+    UINT tries = 0;
+    UINT votes = 0;
 
     if (offset >= length)
         return 0;

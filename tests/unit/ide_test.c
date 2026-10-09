@@ -25,7 +25,8 @@
 #include <string.h>
 #include "vdd_ide.h"
 
-static INT g_Total = 0, g_Failures = 0;
+static INT g_Total = 0;
+static INT g_Failures = 0;
 #define CHECK(condition, message) do {                                  \
         g_Total++;                                               \
         if (condition) { printf("  PASS  %s\n", (message)); }           \
@@ -87,7 +88,9 @@ INT main(VOID)
     VDD_BUS bus;
     IDE_STATE state;
     NTVDD_DEVICE device;
-    INT channel, spin, sawDataRequest;
+    INT channel;
+    INT spin;
+    INT sawDataRequest;
     WORD port;
 
     /* NEGATIVE CONTROL: the machine before this device: */
@@ -105,7 +108,8 @@ INT main(VOID)
 
     for (channel = 0; channel < 2; ++channel)
     {
-        WORD commandPort = channels[channel][0], controlPort = channels[channel][1];
+        WORD commandPort = channels[channel][0];
+        WORD controlPort = channels[channel][1];
         CHAR description[96];
         sprintf(description, "%03Xh: alternate status reads 00h (BSY clear, DD7 pulled down)", controlPort);
         CHECK(IdeTestHostIn(&bus, controlPort, 1) == 0x00, description);

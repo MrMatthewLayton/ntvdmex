@@ -30,13 +30,15 @@ typedef VOID (WINAPI *PFNVDD_INB)(WORD, BYTE *);   typedef VOID (WINAPI *PFNVDD_
 typedef VOID (WINAPI *PFNVDD_OUTB)(WORD, BYTE);    typedef VOID (WINAPI *PFNVDD_OUTW)(WORD, WORD);
 typedef struct { PFNVDD_INB inb;
 PFNVDD_INW inw;
-PVOID insb, insw;
+PVOID insb;
+PVOID insw;
                  PFNVDD_OUTB outb;
                  PFNVDD_OUTW outw;
                  PVOID outsb, outsw; } VDD_IO_HANDLERS;
 typedef struct
 {
-    WORD First, Last;
+    WORD First;
+    WORD Last;
 } VDD_IO_PORTRANGE;
 
 USHORT WINAPI getAX(VOID); VOID WINAPI setAX(USHORT);
@@ -97,7 +99,9 @@ __declspec(dllexport) VOID IsvDispatch(VOID)
     case ISV_FUNCTION_SUM:
     {
         BYTE *bytes = (BYTE *)VdmMapFlat(getDS(), getSI(), VDM_V86);
-        USHORT count = getCX(), sum = 0, index;
+        USHORT count = getCX();
+        USHORT sum = 0;
+        USHORT index;
         for (index = 0; bytes && index < count; ++index)
             sum = (USHORT)(sum + bytes[index]);
         setCX(sum);

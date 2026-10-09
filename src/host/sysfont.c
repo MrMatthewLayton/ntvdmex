@@ -88,7 +88,12 @@ static INT SysFontOpenFon(SYSFONT_FACE *face, PCSTR fileName, INT wantedHeight)
 {
     CHAR path[MAX_PATH];
     HANDLE file;
-    DWORD size = 0, read = 0, neHeader, resourceTable, alignShift, offset;
+    DWORD size = 0;
+    DWORD read = 0;
+    DWORD neHeader;
+    DWORD resourceTable;
+    DWORD alignShift;
+    DWORD offset;
     BYTE *bytes;
     INT isFound = 0;
 
@@ -128,13 +133,23 @@ static INT SysFontOpenFon(SYSFONT_FACE *face, PCSTR fileName, INT wantedHeight)
     offset = resourceTable + X86_WORD_SIZE;
     while (!isFound && offset + SYSFONT_RESOURCE_TYPE_SIZE <= size)
     {
-        DWORD type = SysFontRead(bytes, size, offset, X86_WORD_SIZE), count = SysFontRead(bytes, size, offset + X86_WORD_SIZE, X86_WORD_SIZE), index;
+        DWORD type = SysFontRead(bytes, size, offset, X86_WORD_SIZE);
+        DWORD count = SysFontRead(bytes, size, offset + X86_WORD_SIZE, X86_WORD_SIZE);
+        DWORD index;
         if (!type)
             break;
         offset += SYSFONT_RESOURCE_TYPE_SIZE;
         for (index = 0; index < count && offset + SYSFONT_RESOURCE_ENTRY_SIZE <= size; ++index, offset += SYSFONT_RESOURCE_ENTRY_SIZE)
         {
-            DWORD fontOffset = SysFontRead(bytes, size, offset, X86_WORD_SIZE) << alignShift, version, pixelWidth, pixelHeight, charset, firstChar, lastChar, charTable, character;
+            DWORD fontOffset = SysFontRead(bytes, size, offset, X86_WORD_SIZE) << alignShift;
+            DWORD version;
+            DWORD pixelWidth;
+            DWORD pixelHeight;
+            DWORD charset;
+            DWORD firstChar;
+            DWORD lastChar;
+            DWORD charTable;
+            DWORD character;
             if (type != SYSFONT_RT_FONT || isFound || fontOffset + SYSFONT_FNT3_HEADER_SIZE > size)
                 continue;                                                                                       /* RT_FONT only */
             version = SysFontRead(bytes, size, fontOffset, X86_WORD_SIZE);
@@ -149,7 +164,9 @@ static INT SysFontOpenFon(SYSFONT_FACE *face, PCSTR fileName, INT wantedHeight)
             charTable = fontOffset + (version == SYSFONT_FNT_VERSION_3 ? SYSFONT_FNT3_HEADER_SIZE : SYSFONT_FNT2_HEADER_SIZE);
             for (character = 0; character < VGA_FONT_CHARACTERS; ++character)
             {
-                DWORD entry, glyphOffset, row;
+                DWORD entry;
+                DWORD glyphOffset;
+                DWORD row;
                 for (row = 0; row < SYSFONT_MAX_HEIGHT; ++row)
                     face->Glyphs[character][row] = 0;
                 if (character < firstChar || character > lastChar)
@@ -228,7 +245,9 @@ static VOID SysFontFit(
     INT cropTop)
 {
     const BYTE *glyph = face->Glyphs[character];
-    INT faceHeight = face->Height, top, row;
+    INT faceHeight = face->Height;
+    INT top;
+    INT row;
 
     for (row = 0; row < cellHeight; ++row)
         cell[row] = 0;
@@ -277,7 +296,11 @@ static INT SysFontUser(
     CHAR selectedName[LF_FACESIZE];
     HFONT previous;
     UINT character;
-    INT isTrueType, isOem, cropTop, count = 0, wantedHeight;
+    INT isTrueType;
+    INT isOem;
+    INT cropTop;
+    INT count = 0;
+    INT wantedHeight;
     static BYTE hasGlyph[VGA_FONT_CHARACTERS];
 
     face->IsOk = 0;
@@ -380,7 +403,12 @@ static INT SysFontUser(
 PCSTR SysFontBuildInto(PCSTR faceName, SYSFONT_TABLES *tables, SYSFONT_REPORT *report)
 {
     PSTR summary = report->Line;
-    static SYSFONT_FACE fixedsys, terminal8, terminal12, terminal16, userFace;        /* static: ~8 KB each */
+    /* static: ~8 KB each */
+    static SYSFONT_FACE fixedsys;
+    static SYSFONT_FACE terminal8;
+    static SYSFONT_FACE terminal12;
+    static SYSFONT_FACE terminal16;
+    static SYSFONT_FACE userFace;
     struct
     {
         BITMAPINFOHEADER h;
@@ -388,10 +416,12 @@ PCSTR SysFontBuildInto(PCSTR faceName, SYSFONT_TABLES *tables, SYSFONT_REPORT *r
     } bitmapInfo;  /* 1bpp needs BOTH entries */
     PVOID bits = NULL;
     HDC dc = CreateCompatibleDC(NULL);
-    HBITMAP bitmap, previousBitmap;
+    HBITMAP bitmap;
+    HBITMAP previousBitmap;
     UINT character;
     INT cropFixedsys = 0;
-    PCSTR source8 = "GDI by name", source12 = "GDI by name";
+    PCSTR source8 = "GDI by name";
+    PCSTR source12 = "GDI by name";
     ZeroMemory(report, sizeof *report);
     ZeroMemory(tables, sizeof *tables);
     if (!dc)
@@ -474,7 +504,8 @@ PCSTR SysFontBuildInto(PCSTR faceName, SYSFONT_TABLES *tables, SYSFONT_REPORT *r
 
     if (faceName && faceName[0])                                /* #321: the user's choice over it */
     {
-        INT index, glyphCounts[SYSFONT_TABLE_COUNT];
+        INT index;
+        INT glyphCounts[SYSFONT_TABLE_COUNT];
         glyphCounts[0] = SysFontUser(dc, (BYTE *)bits, &userFace, faceName, VGA_FONT8_HEIGHT,  &tables->Table8[0][0],  report);
         glyphCounts[1] = SysFontUser(dc, (BYTE *)bits, &userFace, faceName, VGA_FONT14_HEIGHT, &tables->Table14[0][0], report);
         glyphCounts[2] = SysFontUser(dc, (BYTE *)bits, &userFace, faceName, VGA_FONT16_HEIGHT, &tables->Table16[0][0], report);
@@ -529,7 +560,8 @@ INT SysFontIsDefaultDegraded(const SYSFONT_REPORT *report)
 PCSTR SysFontBuild(PCSTR faceName, SYSFONT_REPORT *report)
 {
     static SYSFONT_TABLES stage;
-    UINT character, row;
+    UINT character;
+    UINT row;
 
     SysFontBuildInto(faceName, &stage, report);
     for (character = 0; character < VGA_FONT_CHARACTERS; ++character)

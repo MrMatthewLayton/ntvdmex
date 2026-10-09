@@ -63,7 +63,8 @@ INT WowEnumBegin(
  */
 VOID WowEnumLine(INT startX, INT startY, INT endX, INT endY)
 {
-    INT deltaX = endX - startX, deltaY = endY - startY;
+    INT deltaX = endX - startX;
+    INT deltaY = endY - startY;
 
     if (deltaX < 0)
         deltaX = -deltaX;
@@ -272,7 +273,9 @@ INT WowEnumStep(
         /* EnumMetaFileProc(HDC, HANDLETABLE FAR*, METARECORD FAR*, int nObj, LPARAM)
          * -- #295. One blob, two pointers: the record at +0, the table after it.
          */
-        INT blobLength = 0, tableOffset = 0, room = WOWCALL_MAX_BLOB;
+        INT blobLength = 0;
+        INT tableOffset = 0;
+        INT room = WOWCALL_MAX_BLOB;
         UINT function = 0;
         WORD stackPointer = (WORD)(VDM_REG(tib, VTIB_ESP) & WORD_MASK);
         /* [CAUTION]: THE BLOB IS ON THE GUEST'S STACK, so it must fit there. A Win16 task's
@@ -360,7 +363,8 @@ INT WowEnumStep(
     {
         /* EnumPropProc(HWND, LPCSTR lpszName, HANDLE hData) -- s90, #296 */
         PCWOWENUM_FONT entry;
-        INT isAtom, nameLength = 0;
+        INT isAtom;
+        INT nameLength = 0;
         if (g_WowEnum.Index >= g_WowEnumFontCount)
         {
             WowNotePut(note, noteCapacity, &noteLength, "ENUM props complete: 0x");
@@ -415,8 +419,10 @@ INT WowEnumStep(
          * it would plot itself.
          */
         INT index = g_WowEnum.Index;
-        INT deltaX = g_WowEnum.EndX - g_WowEnum.StartX, deltaY = g_WowEnum.EndY - g_WowEnum.StartY;
-        INT pointX, pointY;
+        INT deltaX = g_WowEnum.EndX - g_WowEnum.StartX;
+        INT deltaY = g_WowEnum.EndY - g_WowEnum.StartY;
+        INT pointX;
+        INT pointY;
         if (index >= g_WowEnum.Steps)
         {
             WowNotePut(note, noteCapacity, &noteLength, "ENUM LineDDA complete: 0x");

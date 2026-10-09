@@ -48,7 +48,9 @@
 #include <string.h>
 #include "../../src/wow/wowconv.h"
 
-static INT g_Passes, g_Failures, g_Skips;
+static INT g_Passes;
+static INT g_Failures;
+static INT g_Skips;
 static VOID WowTestCheck(INT condition, PCSTR description)
 {
     if (condition)
@@ -99,7 +101,8 @@ static PCSTR g_Headers[] = {
  */
 static VOID WowTestScanHeader(PCSTR root, PCSTR relativePath)
 {
-    CHAR path[512], line[1024];
+    CHAR path[512];
+    CHAR line[1024];
     FILE *file;
     INT lineNumber = 0;
 
@@ -115,7 +118,8 @@ static VOID WowTestScanHeader(PCSTR root, PCSTR relativePath)
     {
         CHAR name[128];
         long value;
-        PSTR cursor = line, nameCursor;
+        PSTR cursor = line;
+        PSTR nameCursor;
         ++lineNumber;
         while (*cursor == ' ' || *cursor == '\t')
             ++cursor;
@@ -179,7 +183,9 @@ static long WowTestDefinitionValue(PCSTR name, PINT found)
 
 static VOID WowTestMacroHygiene(VOID)
 {
-    INT first, second, duplicateCount = 0;
+    INT first;
+    INT second;
+    INT duplicateCount = 0;
     CHAR description[256];
 
     printf("\n-- part 1: no `*_ARG_*` macro may be defined twice --\n");
@@ -318,7 +324,10 @@ static VOID WowTestOffsetTiling(VOID)
     {
         const WOW_TEST_SERVICE *service = &g_Services[serviceIndex];
         BYTE cover[64];
-        INT fieldIndex, isBad = 0, coveredBytes = 0, missingCount = 0;
+        INT fieldIndex;
+        INT isBad = 0;
+        INT coveredBytes = 0;
+        INT missingCount = 0;
         memset(cover, 0, sizeof cover);
         if (service->Width > (INT)sizeof cover)
         {
@@ -327,7 +336,8 @@ static VOID WowTestOffsetTiling(VOID)
         }
         for (fieldIndex = 0; fieldIndex < 14 && service->Fields[fieldIndex].Macro; ++fieldIndex)
         {
-            INT found = 0, byteIndex;
+            INT found = 0;
+            INT byteIndex;
             long offset = WowTestDefinitionValue(service->Fields[fieldIndex].Macro, &found);
             if (!found)
             {
@@ -398,8 +408,10 @@ static VOID WowTestOffsetTiling(VOID)
 /* PART 3: the semantic deltas: */
 static VOID WowTestConversions(VOID)
 {
-    BYTE core[12 + 16 * 3 + 8], output[40 + 256 * 4];
-    UINT palette = 0, pixels;
+    BYTE core[12 + 16 * 3 + 8];
+    BYTE output[40 + 256 * 4];
+    UINT palette = 0;
+    UINT pixels;
     BYTE rect[WOWCONV_RECT16_SIZE];
 
     printf("\n-- part 3: the Win16/Win32 semantic deltas (wowconv.h) --\n");
@@ -498,7 +510,12 @@ static VOID WowTestConversions(VOID)
  */
 static VOID WowTestModal(VOID)
 {
-    INT isEnded, isAlive, hasProcedure, isExpired, runCount = 0, seen[5];
+    INT isEnded;
+    INT isAlive;
+    INT hasProcedure;
+    INT isExpired;
+    INT runCount = 0;
+    INT seen[5];
 
     printf("\n-- part 4: the modal dialog loop (wowconv.h, src/wow/wowdlg.h) --\n");
 
@@ -588,8 +605,13 @@ static VOID WowTestPut32(PBYTE bytes, INT offset, unsigned long value)
 static VOID WowTestMetafile(VOID)
 {
     BYTE metafile[128];
-    unsigned long first, end = 0, offset, bytes = 0;
-    UINT objectCount = 0, function = 0, sequence[8];
+    unsigned long first;
+    unsigned long end = 0;
+    unsigned long offset;
+    unsigned long bytes = 0;
+    UINT objectCount = 0;
+    UINT function = 0;
+    UINT sequence[8];
     INT count = 0;
 
     printf("\n-- part 5: the Windows metafile walk (wowconv.h, #295) --\n");

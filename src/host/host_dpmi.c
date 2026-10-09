@@ -267,12 +267,14 @@ WORD DpmiHandlerCodeSelector(VOID)
  * present. That is the failure this avoids: a stale mapping faults far from here.
  */
 #define DPMI_S2D_MAX    64
-static WORD g_SegmentToDescriptorSegment[DPMI_S2D_MAX], g_SegmentToDescriptorSelector[DPMI_S2D_MAX];
+static WORD g_SegmentToDescriptorSegment[DPMI_S2D_MAX];
+static WORD g_SegmentToDescriptorSelector[DPMI_S2D_MAX];
 static INT  g_SegmentToDescriptorCount = 0;
 
 WORD DpmiSegmentToDescriptor(WORD segment)
 {
-    INT index, ldtIndex;
+    INT index;
+    INT ldtIndex;
 
     for (index = 0; index < g_SegmentToDescriptorCount; ++index)
         if (g_SegmentToDescriptorSegment[index] == segment)
@@ -320,10 +322,13 @@ enum
  */
 VOID DpmiInstallDefaultPmHandlers(DOS_MACHINE *machine)
 {
-    WORD segment = 0, maximum = 0;
+    WORD segment = 0;
+    WORD maximum = 0;
     volatile BYTE *stub;
-    INT vector, index;
-    CHAR lineBuffer[160], *cursor = lineBuffer;
+    INT vector;
+    INT index;
+    CHAR lineBuffer[160];
+    CHAR *cursor = lineBuffer;
 
     /* A SECOND CLIENT (s80): the table is the host's and outlives the first client.
      * If its memory survived teardown (the host pool), point every vector back at it.
@@ -401,7 +406,9 @@ VOID DpmiInstallDefaultPmHandlers(DOS_MACHINE *machine)
 /* (Re)build g_Ldt[idx]'s descriptor and install it in the process LDT via svc 10. */
 VOID DpmiInstall(INT index)
 {
-    DWORD low, high, descriptorLimit = g_Ldt[index].Limit;
+    DWORD low;
+    DWORD high;
+    DWORD descriptorLimit = g_Ldt[index].Limit;
     BYTE flags = g_Ldt[index].Flags;
     BYTE accessRights = g_Ldt[index].Access;
     WORD selector = (WORD)DPMI_LDT_SELECTOR(index);
@@ -473,7 +480,10 @@ VOID DpmiInstall(INT index)
              * believes is 4GB must not look like a mystery.
              */
             DWORD cap = XP_LDT_MAX_LINEAR;
-            DWORD descriptorLow = low, descriptorHigh = high, want = g_Ldt[index].Limit, cl = 0;
+            DWORD descriptorLow = low;
+            DWORD descriptorHigh = high;
+            DWORD want = g_Ldt[index].Limit;
+            DWORD cl = 0;
             LONG state2 = status;
             if (g_Ldt[index].Base < cap)
             {
@@ -488,7 +498,8 @@ VOID DpmiInstall(INT index)
                 state2 = VdmInstallLdtEntries(selector, descriptorLow, descriptorHigh, selector, descriptorLow, descriptorHigh);
             }
             {
-                CHAR lineBuffer[256], *cursor = lineBuffer;
+                CHAR lineBuffer[256];
+                CHAR *cursor = lineBuffer;
                 cursor = LogPut(cursor, "DPMI-LDT: install REJECTED sel 0x"); cursor = LogHex(cursor, selector);
                 cursor = LogPut(cursor, " base 0x"); cursor = LogHex(cursor, g_Ldt[index].Base);
                 cursor = LogPut(cursor, " limit 0x"); cursor = LogHex(cursor, want);
@@ -516,7 +527,8 @@ VOID DpmiInstall(INT index)
  */
 VOID DpmiInstallFaultTrampoline(VOID)
 {
-    INT stackIndex, codeIndex;
+    INT stackIndex;
+    INT codeIndex;
     UINT index;
     volatile BYTE *handlerArea = (volatile BYTE *)(ULONG_PTR)((DWORD)DOS_HDLR_SEG << PARAGRAPH_SHIFT);
 
@@ -645,12 +657,15 @@ DWORD DpmiSelectorBase(WORD selector)
 DWORD DpmiRecoverFlatEip(DWORD lo16, BYTE vector, INT *candidateCount)
 {
     DWORD found = 0;
-    INT matches = 0, index;
+    INT matches = 0;
+    INT index;
 
     lo16 &= WORD_MASK_U;
     for (index = 0; index < g_DpmiBlockCount; ++index)
     {
-        DWORD base = g_DpmiBlock[index].Base, size = g_DpmiBlock[index].Size, address;
+        DWORD base = g_DpmiBlock[index].Base;
+        DWORD size = g_DpmiBlock[index].Size;
+        DWORD address;
         if (!size)
             continue;
         for (address = (base & ~WORD_MASK_U) | lo16; address < base + size; address += X86_SEGMENT_SIZE_U)
@@ -805,10 +820,17 @@ DWORD DpmiPmEip(volatile BYTE *tib)
 VOID DpmiPatchCodeRegion(DWORD base, DWORD limit, INT is32BitRegion)
 {
     volatile BYTE *memory;
-    DWORD end, patched = 0, rejected = 0, jumpTableSkipped = 0;   /* jumpTableSkipped: jump-table entries skipped -- see the guard */
-    DWORD patchedOffsets[12], patchedOffsetCount = 0;               /* the first few patched offsets, for the log */
+    /* jumpTableSkipped: jump-table entries skipped -- see the guard */
+    DWORD end;
+    DWORD patched = 0;
+    DWORD rejected = 0;
+    DWORD jumpTableSkipped = 0;
+    /* the first few patched offsets, for the log */
+    DWORD patchedOffsets[12];
+    DWORD patchedOffsetCount = 0;
     DWORD sitesDumped = 0;                      /* how many sites we have dumped BYTES for */
-    CHAR lineBuffer[320], *cursor = lineBuffer;
+    CHAR lineBuffer[320];
+    CHAR *cursor = lineBuffer;
 
     /* - NEVER PATCH THE IVT / BIOS DATA AREA, even when the client declares a base-0
      * code selector -- and Doom does exactly that (sel 0x67, base 0, limit 0xFFFF),
@@ -835,7 +857,9 @@ VOID DpmiPatchCodeRegion(DWORD base, DWORD limit, INT is32BitRegion)
         LogAppend(LOG_PATH, lineBuffer, cursor); SerialOut(lineBuffer, cursor);
         return;
     }
-    DWORD pointerLow = base, pointerHigh = end;               /* a near-pointer table INTO this region is DATA -- see the loop */
+    /* a near-pointer table INTO this region is DATA -- see the loop */
+    DWORD pointerLow = base;
+    DWORD pointerHigh = end;
     /* A 32-BIT CODE REGION IS SCANNED BUT NEVER WRITTEN. (s74) (Importance = 5):
      * The sixth guest this scan corrupted was heaven7, and the failure is not one the
      * vote can be tuned out of: its LE code object is a PACKED payload, and x86's
@@ -920,7 +944,8 @@ VOID DpmiPatchCodeRegion(DWORD base, DWORD limit, INT is32BitRegion)
       while (address < end)
       {
           MEMORY_BASIC_INFORMATION memoryInfo;
-          DWORD rend, index;
+          DWORD rend;
+          DWORD index;
           if (VirtualQuery((LPCVOID)(ULONG_PTR)address, &memoryInfo, sizeof memoryInfo) != sizeof memoryInfo)
               break;
           rend = (DWORD)((ULONG_PTR)memoryInfo.BaseAddress + memoryInfo.RegionSize);
@@ -1031,7 +1056,8 @@ VOID DpmiPatchCodeRegion(DWORD base, DWORD limit, INT is32BitRegion)
                                 ++jumpTableSkipped;
                                 if (jumpTableSkipped <= 8)
                                 {
-                                    CHAR pointerLine[192], *pointerCursor = pointerLine;
+                                    CHAR pointerLine[192];
+                                    CHAR *pointerCursor = pointerLine;
                                     pointerCursor = LogPut(pointerCursor, "DPMI: NOT patching 0x"); pointerCursor = LogHex(pointerCursor, linear);
                                     pointerCursor = LogPut(pointerCursor, " vec=0x"); pointerCursor = LogHexByte(pointerCursor, memory[index+1]);
                                     pointerCursor = LogPut(pointerCursor, " -- inside aligned pointer 0x"); pointerCursor = LogHex(pointerCursor, word);
@@ -1077,7 +1103,8 @@ VOID DpmiPatchCodeRegion(DWORD base, DWORD limit, INT is32BitRegion)
                       {
                           if (rejected < 16)
                           {
-                              CHAR fixupLine[160], *fixupCursor = fixupLine;
+                              CHAR fixupLine[160];
+                              CHAR *fixupCursor = fixupLine;
                               fixupCursor = LogPut(fixupCursor, "DPMI: NOT patching 0x"); fixupCursor = LogHex(fixupCursor, linear);
                               fixupCursor = LogPut(fixupCursor, " vec=0x"); fixupCursor = LogHexByte(fixupCursor, memory[index+1]);
                               fixupCursor = LogPut(fixupCursor, " -- FP EMULATOR / fixup range 34..3F,"
@@ -1130,7 +1157,8 @@ VOID DpmiPatchCodeRegion(DWORD base, DWORD limit, INT is32BitRegion)
                         {
                             if (rejected++ < 16)
                             {
-                                CHAR unservicedLine[176], *unservicedCursor = unservicedLine;
+                                CHAR unservicedLine[176];
+                                CHAR *unservicedCursor = unservicedLine;
                                 unservicedCursor = LogPut(unservicedCursor, "DPMI: NOT patching 0x"); unservicedCursor = LogHex(unservicedCursor, linear);
                                 unservicedCursor = LogPut(unservicedCursor, " vec=0x"); unservicedCursor = LogHexByte(unservicedCursor, vector);
                                 unservicedCursor = LogPut(unservicedCursor, " -- no PM service arm for it, so a BOP here"
@@ -1166,7 +1194,8 @@ VOID DpmiPatchCodeRegion(DWORD base, DWORD limit, INT is32BitRegion)
                       {
                           if (rejected++ < 16)
                           {
-                              CHAR midInstructionLine[128], *midInstructionCursor = midInstructionLine;
+                              CHAR midInstructionLine[128];
+                              CHAR *midInstructionCursor = midInstructionLine;
                               midInstructionCursor = LogPut(midInstructionCursor, "DPMI: NOT an INT site (mid-instruction) 0x");
                               midInstructionCursor = LogHex(midInstructionCursor, linear);
                               midInstructionCursor = LogPut(midInstructionCursor, " vec=0x"); midInstructionCursor = LogHexByte(midInstructionCursor, memory[index+1]);
@@ -1200,7 +1229,8 @@ VOID DpmiPatchCodeRegion(DWORD base, DWORD limit, INT is32BitRegion)
                        */
                       if (sitesDumped < 24)                /* its OWN counter: patchedOffsetCount saturates at 12 */
                       {
-                          CHAR siteLine[192], *siteCursor = siteLine;
+                          CHAR siteLine[192];
+                          CHAR *siteCursor = siteLine;
                           ++sitesDumped;
                           siteCursor = LogPut(siteCursor, isDryRun ? "DPMI: WOULD PATCH 0x" : "DPMI: PATCHING 0x"); siteCursor = LogHex(siteCursor, linear);
                           siteCursor = LogPut(siteCursor, " (+0x"); siteCursor = LogHex(siteCursor, linear - base);
@@ -1264,7 +1294,8 @@ enum
 VOID DpmiLeLearn(const BYTE *buffer, DWORD length)
 {
     DWORD index;
-    CHAR lineBuffer[192], *cursor;
+    CHAR lineBuffer[192];
+    CHAR *cursor;
 
     if (!buffer || length < LE_SCAN_FILE_MIN)
         return;
@@ -1272,7 +1303,9 @@ VOID DpmiLeLearn(const BYTE *buffer, DWORD length)
 #define LE16(o)     ((DWORD)buffer[(o)] | ((DWORD)buffer[(o)+1] << BYTE_SHIFT))
     for (index = 0; index + LE_SCAN_HEADER_ROOM < length; ++index)
     {
-        DWORD objectTableOffset, objectCount, object;
+        DWORD objectTableOffset;
+        DWORD objectCount;
+        DWORD object;
         if (buffer[index] != 'L' || buffer[index+1] != 'E' || buffer[index+2] || buffer[index+3])
             continue;
         if (LE32(index + LE_FORMAT_LEVEL) != 0)
@@ -1292,7 +1325,8 @@ VOID DpmiLeLearn(const BYTE *buffer, DWORD length)
         for (object = 0; object < objectCount; ++object)
         {
             DWORD entry     = index + objectTableOffset + object * LE_OBJECT_ENTRY_SIZE;
-            DWORD virtualSize = LE32(entry + LE_OBJECT_VIRTUAL_SIZE), flags = LE32(entry + LE_OBJECT_FLAGS);
+            DWORD virtualSize = LE32(entry + LE_OBJECT_VIRTUAL_SIZE);
+            DWORD flags = LE32(entry + LE_OBJECT_FLAGS);
             DWORD pageRounded    = (virtualSize + PAGE_LAST_BYTE_U) & ~PAGE_LAST_BYTE_U;          /* what 0501 will ask for */
             INT   isExecutable  = (flags & LE_OBJECT_EXECUTABLE) != 0;
             cursor = lineBuffer; cursor = LogPut(cursor, "DPMI:   obj"); cursor = LogHex(cursor, object + 1);
@@ -1375,8 +1409,10 @@ VOID DpmiBreakpointLoad(VOID)
     HANDLE handle = CreateFileA(PMBP_PATH, GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE,
                            NULL, OPEN_EXISTING, 0, NULL);
     CHAR buffer[8192];
-    DWORD bytesRead = 0, index = 0;
-    CHAR lineBuffer[256], *cursor = lineBuffer;
+    DWORD bytesRead = 0;
+    DWORD index = 0;
+    CHAR lineBuffer[256];
+    CHAR *cursor = lineBuffer;
     INT countBefore = g_BreakpointCount;
 
     if (handle == INVALID_HANDLE_VALUE)
@@ -1490,7 +1526,8 @@ VOID DpmiBreakpointLoad(VOID)
  */
 VOID DpmiBreakpointResolveCodeBase(DWORD base)
 {
-    CHAR lineBuffer[200], *cursor;
+    CHAR lineBuffer[200];
+    CHAR *cursor;
     INT index;
 
     for (index = 0; index < g_BreakpointCount; ++index)
@@ -1512,7 +1549,8 @@ VOID DpmiBreakpointResolveCodeBase(DWORD base)
 
 VOID DpmiBreakpointResolveSegment(UINT segmentNumber, DWORD base)
 {
-    CHAR lineBuffer[200], *cursor;
+    CHAR lineBuffer[200];
+    CHAR *cursor;
     INT index;
 
     for (index = 0; index < g_BreakpointCount; ++index)
@@ -1559,7 +1597,8 @@ VOID DpmiBreakpointArm(VOID)
          * from that very string. zput/zhex are caller-sized and check nothing, so
          * the buffer has to be big enough for the LONGEST line, not the usual one.
          */
-        CHAR lineBuffer[320], *cursor = lineBuffer;
+        CHAR lineBuffer[320];
+        CHAR *cursor = lineBuffer;
         if (linear < DPMI_PATCH_FLOOR)
             continue;
         /* [CAUTION]: AN UNRESOLVED SEGMENT-RELATIVE ADDRESS IS NOT A LINEAR ADDRESS (Importance =
@@ -1758,7 +1797,8 @@ VOID DpmiBreakpointArm(VOID)
  */
 VOID DpmiBreakpointRearmPending(DWORD currentLinear)
 {
-    INT index, any = 0;
+    INT index;
+    INT any = 0;
 
     for (index = 0; index < g_BreakpointCount; ++index)
         if (g_BreakpointPending[index] && currentLinear != g_BreakpointLinear[index] && currentLinear != g_BreakpointLinear[index] + 1)
@@ -1900,9 +1940,12 @@ VOID DpmiInvokeCallback(DOS_MACHINE *machine, volatile BYTE *tib, INT slot)
 {
     CHAR lineBuffer[256];
     PSTR lineCursor = lineBuffer;
-    WORD realSs = (WORD)VDM_REG(tib, VTIB_SS), realSp = (WORD)VDM_REG(tib, VTIB_ESP);
+    WORD realSs = (WORD)VDM_REG(tib, VTIB_SS);
+    WORD realSp = (WORD)VDM_REG(tib, VTIB_ESP);
     DWORD realStack = ((DWORD)realSs << PARAGRAPH_SHIFT) + realSp;
-    WORD retIP = PeekWord(realStack), retCS = PeekWord(realStack + X86_FRAME16_CS);     /* the far-call return frame */
+    /* the far-call return frame */
+    WORD retIP = PeekWord(realStack);
+    WORD retCS = PeekWord(realStack + X86_FRAME16_CS);
     WORD newSP = (WORD)(realSp + X86_FAR_RETURN16_SIZE);                          /* pop it */
     DWORD callStructure = DpmiSelectorBase(g_Callbacks[slot].RmEs) + g_Callbacks[slot].RmDi;
     volatile BYTE *callStructureBytes = (volatile BYTE *)(ULONG_PTR)callStructure;
@@ -1972,7 +2015,9 @@ VOID DpmiInvokeCallback(DOS_MACHINE *machine, volatile BYTE *tib, INT slot)
      */
     for (phase = 0; phase < DPMI_CALLBACK_PHASE_MAX && !callbackDone; ++phase)
     {
-        DWORD event, eip, vector;
+        DWORD event;
+        DWORD eip;
+        DWORD vector;
         DpmiArmFaultTrampoline(tib, 0);   /* GH #18: re-arm the PM-fault reflect (no-op on interp path) */
         DpmiEnterProtectedMode(tib);
         event = VDM_REG(tib, VTIB_EVENT);
@@ -2128,12 +2173,14 @@ INT DpmiDispatchToPmHandler(DOS_MACHINE *machine, volatile BYTE *tib, DWORD vect
      *   the next field added would have hit this again -- 512 leaves room for one. If
      *   this line ever grows a second dump, split it rather than raising this again.
      */
-    CHAR lineBuffer[512], *lineCursor = lineBuffer;
+    CHAR lineBuffer[512];
+    CHAR *lineCursor = lineBuffer;
     /* Captured at ENTRY and kept in a LOCAL: the handler's whole job is to change AX, so
      * the exit line must be keyed on what the caller ASKED, not on the answer -- and this
      * function re-enters itself when a handler chains, so a static would cross-talk.
      */
-    UINT dispatchVector = vector & BYTE_MASK, dispatchAh = (VDM_REG(tib, VTIB_EAX) >> BYTE_SHIFT) & BYTE_MASK;
+    UINT dispatchVector = vector & BYTE_MASK;
+    UINT dispatchAh = (VDM_REG(tib, VTIB_EAX) >> BYTE_SHIFT) & BYTE_MASK;
     DWORD dispatchTick = GetTickCount();
     INT   isFirstDispatch = (g_PmDispatchLogged[dispatchVector][dispatchAh] < PM_DISP_LOG_MAX);
     INT   loud = isFirstDispatch || (dispatchTick - g_PmDispatchMs[dispatchVector][dispatchAh]) >= PM_DISP_QUIET_MS;
@@ -2142,8 +2189,10 @@ INT DpmiDispatchToPmHandler(DOS_MACHINE *machine, volatile BYTE *tib, DWORD vect
         ++g_PmDispatchCount[dispatchVector][dispatchAh];
     if (loud)
         g_PmDispatchMs[dispatchVector][dispatchAh] = dispatchTick;
-    DWORD sEIP = VDM_REG(tib, VTIB_EIP), sESP = VDM_REG(tib, VTIB_ESP);
-    WORD  savedCs  = (WORD)VDM_REG(tib, VTIB_CS), savedSs = (WORD)VDM_REG(tib, VTIB_SS);
+    DWORD sEIP = VDM_REG(tib, VTIB_EIP);
+    DWORD sESP = VDM_REG(tib, VTIB_ESP);
+    WORD savedCs  = (WORD)VDM_REG(tib, VTIB_CS);
+    WORD savedSs = (WORD)VDM_REG(tib, VTIB_SS);
     DWORD sEFL = VDM_REG(tib, VTIB_EFLAGS);
     /* -- THE FRAME WIDTH FOLLOWS THE CLIENT'S MODE, NOT THE HANDLER SELECTOR'S D BIT.
      * This is measured, and getting it wrong is invisible until the handler RETURNS.
@@ -2269,7 +2318,9 @@ quietEntry:
     g_PmDispatch[vector] = 1;
     for (phase = 0; phase < DPMI_DISPATCH_PHASE_MAX && !done; ++phase)
     {
-        DWORD event, eip, vectorNumber;
+        DWORD event;
+        DWORD eip;
+        DWORD vectorNumber;
         INT status;
         /* - CHECKPOINT INSIDE THE HANDLER TOO. The main loop's DPMI-CP lines stop at the
          * moment we hand control to the client's handler, so without this a death in
@@ -2280,7 +2331,8 @@ quietEntry:
         if (phase < 64 && g_DpmiCpMaximum > 8)
         {
             DWORD callerCs = VDM_REG16(tib, VTIB_CS);
-            DWORD codeBase  = DpmiSelectorBase((WORD)callerCs), callerIp = VDM_REG(tib, VTIB_EIP);
+            DWORD codeBase  = DpmiSelectorBase((WORD)callerCs);
+            DWORD callerIp = VDM_REG(tib, VTIB_EIP);
             const BYTE *codeBytes = (const BYTE *)(ULONG_PTR)(codeBase + callerIp);
             lineCursor = LogPut(lineCursor, "  PMH["); lineCursor = LogHex(lineCursor, phase);
             lineCursor = LogPut(lineCursor, "] cs:eip=0x"); lineCursor = LogHex(lineCursor, callerCs);
@@ -2493,9 +2545,12 @@ VOID TibToRmcs(volatile BYTE *tib, RMCS_REGS *registers, WORD flags)
 VOID DpmiRmcsProbe(volatile BYTE *tib, DWORD esBase, UINT slot, DWORD interruptNumber)
 {
     static BYTE seen[5][256];
-    DWORD edi = VDM_REG(tib, VTIB_EDI), es = VDM_REG16(tib, VTIB_ES);
-    DWORD maskedAddress  = esBase + (edi & WORD_MASK), fullAddress = esBase + edi;
-    CHAR buffer[512], *cursor = buffer;
+    DWORD edi = VDM_REG(tib, VTIB_EDI);
+    DWORD es = VDM_REG16(tib, VTIB_ES);
+    DWORD maskedAddress  = esBase + (edi & WORD_MASK);
+    DWORD fullAddress = esBase + edi;
+    CHAR buffer[512];
+    CHAR *cursor = buffer;
     static PCSTR const tags[5] = { "0300", "0301", "0302", "000b", "000c" };
     if (slot > 4 || interruptNumber > 255)
         return;
@@ -2644,7 +2699,8 @@ static INT PmTransferOut(WORD selector, DWORD offset, DWORD length)
  */
 static DWORD PmTransferStringLength(WORD selector, DWORD offset, DWORD cap)
 {
-    DWORD base = DpmiSelectorBase(selector), length = 0;
+    DWORD base = DpmiSelectorBase(selector);
+    DWORD length = 0;
     const volatile BYTE *source = (const volatile BYTE *)(ULONG_PTR)(base + offset);
 
     if (!base)
@@ -2663,7 +2719,8 @@ PSTR PmInt21Transfer(DOS_MACHINE *machine, volatile BYTE *tib, DWORD ah, PSTR cu
     WORD  dsValue = (WORD)VDM_REG16(tib, VTIB_DS);
     DWORD dxValue = VDM_REG16(tib, VTIB_EDX);
     DWORD cxValue = VDM_REG16(tib, VTIB_ECX);
-    DWORD savedDs = VDM_REG(tib, VTIB_DS), savedDx = VDM_REG(tib, VTIB_EDX);
+    DWORD savedDs = VDM_REG(tib, VTIB_DS);
+    DWORD savedDx = VDM_REG(tib, VTIB_EDX);
     DWORD cap = (DWORD)g_PmTransferParagraphs * PARAGRAPH_SIZE_U;
     INT status = 0;
 
@@ -2787,7 +2844,8 @@ PSTR PmInt21Transfer(DOS_MACHINE *machine, volatile BYTE *tib, DWORD ah, PSTR cu
  */
 static INT PmLfnCopy(WORD selector, DWORD offset, DWORD transferOffset, DWORD length, INT isIn)
 {
-    DWORD base = DpmiSelectorBase(selector), index;
+    DWORD base = DpmiSelectorBase(selector);
+    DWORD index;
     volatile BYTE *guest = (volatile BYTE *)(ULONG_PTR)(base + offset);
     volatile BYTE *transfer = (volatile BYTE *)(ULONG_PTR)(((DWORD)g_PmTransferSegment << PARAGRAPH_SHIFT) + transferOffset);
 
@@ -2825,20 +2883,30 @@ PSTR PmInt21Lfn(DOS_MACHINE *machine, volatile BYTE *tib, PSTR cursor)
 {
 #define m   (*machine)
     DWORD al = VDM_REG(tib, VTIB_EAX) & BYTE_MASK;
-    DWORD bl = VDM_REG(tib, VTIB_EBX) & BYTE_MASK, bh = (VDM_REG(tib, VTIB_EBX) >> BYTE_SHIFT) & BYTE_MASK;
-    WORD  dsValue = (WORD)VDM_REG16(tib, VTIB_DS), esValue = (WORD)VDM_REG16(tib, VTIB_ES);
+    DWORD bl = VDM_REG(tib, VTIB_EBX) & BYTE_MASK;
+    DWORD bh = (VDM_REG(tib, VTIB_EBX) >> BYTE_SHIFT) & BYTE_MASK;
+    WORD dsValue = (WORD)VDM_REG16(tib, VTIB_DS);
+    WORD esValue = (WORD)VDM_REG16(tib, VTIB_ES);
     DWORD dxOffset = DpmiCallerOffset(tib, VDM_REG(tib, VTIB_EDX));
     DWORD siOffset = DpmiCallerOffset(tib, VDM_REG(tib, VTIB_ESI));
     DWORD diOffset = DpmiCallerOffset(tib, VDM_REG(tib, VTIB_EDI));
-    DWORD savedDs = VDM_REG(tib, VTIB_DS), savedEs = VDM_REG(tib, VTIB_ES);
-    DWORD savedDx = VDM_REG(tib, VTIB_EDX), savedSi = VDM_REG(tib, VTIB_ESI), savedDi = VDM_REG(tib, VTIB_EDI);
+    DWORD savedDs = VDM_REG(tib, VTIB_DS);
+    DWORD savedEs = VDM_REG(tib, VTIB_ES);
+    DWORD savedDx = VDM_REG(tib, VTIB_EDX);
+    DWORD savedSi = VDM_REG(tib, VTIB_ESI);
+    DWORD savedDi = VDM_REG(tib, VTIB_EDI);
     /* Which registers are pointers for this call, and which way their bytes go:
      * 0 = not a pointer, 1 = a string in, 2 = a block out of `len`, 3 = a block in,
      * 4 = a string out of at most `len` -- copied back only up to its NUL, so a caller's
      *     buffer shorter than RBIL's 261 bytes is not overwritten past the answer.
      */
-    INT copyDx = 0, copySi = 0, copyDi = 0, status = 0;
-    DWORD dxLength = 0, siLength = 0, diLength = 0;
+    INT copyDx = 0;
+    INT copySi = 0;
+    INT copyDi = 0;
+    INT status = 0;
+    DWORD dxLength = 0;
+    DWORD siLength = 0;
+    DWORD diLength = 0;
 
     switch (al)
     {
@@ -3005,16 +3073,29 @@ PSTR PmInt21Lfn(DOS_MACHINE *machine, volatile BYTE *tib, PSTR cursor)
 
 INT DpmiReflectIrqToRm(DOS_MACHINE *machine, volatile BYTE *tib, UINT vector)
 {
-    CHAR lineBuffer[256], *lineCursor = lineBuffer;
-    DWORD savedEax=VDM_REG(tib,VTIB_EAX),savedEbx=VDM_REG(tib,VTIB_EBX),savedEcx=VDM_REG(tib,VTIB_ECX),
-          savedEdx=VDM_REG(tib,VTIB_EDX),savedEsi=VDM_REG(tib,VTIB_ESI),savedEdi=VDM_REG(tib,VTIB_EDI),
-          pmBp=VDM_REG(tib,VTIB_EBP),pmDs=VDM_REG(tib,VTIB_DS),pmEs=VDM_REG(tib,VTIB_ES),
-          pmFs=VDM_REG(tib,VTIB_FS),pmGs=VDM_REG(tib,VTIB_GS),pmCs=VDM_REG(tib,VTIB_CS),
-          pmIp=VDM_REG(tib,VTIB_EIP),pmSs=VDM_REG(tib,VTIB_SS),pmSp=VDM_REG(tib,VTIB_ESP),
-          pFlags=VDM_REG(tib,VTIB_EFLAGS);
+    CHAR lineBuffer[256];
+    CHAR *lineCursor = lineBuffer;
+    DWORD savedEax=VDM_REG(tib,VTIB_EAX);
+    DWORD savedEbx=VDM_REG(tib,VTIB_EBX);
+    DWORD savedEcx=VDM_REG(tib,VTIB_ECX);
+    DWORD savedEdx=VDM_REG(tib,VTIB_EDX);
+    DWORD savedEsi=VDM_REG(tib,VTIB_ESI);
+    DWORD savedEdi=VDM_REG(tib,VTIB_EDI);
+    DWORD pmBp=VDM_REG(tib,VTIB_EBP);
+    DWORD pmDs=VDM_REG(tib,VTIB_DS);
+    DWORD pmEs=VDM_REG(tib,VTIB_ES);
+    DWORD pmFs=VDM_REG(tib,VTIB_FS);
+    DWORD pmGs=VDM_REG(tib,VTIB_GS);
+    DWORD pmCs=VDM_REG(tib,VTIB_CS);
+    DWORD pmIp=VDM_REG(tib,VTIB_EIP);
+    DWORD pmSs=VDM_REG(tib,VTIB_SS);
+    DWORD pmSp=VDM_REG(tib,VTIB_ESP);
+    DWORD pFlags=VDM_REG(tib,VTIB_EFLAGS);
     WORD machineStatusWord = *(volatile WORD *)(tib + VTIB_MSW);
-    WORD realSs = (WORD)(g_DpmiCodeBase >> PARAGRAPH_SHIFT), realSp = DPMI_REFLECT_STACK_TOP;
-    WORD realCs = PeekWord(IVT_SEGMENT_ADDRESS(vector)), rip = PeekWord(IVT_OFFSET_ADDRESS(vector));
+    WORD realSs = (WORD)(g_DpmiCodeBase >> PARAGRAPH_SHIFT);
+    WORD realSp = DPMI_REFLECT_STACK_TOP;
+    WORD realCs = PeekWord(IVT_SEGMENT_ADDRESS(vector));
+    WORD rip = PeekWord(IVT_OFFSET_ADDRESS(vector));
     UINT round;
     INT done = 0;
 
@@ -3039,7 +3120,8 @@ INT DpmiReflectIrqToRm(DOS_MACHINE *machine, volatile BYTE *tib, UINT vector)
     for (round = 0; round < NESTED_V86_ROUNDS_MAX && !done; ++round)
     {
         LONG runStatus;
-        DWORD rev, info;
+        DWORD rev;
+        DWORD info;
         InterlockedExchange(&g_NestedRm, 1);
         InterlockedExchange(&g_InExec, 1);                     /* see g_NestedRm */
         rev = VdmRunGuest(tib, &runStatus);
@@ -3172,7 +3254,12 @@ static VOID DpmiPmCarryToFrame(volatile BYTE *tib)
 {
     WORD  cs = (WORD)VDM_REG16(tib, VTIB_CS);
     WORD  ss;
-    DWORD base, eip, sp, linear, image, now;
+    DWORD base;
+    DWORD eip;
+    DWORD sp;
+    DWORD linear;
+    DWORD image;
+    DWORD now;
     const volatile BYTE *instruction;
     volatile BYTE *flagsBytes;
 
@@ -3388,7 +3475,8 @@ INT DpmiAsyncInjectPm(UINT irq, CONTEXT *context)
      * them costs.
      */
     { DWORD stackBase = DpmiSelectorBase(ss);
-      INT   ss32 = DpmiSelectorIs32(ss), isClient32 = g_DpmiIsClient32;
+      INT ss32 = DpmiSelectorIs32(ss);
+      INT isClient32 = g_DpmiIsClient32;
       DWORD sp = ss32 ? context->Esp : (context->Esp & WORD_MASK);
       if (isClient32)
       {
@@ -3464,9 +3552,11 @@ enum
 INT DpmiNestedFault(volatile BYTE *tib, DWORD event, DWORD eip)
 {
     DWORD csValue = VDM_REG16(tib, VTIB_CS);
-    DWORD stackBase, esp;
+    DWORD stackBase;
+    DWORD esp;
     volatile WORD *frame;
-    CHAR lineBuffer[256], *lineCursor = lineBuffer;
+    CHAR lineBuffer[256];
+    CHAR *lineCursor = lineBuffer;
 
     /* [CAUTION]: WOW ONLY. The evidence is a WOW run; DOS clients (ZAR's DOS/16M, Doom's
      * DOS/4GW) go through the IRQ injector too and keep their old behaviour until
@@ -3577,18 +3667,28 @@ enum
 };   /* DpmiClientTeardown: the host's own LDT entries it keeps */
 INT DpmiInjectPmIrq(DOS_MACHINE *machine, volatile BYTE *tib, UINT interruptVector, UINT steps)
 {
-    CHAR lineBuffer[256], *lineCursor = lineBuffer;
+    CHAR lineBuffer[256];
+    CHAR *lineCursor = lineBuffer;
 
     if (g_PmClientExited)
         return 0;                                /* nothing left to interrupt */
     /* snapshot the interrupted PM register file */
-    DWORD sEAX=VDM_REG(tib,VTIB_EAX), sEBX=VDM_REG(tib,VTIB_EBX), sECX=VDM_REG(tib,VTIB_ECX);
-    DWORD sEDX=VDM_REG(tib,VTIB_EDX), sESI=VDM_REG(tib,VTIB_ESI), sEDI=VDM_REG(tib,VTIB_EDI);
-    DWORD sEBP=VDM_REG(tib,VTIB_EBP), sEIP=VDM_REG(tib,VTIB_EIP), sESP=VDM_REG(tib,VTIB_ESP);
+    DWORD sEAX=VDM_REG(tib,VTIB_EAX);
+    DWORD sEBX=VDM_REG(tib,VTIB_EBX);
+    DWORD sECX=VDM_REG(tib,VTIB_ECX);
+    DWORD sEDX=VDM_REG(tib,VTIB_EDX);
+    DWORD sESI=VDM_REG(tib,VTIB_ESI);
+    DWORD sEDI=VDM_REG(tib,VTIB_EDI);
+    DWORD sEBP=VDM_REG(tib,VTIB_EBP);
+    DWORD sEIP=VDM_REG(tib,VTIB_EIP);
+    DWORD sESP=VDM_REG(tib,VTIB_ESP);
     DWORD sEFL=VDM_REG(tib,VTIB_EFLAGS);
-    WORD  savedCs=(WORD)VDM_REG(tib,VTIB_CS), savedSs=(WORD)VDM_REG(tib,VTIB_SS);
-    WORD  savedDs=(WORD)VDM_REG(tib,VTIB_DS), savedEs=(WORD)VDM_REG(tib,VTIB_ES);
-    WORD  savedFs=(WORD)VDM_REG(tib,VTIB_FS), savedGs=(WORD)VDM_REG(tib,VTIB_GS);
+    WORD savedCs=(WORD)VDM_REG(tib,VTIB_CS);
+    WORD savedSs=(WORD)VDM_REG(tib,VTIB_SS);
+    WORD savedDs=(WORD)VDM_REG(tib,VTIB_DS);
+    WORD savedEs=(WORD)VDM_REG(tib,VTIB_ES);
+    WORD savedFs=(WORD)VDM_REG(tib,VTIB_FS);
+    WORD savedGs=(WORD)VDM_REG(tib,VTIB_GS);
     INT previousVi = g_DpmiVi;
     UINT phase;
     INT done = 0;
@@ -3723,7 +3823,9 @@ INT DpmiInjectPmIrq(DOS_MACHINE *machine, volatile BYTE *tib, UINT interruptVect
      */
     for (phase = 0; phase < DPMI_IRQ0_PHASE_MAX && !done; ++phase)
     {
-        DWORD event, eip, vector;
+        DWORD event;
+        DWORD eip;
+        DWORD vector;
         INT status;
         if ((phase & DPMI_IRQ_TIME_CHECK_MASK) == DPMI_IRQ_TIME_CHECK_MASK && (GetTickCount() - isrStartTick) > DPMI_IRQ0_MS_MAX)
             break;
@@ -3738,7 +3840,8 @@ INT DpmiInjectPmIrq(DOS_MACHINE *machine, volatile BYTE *tib, UINT interruptVect
          */
         if (g_PmIrq0Done < 12)
         {
-            CHAR errorLine[192], *errorCursor = errorLine;
+            CHAR errorLine[192];
+            CHAR *errorCursor = errorLine;
             errorCursor = LogPut(errorCursor, "   PMENT tick="); errorCursor = LogHex(errorCursor, (DWORD)g_PmIrq0Done);
             errorCursor = LogPut(errorCursor, " ph="); errorCursor = LogHex(errorCursor, (DWORD)phase);
             errorCursor = LogPut(errorCursor, " cs:eip=0x"); errorCursor = LogHex(errorCursor, VDM_REG16(tib, VTIB_CS));
@@ -3791,7 +3894,8 @@ INT DpmiInjectPmIrq(DOS_MACHINE *machine, volatile BYTE *tib, UINT interruptVect
      */
     if (!done && g_PmClientExited)
     {
-        CHAR afterLine[128], *afterCursor = afterLine;
+        CHAR afterLine[128];
+        CHAR *afterCursor = afterLine;
         afterCursor = LogPut(afterCursor, "DPMI: the client EXITED inside its vec 0x"); afterCursor = LogHexByte(afterCursor, interruptVector);
         afterCursor = LogPut(afterCursor, " handler after "); afterCursor = LogHex(afterCursor, (DWORD)phase);
         afterCursor = LogPut(afterCursor, " phases -- not resuming it\r\n");
@@ -3799,7 +3903,8 @@ INT DpmiInjectPmIrq(DOS_MACHINE *machine, volatile BYTE *tib, UINT interruptVect
     }
     else if (!done)
     {
-        CHAR afterLine[192], *afterCursor = afterLine;
+        CHAR afterLine[192];
+        CHAR *afterCursor = afterLine;
         afterCursor = LogPut(afterCursor, "DPMI: *** PM ISR ABANDONED after "); afterCursor = LogHex(afterCursor, (DWORD)phase);
         afterCursor = LogPut(afterCursor, " phases / "); afterCursor = LogHex(afterCursor, GetTickCount() - isrStartTick);
         afterCursor = LogPut(afterCursor, " ms -- the client's interrupt state is now INCONSISTENT"
@@ -3877,13 +3982,22 @@ INT DpmiInjectPmMouseCallback(DOS_MACHINE *machine, volatile BYTE *tib, UINT ste
 {
     if (g_PmClientExited)
         return 0;                            /* nothing left to call into */
-    DWORD sEAX=VDM_REG(tib,VTIB_EAX), sEBX=VDM_REG(tib,VTIB_EBX), sECX=VDM_REG(tib,VTIB_ECX);
-    DWORD sEDX=VDM_REG(tib,VTIB_EDX), sESI=VDM_REG(tib,VTIB_ESI), sEDI=VDM_REG(tib,VTIB_EDI);
-    DWORD sEBP=VDM_REG(tib,VTIB_EBP), sEIP=VDM_REG(tib,VTIB_EIP), sESP=VDM_REG(tib,VTIB_ESP);
+    DWORD sEAX=VDM_REG(tib,VTIB_EAX);
+    DWORD sEBX=VDM_REG(tib,VTIB_EBX);
+    DWORD sECX=VDM_REG(tib,VTIB_ECX);
+    DWORD sEDX=VDM_REG(tib,VTIB_EDX);
+    DWORD sESI=VDM_REG(tib,VTIB_ESI);
+    DWORD sEDI=VDM_REG(tib,VTIB_EDI);
+    DWORD sEBP=VDM_REG(tib,VTIB_EBP);
+    DWORD sEIP=VDM_REG(tib,VTIB_EIP);
+    DWORD sESP=VDM_REG(tib,VTIB_ESP);
     DWORD sEFL=VDM_REG(tib,VTIB_EFLAGS);
-    WORD  savedCs=(WORD)VDM_REG(tib,VTIB_CS), savedSs=(WORD)VDM_REG(tib,VTIB_SS);
-    WORD  savedDs=(WORD)VDM_REG(tib,VTIB_DS), savedEs=(WORD)VDM_REG(tib,VTIB_ES);
-    WORD  savedFs=(WORD)VDM_REG(tib,VTIB_FS), savedGs=(WORD)VDM_REG(tib,VTIB_GS);
+    WORD savedCs=(WORD)VDM_REG(tib,VTIB_CS);
+    WORD savedSs=(WORD)VDM_REG(tib,VTIB_SS);
+    WORD savedDs=(WORD)VDM_REG(tib,VTIB_DS);
+    WORD savedEs=(WORD)VDM_REG(tib,VTIB_ES);
+    WORD savedFs=(WORD)VDM_REG(tib,VTIB_FS);
+    WORD savedGs=(WORD)VDM_REG(tib,VTIB_GS);
     INT previousVi = g_DpmiVi;
     UINT phase;
     INT done = 0;
@@ -3944,7 +4058,8 @@ INT DpmiInjectPmMouseCallback(DOS_MACHINE *machine, volatile BYTE *tib, UINT ste
     ++g_MouseCallbackInjected;
     if (g_MouseCallbackInjected <= 16)
     {
-        CHAR lineBuffer[256], *lineCursor = lineBuffer;
+        CHAR lineBuffer[256];
+        CHAR *lineCursor = lineBuffer;
         lineCursor = LogPut(lineCursor, "  MOUSECB->PM #"); lineCursor = LogHex(lineCursor, g_MouseCallbackInjected);
         lineCursor = LogPut(lineCursor, " ev=0x"); lineCursor = LogHex(lineCursor, (DWORD)pend);
         lineCursor = LogPut(lineCursor, " btn=0x"); lineCursor = LogHex(lineCursor, (DWORD)event.Buttons);
@@ -3956,7 +4071,9 @@ INT DpmiInjectPmMouseCallback(DOS_MACHINE *machine, volatile BYTE *tib, UINT ste
     }
     for (phase = 0; phase < DPMI_IRQ0_PHASE_MAX && !done; ++phase)
     {
-        DWORD runEvent, eip, vector;
+        DWORD runEvent;
+        DWORD eip;
+        DWORD vector;
         INT status;
         if ((phase & DPMI_IRQ_TIME_CHECK_MASK) == DPMI_IRQ_TIME_CHECK_MASK && (GetTickCount() - start) > DPMI_IRQ0_MS_MAX)
             break;
@@ -3995,7 +4112,8 @@ INT DpmiInjectPmMouseCallback(DOS_MACHINE *machine, volatile BYTE *tib, UINT ste
         ++g_MouseCallbackLost;
     if (!done)
     {
-        CHAR afterLine[192], *afterCursor = afterLine;
+        CHAR afterLine[192];
+        CHAR *afterCursor = afterLine;
         afterCursor = LogPut(afterCursor, "DPMI: *** PM MOUSE CALLBACK ABANDONED after "); afterCursor = LogHex(afterCursor, (DWORD)phase);
         afterCursor = LogPut(afterCursor, " phases (last cs:eip=0x"); afterCursor = LogHex(afterCursor, VDM_REG16(tib, VTIB_CS));
         afterCursor = LogPut(afterCursor, ":0x"); afterCursor = LogHex(afterCursor, DpmiPmEip(tib)); afterCursor = LogPut(afterCursor, ")\r\n");
@@ -4042,9 +4160,14 @@ INT DpmiInjectPmMouseCallback(DOS_MACHINE *machine, volatile BYTE *tib, UINT ste
  */
 VOID DpmiClientTeardown(VOID)
 {
-    INT index, keepHigh = g_LdtClientMark, freedLdt = 0, freedMemory = 0, freedDos = 0;
+    INT index;
+    INT keepHigh = g_LdtClientMark;
+    INT freedLdt = 0;
+    INT freedMemory = 0;
+    INT freedDos = 0;
     INT hostIndex[DPMI_HOST_SELECTORS];
-    CHAR lineBuffer[256], *cursor = lineBuffer;
+    CHAR lineBuffer[256];
+    CHAR *cursor = lineBuffer;
 
     /* [WARNING]: PUT EVERY PATCHED INT SITE BACK FIRST, while all of them are still mapped. The
      * patcher's scans are not confined to the client's own blocks: the first version
@@ -4137,7 +4260,8 @@ VOID DpmiClientTeardown(VOID)
     g_LdtFreeCount = 0;
     for (index = g_LdtClientMark; index < keepHigh; ++index)
     {
-        INT isHostIndex = 0, index2;
+        INT isHostIndex = 0;
+        INT index2;
         for (index2 = 0; index2 < DPMI_HOST_SELECTORS; ++index2)
             if (hostIndex[index2] == index)
                 isHostIndex = 1;

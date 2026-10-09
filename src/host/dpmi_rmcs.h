@@ -59,8 +59,18 @@
  */
 typedef struct _RMCS_REGS
 {
-    UINT32 Edi, Esi, Ebp, Ebx, Edx, Ecx, Eax;
-    UINT16 Flags, Es, Ds, Fs, Gs;
+    UINT32 Edi;
+    UINT32 Esi;
+    UINT32 Ebp;
+    UINT32 Ebx;
+    UINT32 Edx;
+    UINT32 Ecx;
+    UINT32 Eax;
+    UINT16 Flags;
+    UINT16 Es;
+    UINT16 Ds;
+    UINT16 Fs;
+    UINT16 Gs;
 } RMCS_REGS, *PRMCS_REGS; typedef const RMCS_REGS *PCRMCS_REGS;
 
 /* Byte-assembled: the structure lives wherever the client put it, at any alignment. */

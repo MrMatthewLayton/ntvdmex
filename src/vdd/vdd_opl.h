@@ -223,10 +223,21 @@ enum
 typedef struct _OPL_OPERATOR
 {
     /* programmed by the register file */
-    BYTE AmplitudeModulation, Vibrato, EnvelopeType, KeyScaleRate, Multiplier;    /* 0x20-0x35 */
-    BYTE KeyScaleLevel, TotalLevel;     /* 0x40-0x55: key-scale level, total level */
-    BYTE AttackRate, DecayRate;         /* 0x60-0x75: attack, decay rates */
-    BYTE SustainLevel, ReleaseRate;     /* 0x80-0x95: sustain level, release rate */
+    /* 0x20-0x35 */
+    BYTE AmplitudeModulation;
+    BYTE Vibrato;
+    BYTE EnvelopeType;
+    BYTE KeyScaleRate;
+    BYTE Multiplier;
+    /* 0x40-0x55: key-scale level, total level */
+    BYTE KeyScaleLevel;
+    BYTE TotalLevel;
+    /* 0x60-0x75: attack, decay rates */
+    BYTE AttackRate;
+    BYTE DecayRate;
+    /* 0x80-0x95: sustain level, release rate */
+    BYTE SustainLevel;
+    BYTE ReleaseRate;
     /* 0xE0-0xF5: waveform select, the 3 bits AS WRITTEN. How many of them count is
      * decided at render time (OplEffectiveWaveform in vdd_opl_synth.c), because it depends
      * on registers written later -- NEW, and on an OPL2 the WSE bit in 0x01.
@@ -236,7 +247,9 @@ typedef struct _OPL_OPERATOR
     UINT32 Phase;                       /* phase accumulator, 10.10 fixed point */
     INT32  Envelope;                       /* attenuation, OPL_ENVELOPE_SHIFT fixed point */
     BYTE  EnvelopeState;
-    INT32  Output1, Output2;            /* last two outputs, for feedback */
+    /* last two outputs, for feedback */
+    INT32 Output1;
+    INT32 Output2;
 } OPL_OPERATOR, *POPL_OPERATOR;
 typedef const OPL_OPERATOR *PCOPL_OPERATOR;
 
@@ -265,14 +278,21 @@ typedef struct _OPL_STATE
     OPL_CHANNEL   Channels[OPL3_CHANNELS];           /* 0-8 array 0, 9-17 array 1 */
 
     /* timers */
-    BYTE  Timer1Preset, Timer2Preset;
-    BYTE  IsTimer1Running, IsTimer2Running;
-    BYTE  IsTimer1Masked, IsTimer2Masked;
-    WORD Timer1Count, Timer2Count;      /* current up-counters (preset..256) */
+    BYTE Timer1Preset;
+    BYTE Timer2Preset;
+    BYTE IsTimer1Running;
+    BYTE IsTimer2Running;
+    BYTE IsTimer1Masked;
+    BYTE IsTimer2Masked;
+    /* current up-counters (preset..256) */
+    WORD Timer1Count;
+    WORD Timer2Count;
     BYTE  Status;                       /* timer/IRQ flags (bits 5-7). A read of
                                            0x388 is this plus the chip ID bits --
                                            use VddOplReadStatus(), not this.   */
-    UINT32 Timer1FractionUs, Timer2FractionUs;    /* microseconds not yet turned into steps */
+    /* microseconds not yet turned into steps */
+    UINT32 Timer1FractionUs;
+    UINT32 Timer2FractionUs;
 
     /* Free-running sample counter driving BOTH low-frequency oscillators. They are
      * properties of the chip, not of a note: one tremolo and one vibrato shared by

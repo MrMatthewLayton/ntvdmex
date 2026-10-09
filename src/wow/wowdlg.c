@@ -52,7 +52,8 @@ static INT WowDlgPump(INT budget, PINT traceBudget)
     {
         if (traceBudget && *traceBudget > 0)
         {
-            CHAR traceBuffer[WOWDLG_TRACE_LINE_MAX], *traceCursor = traceBuffer;
+            CHAR traceBuffer[WOWDLG_TRACE_LINE_MAX];
+            CHAR *traceCursor = traceBuffer;
             WORD window16 = WowWinHwnd16(message.hwnd);
             --*traceBudget;
             traceCursor = LogPut(traceCursor, "       WOWDLG/win32: msg=0x"); traceCursor = LogHex(traceCursor, message.message);
@@ -274,7 +275,8 @@ INT WowDlgStep(
         WOWMSG message;
         DWORD procedure = 0;
         WORD  arguments[WOWDLG_PROCEDURE_ARGUMENTS];
-        WORD  messageNumber, wParam;
+        WORD messageNumber;
+        WORD wParam;
         WORD  target;                      /* s93: the window the call is FOR */
         DWORD lParam;
         INT   isAbsent = 0;
@@ -448,7 +450,8 @@ INT WowDlgStep(
              * sharing the code: a modal dialog and an idle message loop are
              * the same kind of wait and a user who set one meant both.
              */
-            DWORD startTime = GetTickCount(), lastBeat = startTime;
+            DWORD startTime = GetTickCount();
+            DWORD lastBeat = startTime;
             DWORD pumpedAtStart = g_WowWinPumped;
             UINT beatCount = 0;
             /* AND IT SAYS SO BEFORE IT BLOCKS, NOT AFTER (Importance = 2):
@@ -498,7 +501,8 @@ INT WowDlgStep(
                 {   DWORD interval = (beatCount < WOWDLG_FAST_BEATS) ? WOWDLG_FAST_BEAT_MS : WOWDLG_SLOW_BEAT_MS;
                     if (GetTickCount() - lastBeat >= interval)
                     {
-                        CHAR beatBuffer[WOWDLG_BEAT_LINE_MAX], *beatCursor = beatBuffer;
+                        CHAR beatBuffer[WOWDLG_BEAT_LINE_MAX];
+                        CHAR *beatCursor = beatBuffer;
                         lastBeat = GetTickCount();
                         ++beatCount;
                         beatCursor = LogPut(beatCursor, "     WOWDLG: modal 0x"); beatCursor = LogHex(beatCursor, dialog->Window);

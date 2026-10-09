@@ -102,8 +102,10 @@ static INT PicTopLine(PCPIC_CHIP chip, BYTE mask)
  */
 static BYTE PicBlockers(PCPIC_CHIP chip, INT line, INT isMaster)
 {
-    BYTE effective = chip->Isr, blockers = 0;
-    INT otherLine, lineRank = PicRank(chip, line);
+    BYTE effective = chip->Isr;
+    BYTE blockers = 0;
+    INT otherLine;
+    INT lineRank = PicRank(chip, line);
 
     if (chip->IsSpecialMaskMode)
         effective = (BYTE)(effective & ~chip->Imr);

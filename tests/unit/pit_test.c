@@ -17,7 +17,8 @@
 #include <string.h>
 #include "vdd_pit.h"
 
-static INT g_Total = 0, g_Failures = 0;
+static INT g_Total = 0;
+static INT g_Failures = 0;
 #define CHECK(condition, message) do {                                  \
         g_Total++;                                               \
         if (condition) { printf("  PASS  %s\n", (message)); }           \
@@ -30,7 +31,10 @@ static INT g_Total = 0, g_Failures = 0;
  */
 static UINT PitTestLatchedCount(PVDD_BUS bus)
 {
-    UINT32 low = 0, high = 0, controlWord = 0x00;      /* ch0, access 00 = latch */
+    /* ch0, access 00 = latch */
+    UINT32 low = 0;
+    UINT32 high = 0;
+    UINT32 controlWord = 0x00;
 
     VddBusIo(bus, 0x43, 1, 0, &controlWord);
     VddBusIo(bus, 0x40, 1, 1, &low);
@@ -41,7 +45,10 @@ static UINT PitTestLatchedCount(PVDD_BUS bus)
 /* Counter 2 through its ports, the way a guest reads it. */
 static UINT PitTestLatchedCounter2(PVDD_BUS bus)
 {
-    UINT32 low = 0, high = 0, controlWord = 0x80;      /* ch2, access 00 = latch */
+    /* ch2, access 00 = latch */
+    UINT32 low = 0;
+    UINT32 high = 0;
+    UINT32 controlWord = 0x80;
 
     VddBusIo(bus, 0x43, 1, 0, &controlWord);
     VddBusIo(bus, 0x42, 1, 1, &low);
@@ -238,7 +245,9 @@ INT main(VOID)
 
     /* T8b: GH #262 case B -- the WITNESS: was 0040:006C last written by the BIOS? */
     {
-        UINT32 takenTicks = 0xEEEE, takenWraps = 0xEEEE, takenSince = 0xEEEE;
+        UINT32 takenTicks = 0xEEEE;
+        UINT32 takenWraps = 0xEEEE;
+        UINT32 takenSince = 0xEEEE;
         CHECK(pit.TickWitness == 0x00123456 && !pit.IsTickForeign,
               "witness: AH=01h with no host hook owns its count");
         CHECK(VddPitTickTake(&pit, *PitTestBdaTick(), &takenTicks, &takenWraps, &takenSince) == 0 && takenTicks == 0xEEEE,
@@ -298,7 +307,8 @@ INT main(VOID)
     value = 0x00;
     VddBusIo(&bus, 0x43, 1, 0, &value);          /* latch ch0 count */
     {
-        UINT32 low = 0, high = 0;
+        UINT32 low = 0;
+        UINT32 high = 0;
         VddBusIo(&bus, 0x40, 1, 1, &low);              /* lo byte */
         VddBusIo(&bus, 0x40, 1, 1, &high);              /* hi byte */
         CHECK(((high << 8) | low) == 0x1234, "8254: latched count reads lo/hi = 0x1234");
@@ -636,7 +646,9 @@ INT main(VOID)
      * regression that collapsed them.
      */
     {
-        UINT32 portValue, firstStatus, secondStatus;
+        UINT32 portValue;
+        UINT32 firstStatus;
+        UINT32 secondStatus;
         /* Counter 0: lo/hi, mode 2, binary -> status bits 5:0 = 0x34. */
         portValue = 0x34;
         VddBusIo(&bus, 0x43, 1, 0, &portValue);
@@ -737,7 +749,8 @@ INT main(VOID)
      */
     {
         UINT32 portValue;
-        UINT firstOut, secondOut;
+        UINT firstOut;
+        UINT secondOut;
         VddPitCounter2Gate(&pit, 1);                      /* gate high: counting */
         portValue = 0xB6;
         VddBusIo(&bus, 0x43, 1, 0, &portValue);     /* ch2 lo/hi mode 3 */
@@ -790,7 +803,8 @@ INT main(VOID)
     {
         UINT32 portValue;
         UINT value;
-        INT index, isAllBcd;
+        INT index;
+        INT isAllBcd;
 
         /* -- a read is BCD, digit by digit, including the decade borrow. ----- */
         VddPitCounter2Gate(&pit, 1);
@@ -921,7 +935,8 @@ INT main(VOID)
 
     /* ---- #175: THE GATE AS A TRIGGER (docs/ref/pit.md section 5; p_pit section H). ---- */
     {   UINT32 portValue;
-        UINT firstOut, secondOut;
+        UINT firstOut;
+        UINT secondOut;
         VddPitCounter2Gate(&pit, 0);
         portValue = 0xB2;
         VddBusIo(&bus, 0x43, 1, 0, &portValue);          /* ch2 lo/hi mode 1 */

@@ -51,11 +51,17 @@ INT            g_P12Offset       = 0;  /* P12OFF_FLAG: revert to the A0000 page 
 /* North star 1, design C (s80) -- see ModeYNeedsInterp(). */
 INT            g_ModeYInterpOffset = 0;  /* MYINTERP_OFF_FLAG */
 INT            g_ModeYInterp     = 0;  /* inside HostInterp on mode Y's behalf */
-DWORD          g_ModeYSlices = 0, g_ModeYInstructions = 0, g_ModeYBails = 0, g_ModeYBailMp = 0;
+DWORD g_ModeYSlices = 0;
+DWORD g_ModeYInstructions = 0;
+DWORD g_ModeYBails = 0;
+DWORD g_ModeYBailMp = 0;
 INT            g_ModeYRingOn    = 0;  /* MYRING_FLAG: record the ring (a copy per instruction) */
 INT            g_ModeYPmOffset     = 0;  /* MYPM_OFF_FLAG */
 INT            g_ModeYPmDetect  = 0;  /* MYPM_DETECT_FLAG */
-static DWORD          g_ModeYPmRuns = 0, g_ModeYPmInstructions = 0, g_ModeYPmBails = 0, g_ModeYPmBailMp = 0;
+static DWORD g_ModeYPmRuns = 0;
+static DWORD g_ModeYPmInstructions = 0;
+static DWORD g_ModeYPmBails = 0;
+static DWORD g_ModeYPmBailMp = 0;
 static DWORD          g_ModeYPmStop[MYPM_STOP_REASONS];       /* returned, window closed, declined, cap, not32, irq (#172) */
 /* - THE SOURCE BESIDE THE PICTURE. (s68) A planar frame is st->fb rendered from
  * st->plane[] at crtc_start_live, and a watchpoint on the byte a visible sprite
@@ -70,7 +76,8 @@ VOID PlanesDumpBeside(PCSTR bitmapPath)
     CHAR path[200];
     INT length = 0;
     HANDLE file;
-    DWORD header[4], bytesWritten;
+    DWORD header[4];
+    DWORD bytesWritten;
     INT plane;
 
     while (bitmapPath[length] && length < 190)
@@ -110,9 +117,14 @@ static BYTE   g_ModeYSeed[MODEY_WIN];            /* scratch contents as it was s
 INT    g_ModeYRemap      = 0;             /* the window is ours */
 static INT    g_ModeYCurrent        = -1;            /* section index currently at A0000 */
 static INT    g_ModeYPreviousMask  = 0;             /* mask live while the scratch was up */
-DWORD  g_ModeYSwaps = 0, g_ModeYFanouts = 0, g_ModeYFail = 0;
-static DWORD  g_ModeYTimelineSelector[YTL_SECS], g_ModeYTimelineSwap[YTL_SECS], g_ModeYTimelineFanout[YTL_SECS];
-static DWORD  g_ModeYTimelineFanoutBytes[YTL_SECS], g_ModeYTimelineFlip[YTL_SECS];
+DWORD g_ModeYSwaps = 0;
+DWORD g_ModeYFanouts = 0;
+DWORD g_ModeYFail = 0;
+static DWORD g_ModeYTimelineSelector[YTL_SECS];
+static DWORD g_ModeYTimelineSwap[YTL_SECS];
+static DWORD g_ModeYTimelineFanout[YTL_SECS];
+static DWORD g_ModeYTimelineFanoutBytes[YTL_SECS];
+static DWORD g_ModeYTimelineFlip[YTL_SECS];
 static UINT64 g_ModeYTimelineCycles[YTL_SECS];
 DWORD  g_ModeYTimelineT0 = 0;
 static UINT64 g_ModeYTimelineTscBase = 0;
@@ -130,7 +142,8 @@ static DWORD  g_ModeYFanoutNew = 0;
 static DWORD  g_ModeYTimelineFanoutCount[YTL_SECS];
 UINT64 ModeYTimelineRdtsc(VOID)
 {
-    UINT low, high;
+    UINT low;
+    UINT high;
 
     __asm__ __volatile__("rdtsc" : "=a"(low), "=d"(high));
     return ((UINT64)high << DWORD_SHIFT) | low;
@@ -144,9 +157,13 @@ static BYTE  g_ModeYSample[2][4][YSMP_LEN];      /* [band][plane] last seen */
 static INT   g_ModeYSampleHave[2][4];
 static BYTE  g_ModeYSampleLast[2][YSMP_LEN];    /* last CHANGED window, any plane */
 static INT   g_ModeYSampleLastPlane[2] = { -1, -1 };
-DWORD g_ModeYSampleCrossSame[2], g_ModeYSampleCrossDiff[2], g_ModeYSampleWrites[2];
-DWORD g_ModeYSampleCrossEqualBytes[2], g_ModeYSampleCrossTotalBytes[2];
-DWORD g_ModeYSampleP1Equal[2][4], g_ModeYSampleP1Total[2][4];
+DWORD g_ModeYSampleCrossSame[2];
+DWORD g_ModeYSampleCrossDiff[2];
+DWORD g_ModeYSampleWrites[2];
+DWORD g_ModeYSampleCrossEqualBytes[2];
+DWORD g_ModeYSampleCrossTotalBytes[2];
+DWORD g_ModeYSampleP1Equal[2][4];
+DWORD g_ModeYSampleP1Total[2][4];
 /* [CAUTION]: AND `cross_eqb` IS A STATE MEASUREMENT, NOT A DELIVERY ONE (Importance = 1):
  * It compares the WHOLE 256-byte window whenever ANY byte of it changed, so 255 of
  * those bytes can be stale content left by an earlier event. That makes it very
@@ -159,7 +176,8 @@ DWORD g_ModeYSampleP1Equal[2][4], g_ModeYSampleP1Total[2][4];
  *   excluded by construction, so a high rate means the guest HANDED us the same byte for
  *   two different planes -- which state cannot fake.
  */
-DWORD g_ModeYSampleDeliveredEqual[2], g_ModeYSampleDeliveredTotal[2];
+DWORD g_ModeYSampleDeliveredEqual[2];
+DWORD g_ModeYSampleDeliveredTotal[2];
 static VOID ModeYSampleCheck(INT band, UINT offset, INT plane)
 {
     const BYTE *view = (const BYTE *)g_ModeYView[plane] + offset;
@@ -231,7 +249,8 @@ static VOID ModeYFanoutBarNote(UINT linearOffset, INT mask)
     for (page = 0; page < 3; ++page)
     {
         UINT offset = linearOffset - page * 0x4000u;
-        UINT index, band;
+        UINT index;
+        UINT band;
         if (linearOffset < page * 0x4000u || offset < YBAR_OFF_LO || offset >= YBAR_OFF_HI)
             continue;
         band = (offset < YBAR_OFF_MID) ? 0u : 1u;
@@ -257,7 +276,8 @@ static INT    g_ModeYLatch      = 0;             /* write mode 1 seen in the cur
 static VOID ModeYRemapProbe(PCSTR when, DWORD address)
 {
     MEMORY_BASIC_INFORMATION memoryInfo;
-    CHAR buffer[200], *cursor = buffer;
+    CHAR buffer[200];
+    CHAR *cursor = buffer;
 
     cursor = LogPut(cursor, "MODEY-REMAP probe "); cursor = LogPut(cursor, when);
     cursor = LogPut(cursor, " @0x"); cursor = LogHex(cursor, address);
@@ -302,7 +322,8 @@ VOID ModeYRemapFlushReport(VOID)
 
 static VOID ModeYRemapLog(PCSTR what, DWORD error)
 {
-    CHAR buffer[160], *cursor = buffer;
+    CHAR buffer[160];
+    CHAR *cursor = buffer;
 
     cursor = LogPut(cursor, "MODEY-REMAP "); cursor = LogPut(cursor, what);
     if (error)
@@ -319,7 +340,8 @@ static VOID ModeYRemapLog(PCSTR what, DWORD error)
  */
 INT ModeYRemapInitialize(VOID)
 {
-    static BYTE savedWindowA[MODEY_WIN], savedWindowB[MODEY_WIN];
+    static BYTE savedWindowA[MODEY_WIN];
+    static BYTE savedWindowB[MODEY_WIN];
     UINT index;
 
     for (index = 0; index < MODEY_WIN; ++index)
@@ -423,7 +445,8 @@ INT ModeYRemapInitialize(VOID)
 static INT ModeYLatchVerify(INT32 delta)
 {
     const BYTE *scratch = (const BYTE *)g_ModeYView[MODEY_VIEW_SCRATCH];
-    UINT index, moved = 0;
+    UINT index;
+    UINT moved = 0;
 
     for (index = 0; index < MODEY_WIN; ++index)
     {
@@ -449,7 +472,13 @@ static INT ModeYLatchVerify(INT32 delta)
 static INT32 ModeYLatchDelta(VOID)
 {
     const BYTE *scratch = (const BYTE *)g_ModeYView[MODEY_VIEW_SCRATCH];
-    unsigned index, runLow = 0, runLength = 0, bestLow = 0, bestLength = 0, cap; /* stays unsigned: UINT here moves the compiled code */
+    /* stays unsigned: UINT here moves the compiled code */
+    unsigned index;
+    unsigned runLow = 0;
+    unsigned runLength = 0;
+    unsigned bestLow = 0;
+    unsigned bestLength = 0;
+    unsigned cap;
 
     for (index = 0; index < MODEY_WIN; ++index)
     {
@@ -497,15 +526,19 @@ static INT32 ModeYLatchDelta(VOID)
 #define YPM_SITES   16
 static struct
 {
-    DWORD Linear, Count, Multi;
+    DWORD Linear;
+    DWORD Count;
+    DWORD Multi;
     WORD Masks;
     BYTE Bytes[48];
 } g_ModeYPmSite[YPM_SITES];
-static UINT g_ModeYPmCount = 0, g_ModeYPmLost = 0;
+static UINT g_ModeYPmCount = 0;
+static UINT g_ModeYPmLost = 0;
 static VOID ModeYPmSiteNote(INT mask)
 {
     DWORD linear;
-    UINT index, byteIndex;
+    UINT index;
+    UINT byteIndex;
 
     if (!g_DpmiPm || !g_DpmiLastCs)
         return;
@@ -539,7 +572,11 @@ static VOID ModeYPmSiteNote(INT mask)
 VOID ModeYRemapSelect(PVOID context, INT mask)
 {
     UINT64 cycleStart;
-    DWORD seconds, swapsBase, fan0, fanoutBytesBase, function0;
+    DWORD seconds;
+    DWORD swapsBase;
+    DWORD fan0;
+    DWORD fanoutBytesBase;
+    DWORD function0;
 
     if (!g_ModeYRemap)
         return;
@@ -592,13 +629,16 @@ VOID ModeYRemapSelect(PVOID context, INT mask)
 #define MY_SITE_MAX     16
 static struct
 {
-    DWORD Cs, Ip, Count;
+    DWORD Cs;
+    DWORD Ip;
+    DWORD Count;
     BYTE Bytes[8];
 } g_ModeYSite[MY_SITE_MAX];
 static UINT g_ModeYSiteCount = 0;
 VOID ModeYBailNote(DWORD cs, DWORD ip, const volatile BYTE *bytes)
 {
-    UINT index, byteIndex;
+    UINT index;
+    UINT byteIndex;
 
     for (index = 0; index < g_ModeYSiteCount; ++index)
         if (g_ModeYSite[index].Cs == cs && g_ModeYSite[index].Ip == ip)
@@ -619,10 +659,13 @@ VOID ModeYBailNote(DWORD cs, DWORD ip, const volatile BYTE *bytes)
 VOID ModeYTimelineReport(VOID)
 {
     static INT done = 0;
-    CHAR buffer[1400], *cursor = buffer;
+    CHAR buffer[1400];
+    CHAR *cursor = buffer;
     LARGE_INTEGER now;
     UINT64 cpu;
-    DWORD microsecondsRun, second, last = 0;
+    DWORD microsecondsRun;
+    DWORD second;
+    DWORD last = 0;
     INT row;
     static PCSTR names[9] = { "sel", "swap", "fan", "fanB", "us", "flip", "fanN", "ins", "ius" };
     if (done || !g_ModeYTimelineT0)
@@ -753,7 +796,10 @@ VOID ModeYTimelineReport(VOID)
 
 static VOID ModeYRemapSelectBody(PVOID context, INT mask)
 {
-    INT want, plane, selectedCount = 0, selector[VIDEO_PLANES];
+    INT want;
+    INT plane;
+    INT selectedCount = 0;
+    INT selector[VIDEO_PLANES];
 
     (VOID)context;
     if (!g_ModeYRemap)
@@ -929,7 +975,9 @@ BYTE *ModeYRemapPlane(PVOID context, INT plane)
  *   (`g_ModeYCurrent == 5`): a multi-plane write window is mid-flight and I_ReadScreen never runs
  *   under one.
  */
-DWORD g_ModeYGr4Calls = 0, g_ModeYGr4Mismatch = 0, g_ModeYGr4Pair[4][6];
+DWORD g_ModeYGr4Calls = 0;
+DWORD g_ModeYGr4Mismatch = 0;
+DWORD g_ModeYGr4Pair[4][6];
 /* AND THE MISMATCH ONLY BITES IF NO MASK CHANGE FOLLOWS:
  * `mismatch` is sampled at the instant GR4 is written, and 74% of those instants have
  * the window one plane behind -- but that is HARMLESS in the ordinary blit, where the
@@ -943,7 +991,9 @@ DWORD g_ModeYGr4Calls = 0, g_ModeYGr4Mismatch = 0, g_ModeYGr4Pair[4][6];
  *   4 with no intervening select is its fingerprint. A run of 1 is the ordinary blit and
  *   is fine. This is the counter that can come out either way.
  */
-DWORD g_ModeYGr4SinceSelector = 0, g_ModeYGr4Runs[10], g_ModeYGr4RunPlanes[VIDEO_PLANES];
+DWORD g_ModeYGr4SinceSelector = 0;
+DWORD g_ModeYGr4Runs[10];
+DWORD g_ModeYGr4RunPlanes[VIDEO_PLANES];
 static VOID ModeYGr4CloseRun(VOID)
 {
     if (g_ModeYGr4SinceSelector)
@@ -1114,7 +1164,12 @@ VOID ModeYRemapWriteMode(PVOID context, INT writeMode)
          */
         if (g_ModeYLatchDescriptor < 4096)
         {
-            UINT index2, count = 0, low = MODEY_WIN, high = 0, uniqueCount = 0, barBytes = 0;
+            UINT index2;
+            UINT count = 0;
+            UINT low = MODEY_WIN;
+            UINT high = 0;
+            UINT uniqueCount = 0;
+            UINT barBytes = 0;
             BYTE first = 0;
             INT constant = 1;
             for (index2 = 0; index2 < MODEY_WIN; ++index2)
@@ -1304,7 +1359,9 @@ enum
  *   cost falls only on the upper-memory accesses that are the anomaly.
  */
 static BYTE g_PageMap[X86_REAL_MODE_SIZE_U >> PAGE_SHIFT];     /* one entry per 4KB page of the low 1MB */
-DWORD   g_InterpreterMemoryBadReads, g_InterpreterMemoryBadWrites, g_InterpreterMemoryBadLogged;
+DWORD g_InterpreterMemoryBadReads;
+DWORD g_InterpreterMemoryBadWrites;
+DWORD g_InterpreterMemoryBadLogged;
 INT InterpreterMemoryPageOk(UINT32 linear)
 {
     UINT32 page = linear >> PAGE_SHIFT;
@@ -1546,13 +1603,15 @@ static INT ModeYPmIrqWaiting(VOID)
 VOID ModeYPmRun(volatile BYTE *tib)
 {
     PM32_CPU cpu;
-    INT32 steps = 0, idleFrom = 0;
+    INT32 steps = 0;
+    INT32 idleFrom = 0;
     UINT32 espStart;
     INT why;
     DWORD vgaSeen;
     WORD selector[X86_SEGMENT_REGISTERS];
     INT index;
-    WORD cs = (WORD)VDM_REG16(tib, VTIB_CS), ss = (WORD)VDM_REG16(tib, VTIB_SS);
+    WORD cs = (WORD)VDM_REG16(tib, VTIB_CS);
+    WORD ss = (WORD)VDM_REG16(tib, VTIB_SS);
 
     if (!DpmiSelectorIs32(cs) || !DpmiSelectorIs32(ss))
     {
@@ -1661,7 +1720,8 @@ const V86_CPU *g_InterpreterCpu;
  */
 static VOID InterpreterMemoryBadNote(UINT32 linear, INT write)
 {
-    CHAR buffer[224], *cursor = buffer;
+    CHAR buffer[224];
+    CHAR *cursor = buffer;
 
     if (g_InterpreterMemoryBadLogged >= 12)
         return;
@@ -1696,15 +1756,20 @@ UINT32 HostGuestPc(VOID)
 #define MY_RING     64
 static struct
 {
-    WORD Cs, Ip, Sp, Ss;
+    WORD Cs;
+    WORD Ip;
+    WORD Sp;
+    WORD Ss;
     BYTE Bytes[6];
 } g_ModeYRing[MY_RING];
 static UINT g_ModeYRingPosition = 0;
 static INT      g_ModeYRingDumped = 0;
 VOID ModeYRingDump(PCSTR why)
 {
-    CHAR lineBuffer[160], *cursor;
-    UINT age, byteIndex;
+    CHAR lineBuffer[160];
+    CHAR *cursor;
+    UINT age;
+    UINT byteIndex;
 
     if (g_ModeYRingDumped)
         return;
@@ -1734,7 +1799,8 @@ VOID ModeYRingDump(PCSTR why)
  */
 VOID ModeYRingNoteIrq(UINT vector, WORD cs, WORD ip, WORD ss, WORD sp)
 {
-    UINT index, byteIndex;
+    UINT index;
+    UINT byteIndex;
 
     (VOID)ss;
     (VOID)sp;
@@ -1765,11 +1831,17 @@ enum
 static volatile LONG g_HostProfileOn;
 static HANDLE   g_HostProfileThread;
 static DWORD   *g_HostProfile;                 /* one counter per 16 bytes of the image */
-static DWORD    g_HostProfileCount, g_HostProfileSamples, g_HostProfileIn, g_HostProfileBase, g_HostProfileSize;
+static DWORD g_HostProfileCount;
+static DWORD g_HostProfileSamples;
+static DWORD g_HostProfileIn;
+static DWORD g_HostProfileBase;
+static DWORD g_HostProfileSize;
 /* ...and everything that is NOT our image, because half the samples were not: the
  * guest running natively (VM flag), the kernel, and other user-mode code by 64 KB.
  */
-static DWORD    g_HostProfileV86, g_HostProfileKernel, g_HostProfileOther;
+static DWORD g_HostProfileV86;
+static DWORD g_HostProfileKernel;
+static DWORD g_HostProfileOther;
 static DWORD    g_HostProfileSegment[0x8000];     /* user space below 2 GB, per 64 KB */
 static DWORD WINAPI HostProfileThread(LPVOID parameter)
 {
@@ -1807,7 +1879,8 @@ static DWORD WINAPI HostProfileThread(LPVOID parameter)
 VOID HostProfileStart(VOID)
 {
     const BYTE *image = (const BYTE *)GetModuleHandleA(NULL);
-    DWORD newHeaderOffset, size;
+    DWORD newHeaderOffset;
+    DWORD size;
 
     if (GetFileAttributesA(HOSTPROF_FLAG) == INVALID_FILE_ATTRIBUTES)
         return;
@@ -1833,7 +1906,8 @@ VOID HostProfileStart(VOID)
 
 static VOID HostProfileDump(VOID)
 {
-    CHAR buffer[160], *cursor;
+    CHAR buffer[160];
+    CHAR *cursor;
     INT rank;
 
     if (!g_HostProfile)
@@ -1850,7 +1924,9 @@ static VOID HostProfileDump(VOID)
     LogAppend(LOG_PATH, buffer, cursor);
     for (rank = 0; rank < 12; ++rank)
     {
-        DWORD index, best = 0, bestIndex = 0;
+        DWORD index;
+        DWORD best = 0;
+        DWORD bestIndex = 0;
         for (index = 0; index < 0x8000; ++index) if (g_HostProfileSegment[index] > best)
         {
             best = g_HostProfileSegment[index];
@@ -1864,7 +1940,9 @@ static VOID HostProfileDump(VOID)
     }
     for (rank = 0; rank < 400; ++rank)
     {
-        DWORD index, best = 0, bestIndex = 0;
+        DWORD index;
+        DWORD best = 0;
+        DWORD bestIndex = 0;
         for (index = 0; index < g_HostProfileCount; ++index) if (g_HostProfile[index] > best)
         {
             best = g_HostProfile[index];
@@ -1952,7 +2030,8 @@ static INT32 HostInterp(volatile BYTE *tib, INT32 cap)
              */
             if ((iters & BYTE_MASK) == 0xFF)
             {
-                INT irq, pend = (g_Irq0Pending != 0);
+                INT irq;
+                INT pend = (g_Irq0Pending != 0);
                 for (irq = 0; !pend && irq < ARRAYSIZE(g_IrqNPending); ++irq)
                     pend = (g_IrqNPending[irq] != 0);
                 if (pend)
@@ -1975,7 +2054,8 @@ static INT32 HostInterp(volatile BYTE *tib, INT32 cap)
         {
             if (ring)
             {
-                UINT index = g_ModeYRingPosition++ % MY_RING, byteIndex;
+                UINT index = g_ModeYRingPosition++ % MY_RING;
+                UINT byteIndex;
                 const volatile BYTE *codeBytes = (const volatile BYTE *)(((UINT32)cpu.Segments[X86_SREG_CS] << PARAGRAPH_SHIFT) + cpu.Ip);
                 g_ModeYRing[index].Cs = cpu.Segments[X86_SREG_CS];
                 g_ModeYRing[index].Ip = cpu.Ip;
@@ -1994,7 +2074,8 @@ static INT32 HostInterp(volatile BYTE *tib, INT32 cap)
             }
             if ((iters & BYTE_MASK) == 0xFF)
             {
-                INT irq, pend = (g_Irq0Pending != 0);
+                INT irq;
+                INT pend = (g_Irq0Pending != 0);
                 for (irq = 0; !pend && irq < ARRAYSIZE(g_IrqNPending); ++irq)
                     pend = (g_IrqNPending[irq] != 0);
                 /* Only when the guest could TAKE it: yielding inside a CLI region hands
@@ -2085,7 +2166,8 @@ INT32 HostInterpPaced(volatile BYTE *tib, INT32 cap)
 {
     static CPUSPEED_PACE pace;              /* exec thread only -- no lock needed */
     DWORD instructionsPerSecond = CpuSpeedInstructionsPerSecond((UINT)g_CpuSpeedIndex);
-    LARGE_INTEGER before, after;
+    LARGE_INTEGER before;
+    LARGE_INTEGER after;
     INT32 ran;
     INT milliseconds;
 
@@ -2182,7 +2264,8 @@ INT DpmiRunPmInterp(DOS_MACHINE *machine, volatile BYTE *tib)
             continue;
         }
         { UINT32 site = V86SegmentBase(cpu.Segments[X86_SREG_CS]) + cpu.Ip;
-          BYTE opcode = V86HostRead8(site), nextByte = V86HostRead8(site+1);
+          BYTE opcode = V86HostRead8(site);
+          BYTE nextByte = V86HostRead8(site+1);
           if (opcode == X86_OP_INT)                     /* INT nn -> shared DPMI/DOS dispatch */
           {
               INT status;

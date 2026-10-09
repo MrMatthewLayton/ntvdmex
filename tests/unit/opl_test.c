@@ -29,7 +29,8 @@
 #include <string.h>
 #include "vdd_opl.h"
 
-static INT g_Total = 0, g_Failures = 0;
+static INT g_Total = 0;
+static INT g_Failures = 0;
 #define CHECK(condition,message) do{ g_Total++; if(condition){printf("  PASS  %s\n",(message));} \
     else{printf("  FAIL  %s\n",(message)); g_Failures++;} }while(0)
 
@@ -80,7 +81,8 @@ INT main(VOID)
 
     memset(&opl, 0, sizeof opl);
     NTVDD_DEVICE device = VddOplDevice(&opl);
-    INT modulator, carrier;
+    INT modulator;
+    INT carrier;
 
     printf("== sound epic: AdLib/OPL2 + OPL3 register + timer battery ==\n");
 

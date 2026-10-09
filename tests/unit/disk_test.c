@@ -35,7 +35,8 @@
 #define DISK_TEST_REFUSED               (-1L)   /* What lbaOrRefused reports for a refusal */
 #define DISK_TEST_EMPTY                 0       /* A zeroed field: "none" */
 
-static INT g_Checks, g_Failures;
+static INT g_Checks;
+static INT g_Failures;
 
 static VOID DiskTestExpect(PCSTR description, LONG actual, LONG expected)
 {

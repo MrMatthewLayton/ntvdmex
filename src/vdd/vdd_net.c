@@ -46,7 +46,8 @@
 BYTE VddNetBiosService(PNETBIOS_STATE state, BYTE *ncb, BYTE *buffer)
 {
     NETBIOS_REQUEST request;
-    BYTE command = ncb[NETB_NCB_COMMAND], returnCode;
+    BYTE command = ncb[NETB_NCB_COMMAND];
+    BYTE returnCode;
     INT isNoWait = (command & NETB_NO_WAIT_BIT) != 0;
 
     ++state->Calls;
@@ -107,7 +108,8 @@ static VOID VddNetBiosInt5C(PVOID context, PNTVDD_REGISTERS registers)
     PNETBIOS_STATE state = (PNETBIOS_STATE)context;
     BYTE *ncb = (BYTE *)VddMapFlat(state->Bus, registers->Es, VddGetBx(registers));
     BYTE *buffer = NULL;
-    WORD bufferOffset, bufferSegment;
+    WORD bufferOffset;
+    WORD bufferSegment;
 
     if (!ncb)
     {

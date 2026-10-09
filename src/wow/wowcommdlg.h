@@ -200,7 +200,8 @@ typedef struct _WOWCDLG_FIND
     FINDREPLACEA   FindReplace;
     volatile BYTE *Guest;        /* the guest's FINDREPLACE, host linear */
     DWORD          Guest16;      /* ...and as the guest's own 16:16 pointer */
-    WORD           Owner16, Window16;
+    WORD Owner16;
+    WORD Window16;
 } WOWCDLG_FIND, *PWOWCDLG_FIND;
 
 /* Defined in wowcommdlg.c (#335). */

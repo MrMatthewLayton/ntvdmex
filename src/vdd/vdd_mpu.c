@@ -151,7 +151,9 @@ static VOID MpuMidiByte(PMPU_STATE state, BYTE value)
     if (value >= MPU_REALTIME_FIRST)            /* realtime: standalone, no data */
     {
         BYTE savedStatus = state->Status;
-        BYTE savedData0 = state->Data[0], savedData1 = state->Data[1], savedCount = state->DataCount;
+        BYTE savedData0 = state->Data[0];
+        BYTE savedData1 = state->Data[1];
+        BYTE savedCount = state->DataCount;
         state->Status = value;
         state->Data[0] = state->Data[1] = 0;
         MpuEmit(state);

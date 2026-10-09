@@ -956,8 +956,15 @@ static VOID VideoPaletteRefresh(PVIDEO_STATE state)
 static VOID VideoPaletteSplitNote(PVIDEO_STATE state, const UINT32 *prev)
 {
     UINT64 now;
-    UINT32 frameUs, verticalTotal, verticalDisplay, verticalBlank, frameNumber, line, row;
-    INT index, split;
+    UINT32 frameUs;
+    UINT32 verticalTotal;
+    UINT32 verticalDisplay;
+    UINT32 verticalBlank;
+    UINT32 frameNumber;
+    UINT32 line;
+    UINT32 row;
+    INT index;
+    INT split;
 
     if (!VideoBeam(state, &now, &frameUs, &verticalTotal, &verticalDisplay, &verticalBlank, &frameNumber, &line)
         || !state->GraphicsHeight || !verticalDisplay)
@@ -1009,7 +1016,12 @@ static VOID VideoPaletteSplitNote(PVIDEO_STATE state, const UINT32 *prev)
 VOID VddVideoFrameTouch(PVIDEO_STATE state)
 {
     UINT64 now;
-    UINT32 frameUs, verticalTotal, verticalDisplay, verticalBlank, frameNumber, line;
+    UINT32 frameUs;
+    UINT32 verticalTotal;
+    UINT32 verticalDisplay;
+    UINT32 verticalBlank;
+    UINT32 frameNumber;
+    UINT32 line;
 
     state->Frame.PaletteBase  = state->PaletteBase;
     state->Frame.PaletteSplit = state->PaletteSplit;
@@ -1203,8 +1215,12 @@ static VOID VideoAttributeIn(PVOID context, WORD port, BYTE width, UINT32 *value
  */
 typedef struct _VIDEO_MODE_ENTRY
 {
-    BYTE Mode, Kind, Columns, Rows;
-    WORD Width, Height;
+    BYTE Mode;
+    BYTE Kind;
+    BYTE Columns;
+    BYTE Rows;
+    WORD Width;
+    WORD Height;
 } VIDEO_MODE_ENTRY;
 static const VIDEO_MODE_ENTRY g_VideoModes[] = {
     { 0x00, VIDEO_KIND_TEXT,    40, 25,   320, 400 },
@@ -1275,7 +1291,8 @@ static BYTE *VideoPlaneBytes(PVIDEO_STATE state, INT plane)
 
 static VOID VideoClearText(PVIDEO_STATE state, BYTE attribute)
 {
-    INT count = state->Columns * state->Rows, index;
+    INT count = state->Columns * state->Rows;
+    INT index;
     BYTE *text = state->VideoMemory + VIDEO_TEXT_OFFSET;
 
     for (index = 0; index < count; ++index)
@@ -1582,7 +1599,10 @@ static VOID VideoGraphicsGlyph(
     BYTE character,
     BYTE colour)
 {
-    INT height, glyphY, plane, isXor = (colour & VIDEO_COLOUR_XOR) != 0;
+    INT height;
+    INT glyphY;
+    INT plane;
+    INT isXor = (colour & VIDEO_COLOUR_XOR) != 0;
     const BYTE *glyph = VideoGraphicsFont(state, character, &height);
 
     /* A VESA mode: our ModeInfoBlock says D2 = 0, "BIOS TTY output not supported",
@@ -1675,18 +1695,22 @@ static VOID VideoGraphicsGlyph(
 static BYTE VideoGraphicsReadChar(PVIDEO_STATE state, INT page, INT column, INT row)
 {
     BYTE pattern[VGA_FONT16_HEIGHT];
-    INT height, glyphY, candidate;
+    INT height;
+    INT glyphY;
+    INT candidate;
 
     (VOID)VideoGraphicsFont(state, 0, &height);
     if (state->IsVesa || column < 0 || row < 0 || column >= state->Columns || row >= state->Rows)
         return 0;
     for (glyphY = 0; glyphY < height; ++glyphY)
     {
-        INT line = row * height + glyphY, glyphX;
+        INT line = row * height + glyphY;
+        INT glyphX;
         BYTE bits = 0;
         if (state->ModeKind == VIDEO_KIND_LINEAR8)
         {
-            UINT32 width = state->GraphicsWidth ? state->GraphicsWidth : VIDEO_MODE13_WIDTH, offset = (UINT32)line * width + (UINT32)column * VIDEO_GLYPH_WIDTH;
+            UINT32 width = state->GraphicsWidth ? state->GraphicsWidth : VIDEO_MODE13_WIDTH;
+            UINT32 offset = (UINT32)line * width + (UINT32)column * VIDEO_GLYPH_WIDTH;
             if (offset + VIDEO_GLYPH_WIDTH > VIDEO_APERTURE_SIZE)
                 return 0;
             for (glyphX = 0; glyphX < VIDEO_GLYPH_WIDTH; ++glyphX)
@@ -1745,7 +1769,8 @@ static BYTE *VideoGraphicsRowAddress(
 {
     if (state->ModeKind == VIDEO_KIND_LINEAR8)
     {
-        UINT32 width = state->GraphicsWidth ? state->GraphicsWidth : VIDEO_MODE13_WIDTH, offset = (UINT32)line * width + (UINT32)left * VIDEO_GLYPH_WIDTH;
+        UINT32 width = state->GraphicsWidth ? state->GraphicsWidth : VIDEO_MODE13_WIDTH;
+        UINT32 offset = (UINT32)line * width + (UINT32)left * VIDEO_GLYPH_WIDTH;
         *count = (UINT32)(right - left + 1) * VIDEO_GLYPH_WIDTH;
         return (offset + *count <= VIDEO_APERTURE_SIZE) ? state->VideoMemory + offset : 0;
     }
@@ -1783,7 +1808,11 @@ static VOID VideoGraphicsScroll(
     INT isUp)
 {
     INT cellHeight = state->CellHeight == VGA_FONT14_HEIGHT ? VGA_FONT14_HEIGHT : state->CellHeight == VGA_FONT16_HEIGHT ? VGA_FONT16_HEIGHT : VGA_FONT8_HEIGHT;
-    INT line, firstLine, lastLine, plane, planeCount = state->ModeKind == VIDEO_KIND_PLANAR ? VIDEO_PLANES : 1;
+    INT line;
+    INT firstLine;
+    INT lastLine;
+    INT plane;
+    INT planeCount = state->ModeKind == VIDEO_KIND_PLANAR ? VIDEO_PLANES : 1;
 
     if (state->IsVesa || (state->ModeKind == VIDEO_KIND_LINEAR8 && !state->IsChain4))
         return;                                                                                 /* as VideoGraphicsGlyph */
@@ -1809,8 +1838,11 @@ static VOID VideoGraphicsScroll(
         for (line = isUp ? firstLine : lastLine; isUp ? (line <= lastLine) : (line >= firstLine); line += isUp ? 1 : -1)
         {
             INT sourceLine = isUp ? line + lines * cellHeight : line - lines * cellHeight;
-            UINT32 count, sourceCount, byteIndex;
-            BYTE *destination = VideoGraphicsRowAddress(state, plane, line, left, right, &count), *source;
+            UINT32 count;
+            UINT32 sourceCount;
+            UINT32 byteIndex;
+            BYTE *destination = VideoGraphicsRowAddress(state, plane, line, left, right, &count);
+            BYTE *source;
             if (!destination)
                 continue;
             source = (sourceLine >= firstLine && sourceLine <= lastLine) ? VideoGraphicsRowAddress(state, plane, sourceLine, left, right, &sourceCount) : 0;
@@ -1830,7 +1862,8 @@ static VOID VideoScrollUp(
     INT right,
     BYTE attribute)
 {
-    INT row, column;
+    INT row;
+    INT column;
 
     if (state->ModeKind != VIDEO_KIND_TEXT)
     {
@@ -1851,7 +1884,8 @@ static VOID VideoScrollUp(
     for (row = top; row <= bottom - lines; ++row)
         for (column = left; column <= right; ++column)
         {
-            BYTE *destination = VideoCell(state, row, column), *source = VideoCell(state, row + lines, column);
+            BYTE *destination = VideoCell(state, row, column);
+            BYTE *source = VideoCell(state, row + lines, column);
             destination[0] = source[0];
             destination[1] = source[1];
         }
@@ -1942,7 +1976,9 @@ static VOID VideoTeletype(PVIDEO_STATE state, BYTE character)
  */
 typedef struct _VIDEO_VESA_MODE
 {
-    WORD Number, Width, Height;
+    WORD Number;
+    WORD Width;
+    WORD Height;
     BYTE Bpp;
 } VIDEO_VESA_MODE;
 static const VIDEO_VESA_MODE g_VideoVesaModes[] = {
@@ -1983,7 +2019,9 @@ static const VIDEO_VESA_MODE g_VideoVesaModes[] = {
 typedef struct _VIDEO_VESA_TEXT_MODE
 {
     WORD Number;
-    BYTE Columns, Rows, CellHeight;
+    BYTE Columns;
+    BYTE Rows;
+    BYTE CellHeight;
 } VIDEO_VESA_TEXT_MODE;
 static const VIDEO_VESA_TEXT_MODE g_VideoVesaTextModes[] = {
     { 0x108,  80, 60,  8 }, { 0x109, 132, 25, 16 }, { 0x10A, 132, 43,  8 },
@@ -2329,7 +2367,10 @@ static VOID VideoVbePortIn(PVOID context, WORD port, BYTE width, UINT32 *value)
  */
 static VOID VideoVesaScanWritten(PVIDEO_STATE state)
 {
-    UINT32 index, low = VIDEO_OFFSET_NONE, high = 0, nonZero = 0;
+    UINT32 index;
+    UINT32 low = VIDEO_OFFSET_NONE;
+    UINT32 high = 0;
+    UINT32 nonZero = 0;
     UINT32 end = state->VesaOriginLive + state->VesaStride * state->VesaHeight;   /* the displayed page */
 
     if (!end || end > VIDEO_VESA_VRAM)
@@ -2349,8 +2390,14 @@ static VOID VideoVesaScanWritten(PVIDEO_STATE state)
 
 static VOID VideoVesaToArgb(PVIDEO_STATE state)
 {
-    UINT32 line, column, width = state->VesaWidth, height = state->VesaHeight, pitch = state->VesaStride;
-    UINT32 bytesPerPixel = VideoVesaBytesPerPixel(state->VesaBpp), origin = state->VesaOriginLive;  /* as displayed (VideoLatch) */
+    UINT32 line;
+    UINT32 column;
+    UINT32 width = state->VesaWidth;
+    UINT32 height = state->VesaHeight;
+    UINT32 pitch = state->VesaStride;
+    /* as displayed (VideoLatch) */
+    UINT32 bytesPerPixel = VideoVesaBytesPerPixel(state->VesaBpp);
+    UINT32 origin = state->VesaOriginLive;
 
     if (!width || !height || !pitch)
         return;
@@ -2364,7 +2411,9 @@ static VOID VideoVesaToArgb(PVIDEO_STATE state)
             break;
         for (column = 0; column < width; ++column)
         {
-            UINT32 red, green, blue;
+            UINT32 red;
+            UINT32 green;
+            UINT32 blue;
             if (state->VesaBpp == VIDEO_BPP_15)
             {
                 UINT32 value = (UINT32)source[column*VIDEO_BYTES_16BPP] | ((UINT32)source[column*VIDEO_BYTES_16BPP+1] << BYTE_SHIFT);
@@ -2563,7 +2612,9 @@ static VOID VideoVesa(PVIDEO_STATE state, PNTVDD_REGISTERS registers)
          */
         BYTE *buffer = (BYTE *)VddMapFlat(state->Bus, registers->Es, (WORD)(WORD)registers->Edi);
         INT isVbe2 = (buffer[0]=='V' && buffer[1]=='B' && buffer[2]=='E' && buffer[3]=='2');
-        const UINT OEM = 0x22, MODES = 0x40;  /* both inside the reserved area */
+        /* both inside the reserved area */
+        const UINT OEM = 0x22;
+        const UINT MODES = 0x40;
         for (index = 0; index < (isVbe2 ? VIDEO_VBE_INFO_BYTES_V2 : VIDEO_VBE_INFO_BYTES); ++index)
             buffer[index] = 0;
         buffer[0]='V';
@@ -2601,7 +2652,8 @@ static VOID VideoVesa(PVIDEO_STATE state, PNTVDD_REGISTERS registers)
              */
             static const char *const strings[VIDEO_VBE_OEM_STRINGS] = { VIDEO_VBE_OEM_STRING, VIDEO_VBE_OEM_VENDOR, VIDEO_VBE_OEM_PRODUCT, VIDEO_VBE_OEM_REVISION };
             static const UINT pointerOffsets[VIDEO_VBE_OEM_STRINGS] = { VIDEO_VBE_INFO_OEM_STRING, VIDEO_VBE_INFO_OEM_VENDOR, VIDEO_VBE_INFO_OEM_PRODUCT, VIDEO_VBE_INFO_OEM_PRODUCT_REVISION };   /* OemString, Vendor, Product, Rev */
-            UINT stringOffset = VIDEO_VBE_INFO_OEM_DATA, byteIndex;
+            UINT stringOffset = VIDEO_VBE_INFO_OEM_DATA;
+            UINT byteIndex;
             VideoWrite16(buffer + VIDEO_VBE_INFO_OEM_SOFTWARE_REVISION, VIDEO_VBE_OEM_REVISION_1_00);                 /* OEM software rev 1.00 */
             for (byteIndex = 0; byteIndex < VIDEO_VBE_OEM_STRINGS; ++byteIndex)
             {
@@ -2622,7 +2674,8 @@ static VOID VideoVesa(PVIDEO_STATE state, PNTVDD_REGISTERS registers)
 
     case VIDEO_VBE_MODE_INFO:                                    /* return mode info */
     {
-        WORD width, height;
+        WORD width;
+        WORD height;
         BYTE modeBitsPerPixel = VIDEO_BPP_INDEXED;
         { BYTE textColumns, textRows, textCellHeight;
           if (VideoVesaFindText(VddGetCx(registers), &textColumns, &textRows, &textCellHeight))     /* a TEXT mode: answer in characters */
@@ -2659,7 +2712,8 @@ static VOID VideoVesa(PVIDEO_STATE state, PNTVDD_REGISTERS registers)
         if (VideoVesaFind(VddGetCx(registers), &width, &height, &modeBitsPerPixel))
         {
             BYTE *buffer = (BYTE *)VddMapFlat(state->Bus, registers->Es, (WORD)(WORD)registers->Edi);
-            UINT32 bytesPerPixel = VideoVesaBytesPerPixel(modeBitsPerPixel), pitch = (UINT32)width * bytesPerPixel;
+            UINT32 bytesPerPixel = VideoVesaBytesPerPixel(modeBitsPerPixel);
+            UINT32 pitch = (UINT32)width * bytesPerPixel;
             for (index = 0; index < VIDEO_MODE_INFO_BYTES; ++index)
                 buffer[index] = 0;
             /* [WARNING]: D5 STAYS CLEAR (s84, a user-found regression). #226 set it (0xBB, "not
@@ -2810,7 +2864,8 @@ static VOID VideoVesa(PVIDEO_STATE state, PNTVDD_REGISTERS registers)
 
     case VIDEO_VBE_SET_MODE:                                    /* set VBE mode */
     {
-        WORD width, height;
+        WORD width;
+        WORD height;
         BYTE modeBitsPerPixel = VIDEO_BPP_INDEXED;
         { BYTE textColumns, textRows, textCellHeight;
           if (VideoVesaFindText(VddGetBx(registers), &textColumns, &textRows, &textCellHeight))
@@ -3119,7 +3174,10 @@ static VOID VideoVesa(PVIDEO_STATE state, PNTVDD_REGISTERS registers)
         }
         else if (bl == VIDEO_START_SET || bl == (VIDEO_START_SET | VIDEO_START_WAIT_RETRACE) || bl == VIDEO_START_SCHEDULE || bl == (VIDEO_START_SCHEDULE | VIDEO_START_WAIT_RETRACE))
         {
-            UINT32 bytesPerPixel = VideoVesaBytesPerPixel(state->VesaBpp), origin, column, line;
+            UINT32 bytesPerPixel = VideoVesaBytesPerPixel(state->VesaBpp);
+            UINT32 origin;
+            UINT32 column;
+            UINT32 line;
             if (bl == VIDEO_START_SCHEDULE || bl == (VIDEO_START_SCHEDULE | VIDEO_START_WAIT_RETRACE))         /* ECX = byte address (3.0) */
             {
                 origin = registers->Ecx;
@@ -3223,7 +3281,9 @@ static VOID VideoVesa(PVIDEO_STATE state, PNTVDD_REGISTERS registers)
          * the OLD palette until some other DAC path happened to refresh it.
          */
         BYTE bl9 = (BYTE)(VddGetBx(registers) & BYTE_MASK);
-        WORD first = VddGetDx(registers), count = VddGetCx(registers), index;
+        WORD first = VddGetDx(registers);
+        WORD count = VddGetCx(registers);
+        WORD index;
         BYTE *table = (BYTE *)VddMapFlat(state->Bus, registers->Es, (WORD)registers->Edi);
         if (bl9 == VIDEO_PALETTE_SET_SECONDARY || bl9 == VIDEO_PALETTE_GET_SECONDARY)
         {
@@ -3297,7 +3357,8 @@ static VOID VideoVesa(PVIDEO_STATE state, PNTVDD_REGISTERS registers)
          * it. We claim all four states and remember the one set; nothing blanks,
          * which is what a monitor with no power management would show too.
          */
-        BYTE bl = (BYTE)(VddGetBx(registers) & BYTE_MASK), bh = (BYTE)((VddGetBx(registers) >> BYTE_SHIFT) & BYTE_MASK);
+        BYTE bl = (BYTE)(VddGetBx(registers) & BYTE_MASK);
+        BYTE bh = (BYTE)((VddGetBx(registers) >> BYTE_SHIFT) & BYTE_MASK);
         if (bl == VIDEO_POWER_REPORT)
             VddSetBx(registers, (WORD)((VIDEO_POWER_STATES << BYTE_SHIFT) | VIDEO_POWER_VERSION));
         else if (bl == VIDEO_POWER_SET)
@@ -3339,7 +3400,8 @@ static VOID VideoVesa(PVIDEO_STATE state, PNTVDD_REGISTERS registers)
         if (bl == VIDEO_DDC_READ_EDID)
         {
             BYTE *extra;
-            UINT byteIndex, sum = 0;
+            UINT byteIndex;
+            UINT sum = 0;
             if (VddGetDx(registers) != 0) /* block 0 only */
             {
                 VddSetAx(registers, VIDEO_VBE_FAILED);
@@ -3464,7 +3526,8 @@ static VOID VideoVesa(PVIDEO_STATE state, PNTVDD_REGISTERS registers)
          * Window B is advertised as absent (WinBAttributes=0) so BL=01 fails; in an LFB
          * mode the spec requires AH=03.
          */
-        BYTE bh = (BYTE)((VddGetBx(registers) >> BYTE_SHIFT) & BYTE_MASK), bl = (BYTE)(VddGetBx(registers) & BYTE_MASK);
+        BYTE bh = (BYTE)((VddGetBx(registers) >> BYTE_SHIFT) & BYTE_MASK);
+        BYTE bl = (BYTE)(VddGetBx(registers) & BYTE_MASK);
         if (!state->IsVesa || state->IsVesaLfb)
         {
             VddSetAx(registers, VIDEO_VBE_INVALID_IN_MODE);
@@ -3510,7 +3573,8 @@ static VOID VideoVesa(PVIDEO_STATE state, PNTVDD_REGISTERS registers)
 static VOID VideoInt10(PVOID context, PNTVDD_REGISTERS registers)
 {
     PVIDEO_STATE state = (PVIDEO_STATE)context;
-    BYTE ah = VddGetAh(registers), al = VddGetAl(registers);
+    BYTE ah = VddGetAh(registers);
+    BYTE al = VddGetAl(registers);
 
     state->IsDirty = 1;
     state->Int10WaitUntil = 0;          /* every call completes at once unless it says otherwise (#226) */
@@ -3785,7 +3849,8 @@ static VOID VideoInt10(PVOID context, PNTVDD_REGISTERS registers)
      */
     case VIDEO_FUNCTION_SELECT_PAGE:
     {
-        BYTE newPage = (BYTE)(al & VIDEO_PAGE_MASK), oldPage = (BYTE)(state->Page & VIDEO_PAGE_MASK);
+        BYTE newPage = (BYTE)(al & VIDEO_PAGE_MASK);
+        BYTE oldPage = (BYTE)(state->Page & VIDEO_PAGE_MASK);
         state->PageRow[oldPage] = state->CursorRow;
         state->PageColumn[oldPage] = state->CursorColumn;
         state->Page = al;
@@ -3816,7 +3881,8 @@ static VOID VideoInt10(PVOID context, PNTVDD_REGISTERS registers)
     {
         BYTE page = (BYTE)((VddGetBx(registers) >> BYTE_SHIFT) & VIDEO_PAGE_MASK);
         INT isActive = (page == (state->Page & VIDEO_PAGE_MASK));
-        INT row = isActive ? state->CursorRow : state->PageRow[page], column = isActive ? state->CursorColumn : state->PageColumn[page];
+        INT row = isActive ? state->CursorRow : state->PageRow[page];
+        INT column = isActive ? state->CursorColumn : state->PageColumn[page];
         if (state->ModeKind == VIDEO_KIND_TEXT)
         {
             BYTE *cellPointer = VideoPageCell(state, page, row, column);
@@ -3837,7 +3903,8 @@ static VOID VideoInt10(PVOID context, PNTVDD_REGISTERS registers)
         BYTE attribute = (BYTE)(VddGetBx(registers) & BYTE_MASK);
         BYTE page = (BYTE)((VddGetBx(registers) >> BYTE_SHIFT) & VIDEO_PAGE_MASK);
         INT isActive = (page == (state->Page & VIDEO_PAGE_MASK));
-        INT columnIndex = isActive ? state->CursorColumn : state->PageColumn[page], row = isActive ? state->CursorRow : state->PageRow[page];
+        INT columnIndex = isActive ? state->CursorColumn : state->PageColumn[page];
+        INT row = isActive ? state->CursorRow : state->PageRow[page];
         if (!count)
             count = 1;
         while (count-- && row < state->Rows)
@@ -3867,7 +3934,8 @@ static VOID VideoInt10(PVOID context, PNTVDD_REGISTERS registers)
      */
     case VIDEO_FUNCTION_WRITE_PIXEL:
     {
-        UINT32 pixelColumn = VddGetCx(registers), line = VddGetDx(registers);
+        UINT32 pixelColumn = VddGetCx(registers);
+        UINT32 line = VddGetDx(registers);
         INT isXor = (al & VIDEO_PIXEL_XOR) != 0;
         if (state->IsVesa)
             break;
@@ -3881,7 +3949,8 @@ static VOID VideoInt10(PVOID context, PNTVDD_REGISTERS registers)
             if (pixelColumn < state->GraphicsWidth && line < state->GraphicsHeight)
             {
                 UINT32 byteOffset = (UINT32)((VddGetBx(registers) >> BYTE_SHIFT) & VIDEO_PAGE_MASK) * VideoPageSize(state) + line * (state->GraphicsWidth / VIDEO_PIXELS_PER_PLANE_BYTE) + (pixelColumn >> VIDEO_PLANE_BYTE_SHIFT);
-                BYTE  bitMask = (BYTE)(VIDEO_PIXEL_LEFT_BIT >> (pixelColumn & VIDEO_PIXEL_IN_BYTE_MASK)), planeIndex;
+                BYTE bitMask = (BYTE)(VIDEO_PIXEL_LEFT_BIT >> (pixelColumn & VIDEO_PIXEL_IN_BYTE_MASK));
+                BYTE planeIndex;
                 if (byteOffset < VIDEO_PLANE_SIZE)
                     for (planeIndex = 0; planeIndex < VIDEO_PLANES; ++planeIndex)
                     {
@@ -3961,7 +4030,9 @@ static VOID VideoInt10(PVOID context, PNTVDD_REGISTERS registers)
         }
         else if (al == VIDEO_DAC_SET_BLOCK)                        /* set block of DAC regs */
         {
-            WORD first = VddGetBx(registers), count = VddGetCx(registers), index;
+            WORD first = VddGetBx(registers);
+            WORD count = VddGetCx(registers);
+            WORD index;
             BYTE *table = (BYTE *)VddMapFlat(state->Bus, registers->Es, (WORD)VddGetDx(registers));
             for (index = 0; index < count && (first + index) < NTVDD_PALETTE_ENTRIES; ++index)
                 { state->Dac[first + index] = VideoDacPackWidth(state, table[index*VIDEO_RGB_BYTES], table[index*VIDEO_RGB_BYTES+1], table[index*VIDEO_RGB_BYTES+VIDEO_RGB_BLUE]);
@@ -4036,7 +4107,9 @@ static VOID VideoInt10(PVOID context, PNTVDD_REGISTERS registers)
         }
         else if (al == VIDEO_DAC_GET_BLOCK)                        /* get block of DAC regs */
         {
-            WORD first = VddGetBx(registers), count = VddGetCx(registers), index;
+            WORD first = VddGetBx(registers);
+            WORD count = VddGetCx(registers);
+            WORD index;
             BYTE *table = (BYTE *)VddMapFlat(state->Bus, registers->Es, (WORD)VddGetDx(registers));
             for (index = 0; index < count && (first + index) < NTVDD_PALETTE_ENTRIES; ++index)
             {
@@ -4066,10 +4139,15 @@ static VOID VideoInt10(PVOID context, PNTVDD_REGISTERS registers)
         /* 06h scrolled up and 07h fell through to the unimplemented default, so
          * any program scrolling downwards silently did nothing.
          */
-        BYTE count = al, top = (BYTE)(VddGetCx(registers) >> BYTE_SHIFT), left = (BYTE)(VddGetCx(registers) & BYTE_MASK);
-        BYTE bottom = (BYTE)(VddGetDx(registers) >> BYTE_SHIFT), right = (BYTE)(VddGetDx(registers) & BYTE_MASK);
+        BYTE count = al;
+        BYTE top = (BYTE)(VddGetCx(registers) >> BYTE_SHIFT);
+        BYTE left = (BYTE)(VddGetCx(registers) & BYTE_MASK);
+        BYTE bottom = (BYTE)(VddGetDx(registers) >> BYTE_SHIFT);
+        BYTE right = (BYTE)(VddGetDx(registers) & BYTE_MASK);
         BYTE attribute = (BYTE)(VddGetBx(registers) >> BYTE_SHIFT);
-        INT row, column, step;
+        INT row;
+        INT column;
+        INT step;
         if (state->ModeKind != VIDEO_KIND_TEXT)                /* graphics: pixels, BH = fill colour (#252) */
         {
             VideoGraphicsScroll(state, count, top, left, bottom, right, attribute, VIDEO_SCROLL_DOWN);
@@ -4092,7 +4170,8 @@ static VOID VideoInt10(PVOID context, PNTVDD_REGISTERS registers)
                 for (row = bottom; row > top; --row)
                     for (column = left; column <= right; ++column)
                     {
-                        BYTE *destination = VideoCell(state, row, column), *source = VideoCell(state, row - 1, column);
+                        BYTE *destination = VideoCell(state, row, column);
+                        BYTE *source = VideoCell(state, row - 1, column);
                         destination[0] = source[0];
                         destination[1] = source[1];
                     }
@@ -4128,7 +4207,8 @@ static VOID VideoInt10(PVOID context, PNTVDD_REGISTERS registers)
      */
     case VIDEO_FUNCTION_CGA_PALETTE:
     {
-        BYTE bh = (BYTE)(VddGetBx(registers) >> BYTE_SHIFT), bl = (BYTE)(VddGetBx(registers) & BYTE_MASK);
+        BYTE bh = (BYTE)(VddGetBx(registers) >> BYTE_SHIFT);
+        BYTE bl = (BYTE)(VddGetBx(registers) & BYTE_MASK);
         BYTE colourSelect = state->BiosData ? state->BiosData[BIOS_BDA_CGA_PALETTE] : state->CgaSelect;
         INT isGraphics = (state->ModeKind != VIDEO_KIND_TEXT) && !state->IsVesa;
         INT isCga4 = isGraphics && (state->Mode == VIDEO_MODE_CGA_320 || state->Mode == VIDEO_MODE_CGA_320_GREY);
@@ -4173,7 +4253,8 @@ static VOID VideoInt10(PVOID context, PNTVDD_REGISTERS registers)
 
     case VIDEO_FUNCTION_READ_PIXEL:                                         /* READ a pixel */
     {
-        WORD pixelColumn = VddGetCx(registers), line = VddGetDx(registers);
+        WORD pixelColumn = VddGetCx(registers);
+        WORD line = VddGetDx(registers);
         BYTE value = 0;
         if (state->ModeKind == VIDEO_KIND_LINEAR8)
         {
@@ -4232,11 +4313,14 @@ static VOID VideoInt10(PVOID context, PNTVDD_REGISTERS registers)
      */
     case VIDEO_FUNCTION_WRITE_STRING:
     {
-        WORD count = VddGetCx(registers), index;
-        BYTE mode = al, attribute = (BYTE)(VddGetBx(registers) & BYTE_MASK);
+        WORD count = VddGetCx(registers);
+        WORD index;
+        BYTE mode = al;
+        BYTE attribute = (BYTE)(VddGetBx(registers) & BYTE_MASK);
         BYTE page = (BYTE)((VddGetBx(registers) >> BYTE_SHIFT) & VIDEO_PAGE_MASK);
         INT isActive = (page == (state->Page & VIDEO_PAGE_MASK));
-        INT row = (BYTE)(VddGetDx(registers) >> BYTE_SHIFT), column = (BYTE)(VddGetDx(registers) & BYTE_MASK);
+        INT row = (BYTE)(VddGetDx(registers) >> BYTE_SHIFT);
+        INT column = (BYTE)(VddGetDx(registers) & BYTE_MASK);
         BYTE *string = (BYTE *)VddMapFlat(state->Bus, registers->Es, (WORD)registers->Ebp);
         if (!string)
             break;
@@ -4310,7 +4394,9 @@ static VOID VideoInt10(PVOID context, PNTVDD_REGISTERS registers)
              * two real tables and answer every code from the nearer of the two.
              */
             BYTE bh = (BYTE)((VddGetBx(registers) >> BYTE_SHIFT) & BYTE_MASK);
-            WORD segment = VDD_FONT8X16_SEG, offset = 0, bytesPerCharacter = VGA_FONT16_HEIGHT;
+            WORD segment = VDD_FONT8X16_SEG;
+            WORD offset = 0;
+            WORD bytesPerCharacter = VGA_FONT16_HEIGHT;
             switch (bh)
             {
             case VIDEO_FONT_INFO_ROM_8X8:
@@ -4440,8 +4526,10 @@ static VOID VideoInt10(PVOID context, PNTVDD_REGISTERS registers)
              */
             if ((al & VIDEO_FONT_LOAD_MASK) == VIDEO_FONT_LOAD_USER)
             {
-                WORD fontSegment = registers->Es, fontOffset = (WORD)(registers->Ebp & WORD_MASK_U);
-                WORD characterCount = (WORD)VddGetCx(registers), first = (WORD)VddGetDx(registers);
+                WORD fontSegment = registers->Es;
+                WORD fontOffset = (WORD)(registers->Ebp & WORD_MASK_U);
+                WORD characterCount = (WORD)VddGetCx(registers);
+                WORD first = (WORD)VddGetDx(registers);
                 BYTE  bytesPerCharacter = (BYTE)((VddGetBx(registers) >> BYTE_SHIFT) & BYTE_MASK);
                 const BYTE *fontSource = (const BYTE *)VddMapFlat(state->Bus, fontSegment, fontOffset);
                 if (!fontSource || bytesPerCharacter == 0 || bytesPerCharacter > VIDEO_CELL_HEIGHT)
@@ -4453,7 +4541,8 @@ static VOID VideoInt10(PVOID context, PNTVDD_REGISTERS registers)
                 }
                 else
                 {
-                    UINT index, line;
+                    UINT index;
+                    UINT line;
                     if (!state->IsUserFontOn) {       /* seed from ROM so characters
                                                       the caller does NOT supply
                                                       still draw as themselves */
@@ -4728,7 +4817,12 @@ static VOID VideoDacOut(PVOID context, WORD port, BYTE width, UINT32 value)
             state->DacComponent = 0;
             state->DacWrites++;
             {   UINT64 now;
-            UINT32 frameUs, verticalTotal, verticalDisplay, verticalBlank, frameNumber, line;
+            UINT32 frameUs;
+            UINT32 verticalTotal;
+            UINT32 verticalDisplay;
+            UINT32 verticalBlank;
+            UINT32 frameNumber;
+            UINT32 line;
             WORD row = VIDEO_ROW_UNKNOWN;
                 if (VideoBeam(state, &now, &frameUs, &verticalTotal, &verticalDisplay, &verticalBlank, &frameNumber, &line) && state->GraphicsHeight && verticalDisplay)
                     row = (line >= verticalBlank) ? VIDEO_ROW_NONE : (WORD)(((UINT64)line * state->GraphicsHeight) / verticalDisplay);
@@ -4802,7 +4896,8 @@ case VIDEO_GC_ALU_OR:
 
 static VOID VideoPlanarWrite1(PVIDEO_STATE state, UINT32 offset, BYTE cpu)
 {
-    BYTE alu = (BYTE)((state->FunctionRotate >> VIDEO_GC_ALU_SHIFT) & VIDEO_GC_ALU_MASK), bitMask = state->BitMask;
+    BYTE alu = (BYTE)((state->FunctionRotate >> VIDEO_GC_ALU_SHIFT) & VIDEO_GC_ALU_MASK);
+    BYTE bitMask = state->BitMask;
     INT plane;
 
     if (offset >= VIDEO_PLANE_SIZE)
@@ -4829,7 +4924,8 @@ static VOID VideoPlanarWrite1(PVIDEO_STATE state, UINT32 offset, BYTE cpu)
 
     case VIDEO_WRITE_MODE_3:                                       /* set/reset masked by rot(cpu)&bm */
     {
-        BYTE data = VideoRotateRight(cpu, state->FunctionRotate), mask = (BYTE)(data & bitMask);
+        BYTE data = VideoRotateRight(cpu, state->FunctionRotate);
+        BYTE mask = (BYTE)(data & bitMask);
         for (plane = 0; plane < VIDEO_PLANES; ++plane)
         {
             BYTE byteValue = (BYTE)((state->SetReset & (1<<plane)) ? VIDEO_FILL_SET : 0x00);
@@ -4874,7 +4970,8 @@ static VOID VideoPlanarWrite1(PVIDEO_STATE state, UINT32 offset, BYTE cpu)
  */
 static VOID VideoCacheSiteNote(PVIDEO_STATE state, UINT32 offset, INT isWrite)
 {
-    UINT32 guestPc, index;
+    UINT32 guestPc;
+    UINT32 index;
 
     if (offset < VIDEO_CACHE_LOW || !state->GuestPc)
         return;
@@ -5083,7 +5180,10 @@ static INT VideoVerticalTiming(
  */
 UINT32 VddVideoFrameUs(PCVIDEO_STATE state)
 {
-    UINT32 verticalTotal, verticalDisplay, verticalBlank, hz;
+    UINT32 verticalTotal;
+    UINT32 verticalDisplay;
+    UINT32 verticalBlank;
+    UINT32 hz;
     INT isTall = (state->GraphicsHeight > VIDEO_VACTIVE_LOW);
 
     if (VideoVesaGeometry(state, &verticalTotal, &verticalDisplay, &verticalBlank, &hz))
@@ -5095,8 +5195,14 @@ UINT32 VddVideoFrameUs(PCVIDEO_STATE state)
 
 INT VddVideoIsPresentReady(PVIDEO_STATE state)
 {
-    UINT32 frameUs, perMille, verticalTotal, verticalDisplay, verticalBlank, hz;
-    INT presentPerMille, isTall;
+    UINT32 frameUs;
+    UINT32 perMille;
+    UINT32 verticalTotal;
+    UINT32 verticalDisplay;
+    UINT32 verticalBlank;
+    UINT32 hz;
+    INT presentPerMille;
+    INT isTall;
 
     if (!state->TimeUs)
         return 1;                                 /* no clock: present every tick */
@@ -5235,9 +5341,16 @@ static VOID VideoModeYCopy(
 
 static VOID VideoModeYFlush(PVIDEO_STATE state)
 {
-    UINT32 index, runLow = 0, runHigh = 0, gap = 0;
-    const UINT32 *memoryWords, *shadowWords;
-    INT plane, selected[VIDEO_PLANES], selectedCount = 0, isInRun = 0;
+    UINT32 index;
+    UINT32 runLow = 0;
+    UINT32 runHigh = 0;
+    UINT32 gap = 0;
+    const UINT32 *memoryWords;
+    const UINT32 *shadowWords;
+    INT plane;
+    INT selected[VIDEO_PLANES];
+    INT selectedCount = 0;
+    INT isInRun = 0;
 
     if (state->IsChain4 || state->ModeKind != VIDEO_KIND_LINEAR8 || !state->VideoMemory)
         return;
@@ -5316,7 +5429,8 @@ static VOID VideoIndexData(
  */
 static VOID VideoLoadModeDefinition(PVIDEO_STATE state, BYTE mode)
 {
-    INT index, definitionIndex;
+    INT index;
+    INT definitionIndex;
 
     for (definitionIndex = 0; definitionIndex < VGA_MODEDEF_COUNT; ++definitionIndex)
     {
@@ -5395,7 +5509,8 @@ static const BYTE VideoParameterMode[VDD_VPARAM_N] = {
 };
 INT VddVideoParameterEntry(BYTE tableIndex, BYTE entry[VIDEO_PARAMETER_ENTRY_BYTES])
 {
-    INT index, definitionIndex;
+    INT index;
+    INT definitionIndex;
     UINT modeIndex;
     BYTE mode;
 
@@ -5498,7 +5613,11 @@ static VOID VideoCrtcLineCompareUpdate(PVIDEO_STATE state)
  */
 static VOID VideoCrtcVerticalTimingRecompute(PVIDEO_STATE state)
 {
-    UINT32 overflow, maxScan, verticalTotal, verticalDisplayEnd, verticalBlankStart;
+    UINT32 overflow;
+    UINT32 maxScan;
+    UINT32 verticalTotal;
+    UINT32 verticalDisplayEnd;
+    UINT32 verticalBlankStart;
 
     state->IsVerticalTimingValid = 0;
     if (!state->IsCrtcVerticalTimingSeen)
@@ -5598,7 +5717,8 @@ static VOID VideoCrtcOut(PVOID context, WORD port, BYTE width, UINT32 value)
  */
 static VOID VideoVintCr11(PVIDEO_STATE state, BYTE value)
 {
-    INT isEnabled = !(value & VIDEO_CR11_VINT_DISABLE), isHoldClear = !(value & VIDEO_CR11_VINT_CLEAR);
+    INT isEnabled = !(value & VIDEO_CR11_VINT_DISABLE);
+    INT isHoldClear = !(value & VIDEO_CR11_VINT_CLEAR);
 
     if (isHoldClear)
     {
@@ -5620,8 +5740,15 @@ static VOID VideoVintCr11(PVIDEO_STATE state, BYTE value)
 
 static BYTE VideoVintStatus(PVIDEO_STATE state)
 {
-    UINT64 now, next, blankOffset;
-    UINT32 frameUs, verticalTotal, verticalDisplay, verticalBlank, frameNumber, line;
+    UINT64 now;
+    UINT64 next;
+    UINT64 blankOffset;
+    UINT32 frameUs;
+    UINT32 verticalTotal;
+    UINT32 verticalDisplay;
+    UINT32 verticalBlank;
+    UINT32 frameNumber;
+    UINT32 line;
 
     if (state->IsVintArmed && !state->IsVintPending)
     {
@@ -5716,7 +5843,12 @@ static VOID VideoCrtcSetData(PVOID context, UINT32 value)
                    if (state->TimeUs)             /* pacing: frames since the last pair */
                    {
                        UINT64 now;
-                       UINT32 frameUs, verticalTotal, verticalDisplay, verticalBlank, frameNumber, line;
+                       UINT32 frameUs;
+                       UINT32 verticalTotal;
+                       UINT32 verticalDisplay;
+                       UINT32 verticalBlank;
+                       UINT32 frameNumber;
+                       UINT32 line;
                        if (VideoBeam(state, &now, &frameUs, &verticalTotal, &verticalDisplay, &verticalBlank, &frameNumber, &line))
                        {
                            UINT32 gap = state->StartPreviousFrame ? frameNumber - state->StartPreviousFrame : 1u;
@@ -6219,7 +6351,10 @@ static INT VideoBeam(
     UINT32 *line)
 {
     INT isTall;
-    UINT32 total, active, blank, hz;
+    UINT32 total;
+    UINT32 active;
+    UINT32 blank;
+    UINT32 hz;
     UINT64 inFrame;
 
     if (!state->TimeUs)
@@ -6288,8 +6423,16 @@ static INT VideoBeam(
  */
 static VOID VideoLatch(PVIDEO_STATE state, INT atFrame)
 {
-    UINT64 now, frameStart, displayStart, blankOffset;
-    UINT32 frameUs, verticalTotal, verticalDisplay, verticalBlank, frameNumber, line;
+    UINT64 now;
+    UINT64 frameStart;
+    UINT64 displayStart;
+    UINT64 blankOffset;
+    UINT32 frameUs;
+    UINT32 verticalTotal;
+    UINT32 verticalDisplay;
+    UINT32 verticalBlank;
+    UINT32 frameNumber;
+    UINT32 line;
 
     if (!VideoBeam(state, &now, &frameUs, &verticalTotal, &verticalDisplay, &verticalBlank, &frameNumber, &line) || !frameUs || !verticalTotal)
     {
@@ -6357,8 +6500,16 @@ static VOID VideoLatch(PVIDEO_STATE state, INT atFrame)
  */
 static UINT64 VideoVesaVblRelease(PVIDEO_STATE state, INT *isNowInVbl)
 {
-    UINT64 now, blankOffset, displayStart, verticalStart;
-    UINT32 frameUs, verticalTotal, verticalDisplay, verticalBlank, frameNumber, line;
+    UINT64 now;
+    UINT64 blankOffset;
+    UINT64 displayStart;
+    UINT64 verticalStart;
+    UINT32 frameUs;
+    UINT32 verticalTotal;
+    UINT32 verticalDisplay;
+    UINT32 verticalBlank;
+    UINT32 frameNumber;
+    UINT32 line;
 
     *isNowInVbl = 0;
     if (!VideoBeam(state, &now, &frameUs, &verticalTotal, &verticalDisplay, &verticalBlank, &frameNumber, &line) || !frameUs || !verticalTotal)
@@ -6385,7 +6536,8 @@ static UINT64 VideoVesaVblRelease(PVIDEO_STATE state, INT *isNowInVbl)
 
 UINT32 VddVideoInt10WaitUs(PVIDEO_STATE state)
 {
-    UINT64 now, until = state->Int10WaitUntil;
+    UINT64 now;
+    UINT64 until = state->Int10WaitUntil;
 
     if (!until)
         return 0;
@@ -6529,8 +6681,15 @@ static VOID VideoStatusOut(PVOID context, WORD port, BYTE width, UINT32 value)
  */
 UINT32 VddVideoUsToRetrace(PVIDEO_STATE state, INT wantSet)
 {
-    UINT64 now, inFrame, blankOffset;
-    UINT32 frameUs, verticalTotal, verticalDisplay, verticalBlank, frameNumber, line;
+    UINT64 now;
+    UINT64 inFrame;
+    UINT64 blankOffset;
+    UINT32 frameUs;
+    UINT32 verticalTotal;
+    UINT32 verticalDisplay;
+    UINT32 verticalBlank;
+    UINT32 frameNumber;
+    UINT32 line;
 
     if (!VideoBeam(state, &now, &frameUs, &verticalTotal, &verticalDisplay, &verticalBlank, &frameNumber, &line) || !frameUs || !verticalTotal)
         return VIDEO_UINT32_MAX;
@@ -6550,14 +6709,23 @@ static VOID VideoStatusIn(PVOID context, WORD port, BYTE width, UINT32 *value)
 
     (VOID)port;
     (VOID)width;
-    UINT64 now, inFrame;
+    UINT64 now;
+    UINT64 inFrame;
     /* [CAUTION]: LOAD-BEARING, AND NOT A VBLANK CONCERN. Reading this port resets the
      * Attribute Controller's index/data flip-flop, and every guest relies on it
      * before touching 0x3C0. See VideoAttributeOut.
      */
     state->AttributeFlipFlop = 0;
-    UINT32 frameUs, line, vesaVerticalTotal, vesaVerticalDisplay, vesaVerticalBlank, frameNumber;
-    INT verticalTotal, verticalActive, isInVbl, isInHbl;
+    UINT32 frameUs;
+    UINT32 line;
+    UINT32 vesaVerticalTotal;
+    UINT32 vesaVerticalDisplay;
+    UINT32 vesaVerticalBlank;
+    UINT32 frameNumber;
+    INT verticalTotal;
+    INT verticalActive;
+    INT isInVbl;
+    INT isInHbl;
 
     if (!VideoBeam(state, &now, &frameUs, &vesaVerticalTotal, &vesaVerticalDisplay, &vesaVerticalBlank, &frameNumber, &line))
     {
@@ -6734,8 +6902,11 @@ static VOID VideoStatusIn(PVOID context, WORD port, BYTE width, UINT32 *value)
  */
 INT VddVideoRefreshFonts(PVIDEO_STATE state)
 {
-    BYTE *font16, *font8, *font14;
-    UINT character, line;
+    BYTE *font16;
+    BYTE *font8;
+    BYTE *font14;
+    UINT character;
+    UINT line;
 
     if (!state || !state->Bus)
         return 0;
@@ -6886,12 +7057,14 @@ INT VddVideoTextCellWidth(PCVIDEO_STATE state)
 
 static VOID VideoRenderCell(PVIDEO_STATE state, INT row, INT column, BYTE character, BYTE attribute)
 {
-    INT glyphY, glyphX;
+    INT glyphY;
+    INT glyphX;
     INT cellHeight = state->CellHeight ? state->CellHeight : VIDEO_CELL_HEIGHT;
     INT cellWidth = VideoTextCellWidthOf(state);
     INT stride = state->Columns * cellWidth;                        /* 360 in a 40-column mode */
     INT isLineGraphics = cellWidth == VIDEO_CHARACTER_CLOCK_9 && (state->AttributeMode & VIDEO_AR_MODE_LINE_GRAPHICS) && character >= VIDEO_LINE_GRAPHICS_FIRST && character <= VIDEO_LINE_GRAPHICS_LAST;
-    BYTE foreground = attribute & VIDEO_ATTRIBUTE_COLOUR_MASK, background;
+    BYTE foreground = attribute & VIDEO_ATTRIBUTE_COLOUR_MASK;
+    BYTE background;
     const BYTE *glyph = VideoGlyphRows(state, character);
 
     if (state->IsBlink)
@@ -6929,7 +7102,9 @@ static VOID VideoDrawHardwareCursor(PVIDEO_STATE state);
 INT VddVideoTextSnapshot(PVIDEO_STATE state, char *output, INT capacity)
 {
     static const char hexDigits[] = HEX_DIGITS_LOWER;
-    INT row, column, count = 0;
+    INT row;
+    INT column;
+    INT count = 0;
 
     if (!output || capacity < VIDEO_SNAPSHOT_MIN_CAPACITY)
         return 0;
@@ -6966,7 +7141,8 @@ INT VddVideoTextSnapshot(PVIDEO_STATE state, char *output, INT capacity)
 
 VOID VddVideoRender(PVIDEO_STATE state)                 /* text glyph render */
 {
-    INT row, column;
+    INT row;
+    INT column;
 
     /* Text blinks at half the cursor rate: 32 frames on, 32 off at 60 Hz. */
     state->IsBlinkOffPhase = (BYTE)((state->IsBlink && state->TimeUs)
@@ -6982,7 +7158,9 @@ VOID VddVideoRender(PVIDEO_STATE state)                 /* text glyph render */
 
 VOID VddVideoTextCursor(PVIDEO_STATE state, INT column, INT row, WORD andMask, WORD xorMask)
 {
-    BYTE *cell, character, attribute;
+    BYTE *cell;
+    BYTE character;
+    BYTE attribute;
 
     if (state->ModeKind != VIDEO_KIND_TEXT)
         return;
@@ -7001,7 +7179,8 @@ VOID VddVideoTextCursor(PVIDEO_STATE state, INT column, INT row, WORD andMask, W
 
 static VOID VideoDrawHardwareCursor(PVIDEO_STATE state)
 {
-    INT glyphY, glyphX;
+    INT glyphY;
+    INT glyphX;
     INT cellHeight = state->CellHeight ? state->CellHeight : VIDEO_CELL_HEIGHT;
     INT cellWidth = VideoTextCellWidthOf(state);
     INT stride = state->Columns * cellWidth;
@@ -7024,8 +7203,10 @@ static VOID VideoDrawHardwareCursor(PVIDEO_STATE state)
      */
     if (state->CursorRow < state->Rows && state->CursorColumn < state->Columns)
     {
-        UINT start, end;
-        INT hidden, lit = 1;
+        UINT start;
+        UINT end;
+        INT hidden;
+        INT lit = 1;
         VddCursorLines(state->CursorShape, (UINT)cellHeight, &start, &end, &hidden);
         if (state->IsCursorEmulationOff)                    /* AH=12h BL=34h: CX as written (#252) */
         {
@@ -7122,7 +7303,10 @@ const BYTE *VddVideoCga4Map(PCVIDEO_STATE state)
 static VOID VideoRenderCga(PVIDEO_STATE state)
 {
     const BYTE *source = state->VideoMemory + VIDEO_TEXT_OFFSET;
-    INT graphicsWidth = state->GraphicsWidth, graphicsHeight = state->GraphicsHeight, line, column;
+    INT graphicsWidth = state->GraphicsWidth;
+    INT graphicsHeight = state->GraphicsHeight;
+    INT line;
+    INT column;
     INT pixelsPerByte = state->CgaBpp == 1 ? VIDEO_PIXELS_PER_PLANE_BYTE : VIDEO_CGA_PIXELS_PER_BYTE;             /* pixels per byte */
 
     /* -- #266: THE PIXEL VALUE IS AN ATTRIBUTE-CONTROLLER INDEX, as on the card: 0-3 in
@@ -7186,7 +7370,10 @@ static VOID VideoRenderCga(PVIDEO_STATE state)
  */
 static VOID VideoGeometryOf(PCVIDEO_STATE state, INT *width, INT *height)
 {
-    UINT32 horizontalDisplayEnd, verticalDisplayEnd, overflow, maxScan;
+    UINT32 horizontalDisplayEnd;
+    UINT32 verticalDisplayEnd;
+    UINT32 overflow;
+    UINT32 maxScan;
 
     *width = state->GraphicsWidth;
     *height = state->GraphicsHeight;
@@ -7217,7 +7404,11 @@ VOID VddVideoGeometry(PCVIDEO_STATE state, INT *width, INT *height)
 
 static VOID VideoRenderPlanar(PVIDEO_STATE state)
 {
-    INT line, byteColumn, bit, graphicsWidth, graphicsHeight;
+    INT line;
+    INT byteColumn;
+    INT bit;
+    INT graphicsWidth;
+    INT graphicsHeight;
 
     VideoGeometryOf(state, &graphicsWidth, &graphicsHeight);                            /* #325: the CRTC's size */
     if (!graphicsWidth)
@@ -7269,8 +7460,10 @@ static VOID VideoRenderPlanar(PVIDEO_STATE state)
             for (byteColumn = 0; byteColumn < (INT)bytes; ++byteColumn)
             {
                 UINT32 planeOffset = (rowAddress + (UINT32)byteColumn) % (UINT32)VIDEO_PLANE_SIZE;
-                BYTE plane0 = VideoPlaneBytes(state,0)[planeOffset], plane1 = VideoPlaneBytes(state,1)[planeOffset];
-                BYTE plane2 = VideoPlaneBytes(state,2)[planeOffset], plane3 = VideoPlaneBytes(state,3)[planeOffset];
+                BYTE plane0 = VideoPlaneBytes(state,0)[planeOffset];
+                BYTE plane1 = VideoPlaneBytes(state,1)[planeOffset];
+                BYTE plane2 = VideoPlaneBytes(state,2)[planeOffset];
+                BYTE plane3 = VideoPlaneBytes(state,3)[planeOffset];
                 for (bit = 0; bit < BITS_PER_BYTE; ++bit)
                 {
                     BYTE mask = (BYTE)(VIDEO_PIXEL_LEFT_BIT >> bit);
@@ -7320,11 +7513,15 @@ static UINT32 VideoModeYPage(PCVIDEO_STATE state)
      * onto the top. Measured -- the largest row-to-row discontinuity in the
      * captured frame sits at y=5.
      */
-    UINT32 page = 0, bestCount = 0, candidatePage;
+    UINT32 page = 0;
+    UINT32 bestCount = 0;
+    UINT32 candidatePage;
 
     for (candidatePage = 0; candidatePage < VIDEO_MODE_Y_PAGES; ++candidatePage)
     {
-        UINT32 base = candidatePage * VIDEO_MODE_Y_PAGE_BYTES, index, count = 0;
+        UINT32 base = candidatePage * VIDEO_MODE_Y_PAGE_BYTES;
+        UINT32 index;
+        UINT32 count = 0;
         if (base + VIDEO_MODE_Y_PAGE_USED > VIDEO_Y_PLANE_SIZE)
             break;
         for (index = 0; index < VIDEO_MODE_Y_PAGE_USED; index += VIDEO_MODE_Y_SAMPLE_STRIDE)
@@ -7380,7 +7577,8 @@ static VOID VideoRenderModeY(PVIDEO_STATE state)
       const BYTE *plane[VIDEO_PLANES];
       for (column = 0; column < VIDEO_PLANES; ++column)
           plane[column] = state->YMapPlane ? state->YMapPlane(state->YMapContext, column) : state->YPlanes[column];
-      INT modeWidth, modeHeight;
+      INT modeWidth;
+      INT modeHeight;
       VideoGeometryOf(state, &modeWidth, &modeHeight);                          /* #325: Mode X is 320x240 */
       for (line = 0; line < modeHeight; ++line)
       {
@@ -7450,7 +7648,8 @@ static VOID VideoOnFrame(PVOID context)
          * The mask-change snapshot is well defined -- the outgoing plane is
          * complete by then -- so rely on that alone.
          */
-        INT modeWidth, modeHeight;
+        INT modeWidth;
+        INT modeHeight;
         VideoRenderModeY(state);
         VideoGeometryOf(state, &modeWidth, &modeHeight);                        /* #325 */
         state->Frame.Width = (WORD)modeWidth;
@@ -7481,7 +7680,8 @@ static VOID VideoOnFrame(PVOID context)
     }
     else if (state->ModeKind == VIDEO_KIND_PLANAR)           /* planar: combine -> fb */
     {
-        INT pictureWidth, pictureHeight;
+        INT pictureWidth;
+        INT pictureHeight;
         VideoRenderPlanar(state);
         VideoGeometryOf(state, &pictureWidth, &pictureHeight);                        /* #325 */
         if (!pictureWidth)
@@ -7597,7 +7797,8 @@ static char *VideoReadGroup(
     const UINT32 *width,
     INT count)
 {
-    INT index, isAny = 0;
+    INT index;
+    INT isAny = 0;
 
     output = VideoReadString(output, "STAGE2: VGAREG ");
     output = VideoReadString(output, name);

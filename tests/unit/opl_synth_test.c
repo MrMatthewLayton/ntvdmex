@@ -34,7 +34,8 @@
 
 VOID VddOplRender(POPL_STATE state, INT16 *output, UINT32 frames);
 
-static INT g_Total = 0, g_Failures = 0;
+static INT g_Total = 0;
+static INT g_Failures = 0;
 #define CHECK(condition,message) do{ g_Total++; if(condition){printf("  PASS  %s\n",(message));} \
     else{printf("  FAIL  %s\n",(message)); g_Failures++;} }while(0)
 
@@ -77,7 +78,9 @@ static VOID OplSynthTestNoteOn(INT channel, WORD fnum, BYTE block, BYTE totalLev
 /* Count positive-going zero crossings -> cycles -> Hz. */
 static double OplSynthTestMeasureHz(const INT16 *samples, INT count)
 {
-    INT index, crossings = 0, wasPositive = 0;
+    INT index;
+    INT crossings = 0;
+    INT wasPositive = 0;
 
     for (index = 0; index < count; ++index)
     {
@@ -105,7 +108,8 @@ static INT16 g_StereoSamples[2 * 8192];                /* interleaved L/R */
 /* Operator 0-35 -> 9-bit register offset: array 1 is 0x100 + the same layout. */
 static WORD OplSynthTestOperatorRegister9(INT operatorIndex)
 {
-    INT array = operatorIndex / 18, slot = operatorIndex % 18;
+    INT array = operatorIndex / 18;
+    INT slot = operatorIndex % 18;
 
     return (WORD)(array * 0x100 + slot + 2 * (slot / 6));
 }
@@ -193,7 +197,8 @@ static UINT32 OplSynthTestFnv16(UINT32 hash, const INT16 *samples, INT count)
 #define OPL2_GOLDEN_MELODIC     0xD827E8E0u     /* samples 0-16799: must NEVER change */
 #define OPL2_GOLDEN         0x48947CCEu     /* the whole run, as of #139 (it was
                                                0xA60B79B9 from 42a9029 until then)  */
-static UINT32 g_Hash, g_HashMelodic;
+static UINT32 g_Hash;
+static UINT32 g_HashMelodic;
 static VOID OplSynthTestEat(INT which, INT count)
 {
     INT index;
@@ -217,7 +222,8 @@ static VOID OplSynthTestWrite(UINT registerIndex, UINT value)
 
 static UINT32 OplSynthTestGoldenRun(INT isOpl3, INT which)
 {
-    INT channel, round;
+    INT channel;
+    INT round;
 
     memset(&g_Opl, 0, sizeof g_Opl);
     g_Opl.IsOpl3 = (BYTE)isOpl3;
@@ -227,8 +233,10 @@ static UINT32 OplSynthTestGoldenRun(INT isOpl3, INT which)
     OplSynthTestWrite(0xBD, 0xC0);                                 /* deep AM + VIB */
     for (channel = 0; channel < 9; ++channel)
     {
-        INT modulator = VddOplOperatorIndex(channel, 0), carrier = VddOplOperatorIndex(channel, 1);
-        UINT modulatorOffset = (UINT)(modulator + 2 * (modulator / 6)), carrierOffset = (UINT)(carrier + 2 * (carrier / 6));
+        INT modulator = VddOplOperatorIndex(channel, 0);
+        INT carrier = VddOplOperatorIndex(channel, 1);
+        UINT modulatorOffset = (UINT)(modulator + 2 * (modulator / 6));
+        UINT carrierOffset = (UINT)(carrier + 2 * (carrier / 6));
         OplSynthTestWrite(0x20 + modulatorOffset, 0x21 | ((channel & 1) << 7) | ((channel & 2) << 5) | (channel & 4 ? 0x10 : 0) | (channel % 5));
         OplSynthTestWrite(0x20 + carrierOffset, 0x21 | ((channel & 2) << 6));
         OplSynthTestWrite(0x40 + modulatorOffset, (UINT)(0x10 + channel * 3) | ((channel % 4) << 6));
@@ -293,7 +301,8 @@ static UINT32 OplSynthTestPhaseBit(UINT32 phase13, UINT32 phase17)
 static BYTE g_Noise[72 * (T_NSAMP + 2) + 32];
 static VOID OplSynthTestNoiseInitialize(VOID)
 {
-    INT index, count = (INT)sizeof g_Noise;
+    INT index;
+    INT count = (INT)sizeof g_Noise;
 
     for (index = 0; index < 23; ++index)
         g_Noise[index] = (BYTE)((OPL_NOISE_SEED >> index) & 1);
@@ -316,7 +325,8 @@ static VOID OplSynthTestRhythmSetup(
     VddOplWriteRegister(&g_Opl, 0x01, 0x20);
     for (index = 0; index < 6; ++index)
     {
-        BYTE operatorOffset = (BYTE)(0x10 + index), mult = (BYTE)(index == 1 ? multiplier13 : index == 5 ? multiplier17 : 1);
+        BYTE operatorOffset = (BYTE)(0x10 + index);
+        BYTE mult = (BYTE)(index == 1 ? multiplier13 : index == 5 ? multiplier17 : 1);
         VddOplWriteRegister(&g_Opl, (BYTE)(0x20 + operatorOffset), (BYTE)(0x20 | mult));   /* EGT */
         VddOplWriteRegister(&g_Opl, (BYTE)(0x40 + operatorOffset), 0x00);
         VddOplWriteRegister(&g_Opl, (BYTE)(0x60 + operatorOffset), 0xF0);                     /* AR=15 */
@@ -336,7 +346,9 @@ static VOID OplSynthTestRhythmSetup(
  */
 static double OplSynthTestPeriodicity(const INT16 *samples, INT count, INT lag)
 {
-    double mean = 0, numerator = 0, denominator = 0;
+    double mean = 0;
+    double numerator = 0;
+    double denominator = 0;
     INT index;
 
     for (index = 0; index < count; ++index)
@@ -352,7 +364,8 @@ static double OplSynthTestPeriodicity(const INT16 *samples, INT count, INT lag)
 
 static VOID OplSynthTestRhythm(VOID)
 {
-    static INT16 firstRender[T_NSAMP], secondRender[T_NSAMP];
+    static INT16 firstRender[T_NSAMP];
+    static INT16 secondRender[T_NSAMP];
     /* The register setups: the default test pitch, and two with unrelated pitches
      * and MULTs so the five accumulator bits vary independently.
      */
@@ -362,25 +375,30 @@ static VOID OplSynthTestRhythm(VOID)
         BYTE Block7;
         WORD Fnum8;
         BYTE Block8;
-        BYTE Multiplier13, Multiplier17;
+        BYTE Multiplier13;
+        BYTE Multiplier17;
     }
 
     setups[3] = {
         { 0x200, 4, 0x200, 4, 1, 1 }, { 0x1A3, 5, 0x2F1, 4, 3, 5 }, { 0x0B7, 6, 0x3E5, 2, 1, 7 } };
-    INT setup, sample, wrongCount;
+    INT setup;
+    INT sample;
+    INT wrongCount;
     CHAR description[160];
     OplSynthTestNoiseInitialize();
 
     for (setup = 0; setup < 3; ++setup)
     {
-        UINT32 increment13 = OplSynthTestIncrement(setups[setup].Fnum7, setups[setup].Block7, setups[setup].Multiplier13), increment17 = OplSynthTestIncrement(setups[setup].Fnum8, setups[setup].Block8, setups[setup].Multiplier17);
+        UINT32 increment13 = OplSynthTestIncrement(setups[setup].Fnum7, setups[setup].Block7, setups[setup].Multiplier13);
+        UINT32 increment17 = OplSynthTestIncrement(setups[setup].Fnum8, setups[setup].Block8, setups[setup].Multiplier17);
         /* CYMBAL */
         OplSynthTestRhythmSetup(setups[setup].Fnum7, setups[setup].Block7, setups[setup].Fnum8, setups[setup].Block8, setups[setup].Multiplier13, setups[setup].Multiplier17);
         VddOplWriteRegister(&g_Opl, 0xBD, 0x20 | 0x02);
         VddOplRender(&g_Opl, firstRender, T_NSAMP);
         for (wrongCount = 0, sample = 1; sample < T_NSAMP; ++sample)
         {
-            UINT32 phase13 = (((UINT32)(sample + 1) * increment13) >> 10) & 1023, phase17 = (((UINT32)(sample + 1) * increment17) >> 10) & 1023;
+            UINT32 phase13 = (((UINT32)(sample + 1) * increment13) >> 10) & 1023;
+            UINT32 phase17 = (((UINT32)(sample + 1) * increment17) >> 10) & 1023;
             INT expectedSign = OplSynthTestPhaseBit(phase13, phase17) ? -1 : 1;
             if (!((firstRender[sample] > 5000 && expectedSign > 0) || (firstRender[sample] < -5000 && expectedSign < 0)))
                 wrongCount++;
@@ -393,7 +411,8 @@ static VOID OplSynthTestRhythm(VOID)
         VddOplRender(&g_Opl, firstRender, T_NSAMP);
         for (wrongCount = 0, sample = 1; sample < T_NSAMP; ++sample)
         {
-            UINT32 phase13 = (((UINT32)(sample + 1) * increment13) >> 10) & 1023, snareBit = (phase13 >> 8) & 1;
+            UINT32 phase13 = (((UINT32)(sample + 1) * increment13) >> 10) & 1023;
+            UINT32 snareBit = (phase13 >> 8) & 1;
             UINT32 isLoud = snareBit ^ g_Noise[72 * (sample + 1) + 6];
             if (isLoud ? !((snareBit && firstRender[sample] < -7000) || (!snareBit && firstRender[sample] > 7000)) : (firstRender[sample] > 200 || firstRender[sample] < -200))
                 wrongCount++;
@@ -406,8 +425,10 @@ static VOID OplSynthTestRhythm(VOID)
         VddOplRender(&g_Opl, firstRender, T_NSAMP);
         for (wrongCount = 0, sample = 1; sample < T_NSAMP; ++sample)
         {
-            UINT32 phase13 = (((UINT32)(sample + 1) * increment13) >> 10) & 1023, phase17Previous = (((UINT32)sample * increment17) >> 10) & 1023;
-            UINT32 phaseBit = OplSynthTestPhaseBit(phase13, phase17Previous), isLoud = phaseBit ^ g_Noise[72 * (sample + 1)];
+            UINT32 phase13 = (((UINT32)(sample + 1) * increment13) >> 10) & 1023;
+            UINT32 phase17Previous = (((UINT32)sample * increment17) >> 10) & 1023;
+            UINT32 phaseBit = OplSynthTestPhaseBit(phase13, phase17Previous);
+            UINT32 isLoud = phaseBit ^ g_Noise[72 * (sample + 1)];
             INT magnitude = firstRender[sample] < 0 ? -firstRender[sample] : firstRender[sample];
             if ((phaseBit ? firstRender[sample] >= 0 : firstRender[sample] <= 0) || (isLoud ? magnitude < 6000 : (magnitude < 1500 || magnitude > 3500)))
                 wrongCount++;
@@ -446,7 +467,8 @@ static VOID OplSynthTestRhythm(VOID)
         VddOplRender(&g_Opl, firstRender + keyOnSample, T_NSAMP - keyOnSample);
         for (wrongCount = 0, sample = keyOnSample + 1; sample < T_NSAMP; ++sample)
         {
-            UINT32 phase13 = (((UINT32)(sample - keyOnSample + 2) * increment13) >> 10) & 1023, phase17Previous = (((UINT32)sample * increment17) >> 10) & 1023;
+            UINT32 phase13 = (((UINT32)(sample - keyOnSample + 2) * increment13) >> 10) & 1023;
+            UINT32 phase17Previous = (((UINT32)sample * increment17) >> 10) & 1023;
             UINT32 phaseBit = OplSynthTestPhaseBit(phase13, phase17Previous);
             if (phaseBit ? firstRender[sample] >= 0 : firstRender[sample] <= 0)
                 wrongCount++;
@@ -531,8 +553,11 @@ static VOID OplSynthTestRhythm(VOID)
 
 INT main(VOID)
 {
-    double frequency, expected;
-    long loudLevel, quietLevel, offLevel;
+    double frequency;
+    double expected;
+    long loudLevel;
+    long quietLevel;
+    long offLevel;
 
     printf("== sound epic: OPL2 FM synthesis battery ==\n");
 
@@ -588,7 +613,8 @@ INT main(VOID)
 
     /* T4: FM actually modulates -------------------------------------------- */
     {
-        long plainLevel, fmLevel;
+        long plainLevel;
+        long fmLevel;
         memset(&g_Opl, 0, sizeof g_Opl);
         VddOplReset(&g_Opl);
         OplSynthTestNoteOn(0, 0x200, 4, 0);
@@ -611,7 +637,9 @@ INT main(VOID)
 
     /* T5: output never leaves int16, even with everything blaring ----------- */
     {
-        INT channel, index, clipped = 0;
+        INT channel;
+        INT index;
+        INT clipped = 0;
         memset(&g_Opl, 0, sizeof g_Opl);
         VddOplReset(&g_Opl);
         for (channel = 0; channel < OPL_CHANNELS; ++channel)
@@ -680,7 +708,8 @@ INT main(VOID)
     {   static const struct
     {
         BYTE C0;
-        INT Left, Right;
+        INT Left;
+        INT Right;
         PCSTR Message;
     }
     routes[] = {
@@ -692,7 +721,8 @@ INT main(VOID)
         INT item;
         for (item = 0; item < 5; ++item)
         {
-            long leftLevel, rightLevel;
+            long leftLevel;
+            long rightLevel;
             OplSynthTestOpl3Fresh(1);
             OplSynthTestOperator9(VddOplOperatorIndex(2, 0), 0, 0);
             OplSynthTestOperator9(VddOplOperatorIndex(2, 1), 1, 0);
@@ -735,7 +765,9 @@ INT main(VOID)
             { 1, 0, 0, 1 },         /* 1,0  1 + (2->3->4) */
             { 1, 0, 1, 1 } };       /* 1,1  1 + (2->3) + 4 */
         static PCSTR algorithmNames[4] = { "FM-FM", "FM-AM", "AM-FM", "AM-AM" };
-        INT algorithm, item, operators[4];
+        INT algorithm;
+        INT item;
+        INT operators[4];
         operators[0] = VddOplOperatorIndex(0, 0);
         operators[1] = VddOplOperatorIndex(0, 1);
         operators[2] = VddOplOperatorIndex(3, 0);
@@ -819,7 +851,10 @@ INT main(VOID)
 
     /* T11: waveforms 4-7 exist only with NEW set --------------------------- */
     {   UINT32 sineHash, waveHash, waveHashNew, sineHashNew;
-        INT waveform, zeroCount, index, flatCount;
+        INT waveform;
+        INT zeroCount;
+        INT index;
+        INT flatCount;
         /* reference: a plain sine carrier, NEW clear, then NEW set */
         OplSynthTestOpl3Fresh(0);
         OplSynthTestOperator9(VddOplOperatorIndex(1, 0), 0, 0);

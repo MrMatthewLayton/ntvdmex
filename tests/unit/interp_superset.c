@@ -53,7 +53,8 @@ static UINT32 InterpSupersetRandom(VOID)
 /* Opcode key: 0x10000 if 0x66 was among the prefixes, 0x0F00|op2 for the 0F map. */
 static UINT InterpSupersetKeyOf(PCBYTE memory, UINT32 linear)
 {
-    UINT hasOperandSize = 0, index;
+    UINT hasOperandSize = 0;
+    UINT index;
 
     for (index = 0; index < 5; ++index)
     {
@@ -81,7 +82,8 @@ static VOID InterpSupersetKeyString(UINT key, PSTR output)
         sprintf(output, "%s%02X", (key >> 16) ? "66:" : "", key & 0xFF);
 }
 
-static UINT g_ExtraByKey[0x20000], g_MismatchByKey[0x20000];
+static UINT g_ExtraByKey[0x20000];
+static UINT g_MismatchByKey[0x20000];
 
 /* Whole-token match in a space-separated list: "8C" must not match "66:8C". */
 static INT InterpSupersetIsAllowedKey(PCSTR allowList, PCSTR keyText)
@@ -125,7 +127,12 @@ INT main(INT argc, PSTR *argv)
     UINT64 seed = argc > 3 ? strtoull(argv[3], 0, 0) : 0x5EEDF00DULL;
     INT isProtectedMode = argc > 4 ? atoi(argv[4]) : 0;
     PCSTR allowList = getenv("ALLOW");
-    long program, sameCount = 0, extraCount = 0, badCount = 0, allowedCount = 0, printedCount = 0;
+    long program;
+    long sameCount = 0;
+    long extraCount = 0;
+    long badCount = 0;
+    long allowedCount = 0;
+    long printedCount = 0;
     UINT keyIndex;
     UINT32 index;
 
@@ -159,9 +166,12 @@ INT main(INT argc, PSTR *argv)
           }
         for (position = 0; position < stepLimit; ++position)
         {
-            INTERP_XCPU referenceState = state, newState = state;
-            UINT64 referenceEffects = 0, newEffects = 0;
-            INT isReferenceOk, isNewOk;
+            INTERP_XCPU referenceState = state;
+            INTERP_XCPU newState = state;
+            UINT64 referenceEffects = 0;
+            UINT64 newEffects = 0;
+            INT isReferenceOk;
+            INT isNewOk;
             UINT key = InterpSupersetKeyOf(ref_Memory(), InterpSupersetLinearOf(&state, isProtectedMode));
             new_UndoBegin();
             isReferenceOk = ref_Step(&referenceState, &referenceEffects);
@@ -182,7 +192,8 @@ INT main(INT argc, PSTR *argv)
                         if (printedCount++ < 12)
                         {
                             PCBYTE memory = ref_Memory();
-                            UINT32 linear = InterpSupersetLinearOf(&state, isProtectedMode), offset;
+                            UINT32 linear = InterpSupersetLinearOf(&state, isProtectedMode);
+                            UINT32 offset;
                             printf("MISMATCH %s new_ok=%d fx %s  bytes:", keyText, isNewOk, referenceEffects == newEffects ? "same" : "DIFFER");
                             for (offset = 0; offset < 8; ++offset)
                                 printf(" %02X", memory[(linear + offset) % XMEM_SIZE]);
@@ -218,7 +229,8 @@ INT main(INT argc, PSTR *argv)
     { INT shownCount;
       for (shownCount = 0; shownCount < 40; ++shownCount)
       {
-          UINT best = 0, bestKey = 0;
+          UINT best = 0;
+          UINT bestKey = 0;
           CHAR keyText[16];
           for (keyIndex = 0; keyIndex < 0x20000; ++keyIndex) if (g_ExtraByKey[keyIndex] > best)
           {

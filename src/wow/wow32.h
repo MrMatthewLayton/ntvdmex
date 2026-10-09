@@ -182,7 +182,9 @@ typedef struct _WOW32_FRAME
     PWORD CallbackSink;                    /* optional: where the host keeps the answer */
     INT              CallbackAction;                  /* WOWCALL_ACT_* -- what to DO with it */
     WORD             CallbackActionArgument;          /* what that action is about */
-    WORD             CallbackWindow, CallbackMessage; /* for the log; 0/0 when not a message */
+    /* for the log; 0/0 when not a message */
+    WORD CallbackWindow;
+    WORD CallbackMessage;
     /* A STRUCTURE TO PUT WHERE THE GUEST CAN REACH IT (Importance = 3):
      * Some messages carry a POINTER, not a value -- WM_CREATE's lParam is an
      * LPCREATESTRUCT -- and a 16-bit program can only follow a pointer that

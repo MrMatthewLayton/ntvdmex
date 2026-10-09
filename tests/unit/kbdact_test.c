@@ -42,7 +42,8 @@ static DWORD V86HostIn(WORD port, INT width)
     return KBDACT_TEST_FLOATING_BUS;
 }
 
-static INT g_LastOutPort = KBDACT_TEST_NONE, g_LastOutValue = KBDACT_TEST_NONE;
+static INT g_LastOutPort = KBDACT_TEST_NONE;
+static INT g_LastOutValue = KBDACT_TEST_NONE;
 static VOID V86HostOut(WORD port, INT width, DWORD value)
 {
     (VOID)width;
@@ -54,7 +55,8 @@ static VOID V86HostOut(WORD port, INT width, DWORD value)
 #include "dos_layout.h"
 #include "bios_kbdact.h"
 
-static INT g_Checks = 0, g_Failures = 0;
+static INT g_Checks = 0;
+static INT g_Failures = 0;
 
 static VOID KeyboardActionTestCheck(BOOL passed, PCSTR message)
 {

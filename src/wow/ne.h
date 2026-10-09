@@ -78,8 +78,11 @@
 
 typedef struct _NE_SEGMENT
 {
-    WORD Sector, Flags, MinAlloc;
-    UINT32 FileOffset, Length;
+    WORD Sector;
+    WORD Flags;
+    WORD MinAlloc;
+    UINT32 FileOffset;
+    UINT32 Length;
     WORD Selector;          /* runtime segment/selector -- filled by the caller */
     PBYTE Memory;          /* host pointer to this segment's loaded bytes */
 } NE_SEGMENT, *PNE_SEGMENT; typedef const NE_SEGMENT *PCNE_SEGMENT;
@@ -87,18 +90,34 @@ typedef struct _NE_SEGMENT
 typedef struct _NE_MODULE
 {
     PCBYTE Image;
-    UINT32 ImageLength, Header;
-    WORD ProgramFlags, AutoData, Heap, Stack;
-    UINT32 CsIp, SsSp;
-    WORD SegmentCount, ModuleCount, MovableCount, AlignShift, ExpectedVersion;
-    WORD EntryTable, EntryLength, SegmentTable, ResourceTable, ResidentTable, ModuleTable, ImportTable;
+    UINT32 ImageLength;
+    UINT32 Header;
+    WORD ProgramFlags;
+    WORD AutoData;
+    WORD Heap;
+    WORD Stack;
+    UINT32 CsIp;
+    UINT32 SsSp;
+    WORD SegmentCount;
+    WORD ModuleCount;
+    WORD MovableCount;
+    WORD AlignShift;
+    WORD ExpectedVersion;
+    WORD EntryTable;
+    WORD EntryLength;
+    WORD SegmentTable;
+    WORD ResourceTable;
+    WORD ResidentTable;
+    WORD ModuleTable;
+    WORD ImportTable;
     /* [CAUTION]: The NON-resident names table offset is an ABSOLUTE file offset and a DWORD,
      * unlike every other table offset in this header, which is a WORD relative to
      * the NE header. Reading it the same way as its neighbours lands in nothing.
      */
     UINT32 NonResidentOffset;
     WORD NonResidentLength;
-    BYTE  TargetOs, OtherFlags;
+    BYTE TargetOs;
+    BYTE OtherFlags;
     NE_SEGMENT   Segments[NE_MAX_SEG];
     INT      Error;          /* 0 = ok; otherwise the __LINE__ that rejected it */
     /* [CAUTION]: How many SITES were actually patched, accumulated across segments. A
@@ -200,7 +219,8 @@ typedef struct _NE_REGISTRY
     char       Names[NE_MAX_MOD][NE_MAX_NAME];  /* char, not CHAR: the spelling moves code (#333) */
     INT        Count;
     /* Diagnostics for the failure that actually happens: which import gave up. */
-    char       FailedModule[NE_MAX_NAME], FailedFunction[NE_MAX_NAME];
+    char FailedModule[NE_MAX_NAME];
+    char FailedFunction[NE_MAX_NAME];
     WORD   FailedOrdinal;
 } NE_REGISTRY, *PNE_REGISTRY; typedef const NE_REGISTRY *PCNE_REGISTRY;
 

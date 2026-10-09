@@ -95,7 +95,8 @@
 
 static BYTE g_Memory[MCB_TEST_MEMORY_SIZE];          /* 1MB flat "conventional memory" buffer */
 
-static INT g_Total = 0, g_Failures = 0;
+static INT g_Total = 0;
+static INT g_Failures = 0;
 
 static VOID McbTestCheck(BOOL passed, PCSTR description)
 {
@@ -135,7 +136,8 @@ static VOID McbTestDumpChain(WORD firstMcb)
     for (;;)
     {
         BYTE signature = McbTestSignature(mcbSegment);
-        WORD owner = McbTestOwner(mcbSegment), blockSize = McbTestSize(mcbSegment);
+        WORD owner = McbTestOwner(mcbSegment);
+        WORD blockSize = McbTestSize(mcbSegment);
         printf(" [%04X %c o=%04X sz=%04X]", mcbSegment,
                (signature >= MCB_TEST_PRINTABLE_FIRST && signature < MCB_TEST_PRINTABLE_END) ? signature : '?', owner, blockSize);
         if (signature == DOS_MCB_LAST || ++walkCount > MCB_TEST_WALK_LIMIT)
@@ -159,7 +161,8 @@ static INT McbTestFind(PCBYTE block, INT blockSize, PCSTR name, INT nameLength)
 INT main(VOID)
 {
     WORD firstMcb = DosMcbInitialize(g_Memory);
-    WORD segment = 0, largest = 0;
+    WORD segment = 0;
+    WORD largest = 0;
     INT status;
 
     printf("== M2.4 MCB allocator battery ==\n");
@@ -379,7 +382,9 @@ INT main(VOID)
     {
         static BYTE envMemory[MCB_TEST_ENV_SIZE];
         PCSTR path = MCB_TEST_PROGRAM_PATH;
-        INT pathLength = MCB_TEST_PATH_LENGTH, characterIndex;    /* strlen("C:\T.COM") = 8 */
+        /* strlen("C:\T.COM") = 8 */
+        INT pathLength = MCB_TEST_PATH_LENGTH;
+        INT characterIndex;
         BOOL isPathIntact = TRUE;
         DWORD blockLength = DosEnvBuild(envMemory, MCB_TEST_ENV_SEGMENT_ZERO, path);
         McbTestCheck(blockLength > 0 && envMemory[0] == 'C' && envMemory[1] == 'O' && envMemory[2] == 'M' && envMemory[3] == 'S',
@@ -460,7 +465,9 @@ INT main(VOID)
          */
         {
             static BYTE emptyExtraMemory[MCB_TEST_SMALL_ENV_SIZE];
-            INT baseLength, withLength, byteIndex;
+            INT baseLength;
+            INT withLength;
+            INT byteIndex;
 
             card.IoBase = DOS_SB_DEFAULT_IO_BASE;
             card.Irq = DOS_SB_DEFAULT_IRQ;

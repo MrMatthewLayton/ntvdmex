@@ -96,14 +96,20 @@ INT DpmiSwitchToProtectedMode(
     WORD codeSelector  = DPMI_SELECTOR(DPMI_IDX_CODE);
     WORD dataSelector  = DPMI_SELECTOR(DPMI_IDX_DATA);
     WORD stackSelector = DPMI_SELECTOR(DPMI_IDX_STACK);
-    DWORD codeLow, codeHigh, dataLow, dataHigh, stackLow, stackHigh;
+    DWORD codeLow;
+    DWORD codeHigh;
+    DWORD dataLow;
+    DWORD dataHigh;
+    DWORD stackLow;
+    DWORD stackHigh;
     DWORD codeBase  = (DWORD)returnSegment << PARAGRAPH_SHIFT;           /* linear base of the guest CS */
     DWORD dataBase  = (DWORD)dataSegment     << PARAGRAPH_SHIFT;           /* linear base of the guest DS */
     DWORD stackBase = (DWORD)stackSegment     << PARAGRAPH_SHIFT;           /* linear base of the guest SS */
     DWORD linearEip = codeBase  + returnOffset;             /* linear code addr */
     DWORD linearEsp = stackBase + newStackPointer;             /* linear stack addr */
     LONG status;
-    BYTE codeAccess = DPMI_CODE_ACCESS, dataAccess = DPMI_DATA_ACCESS;
+    BYTE codeAccess = DPMI_CODE_ACCESS;
+    BYTE dataAccess = DPMI_DATA_ACCESS;
     /* THE INITIAL SELECTORS ARE 16-BIT, EVEN FOR A 32-BIT CLIENT:
      * Run 81 set D/B=1 here when the client passed AX bit0=1, reasoning that "its
      * initial CS/DS/SS must be 32-bit so the code AFTER the far-call runs as 32-bit".

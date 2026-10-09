@@ -131,16 +131,26 @@ typedef struct _COMM_PORT
     BYTE  Irq;
     BYTE  IsFitted;            /* 0 = the ports are not claimed and read 0xFF */
 
-    BYTE  Ier, Lcr, Mcr, Scr, Fcr;
-    BYTE  Lsr, Msr;
-    BYTE  DivisorLow, DivisorHigh;          /* divisor latch, stored and read back exactly */
+    BYTE Ier;
+    BYTE Lcr;
+    BYTE Mcr;
+    BYTE Scr;
+    BYTE Fcr;
+    BYTE Lsr;
+    BYTE Msr;
+    /* divisor latch, stored and read back exactly */
+    BYTE DivisorLow;
+    BYTE DivisorHigh;
     BYTE  Rbr;               /* the byte the guest will read next */
     BYTE  IsThrePending;      /* a THRE interrupt is owed, until IIR is read */
 
     BYTE  Receive[COMM_RECEIVE_RING_SIZE];
-    WORD ReceiveHead, ReceiveLength;
+    WORD ReceiveHead;
+    WORD ReceiveLength;
 
-    UINT32 TransmitCount, ReceiveCount, Overruns;
+    UINT32 TransmitCount;
+    UINT32 ReceiveCount;
+    UINT32 Overruns;
     UINT32 Breaks;            /* #245: break conditions the guest sent */
 } COMM_PORT, *PCOMM_PORT;
 

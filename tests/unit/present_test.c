@@ -21,13 +21,17 @@
 #include <stdint.h>
 #include "present_scale.h"
 
-static INT g_Total = 0, g_Failures = 0;
+static INT g_Total = 0;
+static INT g_Failures = 0;
 #define CHECK(condition,message) do{ g_Total++; if(condition){printf("  PASS  %s\n",(message));} \
     else{printf("  FAIL  %s\n",(message)); g_Failures++;} }while(0)
 
 INT main(VOID)
 {
-    INT left, top, width, height;
+    INT left;
+    INT top;
+    INT width;
+    INT height;
 
     printf("== Display settings: aspect fit + Scale2x (present_scale.h) ==\n");
 
@@ -93,7 +97,8 @@ INT main(VOID)
     {
         static const BYTE flat3[9] = { 7,7,7, 7,7,7, 7,7,7 };
         BYTE destination[6 * 6 + 8];
-        INT index, isOk = 1;
+        INT index;
+        INT isOk = 1;
         memset(destination, 0xEE, sizeof destination);
         PresentScale2x8(flat3, 3, 3, 3, destination);
         for (index = 0; index < 36; ++index)
@@ -152,7 +157,8 @@ INT main(VOID)
                                                3,3,3, 9,9,
                                                3,3,3, 9,9 };
         BYTE destination[36];
-        INT index, isOk = 1;
+        INT index;
+        INT isOk = 1;
         PresentScale2x8(padded, 3, 3, 5, destination);
         for (index = 0; index < 36; ++index)
             if (destination[index] != 3)

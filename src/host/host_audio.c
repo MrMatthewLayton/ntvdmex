@@ -25,8 +25,10 @@
 VOID GusReport(VOID)
 {
     static INT done = 0;
-    CHAR buffer[400], *cursor = buffer;
-    UINT voice, running = 0;
+    CHAR buffer[400];
+    CHAR *cursor = buffer;
+    UINT voice;
+    UINT running = 0;
 
     if (done)
         return;
@@ -69,7 +71,8 @@ VOID GusReport(VOID)
 static struct
 {
     DWORD Microseconds;
-    BYTE Register, Value;
+    BYTE Register;
+    BYTE Value;
 } g_OplTrace[OPLTRACE_MAX];
 DWORD          g_OplTraceCount    = 0;
 DWORD          g_OplTraceDrop = 0;
@@ -97,7 +100,8 @@ VOID OplTraceWrite(BYTE registerIndex, BYTE value)
 VOID OplTraceDump(VOID)
 {
     HANDLE handle;
-    DWORD index, bytesWritten;
+    DWORD index;
+    DWORD bytesWritten;
     static CHAR buffer[64];
 
     if (!g_OplTraceOn || !g_OplTraceCount)
@@ -128,7 +132,8 @@ enum
 };   /* OplPumpTime: shorter is carried to the next pump */
 VOID OplPumpTime(VOID)
 {
-    static LARGE_INTEGER frequency, last;
+    static LARGE_INTEGER frequency;
+    static LARGE_INTEGER last;
     LARGE_INTEGER now;
     LONGLONG delta;
     DWORD microseconds;

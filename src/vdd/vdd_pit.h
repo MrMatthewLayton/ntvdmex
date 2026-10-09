@@ -52,7 +52,14 @@
 /* dow: 1 = Sunday .. 7 = Saturday, the MC146818's own numbering; 0 = unknown (s81, #182). */
 typedef struct _PIT_RTC_READING
 {
-    UINT Century, Year, Month, Day, Hour, Minute, Second, DayOfWeek;
+    UINT Century;
+    UINT Year;
+    UINT Month;
+    UINT Day;
+    UINT Hour;
+    UINT Minute;
+    UINT Second;
+    UINT DayOfWeek;
 } PIT_RTC_READING, *PPIT_RTC_READING;
 
 typedef const PIT_RTC_READING *PCPIT_RTC_READING;

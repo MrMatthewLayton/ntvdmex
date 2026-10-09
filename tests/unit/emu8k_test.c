@@ -165,7 +165,8 @@
 #define EMU8K_TEST_TWENTY_MS                882             /* Samples */
 #define EMU8K_TEST_FULL_VOLUME              0xFFFF
 
-static INT    g_Checks, g_Failures;
+static INT g_Checks;
+static INT g_Failures;
 static BYTE   g_GuestMemory[0x10000];
 static WORD   g_Dram[EMU8K_DRAM_WORDS];
 static VDD_BUS g_Bus;
@@ -324,7 +325,8 @@ static VOID Emu8kTestRender(DWORD frameCount)
 static INT Emu8kTestCrossings(DWORD frameCount)
 {
     DWORD frame;
-    INT crossingCount = 0, previous = 0;
+    INT crossingCount = 0;
+    INT previous = 0;
 
     VddEmu8kRenderStereo(&g_Emu8k, g_Samples, frameCount);
     for (frame = 0; frame < frameCount; ++frame)
@@ -345,7 +347,8 @@ static INT Emu8kTestMagnitude(INT16 sample)
 static VOID Emu8kTestPeaks(DWORD frameCount, PINT peakLeft, PINT peakRight)
 {
     DWORD frame;
-    INT left = 0, right = 0;
+    INT left = 0;
+    INT right = 0;
 
     VddEmu8kRenderStereo(&g_Emu8k, g_Samples, frameCount);
     for (frame = 0; frame < frameCount; ++frame)
@@ -737,7 +740,8 @@ INT main(VOID)
 
     /* ---- T6: the volume envelope ---- */
     { DWORD attackSlowest = VddEmu8kAttackMicroseconds(1), attackFastest = VddEmu8kAttackMicroseconds(0x7F);
-      DWORD decaySlowest = VddEmu8kDecayMicrosecondsPerDb(1), decayFastest = VddEmu8kDecayMicrosecondsPerDb(0x7F);
+      DWORD decaySlowest = VddEmu8kDecayMicrosecondsPerDb(1);
+      DWORD decayFastest = VddEmu8kDecayMicrosecondsPerDb(0x7F);
       printf("        attack 01h=%u us 7Fh=%u us   decay 01h=%u us/dB 7Fh=%u us/dB\n",
              attackSlowest, attackFastest, decaySlowest, decayFastest);
       Emu8kTestCheck(attackSlowest > 11760000 && attackSlowest < 12000000 && attackFastest > 5900 && attackFastest < 6100,
@@ -746,7 +750,9 @@ INT main(VOID)
                      "decay: 01h = 470 ms/dB, 7Fh = 240 us/dB (p.15)"); }
     { DWORD attackSamples = (DWORD)(((UINT64)VddEmu8kAttackMicroseconds(0x40) * EMU8K_TEST_MICROSECONDS_TO_SAMPLES_NUMERATOR)
                                     / EMU8K_TEST_MICROSECONDS_TO_SAMPLES_DENOMINATOR);
-      WORD atQuarter, atHalf, atEnd;
+      WORD atQuarter;
+      WORD atHalf;
+      WORD atEnd;
       Emu8kTestPlayTone(EMU8K_TEST_TONE_CHANNEL, EMU8K_TEST_PAN_CENTRE, EMU8K_TEST_OPEN_FILTER, EMU8K_TEST_ATTACK_40);
       Emu8kTestRender(attackSamples / 4);
       atQuarter = Emu8kTestCurrentVolume(EMU8K_TEST_TONE_CHANNEL);
@@ -845,7 +851,8 @@ INT main(VOID)
     /* ---- T9: the mixer hook ---- */
     { static AUDIO_STATE audio;
     static INT16 mixed[EMU8K_STEREO_SIDES * 1024];
-      BOOL hasLeft = FALSE, hasRight = FALSE;
+      BOOL hasLeft = FALSE;
+      BOOL hasRight = FALSE;
       DWORD frame;
       VddAudioInitialize(&audio, NULL, NULL, EMU8K_TEST_RATE);
       VddAudioSetEmu8k(&audio, &g_Emu8k);

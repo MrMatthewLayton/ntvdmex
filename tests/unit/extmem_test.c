@@ -43,7 +43,8 @@
 #define EXTMEM_TEST_DESCRIPTOR_BASE         0x02101234u
 #define EXTMEM_TEST_DESCRIPTOR              { 0xFF, 0xFF, 0x34, 0x12, 0x10, 0x93, 0x00, 0x02 }
 
-static INT g_Checks = 0, g_Failures = 0;
+static INT g_Checks = 0;
+static INT g_Failures = 0;
 
 static VOID ExtMemTestCheck(BOOL passed, PCSTR description)
 {

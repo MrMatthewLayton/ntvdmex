@@ -17,7 +17,8 @@ static INT PcSpeakerIoctl(PPCSPEAKER speaker, DWORD hz)
 {
     struct
     {
-        DWORD Frequency, Duration;
+        DWORD Frequency;
+        DWORD Duration;
     } beep;
     DWORD returned = 0;
     beep.Frequency = hz;

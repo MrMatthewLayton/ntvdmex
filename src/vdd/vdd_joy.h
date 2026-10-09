@@ -86,7 +86,9 @@ typedef struct _JOYSTICK_STATE
                                   NOT TriggerMicroseconds==0, because an injected
                                   clock may legitimately read 0 at fire time  */
     UINT64       TriggerMicroseconds;   /* when the one-shots last fired */
-    UINT32       PortReads, PortWrites; /* CLOSE diagnostics: did the guest ever poll? */
+    /* CLOSE diagnostics: did the guest ever poll? */
+    UINT32 PortReads;
+    UINT32 PortWrites;
 } JOYSTICK_STATE, *PJOYSTICK_STATE;
 
 typedef const JOYSTICK_STATE *PCJOYSTICK_STATE;

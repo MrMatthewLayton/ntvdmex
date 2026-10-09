@@ -19,7 +19,8 @@
 #define TYPES_TEST_WORD_VALUE           0x1234
 #define TYPES_TEST_DWORD_VALUE          0x89ABCDEFu
 
-static INT g_Total = 0, g_Failures = 0;
+static INT g_Total = 0;
+static INT g_Failures = 0;
 
 static VOID TypesTestCheck(BOOL condition, PCSTR description)
 {

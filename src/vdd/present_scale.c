@@ -78,7 +78,8 @@ VOID PresentFitRatio(
     INT *width,
     INT *height)
 {
-    long fitWidth, fitHeight;
+    long fitWidth;
+    long fitHeight;
 
     if (destinationWidth < 1)
         destinationWidth = 1;
@@ -122,7 +123,8 @@ VOID PresentLayout(
     INT *width,
     INT *height)
 {
-    INT ratioWidth, ratioHeight;
+    INT ratioWidth;
+    INT ratioHeight;
 
     if (destinationWidth < 1)
         destinationWidth = 1;
@@ -141,7 +143,9 @@ VOID PresentLayout(
     {
         if (PresentIsNative(aspect))
         {
-            INT scaleX = destinationWidth / sourceWidth, scaleY = destinationHeight / sourceHeight, scale = scaleX < scaleY ? scaleX : scaleY;
+            INT scaleX = destinationWidth / sourceWidth;
+            INT scaleY = destinationHeight / sourceHeight;
+            INT scale = scaleX < scaleY ? scaleX : scaleY;
             if (scale >= 1)
             {
                 *width = sourceWidth * scale;
@@ -154,10 +158,14 @@ VOID PresentLayout(
         else
         {
             long bestArea = 0;
-            INT bestScaleX = 0, bestScaleY = 0, scaleX;
+            INT bestScaleX = 0;
+            INT bestScaleY = 0;
+            INT scaleX;
             for (scaleX = 1; (long)sourceWidth * scaleX <= destinationWidth; ++scaleX)
             {
-                long numerator = (long)sourceWidth * scaleX * ratioHeight, denominator = (long)sourceHeight * ratioWidth;   /* ny = num/den */
+                /* ny = num/den */
+                long numerator = (long)sourceWidth * scaleX * ratioHeight;
+                long denominator = (long)sourceHeight * ratioWidth;
                 if (numerator % denominator)
                     continue;
                 if ((long)sourceHeight * (numerator / denominator) > destinationHeight || numerator / denominator < 1)
@@ -190,7 +198,8 @@ VOID PresentWindowPicture(
     INT *width,
     INT *height)
 {
-    INT ratioWidth, ratioHeight;
+    INT ratioWidth;
+    INT ratioHeight;
 
     if (scale < 1)
         scale = 1;
@@ -218,7 +227,10 @@ VOID PresentFit(
     INT *width,
     INT *height)
 {
-    INT fitWidth, fitHeight, ratioWidth, ratioHeight;
+    INT fitWidth;
+    INT fitHeight;
+    INT ratioWidth;
+    INT ratioHeight;
 
     if (destinationWidth < 1)
         destinationWidth = 1;
@@ -257,7 +269,9 @@ VOID PresentScale2x8(
     INT sourceStride,
     BYTE *destination)
 {
-    INT column, row, destinationStride = sourceWidth * PRESENT_SCALE2X_FACTOR;
+    INT column;
+    INT row;
+    INT destinationStride = sourceWidth * PRESENT_SCALE2X_FACTOR;
 
     for (row = 0; row < sourceHeight; ++row)
     {
@@ -269,10 +283,14 @@ VOID PresentScale2x8(
         for (column = 0; column < sourceWidth; ++column)
         {
             BYTE centre = sourceRow[column];
-            BYTE above = rowAbove[column],  below = rowBelow[column];
+            BYTE above = rowAbove[column];
+            BYTE below = rowBelow[column];
             BYTE left = sourceRow[column > 0      ? column - 1 : 0];
             BYTE right = sourceRow[column < sourceWidth - 1 ? column + 1 : sourceWidth - 1];
-            BYTE topLeft = centre, topRight = centre, bottomLeft = centre, bottomRight = centre;
+            BYTE topLeft = centre;
+            BYTE topRight = centre;
+            BYTE bottomLeft = centre;
+            BYTE bottomRight = centre;
             if (above != below && left != right)
             {
                 if (left == above)
@@ -295,9 +313,13 @@ VOID PresentScale2x8(
 UINT32 PresentTint(UINT32 argb, INT tint)
 {
     UINT32 alpha = argb & PRESENT_ALPHA_MASK;
-    UINT32 red = (argb >> PRESENT_RED_SHIFT) & PRESENT_CHANNEL_MASK, green = (argb >> PRESENT_GREEN_SHIFT) & PRESENT_CHANNEL_MASK, blue = argb & PRESENT_CHANNEL_MASK;
+    UINT32 red = (argb >> PRESENT_RED_SHIFT) & PRESENT_CHANNEL_MASK;
+    UINT32 green = (argb >> PRESENT_GREEN_SHIFT) & PRESENT_CHANNEL_MASK;
+    UINT32 blue = argb & PRESENT_CHANNEL_MASK;
     UINT32 luminance = (red * PRESENT_LUMA_RED + green * PRESENT_LUMA_GREEN + blue * PRESENT_LUMA_BLUE + PRESENT_LUMA_ROUND) / PRESENT_LUMA_SCALE;   /* 0..255 */
-    UINT32 outputRed, outputGreen, outputBlue;
+    UINT32 outputRed;
+    UINT32 outputGreen;
+    UINT32 outputBlue;
 
     switch (tint)
     {

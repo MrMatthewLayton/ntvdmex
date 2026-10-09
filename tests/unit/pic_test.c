@@ -20,7 +20,8 @@
 #include <string.h>
 #include "vdd_pic.h"
 
-static INT g_Checks = 0, g_Failures = 0;
+static INT g_Checks = 0;
+static INT g_Failures = 0;
 static VOID PicTestCheck(INT condition, PCSTR description)
 {
     ++g_Checks;
@@ -41,7 +42,8 @@ static VOID PicTestCheck(INT condition, PCSTR description)
  * this stub used to throw them away. Everything the battery could ask was
  * therefore about the HOST-side API, which is the half that already worked.
  */
-static BYTE g_LastFirstPort, g_LastLastPort;
+static BYTE g_LastFirstPort;
+static BYTE g_LastLastPort;
 static PVDD_PORT_IN_ROUTINE  g_InRoutine;
 static PVDD_PORT_OUT_ROUTINE g_OutRoutine;
 static PVOID g_Context;
@@ -242,7 +244,10 @@ INT main(VOID)
      * IR2 rule, pinned separately below.
      */
     {
-        INT isr, line, imr, same = 1;
+        INT isr;
+        INT line;
+        INT imr;
+        INT same = 1;
         static const BYTE imrs[] = { 0x00, 0xFC, 0x08, 0xA5 };
         for (imr = 0; imr < 4; ++imr)
             for (isr = 0; isr < 256; ++isr)

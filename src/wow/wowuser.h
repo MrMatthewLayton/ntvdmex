@@ -1915,8 +1915,11 @@ typedef struct _WOWUSER_CLASS
     WORD  Style;
     DWORD WindowProcedure;           /* 16:16 far pointer into the guest */
     WORD  Instance;
-    WORD  Icon16, Cursor16, Background16;
-    WORD  ClassExtra, WindowExtra;
+    WORD Icon16;
+    WORD Cursor16;
+    WORD Background16;
+    WORD ClassExtra;
+    WORD WindowExtra;
     INT   IsSystemClass;             /* 1 = the SYSTEM provides it, not a program */
     /* [INFO]: The REAL Win32 class this one is made from. For a program's class that is
      * a prefixed clone of its name registered against our own window procedure;
@@ -1928,7 +1931,9 @@ typedef struct _WOWUSER_CLASS
     /* The predefined ordinals resolved out of hCursor/hIcon at registration --
      * kept only so the log can say what the class actually got.
      */
-    WORD  CursorOrdinal, IconOrdinal, IconKind;
+    WORD CursorOrdinal;
+    WORD IconOrdinal;
+    WORD IconKind;
     INT   IsCursorUnknown;           /* the OS did not know that cursor ordinal */
     INT   IconBits;                  /* colour depth of the icon actually built */
     /* What the class said its menu was -- a name, or an ordinal. Recorded and
@@ -1988,8 +1993,13 @@ typedef struct _WOWUSER_WINDOW
      * order is settled in WowUserWindowProcedureOf() and nowhere else.
      */
     DWORD DialogProcedure;
-    INT   PositionX, PositionY, Width, Height;
-    WORD  Parent, Menu, Instance;
+    INT PositionX;
+    INT PositionY;
+    INT Width;
+    INT Height;
+    WORD Parent;
+    WORD Menu;
+    WORD Instance;
     char  Text[WOWUSER_NAME_SIZE];                   /* char, not CHAR: the spelling moves code (#333) */
     /* -- THE WINDOW'S EXTRA BYTES -- cbWndExtra, AND THEY ARE LOAD-BEARING.
      * Not storage for its own sake: SYSEDIT keeps its EDIT control's handle
@@ -2024,7 +2034,8 @@ typedef struct _WOWUSER_WINDOW
      * its controls were laid out with, and what MapDialogRect must use. 0 = not
      * a dialog (the system's base units apply).
      */
-    WORD  DialogBaseUnitX, DialogBaseUnitY;
+    WORD DialogBaseUnitX;
+    WORD DialogBaseUnitY;
     /* s89: the template named a font (DS_SETFONT). Stock gives such a dialog the 3-D
      * look -- its static text defaults to the button face (Charmap) -- and a dialog
      * without one the window colour (Calc's display). Measured on those two.
@@ -2165,7 +2176,8 @@ typedef struct _WOWDLG_FONT
     char FaceName[LF_FACESIZE];
     INT PointSize;
     HFONT Font;
-    INT BaseX, BaseY;
+    INT BaseX;
+    INT BaseY;
 } WOWDLG_FONT;
 
 /* -- ASK FOR THE WM_CREATE. One helper, because there are now TWO places that

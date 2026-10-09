@@ -195,7 +195,12 @@ static UINT WowConvDibCoreToInfo(
     UINT capacity,
     PUINT paletteCount)
 {
-    UINT width, height, bitCount, paletteEntries, pixelOffset, index;
+    UINT width;
+    UINT height;
+    UINT bitCount;
+    UINT paletteEntries;
+    UINT pixelOffset;
+    UINT index;
 
     if (!core || !output || length < WOWCONV_CORE_HEADER_SIZE)
         return 0;
@@ -376,7 +381,8 @@ static unsigned long WowConvMetafileHeader(
     PUINT objectCount,
     unsigned long *recordsEnd)
 {
-    UINT type, headerWords;
+    UINT type;
+    UINT headerWords;
     unsigned long metafileBytes;
 
     if (!bytes || length < WOWCONV_MF_HDR)

@@ -48,7 +48,8 @@
 
 static BYTE g_Memory[BDA_TEST_MEMORY_SIZE];          /* 1 MB flat guest memory */
 
-static INT g_Total = 0, g_Failures = 0;
+static INT g_Total = 0;
+static INT g_Failures = 0;
 
 static VOID BdaTestCheck(BOOL passed, PCSTR description)
 {
@@ -72,7 +73,8 @@ static UINT BdaTestReadWord(DWORD linear)
 INT main(VOID)
 {
     WORD firstMcb;
-    UINT byteIndex, dirtyBytes;
+    UINT byteIndex;
+    UINT dirtyBytes;
 
     printf("== BDA / EBDA battery (#253) ==\n");
 

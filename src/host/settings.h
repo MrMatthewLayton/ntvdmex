@@ -144,7 +144,9 @@ typedef struct _SET_DEF
     INT         ControlId;      /* dialog control id (0 for SK_DERIVED) */
     INT         Kind;           /* SK_* */
     DWORD       Default;        /* default value (an INDEX for SK_COMBO) */
-    DWORD       Low, High;      /* inclusive clamp; for SK_COMBO High = last valid index */
+    /* inclusive clamp; for SK_COMBO High = last valid index */
+    DWORD Low;
+    DWORD High;
     PCSTR       Items;          /* SK_COMBO: '|'-separated item text, else NULL */
 } SET_DEF, *PSET_DEF; typedef const SET_DEF *PCSET_DEF;
 

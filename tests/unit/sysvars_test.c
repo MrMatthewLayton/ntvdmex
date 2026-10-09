@@ -119,7 +119,8 @@
 #define SYSVARS_TEST_PARAGRAPH                  16u
 #define SYSVARS_TEST_MCB_HEAD_BYTES             2u
 
-static INT g_Checks, g_Failures;
+static INT g_Checks;
+static INT g_Failures;
 
 static VOID SysVarsTestExpect(PCSTR description, LONG actual, LONG expected)
 {
@@ -346,7 +347,9 @@ INT main(VOID)
     {   static PCSTR expectedNames[DOS_DEVICE_COUNT] = { "CON     ", "AUX     ", "PRN     ",
             "CLOCK$  ", NULL, "COM1    ", "LPT1    ", "LPT2    ", "LPT3    ",
             "COM2    ", "COM3    ", "COM4    " };
-        UINT headerOffset = 0, segment = SYSVARS_TEST_DEVICE_SEGMENT, headerCount = 0;
+        UINT headerOffset = 0;
+        UINT segment = SYSVARS_TEST_DEVICE_SEGMENT;
+        UINT headerCount = 0;
         /* walk it as a guest would: from CON, by the `next` pointers, until FFFF */
         for (;;)
         {
@@ -459,7 +462,8 @@ INT main(VOID)
            nothing else we place in low memory. */
         UINT sysVarsStart = DOS_SYSVARS_SEG * SYSVARS_TEST_PARAGRAPH + DOS_SYSVARS_OFF - SYSVARS_TEST_MCB_HEAD_BYTES;
         UINT sysVarsEnd = DOS_SYSVARS_SEG * SYSVARS_TEST_PARAGRAPH + DOS_SYSVARS_OFF + DOS_SYSVARS_LEN;
-        UINT sdaStart = DOS_SDA_SEG * SYSVARS_TEST_PARAGRAPH + DOS_SDA_OFF, sdaEnd = sdaStart + DOS_SDA_LEN;
+        UINT sdaStart = DOS_SDA_SEG * SYSVARS_TEST_PARAGRAPH + DOS_SDA_OFF;
+        UINT sdaEnd = sdaStart + DOS_SDA_LEN;
         /* -- #207: SysVars' SEGMENT LIES BELOW THE FIRST MCB, AS ON 6.22 (0116 < 0253).
          * MEM /D prints "MSDOS System Data" = SysVars seg .. first MCB; with the chain
          * at 0x5F that was 0x5F - 0x72 paragraphs, printed as 4,294,96x. Every byte of
@@ -471,8 +475,10 @@ INT main(VOID)
         SysVarsTestExpect("the SDA ends at or below the first MCB header", sdaEnd <= DOS_FIRST_MCB * SYSVARS_TEST_PARAGRAPH, TRUE);
         SysVarsTestExpect("MEM /D's IO row (0070..SysVars seg) is not negative", DOS_SYSVARS_SEG >= SYSVARS_TEST_IO_PARAGRAPH, TRUE);
         {   /* #48: the device headers at DOS_DEV_SEG, and NUL's stub in SysVars' segment */
-            UINT deviceStart = DOS_DEV_SEG * SYSVARS_TEST_PARAGRAPH, deviceEnd = deviceStart + DOS_DEVICE_AREA_LEN;
-            UINT nulStubStart = DOS_SYSVARS_SEG * SYSVARS_TEST_PARAGRAPH + DOS_NULSTUB_OFF, nulStubEnd = nulStubStart + DOS_NULSTUB_LEN;
+            UINT deviceStart = DOS_DEV_SEG * SYSVARS_TEST_PARAGRAPH;
+            UINT deviceEnd = deviceStart + DOS_DEVICE_AREA_LEN;
+            UINT nulStubStart = DOS_SYSVARS_SEG * SYSVARS_TEST_PARAGRAPH + DOS_NULSTUB_OFF;
+            UINT nulStubEnd = nulStubStart + DOS_NULSTUB_LEN;
             SysVarsTestExpect("device area clear of DOS_HDLR_SEG's 0x00..0xFF", deviceStart >= DOS_HDLR_SEG * SYSVARS_TEST_PARAGRAPH + SYSVARS_TEST_HANDLER_SLOTS, TRUE);
             SysVarsTestExpect("device area ends below 0x700 (and [0x714])", deviceEnd <= SYSVARS_TEST_KERNEL_AREA_END, TRUE);
             SysVarsTestExpect("device area below the first MCB", deviceEnd <= DOS_FIRST_MCB * SYSVARS_TEST_PARAGRAPH, TRUE);

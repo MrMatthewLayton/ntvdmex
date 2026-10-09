@@ -96,7 +96,9 @@
 typedef struct _SYSFONT_FACE
 {
     HFONT Font;
-    INT   Width, Height;                       /* the cell GDI actually gave us */
+    /* the cell GDI actually gave us */
+    INT Width;
+    INT Height;
     BYTE  Glyphs[VGA_FONT_CHARACTERS][SYSFONT_MAX_HEIGHT];   /* glyphs, Height rows each */
     INT   IsOk;
 } SYSFONT_FACE, *PSYSFONT_FACE; typedef const SYSFONT_FACE *PCSYSFONT_FACE;
@@ -106,7 +108,9 @@ typedef struct _SYSFONT_FACE
  */
 typedef struct _SYSFONT_TABLES
 {
-    BYTE Table8[VGA_FONT_CHARACTERS][VGA_FONT8_HEIGHT], Table14[VGA_FONT_CHARACTERS][VGA_FONT14_HEIGHT], Table16[VGA_FONT_CHARACTERS][VGA_FONT16_HEIGHT];
+    BYTE Table8[VGA_FONT_CHARACTERS][VGA_FONT8_HEIGHT];
+    BYTE Table14[VGA_FONT_CHARACTERS][VGA_FONT14_HEIGHT];
+    BYTE Table16[VGA_FONT_CHARACTERS][VGA_FONT16_HEIGHT];
 } SYSFONT_TABLES, *PSYSFONT_TABLES;
 
 /* What one build did. `Line` is the STAGE1 log line; the rest is about the chosen font,

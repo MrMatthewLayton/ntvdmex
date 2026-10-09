@@ -91,7 +91,8 @@ UINT CpuSpeedRealModeDutyBp(UINT protectedModeBp)
  */
 static UINT CpuSpeedPeriodFloorMs(UINT dutyBp, unsigned long roundTripUs)
 {
-    unsigned long byRun, byHold;
+    unsigned long byRun;
+    unsigned long byHold;
 
     if (!dutyBp || dutyBp >= CPUSPEED_BP_FULL_U)
         return CPUSPEED_GRAN_MIN_MS;
@@ -159,7 +160,8 @@ INT CpuSpeedCharge(
     unsigned long instructionsPerSecond,
     INT64 elapsedUs)
 {
-    INT64 wantedUs, milliseconds;
+    INT64 wantedUs;
+    INT64 milliseconds;
 
     if (!instructionsPerSecond || !ran)
     {

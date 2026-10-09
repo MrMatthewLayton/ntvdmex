@@ -50,7 +50,8 @@ static void IntEchoInterrupt(void *self, ntvdmex_regs *registers)
     else if (function == INTECHO_SUM)
     {
         const uint8_t *bytes = (const uint8_t *)g_IntEchoApi->map_flat(g_IntEchoBus, registers->ds, (uint16_t)registers->esi);
-        uint32_t count = registers->ecx & INTECHO_COUNT_MASK, index;
+        uint32_t count = registers->ecx & INTECHO_COUNT_MASK;
+        uint32_t index;
         uint16_t sum = 0;
         if (!bytes)
         {

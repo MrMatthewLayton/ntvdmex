@@ -65,9 +65,13 @@ BOOL CsrssRegisterConsole(VOID)
     PFN_RegisterConsoleVDM RegisterConsoleVDM =
         (PFN_RegisterConsoleVDM)GetProcAddress(
             GetModuleHandleA(CSRSS_KERNEL32_NAME), CSRSS_REGISTER_CONSOLE_VDM);
-    HANDLE startEvent, endEvent, errorEvent;
-    DWORD sixthOut = 0, tenthOut = 0;
-    PVOID seventhOut = NULL, eleventhOut = NULL;
+    HANDLE startEvent;
+    HANDLE endEvent;
+    HANDLE errorEvent;
+    DWORD sixthOut = 0;
+    DWORD tenthOut = 0;
+    PVOID seventhOut = NULL;
+    PVOID eleventhOut = NULL;
     if (!RegisterConsoleVDM)
         return FALSE;
     startEvent = CreateEventA(NULL, TRUE, FALSE, NULL);
@@ -96,8 +100,9 @@ BOOL CsrssGetCommand(VDM_COMMAND_INFO *commandInfo, DWORD *lastError)
     return succeeded;
 }
 
-CHAR g_CsrssNextApp[CSRSS_APP_NAME_SIZE], g_CsrssNextCommand[CSRSS_COMMAND_LINE_SIZE],
-     g_CsrssNextDirectory[CSRSS_DIRECTORY_SIZE];
+CHAR g_CsrssNextApp[CSRSS_APP_NAME_SIZE];
+CHAR g_CsrssNextCommand[CSRSS_COMMAND_LINE_SIZE];
+CHAR g_CsrssNextDirectory[CSRSS_DIRECTORY_SIZE];
 HANDLE g_CsrssNextStandardHandles[CSRSS_STANDARD_HANDLES];   /* the next command's StdIn/StdOut/StdErr as CSRSS placed them
                                in THIS process (s73: handed to the relaunched host) */
 
@@ -119,8 +124,11 @@ BOOL CsrssTaskDone(ULONG taskId, ULONG exitCode, DWORD *lastError, BOOL *didExit
     HMODULE kernel32 = GetModuleHandleA(CSRSS_KERNEL32_NAME);
     PFN_GetNextVDMCommand GetNextVDMCommand = (PFN_GetNextVDMCommand)GetProcAddress(kernel32, CSRSS_GET_NEXT_VDM_COMMAND);
     PFN_ExitVDM ExitVDM = (PFN_ExitVDM)GetProcAddress(kernel32, CSRSS_EXIT_VDM);
-    static CHAR pifFile[CSRSS_PIF_SIZE], environment[CSRSS_ENVIRONMENT_SIZE], desktop[CSRSS_DESKTOP_SIZE],
-                title[CSRSS_TITLE_SIZE], reserved[CSRSS_RESERVED_SIZE];
+    static CHAR pifFile[CSRSS_PIF_SIZE];
+    static CHAR environment[CSRSS_ENVIRONMENT_SIZE];
+    static CHAR desktop[CSRSS_DESKTOP_SIZE];
+    static CHAR title[CSRSS_TITLE_SIZE];
+    static CHAR reserved[CSRSS_RESERVED_SIZE];
     VDM_COMMAND_INFO commandInfo;
     BOOL succeeded = FALSE;
     INT charIndex;

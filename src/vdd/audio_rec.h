@@ -58,10 +58,13 @@
 
 typedef struct _AUDIO_RECORDER
 {
-    HANDLE          File, Thread;
+    HANDLE File;
+    HANDLE Thread;
     volatile LONG   IsActive;                /* 1 = the audio thread may feed */
     volatile LONG   IsStopping;              /* 1 = writer: drain, finish, exit */
-    volatile LONG   Head, Tail;              /* ring indices (mod AUDIO_RECORDER_RING) */
+    /* ring indices (mod AUDIO_RECORDER_RING) */
+    volatile LONG Head;
+    volatile LONG Tail;
     UINT32        SampleHz;
     UINT32        DataBytes;                 /* written to disk so far */
     UINT32        Dropped;                   /* samples lost to a full ring */
@@ -116,8 +119,10 @@ static VOID AudioRecorderDrain(PAUDIO_RECORDER recorder)
 {
     for (;;)
     {
-        LONG tail = recorder->Tail, head = recorder->Head;
-        DWORD count, written = 0;
+        LONG tail = recorder->Tail;
+        LONG head = recorder->Head;
+        DWORD count;
+        DWORD written = 0;
         if (tail == head)
             return;
         count = (DWORD)((head > tail) ? (head - tail) : ((LONG)AUDIO_RECORDER_RING - tail));   /* contiguous run */
@@ -210,7 +215,9 @@ static VOID AudioRecorderFeed(const INT16 *samples, UINT32 count)
 {
     PAUDIO_RECORDER recorder = &g_AudioRecorder;
     UINT32 sampleIndex;
-    LONG head, tail, room;
+    LONG head;
+    LONG tail;
+    LONG room;
 
     if (!recorder->IsActive)
         return;

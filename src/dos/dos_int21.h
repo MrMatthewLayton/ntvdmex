@@ -233,8 +233,12 @@ typedef struct _DOS_MACHINE
     volatile BYTE *Tib;        /* guest CONTEXT (registers via VDM_REG) */
     HANDLE   FileHandles[DOS_MAX_FILES]; /* DOS handle -> Win32 (0..4 console; files in 5+) */
     WORD FirstMcb;        /* MCB chain root (AH=48/49/4A) */
-    WORD DtaSegment, DtaOffset; /* Disk Transfer Area (AH=1A/2F) */
-    BYTE  VersionMajor, VersionMinor;  /* reported DOS version -- GH #28, default 6.22 */
+    /* Disk Transfer Area (AH=1A/2F) */
+    WORD DtaSegment;
+    WORD DtaOffset;
+    /* reported DOS version -- GH #28, default 6.22 */
+    BYTE VersionMajor;
+    BYTE VersionMinor;
     /* #208, THE USER'S CHOICE: SETVER, NOT A SESSION-WIDE 5.00:
      * XP's COMMAND.COM refuses anything but 5.00, and every program started from
      * Windows now runs UNDER it -- so a session-wide 5.00 would have changed the
@@ -244,11 +248,14 @@ typedef struct _DOS_MACHINE
      */
 #define DOS_SHELL_PSP_SLOTS     4
     WORD ShellPsps[DOS_SHELL_PSP_SLOTS];   /* 0 = unused slot */
-    BYTE  ShellVersionMajor, ShellVersionMinor;
+    BYTE ShellVersionMajor;
+    BYTE ShellVersionMinor;
     BYTE  AllocationStrategy;      /* AH=58h allocation strategy (0 = first fit) */
     BYTE  UmbLink;         /* AH=58h UMB link state (0 = not linked) */
     BYTE  IsBreakOn;         /* AH=33h extended Ctrl-Break checking (BREAK=) */
-    WORD SysvarsSegment, SysvarsOffset;  /* AH=52h list of lists, planted by the host */
+    /* AH=52h list of lists, planted by the host */
+    WORD SysvarsSegment;
+    WORD SysvarsOffset;
     HANDLE   FindHandles[DOS_FIND_SLOTS];        /* AH=4Eh/4Fh live searches; slot stashed in the DTA */
     WORD LastError;         /* AH=59h extended error -- last failing call's AX */
     BYTE  IsVerifyOn;           /* AH=2Eh/54h verify-after-write flag */
@@ -275,8 +282,10 @@ typedef struct _DOS_MACHINE
      * and CS:IP back into it; AL=03 reads the load segment and relocation
      * factor out of it. (GH #50)
      */
-    WORD ExecBlockSegment, ExecBlockOffset;
-    WORD ExecOverlaySegment, ExecOverlayRelocation;
+    WORD ExecBlockSegment;
+    WORD ExecBlockOffset;
+    WORD ExecOverlaySegment;
+    WORD ExecOverlayRelocation;
     char     ExecPath[DOS_EXEC_NAME_SIZE];
     /* The name EXACTLY as the caller passed it in DS:DX. DOS 6.22 appends this,
      * verbatim -- not qualified, not upcased -- to the child's environment copy
@@ -284,9 +293,12 @@ typedef struct _DOS_MACHINE
      */
     char     ExecName[DOS_EXEC_NAME_SIZE];
     WORD ExecEnvironment;         /* 0 = inherit the parent's environment (a COPY) */
-    WORD ExecTailSegment, ExecTailOffset;
-    WORD ExecFcb1Segment, ExecFcb1Offset;
-    WORD ExecFcb2Segment, ExecFcb2Offset;
+    WORD ExecTailSegment;
+    WORD ExecTailOffset;
+    WORD ExecFcb1Segment;
+    WORD ExecFcb1Offset;
+    WORD ExecFcb2Segment;
+    WORD ExecFcb2Offset;
     char    *Output;
     INT OutputCapacity;
     INT OutputLength;  /* captured console output (02/09/40) */
@@ -327,15 +339,20 @@ typedef struct _DOS_MACHINE
      * in we are, and WHICH buffer it was -- a different DS:DX means a different call,
      * not a continuation. See the handler.
      */
-    WORD LineSegment, LineOffset;
-    INT      LineLength, IsLineActive;
+    WORD LineSegment;
+    WORD LineOffset;
+    INT LineLength;
+    INT IsLineActive;
     /* #251: AH=3Fh FROM THE CONSOLE IS DOS's OWN LINE EDITOR, and unlike AH=0Ah its
      * line lives on DOS's side: it is read whole (127 characters + CR LF) and handed
      * out across as many reads as the caller makes. ConsoleTyped counts what is typed while
      * collecting; ConsoleLength/ConsolePosition are what is left to hand out.
      */
     BYTE     ConsoleLine[DOS_CONSOLE_LINE_SIZE];
-    INT      ConsoleTyped, ConsoleLength, ConsolePosition, IsConsoleCollecting;
+    INT ConsoleTyped;
+    INT ConsoleLength;
+    INT ConsolePosition;
+    INT IsConsoleCollecting;
     INT      IsTraceAll;        /* log EVERY INT 21h call -- see the trace at entry */
     DWORD    TraceCount;          /* how many have been printed; capped at DOS_TRACE_MAX */
     /* THE CURRENT DRIVE WHEN WIN32 CANNOT STAND ON IT. -1 = the current drive is the

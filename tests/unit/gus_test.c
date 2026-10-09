@@ -22,7 +22,8 @@
 #include "vdd_gus.h"
 #include "vdd_mpu.h"
 
-static INT g_Total = 0, g_Failures = 0;
+static INT g_Total = 0;
+static INT g_Failures = 0;
 #define CHECK(condition,message) do{ g_Total++; if(condition){printf("  PASS  %s\n",(message));} \
     else{printf("  FAIL  %s\n",(message)); g_Failures++;} }while(0)
 
@@ -31,7 +32,8 @@ static BYTE g_Dram[GUS_DRAM_SIZE];
 static VDD_BUS g_Bus;
 static DMA_STATE g_Dma;
 static GUS_STATE g_Gus;
-static INT g_IrqCount, g_IrqLast;
+static INT g_IrqCount;
+static INT g_IrqLast;
 static VOID GusTestIrqSink(PVOID context, BYTE irq)
 {
     (VOID)context;
@@ -305,7 +307,14 @@ INT main(VOID)
      * in stereo. Balance law: the near side keeps full level, the far side falls.
      */
     {   static INT16 stereo[2 * 64];
-        INT panIndex, left0 = 0, right0 = 0, left7 = 0, right7 = 0, left15 = 0, right15 = 0, voice;
+        INT panIndex;
+        INT left0 = 0;
+        INT right0 = 0;
+        INT left7 = 0;
+        INT right7 = 0;
+        INT left15 = 0;
+        INT right15 = 0;
+        INT voice;
         /* All other voices silent: a STOPPED GF1 voice still outputs its held sample at
          * its volume (programs ramp to zero), so stop AND mute.
          */

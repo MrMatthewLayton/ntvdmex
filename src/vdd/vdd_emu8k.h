@@ -83,27 +83,62 @@ typedef struct _EMU8K_VOICE
     DWORD    Ptrx;           /* Data0 r1: pitch target, reverb send, aux byte */
     DWORD    Cvcf;           /* Data0 r2: current volume (31-16), current cutoff (15-0) */
     DWORD    Vtft;           /* Data0 r3: volume target, cutoff target */
-    DWORD    Data0Register4, Data0Register5;  /* not in the guide's map -- stored, read back */
+    /* not in the guide's map -- stored, read back */
+    DWORD Data0Register4;
+    DWORD Data0Register5;
     DWORD    Psst;           /* Data0 r6: pan (31-24), loop start (23-0) */
     DWORD    Csl;            /* Data0 r7: chorus send (31-24), loop end (23-0) */
     DWORD    Ccca;           /* Data1 r0: Q (31-28), DMA/WR/RIGHT (26-24), address (23-0) */
-    WORD     Envvol, Dcysusv, Envval, Dcysus;          /* Data1 r4-r7 */
-    WORD     Atkhldv, Lfo1val, Atkhld, Lfo2val;        /* Data2 r4-r7 */
-    WORD     Ip, Ifatn, Pefe, Fmmod, Tremfrq, Fm2frq2; /* Data3 r0-r5 */
-    WORD     Data3Register6, Data3Register7;  /* not in the map -- stored, read back */
+    /* Data1 r4-r7 */
+    WORD Envvol;
+    WORD Dcysusv;
+    WORD Envval;
+    WORD Dcysus;
+    /* Data2 r4-r7 */
+    WORD Atkhldv;
+    WORD Lfo1val;
+    WORD Atkhld;
+    WORD Lfo2val;
+    /* Data3 r0-r5 */
+    WORD Ip;
+    WORD Ifatn;
+    WORD Pefe;
+    WORD Fmmod;
+    WORD Tremfrq;
+    WORD Fm2frq2;
+    /* not in the map -- stored, read back */
+    WORD Data3Register6;
+    WORD Data3Register7;
 
     /* ---- the engine's own state ---- */
-    EMU8K_ENVELOPE VolumeEnvelope, ModulationEnvelope;  /* ENV2 and ENV1 */
-    DWORD    Lfo1Phase, Lfo2Phase;     /* triangle phase, a full cycle = 2^32 */
-    DWORD    Lfo1Delay, Lfo2Delay;     /* ticks of LFO delay still to run */
+    /* ENV2 and ENV1 */
+    EMU8K_ENVELOPE VolumeEnvelope;
+    EMU8K_ENVELOPE ModulationEnvelope;
+    /* triangle phase, a full cycle = 2^32 */
+    DWORD Lfo1Phase;
+    DWORD Lfo2Phase;
+    /* ticks of LFO delay still to run */
+    DWORD Lfo1Delay;
+    DWORD Lfo2Delay;
     INT32    CurrentVolume;  /* current volume as CV << 14: slews to VT within a tick */
     INT32    CurrentVolumeStep;
-    INT32    GainLeft, GainRight;      /* pan gains, Q8 (0..256), latched at each tick */
+    /* pan gains, Q8 (0..256), latched at each tick */
+    INT32 GainLeft;
+    INT32 GainRight;
     /* the low-pass filter: direct form I, Q28 coefficients, cached for (cutoff, Q) */
     WORD     FilterCutoff;
-    BYTE FilterQ, FilterIsValid, FilterIsBypassed;
-    INT32    B0, B1, B2, A1, A2;
-    INT32    X1, X2, Y1, Y2;
+    BYTE FilterQ;
+    BYTE FilterIsValid;
+    BYTE FilterIsBypassed;
+    INT32 B0;
+    INT32 B1;
+    INT32 B2;
+    INT32 A1;
+    INT32 A2;
+    INT32 X1;
+    INT32 X2;
+    INT32 Y1;
+    INT32 Y2;
 } EMU8K_VOICE, *PEMU8K_VOICE;
 
 /* Optional host clock for WC, in microseconds (monotonic). NULL: WC counts rendered samples. */
@@ -122,8 +157,14 @@ typedef struct _EMU8K_STATE
 
     WORD      Pointer;               /* the Pointer register as written */
     BYTE      ByteLatch[EMU8K_PORT_GROUPS];  /* byte-access latches, one per port group */
-    WORD      Hwcf1, Hwcf2, Hwcf3;   /* Data1 r1 ch 29/30/31 */
-    DWORD     Hwcf4, Hwcf5, Hwcf6;   /* Data1 r1 ch 9/10/13 */
+    /* Data1 r1 ch 29/30/31 */
+    WORD Hwcf1;
+    WORD Hwcf2;
+    WORD Hwcf3;
+    /* Data1 r1 ch 9/10/13 */
+    DWORD Hwcf4;
+    DWORD Hwcf5;
+    DWORD Hwcf6;
     WORD      EffectsInit[EMU8K_INIT_PROGRAMS][EMU8K_VOICES];  /* INIT1-4 (Data1/2 r2/r3) */
     DWORD     Data1Register1[EMU8K_VOICES];  /* Data1 r1, channels the map does not name */
     WORD      Data2Register1[EMU8K_VOICES];  /* Data2 r1, likewise */
@@ -142,9 +183,19 @@ typedef struct _EMU8K_STATE
     EMU8K_VOICE Voices[EMU8K_VOICES];
 
     /* diagnostics */
-    DWORD     IoWrites, IoReads, ByteIoCount;
-    DWORD     SoundMemoryWordsWritten, SoundMemoryWordsRead, SoundMemoryRomWrites, SoundMemoryHeld;
-    DWORD     NotesStarted, Releases, Renders, SamplesOut, NonZeroSamplesOut, PeakSampleOut;
+    DWORD IoWrites;
+    DWORD IoReads;
+    DWORD ByteIoCount;
+    DWORD SoundMemoryWordsWritten;
+    DWORD SoundMemoryWordsRead;
+    DWORD SoundMemoryRomWrites;
+    DWORD SoundMemoryHeld;
+    DWORD NotesStarted;
+    DWORD Releases;
+    DWORD Renders;
+    DWORD SamplesOut;
+    DWORD NonZeroSamplesOut;
+    DWORD PeakSampleOut;
 } EMU8K_STATE, *PEMU8K_STATE;
 
 typedef const EMU8K_STATE *PCEMU8K_STATE;

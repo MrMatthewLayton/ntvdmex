@@ -82,8 +82,12 @@ enum
 typedef struct _BIOS_PRINT_SCREEN_JOB
 {
     BYTE  IsActive;
-    BYTE  Columns, Rows, Page;
-    BYTE  Row, Column, Phase;
+    BYTE Columns;
+    BYTE Rows;
+    BYTE Page;
+    BYTE Row;
+    BYTE Column;
+    BYTE Phase;
     BYTE  ShouldTestStatus;       /* the last byte out was a screen cell: test its AH */
     WORD  Cursor;                 /* AH=03h's DX, put back at the end */
 } BIOS_PRINT_SCREEN_JOB, *PBIOS_PRINT_SCREEN_JOB;

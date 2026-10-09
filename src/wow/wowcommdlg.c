@@ -187,10 +187,12 @@ INT WowCommdlgCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
         volatile BYTE *guest = Wow32ArgPointer(frame, WOWCDLG_OPENFILENAME_ARG_LPOFN);
         INT isSave = (frame->Id == WOWCDLG_GETSAVEFILENAME);
         OPENFILENAMEA openFileName;
-        DWORD structSize, flags;
+        DWORD structSize;
+        DWORD flags;
         WORD  owner16;
         PWOWUSER_WINDOW window;
-        INT noteLength = 0, isOk = 0;
+        INT noteLength = 0;
+        INT isOk = 0;
         UINT byteIndex;
 
         WowNotePut(note, noteCapacity, &noteLength, isSave ? "GetSaveFileName" : "GetOpenFileName");
@@ -353,7 +355,12 @@ INT WowCommdlgCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
             if (!shortLength)
             {
                 CHAR directory[MAX_PATH];
-                INT  lastSlash = -1, position, length = 0, baseLength = 0, extensionLength = 0, isLeafShort = 1;
+                INT lastSlash = -1;
+                INT position;
+                INT length = 0;
+                INT baseLength = 0;
+                INT extensionLength = 0;
+                INT isLeafShort = 1;
                 while (length < (INT)sizeof directory - 1 && openFileName.lpstrFile[length])
                 {
                     directory[length] = openFileName.lpstrFile[length];
@@ -402,7 +409,9 @@ INT WowCommdlgCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
             }
             if (shortLength && shortLength < sizeof shortPath && shortLength + 1 <= openFileName.nMaxFile)
             {
-                DWORD index, fileOffset = 0, extensionOffset = 0;
+                DWORD index;
+                DWORD fileOffset = 0;
+                DWORD extensionOffset = 0;
                 for (index = 0; index <= shortLength; ++index)
                     openFileName.lpstrFile[index] = shortPath[index];
                 for (index = 0; shortPath[index]; ++index)
@@ -488,12 +497,14 @@ INT WowCommdlgCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
         DWORD guest16 = (DWORD)Wow32ArgWord(frame, WOWCDLG_ARG_LPSTRUCT) | ((DWORD)Wow32ArgWord(frame, WOWCDLG_ARG_LPSTRUCT + WOW_WORD_BYTES) << WORD_SHIFT);
         INT isReplace = (frame->Id == WOWCDLG_REPLACETEXT);
         PWOWCDLG_FIND slot = NULL;
-        PWOWUSER_WINDOW ownerWindow, window;
+        PWOWUSER_WINDOW ownerWindow;
+        PWOWUSER_WINDOW window;
         PWOWUSER_CLASS dialogClass;
         WORD owner16;
         DWORD flags;
         HWND dialog;
-        INT noteLength = 0, index;
+        INT noteLength = 0;
+        INT index;
         WowNotePut(note, noteCapacity, &noteLength, isReplace ? "ReplaceText" : "FindText");
         if (!guest || WowCdlgPeekDword(guest, WOWCDLG_FR16_STRUCTSIZE) != WOWCDLG_FR16_SIZE)
         {
@@ -593,7 +604,9 @@ INT WowCommdlgCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
         CHOOSECOLORA chooseColor;
         PWOWUSER_WINDOW ownerWindow;
         DWORD flags;
-        INT noteLength = 0, isOk, index;
+        INT noteLength = 0;
+        INT isOk;
+        INT index;
         WowNotePut(note, noteCapacity, &noteLength, "ChooseColor");
         if (!guest || WowCdlgPeekDword(guest, WOWCDLG_CC16_STRUCTSIZE) != WOWCDLG_CC16_SIZE)
         {
@@ -649,7 +662,9 @@ INT WowCommdlgCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
         LOGFONTA logFont;
         PWOWUSER_WINDOW ownerWindow;
         DWORD flags;
-        INT noteLength = 0, isOk, index;
+        INT noteLength = 0;
+        INT isOk;
+        INT index;
         WowNotePut(note, noteCapacity, &noteLength, "ChooseFont");
         if (!guest || WowCdlgPeekDword(guest, WOWCDLG_CF16_STRUCTSIZE) != WOWCDLG_CF16_SIZE)
         {
@@ -734,8 +749,11 @@ INT WowCommdlgCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
         PRINTDLGA printDialog;
         PWOWUSER_WINDOW ownerWindow;
         DWORD flags;
-        WORD devMode16, devNames16;
-        INT noteLength = 0, isOk, index;
+        WORD devMode16;
+        WORD devNames16;
+        INT noteLength = 0;
+        INT isOk;
+        INT index;
         WowNotePut(note, noteCapacity, &noteLength, "PrintDlg");
         if (!guest || WowCdlgPeekDword(guest, WOWCDLG_PD16_STRUCTSIZE) != WOWCDLG_PD16_SIZE)
         {

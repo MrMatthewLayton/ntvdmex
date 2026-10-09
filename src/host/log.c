@@ -97,7 +97,8 @@ static VOID LogClose(VOID)
 static INT LogIsBadRange(PCSTR path, PCSTR buffer, PCSTR end)
 {
     HANDLE file;
-    CHAR message[LOG_MESSAGE_SIZE], *cursor = message;
+    CHAR message[LOG_MESSAGE_SIZE];
+    CHAR *cursor = message;
     DWORD written;
     UINT value;
     INT index;
@@ -163,8 +164,11 @@ static VOID LogRotationName(PSTR out, PCSTR path, INT length, INT stem, INT numb
 
 static VOID LogRotateOnce(PCSTR path)
 {
-    CHAR from[MAX_PATH + LOG_ROTATION_SLACK], to[MAX_PATH + LOG_ROTATION_SLACK];
-    INT length = 0, stem, number;
+    CHAR from[MAX_PATH + LOG_ROTATION_SLACK];
+    CHAR to[MAX_PATH + LOG_ROTATION_SLACK];
+    INT length = 0;
+    INT stem;
+    INT number;
 
     if (g_LogIsRotated)
         return;
@@ -237,13 +241,15 @@ INT g_LogIsQuiet = 0;
  * bottleneck.
  */
 LONGLONG g_LogQpc = 0;
-DWORD    g_LogCalls = 0, g_LogBytes = 0;
+DWORD g_LogCalls = 0;
+DWORD g_LogBytes = 0;
 
 VOID LogAppend(PCSTR path, PCSTR buffer, PCSTR end)
 {
     DWORD length = (DWORD)(end - buffer);
     HANDLE file;
-    LARGE_INTEGER start, stop;
+    LARGE_INTEGER start;
+    LARGE_INTEGER stop;
 
     if (g_LogIsQuiet)
         return;

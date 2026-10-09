@@ -95,7 +95,8 @@ VOID RecoveryOk(VOID)
 static INT InstallRead(PSTR buffer, DWORD cap)
 {
     HKEY key;
-    DWORD valueType = 0, size = cap;
+    DWORD valueType = 0;
+    DWORD size = cap;
     LONG status = RegOpenKeyExA(HKEY_LOCAL_MACHINE, INSTALL_KEY, 0, KEY_QUERY_VALUE, &key);
 
     buffer[0] = 0;
@@ -118,7 +119,8 @@ static INT InstallRead(PSTR buffer, DWORD cap)
 static INT InstallPreviousRead(PSTR buffer, DWORD cap)
 {
     HKEY key;
-    DWORD valueType = 0, size = cap;
+    DWORD valueType = 0;
+    DWORD size = cap;
     LONG status = RegOpenKeyExA(HKEY_CURRENT_USER, NTVDMEX_REG_KEY, 0, KEY_QUERY_VALUE, &key);
 
     buffer[0] = 0;
@@ -162,14 +164,17 @@ static VOID InstallPreviousWrite(PCSTR value)
 INT MruLoad(CHAR out[MRU_MAX][MAX_PATH])
 {
     HKEY key;
-    INT count = 0, index;
+    INT count = 0;
+    INT index;
 
     if (RegOpenKeyExA(HKEY_CURRENT_USER, NTVDMEX_REG_KEY, 0, KEY_QUERY_VALUE, &key) != ERROR_SUCCESS)
         return 0;
     for (index = 0; index < MRU_MAX; ++index)
     {
-        CHAR name[16], *cursor = LogPut(name, HOST_REG_RECENT_PREFIX);
-        DWORD valueType = 0, size = MAX_PATH;
+        CHAR name[16];
+        CHAR *cursor = LogPut(name, HOST_REG_RECENT_PREFIX);
+        DWORD valueType = 0;
+        DWORD size = MAX_PATH;
         cursor = LogDecimal(cursor, (DWORD)(index + 1)); *cursor = 0;
         if (RegQueryValueExA(key, name, NULL, &valueType, (LPBYTE)out[count], &size) != ERROR_SUCCESS
             || valueType != REG_SZ || size < 2)
@@ -184,10 +189,14 @@ INT MruLoad(CHAR out[MRU_MAX][MAX_PATH])
 
 VOID MruAdd(PCSTR path)
 {
-    CHAR list[MRU_MAX][MAX_PATH], longPath[MAX_PATH];
+    CHAR list[MRU_MAX][MAX_PATH];
+    CHAR longPath[MAX_PATH];
     HKEY key;
-    DWORD disposition, longLength;
-    INT count, index, written = 0;
+    DWORD disposition;
+    DWORD longLength;
+    INT count;
+    INT index;
+    INT written = 0;
     PCSTR baseName;
 
     if (!path || !path[0] || lstrlenA(path) >= MAX_PATH)
@@ -208,7 +217,8 @@ VOID MruAdd(PCSTR path)
     for (index = -1; index < count && written < MRU_MAX; ++index)
     {
         PCSTR value = (index < 0) ? path : list[index];
-        CHAR name[16], *cursor = LogPut(name, HOST_REG_RECENT_PREFIX);
+        CHAR name[16];
+        CHAR *cursor = LogPut(name, HOST_REG_RECENT_PREFIX);
         if (index >= 0 && !lstrcmpiA(value, path))
             continue;                                                 /* moved to the front */
         cursor = LogDecimal(cursor, (DWORD)(++written)); *cursor = 0;
@@ -326,10 +336,13 @@ static PSTR InstallResidentText(PSTR cursor, INT count)
  */
 INT InstallPerform(INT want, INT force, PSTR message, DWORD cap)
 {
-    CHAR self[NTVDMEX_PATH_MAX], current[NTVDMEX_PATH_MAX], prev[NTVDMEX_PATH_MAX];
+    CHAR self[NTVDMEX_PATH_MAX];
+    CHAR current[NTVDMEX_PATH_MAX];
+    CHAR prev[NTVDMEX_PATH_MAX];
     CHAR currentBefore[NTVDMEX_PATH_MAX];
     PSTR cursor = message;
-    INSTALL_STATE state, oldState;
+    INSTALL_STATE state;
+    INSTALL_STATE oldState;
     INSTALL_ACTION installAction;
     LONG status = ERROR_SUCCESS;
     INT havePrevious;
@@ -454,7 +467,8 @@ INT InstallPerform(INT want, INT force, PSTR message, DWORD cap)
  */
 INSTALL_STATE InstallStatusText(PSTR message, DWORD cap)
 {
-    CHAR self[NTVDMEX_PATH_MAX], current[NTVDMEX_PATH_MAX];
+    CHAR self[NTVDMEX_PATH_MAX];
+    CHAR current[NTVDMEX_PATH_MAX];
     PSTR cursor = message;
     INSTALL_STATE state;
 
@@ -491,7 +505,8 @@ INSTALL_STATE InstallStatusText(PSTR message, DWORD cap)
 INT InstallVerb(PCSTR command)
 {
     static PCSTR const verbs[INSTALL_VERBS] = { "install", "uninstall", "status" };
-    INT index, characterIndex;
+    INT index;
+    INT characterIndex;
     if (!command)
         return INSTALL_VERB_NONE;
     /* Step over argv[0], quoted or not. */
@@ -590,8 +605,10 @@ INT CommandLineBare(PCSTR command)
  */
 INT LaunchShellVdm(VOID)
 {
-    CHAR stub[MAX_PATH + 32], message[1024];
-    DWORD length, bytesWritten = 0;
+    CHAR stub[MAX_PATH + 32];
+    CHAR message[1024];
+    DWORD length;
+    DWORD bytesWritten = 0;
     HANDLE handle;
     STARTUPINFOA startupInfo;
     PROCESS_INFORMATION processInfo;
@@ -679,7 +696,8 @@ VOID InstallReport(PCSTR message, INT isOk)
 
     if (valueType != FILE_TYPE_UNKNOWN)
     {
-        DWORD length = 0, bytesWritten;
+        DWORD length = 0;
+        DWORD bytesWritten;
         while (message[length])
             ++length;
         WriteFile(handle, message, length, &bytesWritten, NULL);

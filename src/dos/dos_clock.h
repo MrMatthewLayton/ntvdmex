@@ -43,8 +43,14 @@
 
 typedef struct _DOS_CLOCK_TIME
 {
-    UINT Year, Month, Day;              /* full year (1999, not 99); month/day 1-based */
-    UINT Hour, Minute, Second, Hundredths;
+    /* full year (1999, not 99); month/day 1-based */
+    UINT Year;
+    UINT Month;
+    UINT Day;
+    UINT Hour;
+    UINT Minute;
+    UINT Second;
+    UINT Hundredths;
     UINT DayOfWeek;                     /* 0 = Sunday, as INT 21h AH=2Ah returns it */
 } DOS_CLOCK_TIME, *PDOS_CLOCK_TIME;
 
@@ -199,9 +205,14 @@ static inline INT64 DosClockPack(_In_ PCDOS_CLOCK_TIME time)
 
 static inline VOID DosClockUnpack(_In_ INT64 packed, _Out_ PDOS_CLOCK_TIME time)
 {
-    INT64 days = packed / DOS_CLOCK_HUNDREDTHS_PER_DAY,
-          remainder = packed % DOS_CLOCK_HUNDREDTHS_PER_DAY;
-    INT64 era, dayOfEra, yearOfEra, year, dayOfYear, shiftedMonth;
+    INT64 days = packed / DOS_CLOCK_HUNDREDTHS_PER_DAY;
+    INT64 remainder = packed % DOS_CLOCK_HUNDREDTHS_PER_DAY;
+    INT64 era;
+    INT64 dayOfEra;
+    INT64 yearOfEra;
+    INT64 year;
+    INT64 dayOfYear;
+    INT64 shiftedMonth;
 
     if (remainder < 0)
     {

@@ -23,7 +23,8 @@
 #include <string.h>
 #include "vdd_cmos.h"
 
-static INT g_Total = 0, g_Failures = 0;
+static INT g_Total = 0;
+static INT g_Failures = 0;
 #define CHECK(condition, message) do {                                  \
         g_Total++;                                               \
         if (condition) { printf("  PASS  %s\n", (message)); }           \
@@ -46,7 +47,8 @@ static VOID CmosTestFakeRtc(PVOID context, PPIT_RTC_READING output)
 
 /* GH #261: the host's side of a clock write, recorded rather than applied. */
 static PIT_RTC_READING g_SetReadings[4];
-static INT g_SetFields[4], g_SetCount;
+static INT g_SetFields[4];
+static INT g_SetCount;
 static INT CmosTestFakeSet(PVOID context, PCPIT_RTC_READING input, INT fields)
 {
     (VOID)context;
@@ -390,7 +392,8 @@ INT main(VOID)
      * answer Status D's VRT bit used to give.
      */
     {
-        UINT index, sum = 0;
+        UINT index;
+        UINT sum = 0;
         VddCmosReset(&cmos);
         for (index = 0x10; index <= 0x2D; ++index)
             sum += CmosTestRead(&bus, (BYTE)index);

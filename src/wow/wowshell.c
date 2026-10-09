@@ -250,8 +250,10 @@ INT WowShellCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
         volatile BYTE *indexPointer = Wow32ArgPointer(frame, WOWSHELL_EXTRACTASSOCIATEDICON_ARG_LPIICON);
         volatile BYTE *pathPointer = Wow32ArgPointer(frame, WOWSHELL_EXTRACTASSOCIATEDICON_ARG_PATH);
         CHAR path[MAX_PATH];
-        INT  noteLength = 0, index;
-        WORD itemIndex = 0, token;
+        INT noteLength = 0;
+        INT index;
+        WORD itemIndex = 0;
+        WORD token;
         HICON icon;
         WowNotePut(note, noteCapacity, &noteLength, "ExtractAssociatedIcon ");
         if (!Wow32ArgString(frame, WOWSHELL_EXTRACTASSOCIATEDICON_ARG_PATH, path, sizeof path) || !path[0])
@@ -324,8 +326,14 @@ INT WowShellCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
         WORD window16 = Wow32ArgWord(frame, WOWSHELL_SHELLEXECUTE_ARG_HWND);
         WORD showCommand = Wow32ArgWord(frame, WOWSHELL_SHELLEXECUTE_ARG_SHOW);
         PWOWUSER_WINDOW window = WowUserFindWindow(window16);
-        CHAR operation[WOWSHELL_OPERATION_MAX], fileName[MAX_PATH], parameters[MAX_PATH], directory[MAX_PATH];
-        INT  noteLength = 0, hasOperation, hasParameters, hasDirectory;
+        CHAR operation[WOWSHELL_OPERATION_MAX];
+        CHAR fileName[MAX_PATH];
+        CHAR parameters[MAX_PATH];
+        CHAR directory[MAX_PATH];
+        INT noteLength = 0;
+        INT hasOperation;
+        INT hasParameters;
+        INT hasDirectory;
         DWORD result;
         hasOperation  = Wow32ArgString(frame, WOWSHELL_SHELLEXECUTE_ARG_OP,     operation,     sizeof operation);
         hasParameters = Wow32ArgString(frame, WOWSHELL_SHELLEXECUTE_ARG_PARAMS, parameters, sizeof parameters);
@@ -369,9 +377,13 @@ INT WowShellCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
      */
     case WOWSHELL_FINDEXECUTABLE:
     {
-        CHAR fileName[MAX_PATH], directory[MAX_PATH], output[MAX_PATH];
+        CHAR fileName[MAX_PATH];
+        CHAR directory[MAX_PATH];
+        CHAR output[MAX_PATH];
         volatile BYTE *resultPointer = Wow32ArgPointer(frame, WOWSHELL_FINDEXECUTABLE_ARG_RESULT);
-        INT noteLength = 0, hasDirectory, index;
+        INT noteLength = 0;
+        INT hasDirectory;
+        INT index;
         DWORD result;
         output[0] = 0;
         hasDirectory = Wow32ArgString(frame, WOWSHELL_FINDEXECUTABLE_ARG_DIR, directory, sizeof directory);
@@ -420,8 +432,11 @@ INT WowShellCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
     {
         volatile BYTE *string = Wow32ArgPointer(frame, WOWSHELL_DOENVSUBST_ARG_STR);
         WORD byteCount = Wow32ArgWord(frame, WOWSHELL_DOENVSUBST_ARG_CB);
-        CHAR input[WOWSHELL_ENV_BUFFER], output[WOWSHELL_ENV_BUFFER];
-        INT noteLength = 0, index, count;
+        CHAR input[WOWSHELL_ENV_BUFFER];
+        CHAR output[WOWSHELL_ENV_BUFFER];
+        INT noteLength = 0;
+        INT index;
+        INT count;
         DWORD expandedLength;
         if (!string || !byteCount)
         {
@@ -467,8 +482,11 @@ INT WowShellCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
         WORD window16 = Wow32ArgWord(frame, WOWSHELL_SHELLABOUT_ARG_HWND);
         WORD iconToken = Wow32ArgWord(frame, WOWSHELL_SHELLABOUT_ARG_HICON);
         PWOWUSER_WINDOW window = WowUserFindWindow(window16);
-        CHAR application[WOWSHELL_ABOUT_APP_MAX], otherText[WOWSHELL_ABOUT_OTHER_MAX];
-        INT  noteLength = 0, bitCount = 0, result;
+        CHAR application[WOWSHELL_ABOUT_APP_MAX];
+        CHAR otherText[WOWSHELL_ABOUT_OTHER_MAX];
+        INT noteLength = 0;
+        INT bitCount = 0;
+        INT result;
         /* The About box wants the full-size icon, so the size is the system's
          * default -- the small-icon variant exists for the taskbar.
          */
@@ -583,7 +601,8 @@ INT WowShellCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
                         result = length;
                     else if (bufferSize)
                     {
-                        WORD copied = (WORD)(length < bufferSize ? length : bufferSize - 1), cursor;
+                        WORD copied = (WORD)(length < bufferSize ? length : bufferSize - 1);
+                        WORD cursor;
                         for (cursor = 0; cursor < copied; ++cursor)
                             output[cursor] = dropBytes[offset + cursor];
                         output[copied] = 0;
@@ -638,7 +657,8 @@ INT WowShellCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
         DWORD key16 = Wow32ArgDword(frame, WOWSHELL_REGOPENKEY_ARG_HKEY);
         CHAR  subkeyBuffer[WOWSHELL_SUBKEY_MAX];
         PCSTR subkey = WowShellSubkey(frame, WOWSHELL_REGOPENKEY_ARG_SUBKEY, subkeyBuffer, sizeof subkeyBuffer);
-        HKEY  parent = WowShellKey32(key16), output = NULL;
+        HKEY parent = WowShellKey32(key16);
+        HKEY output = NULL;
         DWORD token;
         LONG  result;
         INT   noteLength = 0;
@@ -779,7 +799,8 @@ INT WowShellCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
     {
         DWORD key16 = Wow32ArgDword(frame, WOWSHELL_REGSETVALUE_ARG_HKEY);
         DWORD type = Wow32ArgDword(frame, WOWSHELL_REGSETVALUE_ARG_TYPE);
-        CHAR  subkeyBuffer[WOWSHELL_SUBKEY_MAX], dataBuffer[WOWSHELL_VALUE_MAX];
+        CHAR subkeyBuffer[WOWSHELL_SUBKEY_MAX];
+        CHAR dataBuffer[WOWSHELL_VALUE_MAX];
         PCSTR subkey = WowShellSubkey(frame, WOWSHELL_REGSETVALUE_ARG_SUBKEY, subkeyBuffer, sizeof subkeyBuffer);
         HKEY  parent = WowShellKey32(key16);
         LONG  result;
@@ -838,14 +859,18 @@ INT WowShellCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
     case WOWSHELL_REGQUERYVALUE:
     {
         DWORD key16 = Wow32ArgDword(frame, WOWSHELL_REGQUERYVALUE_ARG_HKEY);
-        CHAR  subkeyBuffer[WOWSHELL_SUBKEY_MAX], valueBuffer[WOWSHELL_VALUE_MAX];
+        CHAR subkeyBuffer[WOWSHELL_SUBKEY_MAX];
+        CHAR valueBuffer[WOWSHELL_VALUE_MAX];
         PCSTR subkey = WowShellSubkey(frame, WOWSHELL_REGQUERYVALUE_ARG_SUBKEY, subkeyBuffer, sizeof subkeyBuffer);
         HKEY  parent = WowShellKey32(key16);
         volatile BYTE *byteCountPointer = Wow32ArgPointer(frame, WOWSHELL_REGQUERYVALUE_ARG_CBVALUE);
         volatile BYTE *destination = Wow32ArgPointer(frame, WOWSHELL_REGQUERYVALUE_ARG_VALUE);
-        LONG  capacity = 0, byteCount = (LONG)sizeof valueBuffer;
+        LONG capacity = 0;
+        LONG byteCount = (LONG)sizeof valueBuffer;
         LONG  result;
-        INT   noteLength = 0, index, cursor;
+        INT noteLength = 0;
+        INT index;
+        INT cursor;
         WowShellNoteKey(note, noteCapacity, &noteLength, "RegQueryValue", key16, subkey);
         if (!parent)
         {
@@ -914,7 +939,9 @@ INT WowShellCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
         volatile BYTE *destination = Wow32ArgPointer(frame, WOWSHELL_REGENUMKEY_ARG_BUF);
         CHAR  nameBuffer[WOWSHELL_SUBKEY_MAX];
         LONG  result;
-        INT   noteLength = 0, index, cursor;
+        INT noteLength = 0;
+        INT index;
+        INT cursor;
         WowNotePut(note, noteCapacity, &noteLength, "RegEnumKey key=0x");
         WowNoteHex(note, noteCapacity, &noteLength, key16, WOW_HEX_DWORD_DIGITS);
         WowNotePut(note, noteCapacity, &noteLength, " index=0x");

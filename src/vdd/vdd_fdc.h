@@ -114,7 +114,8 @@ typedef struct _FDC_STATE
     BYTE  CommandLength;               /* how many have arrived */
     BYTE  CommandWanted;              /* how many this command takes, opcode incl. */
     BYTE  Result[FDC_BUFFER_SIZE];               /* the result bytes, oldest first */
-    BYTE  ResultLength, ResultPosition;
+    BYTE ResultLength;
+    BYTE ResultPosition;
 
     /* PER-DRIVE STATE: */
     BYTE  PresentCylinder[FDC_DRIVES];                /* present cylinder number */
@@ -133,13 +134,18 @@ typedef struct _FDC_STATE
     /* WHAT THE FIRMWARE PROGRAMMED, so DUMPREG can hand it back: */
     BYTE  StepRateHeadUnload;               /* SPECIFY byte 1: step rate | head unload */
     BYTE  HeadLoadNonDma;                /* SPECIFY byte 2: head load | non-DMA */
-    BYTE  ConfigureByte2, ConfigurePrecompTrack; /* CONFIGURE bytes 2 and 3 */
+    /* CONFIGURE bytes 2 and 3 */
+    BYTE ConfigureByte2;
+    BYTE ConfigurePrecompTrack;
     BYTE  Perpendicular;                  /* PERPENDICULAR MODE */
     BYTE  IsLocked;                /* LOCK: keep CONFIGURE across a s/w reset */
     BYTE  LastEot;              /* the sector count of the last data command */
 
     /* Counters a run can report -- the same habit as every other VDD here. */
-    UINT32 Commands, InvalidCommands, Irqs, Resets;
+    UINT32 Commands;
+    UINT32 InvalidCommands;
+    UINT32 Irqs;
+    UINT32 Resets;
 } FDC_STATE, *PFDC_STATE;
 
 typedef const FDC_STATE *PCFDC_STATE;

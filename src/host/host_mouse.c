@@ -24,7 +24,9 @@
 /* Mouse state shared UI thread -> V86 thread (INT 33h). Position is in guest
  * pixels (mapped from the window client); buttons: bit0 L, bit1 R, bit2 M.
  */
-volatile LONG g_MouseX = I33_FALLBACK_X, g_MouseY = I33_FALLBACK_Y, g_MouseButtons = 0;
+volatile LONG g_MouseX = I33_FALLBACK_X;
+volatile LONG g_MouseY = I33_FALLBACK_Y;
+volatile LONG g_MouseButtons = 0;
 /* RELATIVE MOTION, WHICH IS WHAT A GAME ACTUALLY ASKS FOR:
  * INT 33h function 0Bh reports MICKEYS MOVED SINCE THE LAST CALL, and we derived that
  * from the absolute pointer: (x - last_x) * 8. Fine for a menu, useless for Doom -- the
@@ -39,15 +41,22 @@ volatile LONG g_MouseX = I33_FALLBACK_X, g_MouseY = I33_FALLBACK_Y, g_MouseButto
  * [CAUTION]: A FALLBACK, not a replacement: if RegisterRawInputDevices fails we go back to the
  * absolute-derived delta rather than reporting no motion at all.
  */
-volatile LONG g_MouseDx, g_MouseDy;      /* raw mickeys since the last 0Bh drain */
+/* raw mickeys since the last 0Bh drain */
+volatile LONG g_MouseDx;
+volatile LONG g_MouseDy;
 /* Doom reports "no mouse look" while capture is demonstrably on. Three things can be
  * false and they need opposite fixes: raw input never REGISTERED, WM_INPUT never
  * ARRIVING, or the guest never ASKING (INT 33h 0Bh). Count all three -- and note that
  * the raw path DISABLES the absolute-derived fallback, so a silent raw failure reports
  * no motion at all where the old code at least reported clamped motion.
  */
-DWORD g_MouseWmInput, g_MouseRawAbsolute, g_MouseI33[16], g_MouseI33Other;
-DWORD g_MouseI33AxOverflow, g_MouseI33SiteCount, g_MouseI33SiteOverflow;
+DWORD g_MouseWmInput;
+DWORD g_MouseRawAbsolute;
+DWORD g_MouseI33[16];
+DWORD g_MouseI33Other;
+DWORD g_MouseI33AxOverflow;
+DWORD g_MouseI33SiteCount;
+DWORD g_MouseI33SiteOverflow;
 /* An offset register from the caller: full-width from a 32-bit PM caller, a word from
  * V86, 16-bit PM, or a 0300 excursion (s74c, the 0Ch handler ZAR installs at
  * 0x347:0x0044xxxx).
@@ -62,9 +71,12 @@ static DWORD MouseI33Offset(volatile BYTE *tib, INT source, DWORD offset)
 INT g_MouseAbsent = 0;          /* nomouse.flag: INT 33h 0000h answers "none" */
 volatile LONG g_MouseHidden = 1;       /* INT 33h cursor hide-count; 0 => visible */
 
-volatile LONG g_MousePressCount[MS_BTNS], g_MouseReleaseCount[MS_BTNS];
-static volatile LONG g_MousePressX[MS_BTNS], g_MousePressY[MS_BTNS];
-static volatile LONG g_MouseReleaseX[MS_BTNS],   g_MouseReleaseY[MS_BTNS];
+volatile LONG g_MousePressCount[MS_BTNS];
+volatile LONG g_MouseReleaseCount[MS_BTNS];
+static volatile LONG g_MousePressX[MS_BTNS];
+static volatile LONG g_MousePressY[MS_BTNS];
+static volatile LONG g_MouseReleaseX[MS_BTNS];
+static volatile LONG g_MouseReleaseY[MS_BTNS];
 DWORD         g_MouseEdges;            /* transitions seen -- STAGE2 evidence */
 
 /* THE DRIVER'S SCREEN IS NOT THE FRAME:
@@ -167,12 +179,17 @@ static LONG I33Snapshot(LONG value)
  * mode's own extent applies; a guest that sets a range while in one mode and then
  * changes mode keeps its range, which is what the real driver does.
  */
-static volatile LONG g_MouseMinimumX = -1, g_MouseMaximumX = -1, g_MouseMinimumY = -1, g_MouseMaximumY = -1;
+static volatile LONG g_MouseMinimumX = -1;
+static volatile LONG g_MouseMaximumX = -1;
+static volatile LONG g_MouseMinimumY = -1;
+static volatile LONG g_MouseMaximumY = -1;
 /* 0Fh / 1Ah / 1Bh. The defaults are the real driver's: 8 mickeys per 8 pixels
  * horizontally, 16 vertically (a mouse moves further across a screen than down it),
  * and a 64 mickey/second double-speed threshold.
  */
-static volatile LONG g_MouseMickeyX = I33_DEFAULT_MICKEYS_X, g_MouseMickeyY = I33_DEFAULT_MICKEYS_Y, g_MouseDoubleThreshold = I33_DEFAULT_DOUBLE_SPEED;
+static volatile LONG g_MouseMickeyX = I33_DEFAULT_MICKEYS_X;
+static volatile LONG g_MouseMickeyY = I33_DEFAULT_MICKEYS_Y;
+static volatile LONG g_MouseDoubleThreshold = I33_DEFAULT_DOUBLE_SPEED;
 /* 1Ah/1Bh SPEED IS NOT 0Fh's RATIO. (#249):
  * 1Ah sets the horizontal/vertical SPEED (0-100, default 50) and the double-speed
  * threshold ON THE SAME 0-100 SCALE (default 50); 0Fh sets the mickey-to-pixel
@@ -185,14 +202,19 @@ static volatile LONG g_MouseMickeyX = I33_DEFAULT_MICKEYS_X, g_MouseMickeyY = I3
  * [CAUTION]: None of them is APPLIED -- the pointer follows the host cursor and 0Bh reports
  * device counts scaled by msens; see docs/inventory/mouse.md (N/A).
  */
-static volatile LONG g_MouseSpeedX = I33_DEFAULT_SPEED, g_MouseSpeedY = I33_DEFAULT_SPEED, g_MouseSpeedDouble = I33_DEFAULT_SPEED;
+static volatile LONG g_MouseSpeedX = I33_DEFAULT_SPEED;
+static volatile LONG g_MouseSpeedY = I33_DEFAULT_SPEED;
+static volatile LONG g_MouseSpeedDouble = I33_DEFAULT_SPEED;
 /* THE v7/v8 STATE THAT 25h-34h REPORT (#249):
  * 09h's hot spot (2Ah reads it back), whether 0Ah asked for the HARDWARE text cursor
  * and its scan lines (25h bits 13-12, 27h AX/BX), 1Dh's display page and 1Ch's
  * report rate (25h bits 11-8). Each is reset by 00h/21h like the rest.
  */
-static volatile LONG g_MouseHotX = 0, g_MouseHotY = 0;
-static volatile LONG g_MouseTcHardware = 0, g_MouseTcHardwareLow = 0, g_MouseTcHardwareHigh = 0;
+static volatile LONG g_MouseHotX = 0;
+static volatile LONG g_MouseHotY = 0;
+static volatile LONG g_MouseTcHardware = 0;
+static volatile LONG g_MouseTcHardwareLow = 0;
+static volatile LONG g_MouseTcHardwareHigh = 0;
 static volatile LONG g_MousePage = 0;
 static volatile LONG g_MouseRate = I33_DEFAULT_RATE;     /* 1Ch code: 3 = 100 reports/s, the PS/2 aux default */
 DWORD         g_MouseEventInstalls;
@@ -214,16 +236,32 @@ volatile LONG g_MouseEventPend;     /* event bits raised since the last callback
  */
 #define MS_EVQ  32
 static MOUSE_EVENT_ENTRY g_MouseEventQueue[MS_EVQ];
-static volatile LONG g_MouseEventQueueHead, g_MouseEventQueueTail;   /* UI pushes at head, exec pops at tail */
+/* UI pushes at head, exec pops at tail */
+static volatile LONG g_MouseEventQueueHead;
+static volatile LONG g_MouseEventQueueTail;
 static DWORD g_MouseEventQueueDropped;
 static DWORD  g_MouseCallbackSince;            /* GetTickCount()|1 when it went in flight */
 static struct
 {
-    DWORD Eax, Ebx, Ecx, Edx, Esi, Edi, Ebp, Esp, Eip, Eflags, Cs, Ds, Es, Ss;
+    DWORD Eax;
+    DWORD Ebx;
+    DWORD Ecx;
+    DWORD Edx;
+    DWORD Esi;
+    DWORD Edi;
+    DWORD Ebp;
+    DWORD Esp;
+    DWORD Eip;
+    DWORD Eflags;
+    DWORD Cs;
+    DWORD Ds;
+    DWORD Es;
+    DWORD Ss;
 } g_MouseCallbackSaved;
 VOID MouseEventRaise(LONG bits)
 {
-    LONG head = g_MouseEventQueueHead, tail = g_MouseEventQueueTail;
+    LONG head = g_MouseEventQueueHead;
+    LONG tail = g_MouseEventQueueTail;
 
     ++g_MouseEventRaised;
     /* Motion after motion, not yet delivered: update the queued entry in place. */
@@ -340,7 +378,8 @@ DWORD g_MouseShapeSets;      /* 09h (and 0Ah BX=1): cursor shapes defined */
  * (the present): 09h fills the buffer NOT being shown and then flips g_MouseGraphicsCursorBuffer,
  * so a present never sees half of one shape and half of another.
  */
-static WORD      g_MouseGraphicsCursorScreen[2][I33_GC_ROWS], g_MouseGraphicsCursorCurrent[2][I33_GC_ROWS];
+static WORD g_MouseGraphicsCursorScreen[2][I33_GC_ROWS];
+static WORD g_MouseGraphicsCursorCurrent[2][I33_GC_ROWS];
 static volatile LONG g_MouseGraphicsCursorBuffer;          /* which of the two the present reads */
 volatile LONG g_MouseGraphicsCursorDefined;      /* 0 = the host arrow; 1 = 09h's bitmap */
 DWORD         g_MouseGraphicsCursorBadPointer;       /* 09h ES:DX we refused to read */
@@ -363,7 +402,8 @@ static I33_ALTERNATE       g_MouseAlt[I33_ALT_N];
  */
 static VOID I33GraphicsCursorDefine(const WORD *screen, const WORD *current)
 {
-    INT row, buffer = (INT)((g_MouseGraphicsCursorBuffer + 1) & 1);
+    INT row;
+    INT buffer = (INT)((g_MouseGraphicsCursorBuffer + 1) & 1);
 
     for (row = 0; row < I33_GC_ROWS; ++row)
     {
@@ -376,7 +416,8 @@ static VOID I33GraphicsCursorDefine(const WORD *screen, const WORD *current)
 /* 0Ah BX=0: the text cursor's screen (AND) and cursor (XOR) masks over the cell's
  * (char, attr) word. The driver's defaults invert the colours and leave the character.
  */
-volatile LONG g_MouseTextCursorAnd = I33_DEFAULT_TEXT_AND, g_MouseTextCursorXor = I33_DEFAULT_TEXT_XOR;
+volatile LONG g_MouseTextCursorAnd = I33_DEFAULT_TEXT_AND;
+volatile LONG g_MouseTextCursorXor = I33_DEFAULT_TEXT_XOR;
 DWORD g_MouseStateBadPointer;    /* 16h/17h: ES:DX we refused to dereference */
 DWORD g_MouseI33Unimplemented;      /* calls that reached `default:` -- see there */
 
@@ -439,13 +480,30 @@ static VOID I33SetRange(volatile LONG *low, volatile LONG *high, LONG first, LON
 typedef struct
 {
     DWORD Magic;
-    LONG  X, Y, Hidden;
-    LONG  MinimumX, MaximumX, MinimumY, MaximumY;
-    LONG  MickeyX, MickeyY, Double;
-    LONG  EventMask, EventSegment, EventOffset;
-    LONG  SpeedX, SpeedY, SpeedDouble, HotX, HotY, Page, Rate;
-    LONG  GraphicsCursorDefined, AccelerationCurrent;
-    WORD  GraphicsCursorScreen[I33_GC_ROWS], GraphicsCursorCurrent[I33_GC_ROWS];
+    LONG X;
+    LONG Y;
+    LONG Hidden;
+    LONG MinimumX;
+    LONG MaximumX;
+    LONG MinimumY;
+    LONG MaximumY;
+    LONG MickeyX;
+    LONG MickeyY;
+    LONG Double;
+    LONG EventMask;
+    LONG EventSegment;
+    LONG EventOffset;
+    LONG SpeedX;
+    LONG SpeedY;
+    LONG SpeedDouble;
+    LONG HotX;
+    LONG HotY;
+    LONG Page;
+    LONG Rate;
+    LONG GraphicsCursorDefined;
+    LONG AccelerationCurrent;
+    WORD GraphicsCursorScreen[I33_GC_ROWS];
+    WORD GraphicsCursorCurrent[I33_GC_ROWS];
     I33_ALTERNATE Alt[I33_ALT_N];
 } I33_STATE;
 
@@ -635,8 +693,11 @@ VOID I33ResetState(VOID)
  */
 static VOID I33TakeMotion(LONG positionX, LONG positionY, LONG *outDeltaX, LONG *outDeltaY)
 {
-    static LONG lastX = I33_FALLBACK_X, lastY = I33_FALLBACK_Y;             /* fallback only (exec thread) */
-    LONG deltaX, deltaY;
+    /* fallback only (exec thread) */
+    static LONG lastX = I33_FALLBACK_X;
+    static LONG lastY = I33_FALLBACK_Y;
+    LONG deltaX;
+    LONG deltaY;
 
     if (g_MouseRawOk)                                    /* the device's own counts */
     {
@@ -728,7 +789,9 @@ static VOID I33AccelerationReady(VOID)
 VOID MouseInt33(volatile BYTE *tib, INT source)
 {
     DWORD ax = VDM_REG16(tib, VTIB_EAX);
-    LONG positionX = g_MouseX, positionY = g_MouseY, buttons = g_MouseButtons;
+    LONG positionX = g_MouseX;
+    LONG positionY = g_MouseY;
+    LONG buttons = g_MouseButtons;
 
     if (ax < ARRAYSIZE(g_MouseI33))
         g_MouseI33[ax]++;
@@ -845,7 +908,9 @@ VOID MouseInt33(volatile BYTE *tib, INT source)
     {
         INT      isRelease = (ax == I33_FN_GET_RELEASE_DATA);
         DWORD    button  = VDM_REG16(tib, VTIB_EBX);
-        volatile LONG *counter, *pressX, *pressY;
+        volatile LONG *counter;
+        volatile LONG *pressX;
+        volatile LONG *pressY;
         LONG count;
         if (button >= MS_BTNS)
             button = 0;                                         /* driver clamps, not faults */
@@ -935,7 +1000,8 @@ VOID MouseInt33(volatile BYTE *tib, INT source)
 
     case I33_FN_READ_MOTION:                                        /* read relative motion */
     {
-        LONG deltaX, deltaY;
+        LONG deltaX;
+        LONG deltaY;
         I33TakeMotion(positionX, positionY, &deltaX, &deltaY);                /* SIGNED 16-bit, drained */
         VDM_SET16(tib, VTIB_ECX, (WORD)(SHORT)deltaX);
         VDM_SET16(tib, VTIB_EDX, (WORD)(SHORT)deltaY);
@@ -957,7 +1023,9 @@ VOID MouseInt33(volatile BYTE *tib, INT source)
 
     case I33_FN_EXCHANGE_EVENT_HANDLER:                                        /* exchange event handler */
     {
-        LONG oldMask = g_MouseEventMask, oldSegment = g_MouseEventSegment, oldOffset = g_MouseEventOffset;
+        LONG oldMask = g_MouseEventMask;
+        LONG oldSegment = g_MouseEventSegment;
+        LONG oldOffset = g_MouseEventOffset;
         InterlockedExchange(&g_MouseEventMask, (LONG)VDM_REG16(tib, VTIB_ECX));
         InterlockedExchange(&g_MouseEventSegment,  (LONG)VDM_REG16(tib, VTIB_ES));
         InterlockedExchange(&g_MouseEventOffset,  (LONG)MouseI33Offset(tib, source, VDM_REG(tib, VTIB_EDX)));
@@ -1173,7 +1241,8 @@ VOID MouseInt33(volatile BYTE *tib, INT source)
          * lines when 0Ah BX=1 chose it; CX/DX = mickeys since the last read -- the SAME
          * counters 0Bh drains (I33TakeMotion), signed.
          */
-        LONG deltaX, deltaY;
+        LONG deltaX;
+        LONG deltaY;
         I33TakeMotion(positionX, positionY, &deltaX, &deltaY);
         VDM_SET16(tib, VTIB_EAX, (WORD)(g_MouseTcHardware ? g_MouseTcHardwareLow : g_MouseTextCursorAnd));
         VDM_SET16(tib, VTIB_EBX, (WORD)(g_MouseTcHardware ? g_MouseTcHardwareHigh : g_MouseTextCursorXor));
@@ -1333,7 +1402,9 @@ VOID MouseInt33(volatile BYTE *tib, INT source)
          * a short buffer gets the head of the block (I33SettingsBlock). A buffer we
          * may not write gets CX=0 -- "nothing returned" -- not a fault.
          */
-        UINT cap = (UINT)VDM_REG16(tib, VTIB_ECX), count, index;
+        UINT cap = (UINT)VDM_REG16(tib, VTIB_ECX);
+        UINT count;
+        UINT index;
         BYTE block[I33_SET_LEN];
         I33_SETTINGS settings;
         volatile BYTE *guest = NULL;
@@ -1491,7 +1562,11 @@ VOID MouseCallbackTry(volatile BYTE *tib)
     LONG pend;
     WORD handlerSegment;
     DWORD handlerOffset;
-    DWORD cs, ip, flags, ss, sp;
+    DWORD cs;
+    DWORD ip;
+    DWORD flags;
+    DWORD ss;
+    DWORD sp;
     MOUSE_EVENT_ENTRY event = { 0, 0, 0, 0 };
     if (g_MouseCallbackActive)                            /* a handler that never came back */
     {
@@ -1565,7 +1640,8 @@ VOID MouseCallbackTry(volatile BYTE *tib)
         {
             if (g_MouseCallbackWhy[MOUSE_CB_WHY_STUB_CLOBBERED] < 4)
             {
-                CHAR lineBuffer[160], *lineCursor = lineBuffer;
+                CHAR lineBuffer[160];
+                CHAR *lineCursor = lineBuffer;
                 lineCursor = LogPut(lineCursor, "MOUSECB REFUSED: return stub at 0050:");
                 lineCursor = LogHex(lineCursor, MS_CB_RET_OFF); lineCursor = LogPut(lineCursor, " overwritten by the guest: ");
                 lineCursor = LogDump(lineCursor, (const VOID *)returnStub, 4); lineCursor = LogPut(lineCursor, "\r\n");
@@ -1617,7 +1693,8 @@ VOID MouseCallbackTry(volatile BYTE *tib)
         g_MouseCallbackTrace = 10;                                   /* see g_MouseCallbackTrace: the next VM events */
     if (g_MouseCallbackInjected <= 16)                         /* the first few, with where from */
     {
-        CHAR lineBuffer[384], *lineCursor = lineBuffer;
+        CHAR lineBuffer[384];
+        CHAR *lineCursor = lineBuffer;
         lineCursor = LogPut(lineCursor, "MOUSECB inject #"); lineCursor = LogHex(lineCursor, g_MouseCallbackInjected);
         lineCursor = LogPut(lineCursor, " ev=0x");   lineCursor = LogHex(lineCursor, (DWORD)pend);
         lineCursor = LogPut(lineCursor, " from=0x"); lineCursor = LogHex(lineCursor, g_MouseCallbackSaved.Cs);
@@ -1647,7 +1724,8 @@ VOID MouseCallbackTry(volatile BYTE *tib)
          */
         if (g_MouseCallbackInjected == 1)
         {
-            CHAR alternateBuffer[256], *alternateCursor = alternateBuffer;
+            CHAR alternateBuffer[256];
+            CHAR *alternateCursor = alternateBuffer;
             alternateCursor = LogPut(alternateCursor, "MOUSECB area 0050:0000..003F=");
             alternateCursor = LogDump(alternateCursor, (const VOID *)(ULONG_PTR)(DOS_HDLR_SEG << PARAGRAPH_SHIFT), 0x40);
             alternateCursor = LogPut(alternateCursor, "\r\n");
@@ -1661,7 +1739,8 @@ VOID MouseCallbackReturn(volatile BYTE *tib)
 {
     if (!g_MouseCallbackActive)                           /* not ours to unwind: step over */
     {
-        CHAR lineBuffer[160], *lineCursor = lineBuffer;
+        CHAR lineBuffer[160];
+        CHAR *lineCursor = lineBuffer;
         ++g_MouseCallbackStray;
         VDM_REG(tib, VTIB_EIP) += VDM_BOP_LENGTH;
         lineCursor = LogPut(lineCursor, "MOUSECB STRAY return, nothing in flight: ss:sp=0x");
@@ -1672,7 +1751,8 @@ VOID MouseCallbackReturn(volatile BYTE *tib)
     }
     if (g_MouseCallbackDone < 16)
     {
-        CHAR lineBuffer[96], *lineCursor = lineBuffer;
+        CHAR lineBuffer[96];
+        CHAR *lineCursor = lineBuffer;
         lineCursor = LogPut(lineCursor, "MOUSECB return #"); lineCursor = LogHex(lineCursor, g_MouseCallbackDone + 1);
         lineCursor = LogPut(lineCursor, " ok\r\n"); LogAppend(LOG_PATH, lineBuffer, lineCursor);
     }
@@ -1738,7 +1818,8 @@ static VOID OverlayCursor(BYTE *pixels, INT width, INT height, INT stride, INT c
     for (row = 0; row < OVERLAY_CURSOR_ROWS; ++row)
     {
         PCSTR shapeRow = g_MouseCursorShape[row];
-        INT column, screenRow = cursorY + row;
+        INT column;
+        INT screenRow = cursorY + row;
         if (screenRow < 0 || screenRow >= height)
             continue;
         for (column = 0; shapeRow[column]; ++column)
@@ -1771,7 +1852,8 @@ VOID MouseDrawGraphicsCursor(BYTE *pixels, INT width, INT height, INT stride)
     /* #325: the pointer lives in the mode's extent (gw x gh); the snapshot may be the
      * CRTC's real geometry (Mode X is 320x240 in a mode 13h extent of 320x200).
      */
-    INT cursorX = (INT)((LONG)g_MouseX * width / (LONG)I33Width()), cursorY = (INT)((LONG)g_MouseY * height / (LONG)I33Height());
+    INT cursorX = (INT)((LONG)g_MouseX * width / (LONG)I33Width());
+    INT cursorY = (INT)((LONG)g_MouseY * height / (LONG)I33Height());
 
     if (!g_MouseGraphicsCursorDefined)
     {

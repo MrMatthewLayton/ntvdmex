@@ -36,7 +36,8 @@ static UINT CpuSpeedTestIndexOf(UINT mhz)
     return CPUSPEED_COUNT;   /* not found: an off-end index, never a silent 0 */
 }
 
-static INT g_Total = 0, g_Failures = 0;
+static INT g_Total = 0;
+static INT g_Failures = 0;
 #define CHECK(condition,message) do{ g_Total++; if(condition){printf("  PASS  %s\n",(message));} \
     else{printf("  FAIL  %s\n",(message)); g_Failures++;} }while(0)
 
@@ -63,8 +64,12 @@ static UINT CpuSpeedTestSimulateDelivered(
     UINT executedDenominator,
     unsigned long long totalUs)
 {
-    unsigned long long executedUs = 0, wallUs = 0;       /* monotonic simulated totals */
-    unsigned long long executedBaseline = 0, wallBaseline = 0;     /* the window baseline CpuSpeedStep tracks */
+    /* monotonic simulated totals */
+    unsigned long long executedUs = 0;
+    unsigned long long wallUs = 0;
+    /* the window baseline CpuSpeedStep tracks */
+    unsigned long long executedBaseline = 0;
+    unsigned long long wallBaseline = 0;
     INT slice = 0;
 
     while (wallUs < totalUs)
@@ -124,7 +129,8 @@ INT main(VOID)
      * the dropdown while every value behind it stayed correct.
      */
     {   PCSTR item = CPUSPEED_ITEMS;
-    INT count = 0, isOk = 1;
+    INT count = 0;
+    INT isOk = 1;
         for (index = 0; index < CPUSPEED_COUNT; ++index)
         {
             size_t length = strlen(g_CpuSpeedNames[index]);
@@ -175,7 +181,8 @@ INT main(VOID)
     {   INT isMonotonic = 1, flatOutCount = 0;
         for (index = 2; index < CPUSPEED_COUNT; ++index)
         {
-            UINT faster = CpuSpeedDutyBp(index - 1, 50), slower = CpuSpeedDutyBp(index, 50);
+            UINT faster = CpuSpeedDutyBp(index - 1, 50);
+            UINT slower = CpuSpeedDutyBp(index, 50);
             if (g_CpuSpeedMhz[index - 1] >= 50u)
             {
                 if (faster != 10000u)
@@ -322,7 +329,9 @@ INT main(VOID)
      * slices owing 300us each must produce 3 ms of sleep.
      */
     {   CPUSPEED_PACE pace;
-    INT slice, sleepMs, totalMs = 0;
+    INT slice;
+    INT sleepMs;
+    INT totalMs = 0;
         memset(&pace, 0, sizeof pace);
         for (slice = 0; slice < 10; ++slice)
         {

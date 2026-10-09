@@ -224,6 +224,10 @@ static BOOL DosDiskGeometryFromBpb(
   one level in. The exception is a line that only writes the log -- one field per line,
   `cursor = LogPut(cursor, " io_r=");  cursor = LogHex(cursor, g_Gus.IoReads);` -- which reads
   as a table and stays together.
+- **One declaration per line**, for structure members, locals and file-scope variables alike:
+  `INT64 era;` / `INT64 dayOfEra;`, never `INT64 era, dayOfEra;`. A comment that described the
+  whole list goes on its own line above the group. (The `typedef ... NAME, *PNAME;` pattern is
+  one declaration and stays.)
 - **A signature fits on one line, or takes one parameter per line**, one level in, the closing
   parenthesis after the last parameter:
 

@@ -177,10 +177,13 @@
 
 typedef struct _WOWMSG
 {
-    WORD  Window, Message, WParam;
+    WORD Window;
+    WORD Message;
+    WORD WParam;
     DWORD LParam;
     DWORD Time;
-    WORD  PointX, PointY;
+    WORD PointX;
+    WORD PointY;
 } WOWMSG, *PWOWMSG;
 typedef const WOWMSG *PCWOWMSG;
 
@@ -193,7 +196,8 @@ typedef const WOWMSG *PCWOWMSG;
 #define WOWMSG_MAXQUIT  8
 typedef struct _WOWMSG_QUIT
 {
-    WORD Task, Code;
+    WORD Task;
+    WORD Code;
 } WOWMSG_QUIT;
 
 /* Take the oldest message matching the filter, or return 0.

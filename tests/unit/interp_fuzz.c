@@ -113,8 +113,11 @@ INT main(INT argc, PSTR *argv)
     INT  stepLimit = argc > 2 ? atoi(argv[2]) : 64;
     UINT64 seed = argc > 3 ? strtoull(argv[3], 0, 0) : 0x5EEDF00DULL;
     long benchCount = argc > 4 ? atol(argv[4]) : 3000000;
-    long program, executed = 0, bails = 0;
-    clock_t startClock, endClock;
+    long program;
+    long executed = 0;
+    long bails = 0;
+    clock_t startClock;
+    clock_t endClock;
     UINT32 index;
 
     /* ---- differential part: random bytes as code, random everything else ---- */

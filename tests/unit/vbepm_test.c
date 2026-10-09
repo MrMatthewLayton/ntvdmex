@@ -37,7 +37,8 @@ static UINT64 VbePmTestFakeClock(VOID)
 /* The interpreter's host hooks: flat memory, and port I/O onto the VDD bus. Each IN
  * advances the fake clock 50 us, so a retrace wait on 3DAh makes progress.
  */
-static UINT32 g_InCount, g_OutCount;
+static UINT32 g_InCount;
+static UINT32 g_OutCount;
 static BYTE  Pm32HostRead8(UINT32 linear)
 {
     return linear < sizeof g_GuestMemory ? g_GuestMemory[linear] : 0xFF;
@@ -75,7 +76,8 @@ static VOID     Pm32HostOut(WORD port, INT width, UINT32 value)
 
 #include "../../src/host/pm32interp.h"
 
-static INT g_Total = 0, g_Failures = 0;
+static INT g_Total = 0;
+static INT g_Failures = 0;
 #define CHECK(condition,message) do{ g_Total++; if(condition){printf("  PASS  %s\n",(message));} \
     else{printf("  FAIL  %s\n",(message)); g_Failures++;} }while(0)
 
@@ -150,8 +152,13 @@ INT main(VOID)
     NTVDD_DEVICE device;
     NTVDD_REGISTERS registers;
     PM32_CPU cpu;
-    UINT32 block, length, index;
-    WORD windowEntry, startEntry, paletteEntry, portsOffset;
+    UINT32 block;
+    UINT32 length;
+    UINT32 index;
+    WORD windowEntry;
+    WORD startEntry;
+    WORD paletteEntry;
+    WORD portsOffset;
 
     printf("== VBE 4F0Ah protected-mode interface battery (#53) ==\n");
     memset(&g_Video, 0, sizeof g_Video);
@@ -176,7 +183,11 @@ INT main(VOID)
     CHECK(windowEntry >= 8 && startEntry >= 8 && paletteEntry >= 8 && windowEntry < length && startEntry < length && paletteEntry < length,
           "table: the three entry offsets lie inside the block, past the 4-word header");
     {   /* the port list: words, FFFFh-terminated, then an empty memory list */
-        INT has1ce = 0, has1cf = 0, has3c9 = 0, has3da = 0, count = 0;
+        INT has1ce = 0;
+        INT has1cf = 0;
+        INT has3c9 = 0;
+        INT has3da = 0;
+        INT count = 0;
         UINT32 listAddress = block + portsOffset;
         for (;;) { WORD port = (WORD)(g_GuestMemory[listAddress] | (g_GuestMemory[listAddress + 1] << 8));
         listAddress += 2;
@@ -240,7 +251,9 @@ INT main(VOID)
 
     /* ---- SetPalette: ES:EDI = B,G,R,pad entries; 4F09h BL=01h reads them back ---- */
     {   static const BYTE entries[3 * 4] = { 0x01, 0x02, 0x03, 0, 0x3F, 0x00, 0x20, 0, 0x10, 0x11, 0x12, 0 };
-        UINT32 dataAddress = 0x160000u, readBackAddress = 0x9000u;      /* ES base 0x100000 + EDI 0x60000 */
+        /* ES base 0x100000 + EDI 0x60000 */
+        UINT32 dataAddress = 0x160000u;
+        UINT32 readBackAddress = 0x9000u;
         memcpy(g_GuestMemory + dataAddress, entries, sizeof entries);
         CHECK(VbePmTestCallPm(paletteEntry, 0x0000, 3, 0x40, 0x60000, 0x100000, &cpu), "SetPalette (ES:EDI, 3 entries at 40h) returns");
         CHECK(cpu.Registers[1] == 3 && cpu.Registers[2] == 0x40 && cpu.Registers[7] == 0x60000, "SetPalette: ECX/EDX/EDI preserved");

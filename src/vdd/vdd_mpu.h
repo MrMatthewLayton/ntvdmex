@@ -72,12 +72,14 @@ typedef struct _MPU_STATE
     BYTE     IsUartMode;            /* 0x3F received: pass bytes straight through */
 
     BYTE     InputQueue[MPU_INPUT_QUEUE_SIZE];  /* bytes waiting for the guest (mostly ACKs) */
-    BYTE     InputQueueHead, InputQueueLength;
+    BYTE InputQueueHead;
+    BYTE InputQueueLength;
 
     /* running MIDI message assembly */
     BYTE     Status;                /* current status byte (running status) */
     BYTE     Data[MPU_MIDI_DATA_BYTES];
-    BYTE     DataCount, DataWanted;
+    BYTE DataCount;
+    BYTE DataWanted;
     BYTE     IsInSysEx;
 
     PMPU_MIDI_SINK Sink;
@@ -89,7 +91,8 @@ typedef struct _MPU_STATE
     PVOID SysExContext;
     UINT32   SysExLength;
     BYTE     IsSysExOverflow;       /* this message outgrew the buffer: drop it */
-    UINT32   SysExSent, SysExDropped;
+    UINT32 SysExSent;
+    UINT32 SysExDropped;
     BYTE     SysEx[MPU_SYSEX_MAX];
 } MPU_STATE, *PMPU_STATE;
 

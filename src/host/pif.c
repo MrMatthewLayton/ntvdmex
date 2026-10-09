@@ -15,7 +15,8 @@
 /* Copy a fixed field, stopping at NUL, then trim trailing (and leading) blanks. */
 static VOID PifCopyField(PSTR destination, PCBYTE source, unsigned length)
 {
-    unsigned end = 0, start = 0;
+    unsigned end = 0;
+    unsigned start = 0;
 
     while (end < length && source[end])
         ++end;

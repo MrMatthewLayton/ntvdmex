@@ -130,6 +130,8 @@ VOID LogWrite(PCSTR path, PCSTR buffer, PCSTR end);     /* truncate: a run's fir
 VOID LogAppend(PCSTR path, PCSTR buffer, PCSTR end);    /* append, under the size cap */
 extern INT      g_LogIsQuiet;                           /* see log.c: what quiet stops */
 extern LONGLONG g_LogQpc;                               /* time spent in LogAppend (QPC) */
-extern DWORD    g_LogCalls, g_LogBytes;                 /* LogAppend calls and bytes */
+/* LogAppend calls and bytes */
+extern DWORD g_LogCalls;
+extern DWORD g_LogBytes;
 
 #endif /* HOST_LOG_H */

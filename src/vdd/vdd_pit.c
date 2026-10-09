@@ -528,7 +528,10 @@ static INT PitOutPin(BYTE mode, UINT32 reload, UINT64 elapsed)
  */
 static BYTE PitStatusOf(PCPIT_STATE state, INT counterIndex)
 {
-    BYTE accessMode, programmedMode, isBcd, isNullCount;
+    BYTE accessMode;
+    BYTE programmedMode;
+    BYTE isBcd;
+    BYTE isNullCount;
     UINT32 reload;
     UINT64 elapsed;
     INT outPin;
@@ -1003,7 +1006,10 @@ static VOID PitInt1A(PVOID context, PNTVDD_REGISTERS registers)
          * not kept -- AH=02h reports standard time, see above.
          */
         PIT_RTC_READING requested;
-        UINT bcdCh = VddGetCx(registers) >> BYTE_SHIFT, bcdCl = VddGetCx(registers) & PIT_LOW_BYTE, bcdDh = VddGetDx(registers) >> BYTE_SHIFT, bcdDl = VddGetDx(registers) & PIT_LOW_BYTE;
+        UINT bcdCh = VddGetCx(registers) >> BYTE_SHIFT;
+        UINT bcdCl = VddGetCx(registers) & PIT_LOW_BYTE;
+        UINT bcdDh = VddGetDx(registers) >> BYTE_SHIFT;
+        UINT bcdDl = VddGetDx(registers) & PIT_LOW_BYTE;
         INT isDate = (VddGetAh(registers) == PIT_1A_SET_DATE);
         UINT fields[PIT_FIELD_COUNT];
         UINT fieldIndex;

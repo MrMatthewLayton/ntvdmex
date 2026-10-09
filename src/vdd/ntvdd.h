@@ -45,8 +45,15 @@
  */
 typedef struct _NTVDD_REGISTERS
 {
-    UINT32 Eax, Ebx, Ecx, Edx, Esi, Edi, Ebp;
-    WORD   Ds, Es;
+    UINT32 Eax;
+    UINT32 Ebx;
+    UINT32 Ecx;
+    UINT32 Edx;
+    UINT32 Esi;
+    UINT32 Edi;
+    UINT32 Ebp;
+    WORD Ds;
+    WORD Es;
     BYTE   CarryFlag;       /* carry flag: read+write by the handler */
     BYTE   ZeroFlag;        /* zero flag: e.g. INT 16h AH=01 "key available" */
 } NTVDD_REGISTERS, *PNTVDD_REGISTERS;
@@ -129,7 +136,9 @@ static inline VOID VddSetDx(PNTVDD_REGISTERS registers, WORD value)
 #define NTVDD_PALETTE_ENTRIES   256
 typedef struct _NTVDD_FRAME
 {
-    WORD            Width, Height;  /* logical resolution in pixels */
+    /* logical resolution in pixels */
+    WORD Width;
+    WORD Height;
     BYTE            BitsPerPixel;   /* 8 (palettised) or 32 (ARGB) */
     UINT32          Stride;         /* bytes per scanline of `Pixels` */
     const BYTE     *Pixels;         /* framebuffer (indices if BitsPerPixel==8) */

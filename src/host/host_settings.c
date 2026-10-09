@@ -130,7 +130,8 @@ VOID SettingsLogSources(VOID)
     static PCSTR const source[] = { "default", "registry",
                                        "registry value OUT OF RANGE -> default" };
     static CHAR buffer[12288];            /* 41 rows + four 260-byte paths */
-    CHAR *cursor = buffer, item[64];
+    CHAR *cursor = buffer;
+    CHAR item[64];
     INT index;
     cursor = LogPut(cursor, "STAGE2: settings -- value, source, and whether the host uses it (GH #144)\r\n");
     for (index = 0; index < SET_COUNT; ++index)
@@ -408,7 +409,8 @@ UINT32 SettingsOutputHz(const NTVDMEX_SETTINGS *settings)
  */
 static VOID SettingsApplyTextFont(VOID)
 {
-    CHAR lineBuffer[480], *lineCursor = lineBuffer;
+    CHAR lineBuffer[480];
+    CHAR *lineCursor = lineBuffer;
 
     if (!lstrcmpA(g_TextFontLive, g_Settings.Strings[SET_STR_TEXTFONT]))
         return;
@@ -470,7 +472,8 @@ static VOID SettingsFillCombos(VOID)
 {
     static PCSTR const versions[] = { "6.22", "5.00", "4.01", "3.31", "7.10" };
     CHAR item[64];
-    INT index, index2;
+    INT index;
+    INT index2;
     HWND control;
     for (index = 0; index < SET_COUNT; ++index)
     {
@@ -509,8 +512,10 @@ enum
 /* #203: the DOS prompt's two radios, and the path box + Browse only live under "Another". */
 static VOID SettingsShellRadios(INT own)
 {
-    HWND xpShell = SettingsControl(IDC_S_SHELL_XP), ownShell = SettingsControl(IDC_S_SHELL_OWN);
-    HWND edit = SettingsControl(IDC_S_SHELL),    browse = SettingsControl(IDC_S_SHELL_BROWSE);
+    HWND xpShell = SettingsControl(IDC_S_SHELL_XP);
+    HWND ownShell = SettingsControl(IDC_S_SHELL_OWN);
+    HWND edit = SettingsControl(IDC_S_SHELL);
+    HWND browse = SettingsControl(IDC_S_SHELL_BROWSE);
 
     if (xpShell)
         SendMessageA(xpShell, BM_SETCHECK, own ? BST_UNCHECKED : BST_CHECKED, 0);
@@ -568,8 +573,10 @@ static VOID SettingsDriveRadios(
     INT have,
     INT isPhysical)
 {
-    HWND physical = SettingsControl(physicalId), image = SettingsControl(imageId);
-    HWND edit = SettingsControl(editId), browse = SettingsControl(browseId);
+    HWND physical = SettingsControl(physicalId);
+    HWND image = SettingsControl(imageId);
+    HWND edit = SettingsControl(editId);
+    HWND browse = SettingsControl(browseId);
 
     if (!have)
         isPhysical = 0;
@@ -661,8 +668,10 @@ static VOID SettingsTextFontGet(PSTR out, INT cap)
 
 static VOID SettingsTextFontPreview(VOID)
 {
-    CHAR face[NTVDMEX_PATH_MAX], text[200];
-    HWND info = SettingsControl(IDC_S_TEXTFONT_INFO), view = SettingsControl(IDC_S_TEXTFONT_VIEW);
+    CHAR face[NTVDMEX_PATH_MAX];
+    CHAR text[200];
+    HWND info = SettingsControl(IDC_S_TEXTFONT_INFO);
+    HWND view = SettingsControl(IDC_S_TEXTFONT_VIEW);
 
     SettingsTextFontGet(face, sizeof face);
     SysFontBuildInto(face, &g_TextFontPreview, &g_TextFontPreviewReport);
@@ -716,7 +725,10 @@ static VOID SettingsTextFontDraw(const DRAWITEMSTRUCT *drawItem)
         BITMAPINFOHEADER Header;
         RGBQUAD Palette[2];
     } bitmapInfo;
-    INT index, pixelRow, left, top;
+    INT index;
+    INT pixelRow;
+    INT left;
+    INT top;
     RECT rect = drawItem->rcItem;
     for (index = 0; index < FONT_PREVIEW_COLUMNS; ++index)
     {
@@ -925,7 +937,8 @@ static VOID SettingsFillCpuInfo(HWND dialog)
     HWND control = GetDlgItem(dialog, IDC_S_CPUINFO);
     HKEY key;
     CHAR name[128];
-    DWORD size = sizeof name - 1, type = 0;
+    DWORD size = sizeof name - 1;
+    DWORD type = 0;
     CHAR out[160];
     PCSTR source = name;
 

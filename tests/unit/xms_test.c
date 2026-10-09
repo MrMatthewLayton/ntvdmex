@@ -55,7 +55,8 @@
 #define XMS_TEST_FIRST_MARK             0xAB
 #define XMS_TEST_LAST_MARK              0xCD
 
-static INT g_Checks = 0, g_Failures = 0;
+static INT g_Checks = 0;
+static INT g_Failures = 0;
 
 static VOID XmsTestCheck(BOOL passed, PCSTR description)
 {
@@ -94,9 +95,17 @@ static DWORD XmsTestFarPointer(DWORD segment, DWORD offset)
 INT main(VOID)
 {
     DOS_XMS_STATE state;
-    WORD firstHandle, secondHandle, thirdHandle;
-    BYTE errorCode, lockCount, freeHandles;
-    DWORD largestKb, totalFreeKb, sizeKb, firstLinear, secondLinear;
+    WORD firstHandle;
+    WORD secondHandle;
+    WORD thirdHandle;
+    BYTE errorCode;
+    BYTE lockCount;
+    BYTE freeHandles;
+    DWORD largestKb;
+    DWORD totalFreeKb;
+    DWORD sizeKb;
+    DWORD firstLinear;
+    DWORD secondLinear;
     INT attempt;
     BOOL succeeded;
 

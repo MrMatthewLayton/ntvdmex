@@ -64,7 +64,9 @@ typedef struct _GUS_VOICE
 {
     BYTE  Control;          /* 00h: 0 stopped 1 stop 2 16-bit 3 loop 4 bidi 5 IRQ en 6 dir 7 IRQ pend */
     WORD FrequencyControl;  /* 01h: frequency control, 6.9 fixed point in bits 15-1 */
-    UINT32 Start, End;      /* 02h-05h, in 1/512-sample units (address << 9 | frac) */
+    /* 02h-05h, in 1/512-sample units (address << 9 | frac) */
+    UINT32 Start;
+    UINT32 End;
     UINT32 Position;        /* 0Ah/0Bh: current position, same units */
     BYTE  RampRate;         /* 06h: bits 5-0 step, 7-6 update rate */
     BYTE  RampStart;        /* 07h: EEEEMMMM */
@@ -81,13 +83,16 @@ typedef struct _GUS_STATE
     PVDD_BUS   Bus;
     PDMA_STATE Dma;
     WORD   BasePort;
-    BYTE    Irq, DmaChannel;         /* ULTRASND's GF1 IRQ and DRAM DMA */
+    /* ULTRASND's GF1 IRQ and DRAM DMA */
+    BYTE Irq;
+    BYTE DmaChannel;
     BYTE    MidiIrq, RecordDma;      /* ULTRASND's MIDI IRQ and record DMA; 0 = the same
                                         as Irq / DmaChannel (the SDK's "combine")         */
     BYTE   *Dram;                    /* GUS_DRAM_SIZE bytes, owned by the host */
 
     /* the indirect register file (ref section 2) */
-    BYTE    VoicePage, RegisterSelect;
+    BYTE VoicePage;
+    BYTE RegisterSelect;
     WORD   LowByteLatch;             /* 3X4 byte written ahead of 3X5 for a 16-bit reg */
 
     /* globals (ref section 2.1) */
@@ -99,8 +104,13 @@ typedef struct _GUS_STATE
     BYTE    IsDmaWaiting;            /* 41h go written, 8237 not ready yet */
     UINT32   DramIoAddress;          /* 43h/44h */
     BYTE    TimerControl;            /* 45h */
-    BYTE    Timer1Load, Timer2Load;  /* 46h/47h */
-    BYTE    SampleFrequency, SampleControl, IsSampleTerminalCount;   /* 48h/49h: recording (silence) */
+    /* 46h/47h */
+    BYTE Timer1Load;
+    BYTE Timer2Load;
+    /* 48h/49h: recording (silence) */
+    BYTE SampleFrequency;
+    BYTE SampleControl;
+    BYTE IsSampleTerminalCount;
     UINT32   SampleAccumulatorNs;    /* GF1 time towards the next ADC sample */
     BYTE    SamplePending;           /* ADC bytes not yet moved (a 16-bit channel
                                         moves them in pairs)                          */
@@ -109,21 +119,31 @@ typedef struct _GUS_STATE
     /* board (ref section 5, section 9) */
     BYTE    MixControl;              /* 2X0 */
     BYTE    IsLatchArmed;            /* 2X0 was the last write: 2XB may be written */
-    BYTE    IrqLatch, DmaLatch;      /* 2XB bank 0, as written (bit 7 dropped) */
+    /* 2XB bank 0, as written (bit 7 dropped) */
+    BYTE IrqLatch;
+    BYTE DmaLatch;
     /* ...and what they DECODE to (ref section 5): the lines the card actually drives. 0 = none.
      * Reset loads them from Irq/DmaChannel/MidiIrq/RecordDma -- the state ULTRINIT leaves a
      * card in, which is what every DOS program finds at its start (see VddGusReset).
      */
-    BYTE    Gf1IrqLine, MidiIrqLine, DramDmaLine, RecordDmaLine;
+    BYTE Gf1IrqLine;
+    BYTE MidiIrqLine;
+    BYTE DramDmaLine;
+    BYTE RecordDmaLine;
     BYTE    RegisterControl;         /* 2XF: the bank 2XB reaches (0, 5, 6) */
     BYTE    RegisterClear;           /* 2XB bank 5: "write 0 to clear power-up IRQs" */
     BYTE    Jumper;                  /* 2XB bank 6: bit 1 MIDI decode, bit 2 joystick */
     BYTE    AdlibIndex;              /* 2X8 write */
     BYTE    AdlibMask;               /* 2X9 bits 5/6 */
-    BYTE    IsTimer1Running, IsTimer2Running;
-    BYTE    Timer1Value, Timer2Value;
-    BYTE    IsTimer1Expired, IsTimer2Expired;       /* expired flags (2X8 read, 2X6 bits 2/3) */
-    UINT32   Timer1AccumulatorNs, Timer2AccumulatorNs;
+    BYTE IsTimer1Running;
+    BYTE IsTimer2Running;
+    BYTE Timer1Value;
+    BYTE Timer2Value;
+    /* expired flags (2X8 read, 2X6 bits 2/3) */
+    BYTE IsTimer1Expired;
+    BYTE IsTimer2Expired;
+    UINT32 Timer1AccumulatorNs;
+    UINT32 Timer2AccumulatorNs;
     BYTE    MidiControl;             /* 3X0 write: 6850 control */
     BYTE    MidiStatus;              /* 6850 status bits RDRF/TDRE/OVRN (IRQ derived) */
     BYTE    MidiReceive;             /* 6850 receive data register */
@@ -135,12 +155,27 @@ typedef struct _GUS_STATE
     GUS_VOICE  Voices[GUS_VOICES];
 
     /* diagnostics */
-    UINT32   IoWrites, IoReads, DramPokes, DramPeeks, DmaUploads, DmaBytes;
-    UINT32   VoiceStarts, IrqsRaised, FifoReads, Renders, SamplesOut;
+    UINT32 IoWrites;
+    UINT32 IoReads;
+    UINT32 DramPokes;
+    UINT32 DramPeeks;
+    UINT32 DmaUploads;
+    UINT32 DmaBytes;
+    UINT32 VoiceStarts;
+    UINT32 IrqsRaised;
+    UINT32 FifoReads;
+    UINT32 Renders;
+    UINT32 SamplesOut;
     UINT32   LatchLockedOut;         /* 2XB writes refused by the lock-out */
-    UINT32   DmaDownloads, DmaDownloadBytes;    /* card -> PC DRAM reads (41h bit 1) */
-    UINT32   SampleTakes, SampleBytes;          /* record (49h) takes and bytes */
-    UINT32   MidiTransmitted, MidiReceivedBytes;          /* 6850 bytes out / looped back in */
+    /* card -> PC DRAM reads (41h bit 1) */
+    UINT32 DmaDownloads;
+    UINT32 DmaDownloadBytes;
+    /* record (49h) takes and bytes */
+    UINT32 SampleTakes;
+    UINT32 SampleBytes;
+    /* 6850 bytes out / looped back in */
+    UINT32 MidiTransmitted;
+    UINT32 MidiReceivedBytes;
     UINT32   OutputMuted;            /* samples rendered while 2X0 bit 1 cut line out */
     UINT32   OutputNonZero;          /* output samples that were not silence */
     UINT32   OutputPeak;             /* largest |sample| produced */

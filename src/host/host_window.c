@@ -49,12 +49,17 @@
 static DWORD  g_SpeakerRealHz;   /* sampled under the lock, applied outside it */
 DWORD    g_PitDeliverSkipped;  /* attempts foregone: g_Lock busy when the crystal knocked */
 DWORD    g_UiTickSkips;
-DWORD    g_UiHookPresents, g_UiTimerPresents;  /* who raised each present */
+/* who raised each present */
+DWORD g_UiHookPresents;
+DWORD g_UiTimerPresents;
 static volatile LONG g_UiPresentPending;                /* one WM_APP_PRESENT in flight */
 static int      g_UiForced;                              /* this body run was raised by the hook; stays int: INT here moves the compiled code */
 static DWORD    g_UiInputFirst;                         /* input served ahead of a queued present */
 /* Which of the three exits from the cooperative IRQ1 gate fires. See its call site. */
-DWORD    g_Irq1Checks, g_Irq1NoIf, g_Irq1In08, g_Irq1In09;
+DWORD g_Irq1Checks;
+DWORD g_Irq1NoIf;
+DWORD g_Irq1In08;
+DWORD g_Irq1In09;
 DWORD    g_Irq1AsyncRetry;
 INT            g_Headless      = 0;  /* AUTOEXIT marker present: SMB test harness -> bound infinite runs */
 DWORD          g_Irq1Injected      = 0;  /* INT 09h injections (should track scancodes) */
@@ -62,7 +67,8 @@ UINT       g_CaptureMs    = CAPTURE_MS_DEFAULT; /* CAPTURE_FLAG contents: ms bet
 /* #58: an optional SECOND number in capture.flag -- ms to wait before the first shot --
  * so the 40-shot budget can be spent on one moment (Doom's melt) instead of the start.
  */
-DWORD          g_CaptureDelayMs, g_CaptureStart;
+DWORD g_CaptureDelayMs;
+DWORD g_CaptureStart;
 INT            g_Capture       = 0;  /* CAPTURE_FLAG present: opt-in self-screenshot for graphical tests */
 /* The UI tick must be well ABOVE the guest refresh (60/70 Hz) or the phase window
  * is unreachable and every present falls back to the staleness path.
@@ -81,7 +87,9 @@ INT  g_TopIsShell;           /* depth 0 is a shell: nothing to close there */
 static HMENU        g_FsMenu;
 
 static INT            g_PauseSuspended    = 0;   /* the CPU thread is suspended BY THE PAUSE */
-DWORD          g_PauseCount, g_PauseCooperative, g_PauseMs;
+DWORD g_PauseCount;
+DWORD g_PauseCooperative;
+DWORD g_PauseMs;
 enum
 {
     INSTALL_UNFORCED = 0, INSTALL_FORCED = 1
@@ -116,8 +124,15 @@ static VOID HostScreenshot(VOID)
     static INT sequence = 0;
     BITMAPINFOHEADER *bitmapHeader;
     HGLOBAL memoryHandle;
-    DWORD width, height, stride, palCount, imageSize, dibSize, bitsPerPixel;
-    BYTE *dib, *bits;
+    DWORD width;
+    DWORD height;
+    DWORD stride;
+    DWORD palCount;
+    DWORD imageSize;
+    DWORD dibSize;
+    DWORD bitsPerPixel;
+    BYTE *dib;
+    BYTE *bits;
     const BYTE *source;
 
     /* #155: 8-bit AND direct-colour (32bpp, VBE 2 LFB) frames. It returned silently for
@@ -197,7 +212,8 @@ static VOID HostScreenshot(VOID)
     {
         CHAR path[MAX_PATH];
         PCSTR directory = NTVDMEX_OUT;   /* screenshots are output, not clutter in the root */
-        INT index = 0, index2;
+        INT index = 0;
+        INT index2;
         while (directory[index] && index < MAX_PATH - SCREENSHOT_NAME_ROOM)
         {
             path[index] = directory[index];
@@ -252,7 +268,8 @@ static VOID HostScreenshot(VOID)
 static VOID HostRecordToggle(VOID)
 {
     static INT sequence = 0;
-    CHAR path[MAX_PATH], *cursor;
+    CHAR path[MAX_PATH];
+    CHAR *cursor;
 
     if (AudioWaveIsRecording())
     {
@@ -266,7 +283,8 @@ static VOID HostRecordToggle(VOID)
     ++sequence;
     if (AudioWaveRecordStart(path, g_Wave.SampleHz) == 0)
     {
-        CHAR lineBuffer[MAX_PATH + 64], *lineCursor = LogPut(lineBuffer, "STAGE2: audio recording started -> ");
+        CHAR lineBuffer[MAX_PATH + 64];
+        CHAR *lineCursor = LogPut(lineBuffer, "STAGE2: audio recording started -> ");
         lineCursor = LogPut(lineCursor, path); lineCursor = LogPut(lineCursor, "\r\n"); LogAppend(LOG_PATH, lineBuffer, lineCursor);
     }
 }
@@ -276,7 +294,8 @@ static VOID HostRecordToggle(VOID)
  */
 static VOID HostOpenCaptureFolder(VOID)
 {
-    CHAR command[MAX_PATH + 32], *cursor;
+    CHAR command[MAX_PATH + 32];
+    CHAR *cursor;
     STARTUPINFOA startupInfo;
     PROCESS_INFORMATION processInfo;
     INT index;
@@ -298,8 +317,10 @@ static VOID HostOpenCaptureFolder(VOID)
  */
 VOID HostRecordFinish(VOID)
 {
-    CHAR lineBuffer[160], *lineCursor = lineBuffer;
-    UINT32 frames, dropped;
+    CHAR lineBuffer[160];
+    CHAR *lineCursor = lineBuffer;
+    UINT32 frames;
+    UINT32 dropped;
 
     if (!AudioWaveIsRecording())
         return;
@@ -315,7 +336,8 @@ INT           g_MouseRawOk;           /* raw mouse registered with the window */
 #define DDFLIP_DRIVER_FLAG  CFG_("ddflip_driver.flag")  /* s86: DirectDraw flip timed by the driver (old path) */
 INT g_TextDump = 0;              /* textdump.flag: dump the text screen too */
 /* g_SimIntBusy (declared above AsyncInjectIrq) is set across 0300h. */
-static LONG  g_MouseRawTotalX, g_MouseRawTotalY;
+static LONG g_MouseRawTotalX;
+static LONG g_MouseRawTotalY;
 /* THE HOST ARROW over the video area, which is a SEPARATE thing from the INT 33h
  * driver cursor above.
  * - IT IS NO LONGER A MENU ITEM OR A HOTKEY, and that is the point: the pointer's
@@ -524,7 +546,10 @@ static VOID MenuCombo(HMENU parent, PCSTR label, INT set, UINT base)
 static HMENU g_RecentMenu;                  /* File > Open Recent (#153) */
 static HMENU BuildMenu(VOID)
 {
-    HMENU menuBar = CreateMenu(), menu, submenu, tools;
+    HMENU menuBar = CreateMenu();
+    HMENU menu;
+    HMENU submenu;
+    HMENU tools;
 
     menu = MenuPopup();                                                   /* File */
     /* #153. No Ctrl+O: that chord belongs to the DOS program (WordStar's own menu). The
@@ -786,7 +811,9 @@ VOID TrayRemove(HWND window)
 static INT   g_ManagerAvailable;                    /* ntvdmex.exe exists beside the host */
 static UINT  g_ManagerCommandMessage;                   /* the registered manager->host message */
 static CHAR  g_ManagerExe[MAX_PATH];
-static DWORD g_ManagerHellos, g_ManagerLaunches;   /* for the log */
+/* for the log */
+static DWORD g_ManagerHellos;
+static DWORD g_ManagerLaunches;
 typedef INT (WINAPI *PFN_INTGETWT)(HWND, LPWSTR, INT);
 
 /* What the menu calls this program. DOS: the running program's name ("Doom"), or
@@ -799,7 +826,8 @@ typedef INT (WINAPI *PFN_INTGETWT)(HWND, LPWSTR, INT);
 static VOID ManagerName(PSTR out, HWND *show)
 {
     CHAR raw[MGR_NAME_SIZE];
-    INT index, length = 0;
+    INT index;
+    INT length = 0;
     PCSTR source = NULL;
 
     raw[0] = 0;
@@ -835,7 +863,8 @@ static VOID ManagerName(PSTR out, HWND *show)
     }
     if (source)
     {
-        PCSTR baseName = source, cursor;
+        PCSTR baseName = source;
+        PCSTR cursor;
         for (cursor = source; *cursor; ++cursor)
             if (*cursor == '\\' || *cursor == '/')
                 baseName = cursor + 1;
@@ -1043,7 +1072,11 @@ static HWND g_Status;                        /* the native comctl32 status bar *
  * gets no fourth part at all -- there is nothing to say about capture. The speed is
  * the clock alone ("66 MHz", "Unlimited"), never the CPU's name.
  */
-static CHAR g_StatusLeft[128], g_StatusMode[96], g_StatusSpeed[32], g_StatusRight[64];  /* ON it now */
+/* ON it now */
+static CHAR g_StatusLeft[128];
+static CHAR g_StatusMode[96];
+static CHAR g_StatusSpeed[32];
+static CHAR g_StatusRight[64];
 /* #325: the window's whole scale (setting or drag), the frame size it was sized for, and
  * whether 1x did not fit the screen and was scaled down. See HostApplyScale.
  */
@@ -1051,7 +1084,8 @@ static INT g_ScaleFactor = 0;            /* the scale the window is AT (after fi
 static INT g_ScaleWant = 0;         /* the scale ASKED for (setting or drag) -- every mode
                                         change starts from this, so one mode too big for 2x
                                         does not leave the next one stuck at 1x            */
-static INT g_WindowFrameWidth, g_WindowFrameHeight;
+static INT g_WindowFrameWidth;
+static INT g_WindowFrameHeight;
 static INT g_FitDown;
 
 /* How wide a string renders IN THE STATUS BAR'S OWN FONT. Asking the control for
@@ -1061,9 +1095,11 @@ static INT g_FitDown;
 static INT StatusTextWidth(PCSTR text)
 {
     HDC deviceContext;
-    HFONT font, old = NULL;
+    HFONT font;
+    HFONT old = NULL;
     SIZE extent;
-    INT length = 0, width = 0;
+    INT length = 0;
+    INT width = 0;
 
     if (!g_Status || !text)
         return 0;
@@ -1097,7 +1133,9 @@ enum
  */
 static VOID StatusSetParts(PCSTR const *text, int count) /* stays int: INT here moves the compiled code */
 {
-    INT parts[STATUS_PARTS], index, right = 0;
+    INT parts[STATUS_PARTS];
+    INT index;
+    INT right = 0;
 
     if (!g_Status || count < 1 || count > STATUS_PARTS)
         return;
@@ -1168,7 +1206,10 @@ static VOID StatusUpdate(VOID)
         PSTR cursor = LogPut(modeText, mode);
         if (g_PresentDdraw.IsSnapshotValid && g_PresentDdraw.SnapshotWidth > 0 && g_PresentDdraw.SnapshotHeight > 0 && g_PresentDdraw.LastDestinationWidth > 0)
         {
-            INT snapshotWidth = g_PresentDdraw.SnapshotWidth, snapshotHeight = g_PresentDdraw.SnapshotHeight, destinationWidth = g_PresentDdraw.LastDestinationWidth, destinationHeight = g_PresentDdraw.LastDestinationHeight;
+            INT snapshotWidth = g_PresentDdraw.SnapshotWidth;
+            INT snapshotHeight = g_PresentDdraw.SnapshotHeight;
+            INT destinationWidth = g_PresentDdraw.LastDestinationWidth;
+            INT destinationHeight = g_PresentDdraw.LastDestinationHeight;
             cursor = LogPut(cursor, ", ");  cursor = LogDecimal(cursor, (UINT)snapshotWidth); cursor = LogPut(cursor, "x"); cursor = LogDecimal(cursor, (UINT)snapshotHeight);
             if (destinationWidth % snapshotWidth == 0 && destinationHeight % snapshotHeight == 0 && destinationWidth / snapshotWidth == destinationHeight / snapshotHeight)
             {
@@ -1281,15 +1322,23 @@ static INT CloseProgramAvailable(VOID)
  *               keypress, so a prompt, EDIT and a program reading port 60h all get it
  * The selection is shown by the presenter inverting it after each frame.
  */
-static INT g_MarkMode, g_MarkDrag, g_SelectionOn;
-static INT g_SelectionColumn0, g_SelectionRow0, g_SelectionColumn1, g_SelectionRow1;
+static INT g_MarkMode;
+static INT g_MarkDrag;
+static INT g_SelectionOn;
+static INT g_SelectionColumn0;
+static INT g_SelectionRow0;
+static INT g_SelectionColumn1;
+static INT g_SelectionRow1;
 static volatile LONG g_PasteBusy;
 
 static VOID SelectionPublish(VOID)
 {
-    INT cols = g_Video.Columns, rows = g_Video.Rows;
-    INT column0 = g_SelectionColumn0 < g_SelectionColumn1 ? g_SelectionColumn0 : g_SelectionColumn1, column1 = g_SelectionColumn0 < g_SelectionColumn1 ? g_SelectionColumn1 : g_SelectionColumn0;
-    INT row0 = g_SelectionRow0 < g_SelectionRow1 ? g_SelectionRow0 : g_SelectionRow1, row1 = g_SelectionRow0 < g_SelectionRow1 ? g_SelectionRow1 : g_SelectionRow0;
+    INT cols = g_Video.Columns;
+    INT rows = g_Video.Rows;
+    INT column0 = g_SelectionColumn0 < g_SelectionColumn1 ? g_SelectionColumn0 : g_SelectionColumn1;
+    INT column1 = g_SelectionColumn0 < g_SelectionColumn1 ? g_SelectionColumn1 : g_SelectionColumn0;
+    INT row0 = g_SelectionRow0 < g_SelectionRow1 ? g_SelectionRow0 : g_SelectionRow1;
+    INT row1 = g_SelectionRow0 < g_SelectionRow1 ? g_SelectionRow1 : g_SelectionRow0;
 
     if (cols < 1)
         cols = 1;
@@ -1299,7 +1348,8 @@ static VOID SelectionPublish(VOID)
     {   /* in FRAME pixels: the live cell -- 9 dots wide (#324), and cell_h tall, which
            is 8 in a 50-line screen (this used VIDEO_CELL_HEIGHT, so a 50-line selection was
            drawn at twice its height). */
-        INT cellWidth = VddVideoTextCellWidth(&g_Video), cellHeight = g_Video.CellHeight ? g_Video.CellHeight : VIDEO_CELL_HEIGHT;
+        INT cellWidth = VddVideoTextCellWidth(&g_Video);
+        INT cellHeight = g_Video.CellHeight ? g_Video.CellHeight : VIDEO_CELL_HEIGHT;
         g_PresentDdraw.SelectionX0 = column0 * cellWidth;
         g_PresentDdraw.SelectionX1 = (column1 + 1) * cellWidth;
         g_PresentDdraw.SelectionY0 = row0 * cellHeight;
@@ -1322,7 +1372,8 @@ static VOID SelectionClear(VOID)
 /* Client pixel -> cell, through the rectangle the last frame was drawn into. */
 static INT ClientToCell(INT clientX, INT clientY, INT *column, INT *row)
 {
-    INT sourceX, sourceY;
+    INT sourceX;
+    INT sourceY;
 
     if (g_PresentDdraw.LastDestinationWidth <= 0 || g_PresentDdraw.LastDestinationHeight <= 0 || g_Video.Columns < 1 || g_Video.Rows < 1)
         return 0;
@@ -1347,7 +1398,13 @@ enum
 };   /* TextCopy: the marked region, or the whole screen */
 static VOID TextCopy(HWND window, INT all)
 {
-    INT column0, column1, row0, row1, row, column, length = 0;
+    INT column0;
+    INT column1;
+    INT row0;
+    INT row1;
+    INT row;
+    INT column;
+    INT length = 0;
     static CHAR text[132 * 60 * 2 + 256];
     HGLOBAL memory;
     PSTR destination;
@@ -1425,7 +1482,9 @@ static DWORD WINAPI PasteThread(LPVOID parameter)
 
     for (index = 0; text[index] && g_Running; ++index)
     {
-        BYTE ch = (BYTE)text[index], scan = 0, isShifted = 0;
+        BYTE ch = (BYTE)text[index];
+        BYTE scan = 0;
+        BYTE isShifted = 0;
         if (ch == '\r')
         {
             scan = INPUT_SCAN_ENTER;
@@ -1669,7 +1728,8 @@ static INT HostCursorVisibleAt(INT overVideo)
  */
 static VOID HostCursorRefresh(HWND window)
 {
-    POINT point, client;
+    POINT point;
+    POINT client;
     HWND under;
 
     if (!window || !GetCursorPos(&point))
@@ -1726,7 +1786,8 @@ static INT   g_InSizeMove;
 static DWORD g_ClipRepairs;
 static VOID CaptureClipGuard(HWND window)
 {
-    RECT want, current;
+    RECT want;
+    RECT current;
 
     if (!window || !g_Captured || g_InSizeMove || GetForegroundWindow() != window)
         return;
@@ -1850,7 +1911,9 @@ static INT OpenIsDosImage(PCSTR path)
 {
     INT length = lstrlenA(path);
     BYTE header[DOS_MZ_NEW_HEADER_MIN];
-    DWORD got = 0, newHeaderOffset, signatureBytesRead = 0;
+    DWORD got = 0;
+    DWORD newHeaderOffset;
+    DWORD signatureBytesRead = 0;
     BYTE signature[DOS_EXE_SIGNATURE_SIZE];
     HANDLE file;
 
@@ -1877,8 +1940,12 @@ static INT OpenIsDosImage(PCSTR path)
 /* Build "<backspaces>X:\r CD \dir\r NAME.EXT\r" from an 8.3 path; 0 if it cannot. */
 static INT OpenPromptLine(PCSTR shortPath, INT backspaceCount, PSTR out, INT cap)
 {
-    INT length = lstrlenA(shortPath), slash = -1, index, directoryLength;
-    PSTR cursor = out, end = out + cap - 1;
+    INT length = lstrlenA(shortPath);
+    INT slash = -1;
+    INT index;
+    INT directoryLength;
+    PSTR cursor = out;
+    PSTR end = out + cap - 1;
 
     for (index = 0; index < length; ++index)
         if (shortPath[index] == '\\')
@@ -1908,15 +1975,21 @@ static INT OpenPromptLine(PCSTR shortPath, INT backspaceCount, PSTR out, INT cap
 
 static VOID OpenProgram(HWND window, PCSTR path)
 {
-    CHAR shortPath[MAX_PATH], directory[MAX_PATH], command[MAX_PATH + 4], line[512];
-    DWORD attributes = GetFileAttributesA(path), shortLength;
-    INT index, cut = -1;
+    CHAR shortPath[MAX_PATH];
+    CHAR directory[MAX_PATH];
+    CHAR command[MAX_PATH + 4];
+    CHAR line[512];
+    DWORD attributes = GetFileAttributesA(path);
+    DWORD shortLength;
+    INT index;
+    INT cut = -1;
     STARTUPINFOA startupInfo;
     PROCESS_INFORMATION processInfo;
 
     if (attributes == INVALID_FILE_ATTRIBUTES || (attributes & FILE_ATTRIBUTE_DIRECTORY))
     {
-        CHAR message[MAX_PATH + 64], *cursor = LogPut(message, HOST_PROGRAM_NOT_FOUND_TEXT);
+        CHAR message[MAX_PATH + 64];
+        CHAR *cursor = LogPut(message, HOST_PROGRAM_NOT_FOUND_TEXT);
         LogPut(cursor, path);
         MessageBoxA(window, message, HOST_PRODUCT_NAME, MB_OK | MB_ICONEXCLAMATION);
         return;
@@ -1929,7 +2002,8 @@ static VOID OpenProgram(HWND window, PCSTR path)
         && OpenPromptLine(shortPath, g_Machine->LineLength, line, (INT)sizeof line)
         && TypeInPush(line))
     {
-        CHAR lineBuffer[MAX_PATH + 64], *lineCursor = LogPut(lineBuffer, "OPEN: typed at the prompt [");
+        CHAR lineBuffer[MAX_PATH + 64];
+        CHAR *lineCursor = LogPut(lineBuffer, "OPEN: typed at the prompt [");
         lineCursor = LogPut(lineCursor, shortPath); lineCursor = LogPut(lineCursor, "]\r\n");
         LogAppend(LOG_PATH, lineBuffer, lineCursor);
         return;
@@ -1949,7 +2023,8 @@ static VOID OpenProgram(HWND window, PCSTR path)
     if (CreateProcessA(NULL, command, NULL, NULL, FALSE, CREATE_NEW_CONSOLE, NULL,
                        cut >= 0 ? directory : NULL, &startupInfo, &processInfo))
     {
-        CHAR lineBuffer[MAX_PATH + 64], *lineCursor = LogPut(lineBuffer, "OPEN: started in a new window [");
+        CHAR lineBuffer[MAX_PATH + 64];
+        CHAR *lineCursor = LogPut(lineBuffer, "OPEN: started in a new window [");
         lineCursor = LogPut(lineCursor, path); lineCursor = LogPut(lineCursor, "]\r\n");
         LogAppend(LOG_PATH, lineBuffer, lineCursor);
         CloseHandle(processInfo.hThread);
@@ -1957,7 +2032,8 @@ static VOID OpenProgram(HWND window, PCSTR path)
     }
     else
     {
-        CHAR message[MAX_PATH + 96], *cursor = LogPut(message, HOST_PROGRAM_START_FAILED_TEXT);
+        CHAR message[MAX_PATH + 96];
+        CHAR *cursor = LogPut(message, HOST_PROGRAM_START_FAILED_TEXT);
         cursor = LogPut(cursor, path); cursor = LogPut(cursor, HOST_WINDOWS_ERROR_TEXT); cursor = LogHex(cursor, GetLastError()); *cursor = 0;
         MessageBoxA(window, message, HOST_PRODUCT_NAME, MB_OK | MB_ICONERROR);
     }
@@ -1991,7 +2067,8 @@ static VOID OpenProgramDialog(HWND window)
 static VOID MenuRecentFill(VOID)
 {
     CHAR list[MRU_MAX][MAX_PATH];
-    INT count, index;
+    INT count;
+    INT index;
 
     if (!g_RecentMenu)
         return;
@@ -2005,7 +2082,8 @@ static VOID MenuRecentFill(VOID)
     }
     for (index = 0; index < count; ++index)
     {
-        CHAR text[2 * MAX_PATH + 8], *cursor = text;
+        CHAR text[2 * MAX_PATH + 8];
+        CHAR *cursor = text;
         PCSTR source;
         *cursor++ = '&';
         *cursor++ = (CHAR)('1' + index);
@@ -2155,7 +2233,8 @@ static VOID CursorIdleNoteMove(HWND window)
  */
 static VOID CursorIdleTick(HWND window)
 {
-    POINT point, client;
+    POINT point;
+    POINT client;
     HWND under;
 
     if (g_CursorIdle || g_Captured || CaptureAllowed())
@@ -2321,9 +2400,11 @@ static VOID HostFullscreenToggle(HWND window)
      */
     if (g_PresentDdraw.IsFullscreen)
     {
-        CHAR lineBuffer[256], *lineCursor = lineBuffer;
+        CHAR lineBuffer[256];
+        CHAR *lineCursor = lineBuffer;
         RECT clientRect;
-        INT clientWidth = 0, clientHeight = 0;
+        INT clientWidth = 0;
+        INT clientHeight = 0;
         if (GetClientRect(window, &clientRect))
         {
             clientWidth = clientRect.right;
@@ -2337,7 +2418,10 @@ static VOID HostFullscreenToggle(HWND window)
         lineCursor = LogPut(lineCursor, "x");                  lineCursor = LogDecimal(lineCursor, (UINT)g_Video.Frame.Height);
         if (g_Video.Frame.Width && g_Video.Frame.Height)
         {
-            INT frameX, frameY, frameWidth, frameHeight;
+            INT frameX;
+            INT frameY;
+            INT frameWidth;
+            INT frameHeight;
             PresentLayout(g_PresentDdraw.Aspect, g_PresentDdraw.Fit, PRESENT_LAYOUT_SCREEN, clientWidth, clientHeight, (INT)g_Video.Frame.Width,
                            (INT)g_Video.Frame.Height, &frameX, &frameY, &frameWidth, &frameHeight);   /* #325: what is drawn */
             lineCursor = LogPut(lineCursor, " dest=");  lineCursor = LogDecimal(lineCursor, (UINT)frameWidth);
@@ -2413,7 +2497,8 @@ static VOID HostFrameSize(INT *frameWidth, INT *frameHeight)
 
 static VOID HostPicture(INT scale, INT *pictureWidth, INT *pictureHeight)
 {
-    INT frameWidth, frameHeight;
+    INT frameWidth;
+    INT frameHeight;
 
     HostFrameSize(&frameWidth, &frameHeight);
     PresentWindowPicture((INT)g_Settings.Values[SET_ASPECT], frameWidth, frameHeight, scale, pictureWidth, pictureHeight);
@@ -2454,7 +2539,8 @@ static VOID HostWorkArea(RECT *workArea)
 static VOID HostWorkRoom(INT *roomWidth, INT *roomHeight)
 {
     RECT workArea;
-    INT extraWidth, extraHeight;
+    INT extraWidth;
+    INT extraHeight;
 
     HostWorkArea(&workArea);
     if (g_PresentDdraw.Window)
@@ -2474,7 +2560,10 @@ static VOID HostWorkRoom(INT *roomWidth, INT *roomHeight)
 /* Does the picture at this scale fit on the work area? */
 static INT WindowScaleFits(INT scale)
 {
-    INT pictureWidth, pictureHeight, roomWidth, roomHeight;
+    INT pictureWidth;
+    INT pictureHeight;
+    INT roomWidth;
+    INT roomHeight;
 
     HostPicture(scale, &pictureWidth, &pictureHeight);
     HostWorkRoom(&roomWidth, &roomHeight);
@@ -2561,8 +2650,20 @@ VOID MenuViewSync(HWND window)
  */
 static VOID HostApplyScale(HWND window, INT scale)
 {
-    INT pictureWidth, pictureHeight, roomWidth, roomHeight, extraWidth, extraHeight, windowWidth, windowHeight, left, top, index;
-    RECT windowRect, workArea, clientRect;
+    INT pictureWidth;
+    INT pictureHeight;
+    INT roomWidth;
+    INT roomHeight;
+    INT extraWidth;
+    INT extraHeight;
+    INT windowWidth;
+    INT windowHeight;
+    INT left;
+    INT top;
+    INT index;
+    RECT windowRect;
+    RECT workArea;
+    RECT clientRect;
 
     if (!window || g_PresentDdraw.IsFullscreen)
         return;                                           /* fullscreen owns the size */
@@ -2579,7 +2680,8 @@ static VOID HostApplyScale(HWND window, INT scale)
     g_FitDown = 0;
     if (pictureWidth > roomWidth || pictureHeight > roomHeight)
     {
-        INT fitX, fitY;
+        INT fitX;
+        INT fitY;
         PresentFitRatio(roomWidth, roomHeight, pictureWidth, pictureHeight, &fitX, &fitY, &pictureWidth, &pictureHeight);
         g_FitDown = 1;
     }
@@ -2647,9 +2749,11 @@ enum
  */
 static VOID HostFollowFrame(HWND window)
 {
-    static INT pendW, pendH;
+    static INT pendW;
+    static INT pendH;
     static DWORD pendT;
-    INT frameWidth, frameHeight;
+    INT frameWidth;
+    INT frameHeight;
 
     if (!window || g_PresentDdraw.IsFullscreen || IsZoomed(window) || IsIconic(window) || !g_PresentDdraw.IsSnapshotValid)
         return;
@@ -2887,7 +2991,8 @@ static LRESULT CALLBACK HostWindowProcedure(HWND window, UINT message, WPARAM wP
                  * provably never run (its counter read zero) dying identically to one
                  * whose had. Leave room.
                  */
-                CHAR keyLine[1024], *keyCursor = keyLine;
+                CHAR keyLine[1024];
+                CHAR *keyCursor = keyLine;
                 UINT index;
                 lastKeyDump = nowTicks;
                 keyCursor = LogPut(keyCursor, "KEYLAT msgq_ms[0,1,2,4,8,16,32,64+]=");
@@ -2952,7 +3057,8 @@ static LRESULT CALLBACK HostWindowProcedure(HWND window, UINT message, WPARAM wP
             DWORD nowTicks = GetTickCount();
             if (g_MouseI33SiteCount && (DWORD)(nowTicks - lastMouseDump) >= HOST_DUMP_INTERVAL_MS)
             {
-                CHAR mouseLine[768], *mouseCursor = mouseLine;
+                CHAR mouseLine[768];
+                CHAR *mouseCursor = mouseLine;
                 UINT index;
                 lastMouseDump = nowTicks;
                 mouseCursor = LogPut(mouseCursor, "MOUSEI33 ax:");
@@ -3038,7 +3144,8 @@ static LRESULT CALLBACK HostWindowProcedure(HWND window, UINT message, WPARAM wP
                 LogAppend(LOG_PATH, mouseLine, mouseCursor);
                 for (index = 0; index < g_MouseI33SiteCount && index < I33_SITEN; ++index)
                 {
-                    CHAR siteLine[256], *siteCursor = siteLine;
+                    CHAR siteLine[256];
+                    CHAR *siteCursor = siteLine;
                     siteCursor = LogPut(siteCursor, "MOUSEI33 site src=");  siteCursor = LogHexByte(siteCursor, g_MouseI33Site[index].Source);
                     siteCursor = LogPut(siteCursor, " lin=0x");   siteCursor = LogHex(siteCursor, g_MouseI33Site[index].Linear);
                     siteCursor = LogPut(siteCursor, " cs=0x");    siteCursor = LogHex(siteCursor, g_MouseI33Site[index].Cs);
@@ -3217,7 +3324,8 @@ static LRESULT CALLBACK HostWindowProcedure(HWND window, UINT message, WPARAM wP
          */
         if (g_Capture)
         {
-            static UINT capTick = 0, captureSequence = 0;
+            static UINT capTick = 0;
+            static UINT captureSequence = 0;
             static INT capFailed = 0;
             /* - 2 s IS FAR TOO SLOW TO CATCH A MODE SWITCH. Doom runs about ten
              * seconds and sets mode 13h in the last fraction of it, so a 2 s cadence
@@ -3290,7 +3398,8 @@ static LRESULT CALLBACK HostWindowProcedure(HWND window, UINT message, WPARAM wP
                 }
                 else if (!capFailed)
                 {
-                    CHAR errorLine[320], *errorCursor = errorLine;
+                    CHAR errorLine[320];
+                    CHAR *errorCursor = errorLine;
                     capFailed = 1;
                     errorCursor = LogPut(errorCursor, "CAPTURE: save_bmp FAILED for ");
                     errorCursor = LogPut(errorCursor, path);
@@ -3371,7 +3480,14 @@ static LRESULT CALLBACK HostWindowProcedure(HWND window, UINT message, WPARAM wP
         if (!g_PresentDdraw.IsFullscreen)
         {
             RECT *sizingRect = (RECT *)lParam;
-            INT numerator, denominator, extraWidth, extraHeight, viewWidth, viewHeight, sourceWidth, sourceHeight;
+            INT numerator;
+            INT denominator;
+            INT extraWidth;
+            INT extraHeight;
+            INT viewWidth;
+            INT viewHeight;
+            INT sourceWidth;
+            INT sourceHeight;
             HostFrameExtra(window, &extraWidth, &extraHeight);
             HostFrameSize(&sourceWidth, &sourceHeight);
             viewWidth = (sizingRect->right - sizingRect->left) - extraWidth;
@@ -3434,7 +3550,12 @@ static LRESULT CALLBACK HostWindowProcedure(HWND window, UINT message, WPARAM wP
         if (g_Window && !g_PresentDdraw.IsFullscreen)
         {
             MINMAXINFO *minMax = (MINMAXINFO *)lParam;
-            INT pictureWidth, pictureHeight, extraWidth, extraHeight, roomWidth, roomHeight;
+            INT pictureWidth;
+            INT pictureHeight;
+            INT extraWidth;
+            INT extraHeight;
+            INT roomWidth;
+            INT roomHeight;
             HostPicture(1, &pictureWidth, &pictureHeight);
             HostWorkRoom(&roomWidth, &roomHeight);
             if (pictureWidth > roomWidth || pictureHeight > roomHeight)
@@ -3515,7 +3636,8 @@ static LRESULT CALLBACK HostWindowProcedure(HWND window, UINT message, WPARAM wP
         if (LOWORD(wParam) >= IDM_RECENT_0 && LOWORD(wParam) < IDM_RECENT_0 + MRU_MAX)
         {
             CHAR list[MRU_MAX][MAX_PATH];
-            INT numerator = MruLoad(list), itemIndex = LOWORD(wParam) - IDM_RECENT_0;
+            INT numerator = MruLoad(list);
+            INT itemIndex = LOWORD(wParam) - IDM_RECENT_0;
             if (itemIndex < numerator)
                 OpenProgram(window, list[itemIndex]);
             return 0;
@@ -3597,7 +3719,8 @@ static LRESULT CALLBACK HostWindowProcedure(HWND window, UINT message, WPARAM wP
         case IDM_FILE_UNINSTALL:
         {
             CHAR message[2048];
-            INT want = (LOWORD(wParam) == IDM_FILE_INSTALL), isOk;
+            INT want = (LOWORD(wParam) == IDM_FILE_INSTALL);
+            INT isOk;
 #define HOST_INSTALL_CONFIRM_TEXT "Make NTVDMEX this machine's virtual DOS machine?\n\n" \
                       "Every MS-DOS and 16-bit Windows program will then start " \
                       "through NTVDMEX instead of Microsoft's ntvdm.exe.\n\n" \
@@ -3971,7 +4094,8 @@ static LRESULT CALLBACK HostWindowProcedure(HWND window, UINT message, WPARAM wP
                  * fast. Scaled by Sensitivity here, with the remainder carried in
                  * hundredths so a slow hand still moves the pointer.
                  */
-                static LONG remainderX, remainderY;
+                static LONG remainderX;
+                static LONG remainderY;
                 LONG scaledX = (LONG)rawInput.data.mouse.lLastX * g_MouseSensitivity + remainderX;
                 LONG scaledY = (LONG)rawInput.data.mouse.lLastY * g_MouseSensitivity + remainderY;
                 LONG newX = g_MouseX + scaledX / PERCENT;
@@ -4006,7 +4130,10 @@ static LRESULT CALLBACK HostWindowProcedure(HWND window, UINT message, WPARAM wP
     case WM_MBUTTONUP:
     {
         RECT clientRect;
-        INT clientWidth, clientHeight, frameWidth, frameHeight;
+        INT clientWidth;
+        INT clientHeight;
+        INT frameWidth;
+        INT frameHeight;
         LONG buttons = 0;
         if (message == WM_MOUSEMOVE)
             CursorIdleNoteMove(window);                                   /* #218 */
@@ -4016,7 +4143,10 @@ static LRESULT CALLBACK HostWindowProcedure(HWND window, UINT message, WPARAM wP
          */
         if (g_MarkMode)
         {
-            INT cellColumn, cellRow, clientX = (INT16)LOWORD(lParam), clientY = (INT16)HIWORD(lParam);
+            INT cellColumn;
+            INT cellRow;
+            INT clientX = (INT16)LOWORD(lParam);
+            INT clientY = (INT16)HIWORD(lParam);
             if (message == WM_RBUTTONDOWN)
             {
                 SelectionClear();
@@ -4338,7 +4468,8 @@ DWORD WINAPI UiThread(LPVOID argument)
      */
     if (GetFileAttributesA(DLGCHECK_FLAG) != INVALID_FILE_ATTRIBUTES)
     {
-        CHAR createLine[512], *createCursor = createLine;
+        CHAR createLine[512];
+        CHAR *createCursor = createLine;
         INT pageIndex;
         HINSTANCE moduleInstance = GetModuleHandleA(NULL);
         for (pageIndex = 0; pageIndex < NTVDMEX_PAGE_COUNT; ++pageIndex)

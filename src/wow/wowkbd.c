@@ -83,7 +83,9 @@ INT WowKeyboardCall(WOW32_FRAME *frame, PSTR note, INT noteCapacity)
         WORD  bufferSize = Wow32ArgWord(frame, WOWKBD_GETKEYNAMETEXT_ARG_COUNT);
         volatile BYTE *destination = Wow32ArgPointer(frame, WOWKBD_GETKEYNAMETEXT_ARG_BUFFER);
         CHAR keyName[WOWKBD_KEY_NAME_MAX];
-        INT noteLength = 0, nameLength = 0, index;
+        INT noteLength = 0;
+        INT nameLength = 0;
+        INT index;
         WowNotePut(note, noteCapacity, &noteLength, "GetKeyNameText(lParam=0x");
         WowNoteHex(note, noteCapacity, &noteLength, keyParameter, WOW_HEX_DWORD_DIGITS);
         WowNotePut(note, noteCapacity, &noteLength, ", cch=");
@@ -130,7 +132,8 @@ INT WowKeyboardCall(WOW32_FRAME *frame, PSTR note, INT noteCapacity)
         INT   isToOem = (frame->Id == WOWKBD_ANSITOOEM);
         volatile BYTE *destination = Wow32ArgPointer(frame, WOWKBD_CONVERT_ARG_DESTINATION);
         volatile BYTE *source = Wow32ArgPointer(frame, WOWKBD_CONVERT_ARG_SOURCE);
-        INT noteLength = 0, isConverted;
+        INT noteLength = 0;
+        INT isConverted;
         WowNotePut(note, noteCapacity, &noteLength, isToOem ? "AnsiToOem " : "OemToAnsi ");
         if (!source || !destination)
         {

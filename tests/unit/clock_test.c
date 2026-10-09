@@ -57,7 +57,8 @@ DOS_CLOCK_STATE g_DosClock;
 #define CLOCK_TEST_TICKS_5_SECONDS      91          /* ~5 s of ticks */
 #define CLOCK_TEST_TICKS_10_SECONDS     182         /* ~10 s of ticks */
 
-static INT g_Checks, g_Failures;
+static INT g_Checks;
+static INT g_Failures;
 
 static VOID ClockTestExpect(PCSTR description, INT64 actual, INT64 expected)
 {
@@ -97,7 +98,8 @@ static VOID ClockTestDayOfWeek(
     UINT day,
     UINT expectedDayOfWeek)
 {
-    DOS_CLOCK_TIME time = ClockTestMake(year, month, day, 0, 0, 0, 0), unpacked;
+    DOS_CLOCK_TIME time = ClockTestMake(year, month, day, 0, 0, 0, 0);
+    DOS_CLOCK_TIME unpacked;
 
     DosClockUnpack(DosClockPack(&time), &unpacked);
     ClockTestExpect(description, unpacked.DayOfWeek, expectedDayOfWeek);
@@ -146,13 +148,18 @@ INT main(VOID)
 
     /* pack/unpack round trip over every day 1980..2099: */
     {
-        UINT year, month, day, mismatches = 0, dayCount = 0;
+        UINT year;
+        UINT month;
+        UINT day;
+        UINT mismatches = 0;
+        UINT dayCount = 0;
         INT64 previous = 0;
         for (year = CLOCK_TEST_FIRST_YEAR; year <= CLOCK_TEST_LAST_YEAR; ++year)
             for (month = DOS_CLOCK_JANUARY; month <= DOS_CLOCK_DECEMBER; ++month)
                 for (day = DOS_CLOCK_FIRST_DAY; day <= DosClockDaysInMonth(year, month); ++day)
                 {
-                    DOS_CLOCK_TIME time = ClockTestMake(year, month, day, 13, 7, 41, 59), unpacked;
+                    DOS_CLOCK_TIME time = ClockTestMake(year, month, day, 13, 7, 41, 59);
+                    DOS_CLOCK_TIME unpacked;
                     INT64 packed = DosClockPack(&time);
                     DosClockUnpack(packed, &unpacked);
                     if (unpacked.Year != year || unpacked.Month != month || unpacked.Day != day
@@ -170,7 +177,8 @@ INT main(VOID)
 
     /* the offset: setting date/time moves the GUEST reading only: */
     {
-        DOS_CLOCK_TIME hostNow = ClockTestMake(2026, 10, 2, 9, 15, 30, 25), guestNow;
+        DOS_CLOCK_TIME hostNow = ClockTestMake(2026, 10, 2, 9, 15, 30, 25);
+        DOS_CLOCK_TIME guestNow;
         INT64 offset = 0;
         DosClockApplyOffset(&hostNow, offset, &guestNow);
         ClockTestExpect("offset 0 reads the host (hour)", guestNow.Hour, 9);
@@ -243,7 +251,8 @@ INT main(VOID)
 
     /* #262 case B: DOS's clock follows a count the BIOS did not write: */
     {
-        DOS_CLOCK_TIME hostNow = ClockTestMake(2026, 10, 2, 9, 15, 30, 25), guestNow;
+        DOS_CLOCK_TIME hostNow = ClockTestMake(2026, 10, 2, 9, 15, 30, 25);
+        DOS_CLOCK_TIME guestNow;
         INT64 offset = 0;
         /* p_tick2c B: 11:30:30 stored (000B:8277), read at once */
         DosClockFollowTicks(&hostNow, &offset, CLOCK_TEST_TICKS_11_30_30, 0, 0);

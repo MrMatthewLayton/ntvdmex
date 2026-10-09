@@ -41,9 +41,12 @@ VOID I33GraphicsCursorRow(
     }
     for (index = 0; index < I33_GC_CGA_PIXELS; ++index)
     {
-        INT column = left + index, colour;
+        INT column = left + index;
+        INT colour;
         UINT shift = (UINT)(I33_GC_CGA_LEFT_SHIFT - I33_GC_CGA_BITS * index);
-        UINT screenBits = (screenMask >> shift) & I33_GC_CGA_MASK, cursorBits = (cursorMask >> shift) & I33_GC_CGA_MASK, valueBits = 0;
+        UINT screenBits = (screenMask >> shift) & I33_GC_CGA_MASK;
+        UINT cursorBits = (cursorMask >> shift) & I33_GC_CGA_MASK;
+        UINT valueBits = 0;
         if (column < 0 || column >= width)
             continue;
         for (colour = 0; colour < I33_GC_CGA_COLOURS; ++colour) if (colourMap[colour] == row[column])
@@ -90,7 +93,8 @@ static const CHAR g_I33AccelerationDefaultNames[I33_ACC_N][I33_ACC_NAMELEN + 1] 
 
 VOID I33AccelerationDefaultNames(BYTE *names)
 {
-    INT profile, index;
+    INT profile;
+    INT index;
 
     for (profile = 0; profile < I33_ACC_N; ++profile)
         for (index = 0; index < I33_ACC_NAMELEN; ++index)
@@ -99,7 +103,8 @@ VOID I33AccelerationDefaultNames(BYTE *names)
 
 VOID I33AccelerationDefaults(BYTE *acceleration)
 {
-    INT profile, index;
+    INT profile;
+    INT index;
 
     for (profile = 0; profile < I33_ACC_N; ++profile)
     {
@@ -120,7 +125,8 @@ UINT I33SettingsBlock(
     const BYTE *acceleration)
 {
     BYTE block[I33_SET_LEN];
-    UINT count = capacity < I33_SET_LEN ? capacity : I33_SET_LEN, index;
+    UINT count = capacity < I33_SET_LEN ? capacity : I33_SET_LEN;
+    UINT index;
 
     for (index = 0; index < I33_SET_HDR; ++index)
         block[index] = 0;
@@ -146,7 +152,8 @@ UINT I33ShiftBits(BYTE keyboardFlags)
 
 INT I33AlternateSet(I33_ALTERNATE *alternates, WORD mask, WORD segment, UINT32 offset)
 {
-    INT index, freeIndex = -1;
+    INT index;
+    INT freeIndex = -1;
     UINT shifts = mask & I33_ALT_SHIFTS;
 
     if (!shifts)

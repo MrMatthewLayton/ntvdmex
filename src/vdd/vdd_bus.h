@@ -56,14 +56,16 @@
 
 typedef struct _VDD_PORT_ENTRY
 {
-    WORD First, Last;
+    WORD First;
+    WORD Last;
     PVDD_PORT_IN_ROUTINE In;
     PVDD_PORT_OUT_ROUTINE Out;
     PVOID Context;
 } VDD_PORT_ENTRY, *PVDD_PORT_ENTRY;
 typedef struct _VDD_MEMORY_ENTRY
 {
-    UINT32 Base, End;
+    UINT32 Base;
+    UINT32 End;
     PVDD_MEMORY_READ_ROUTINE Read;
     PVDD_MEMORY_WRITE_ROUTINE Write;
     PVOID Context;

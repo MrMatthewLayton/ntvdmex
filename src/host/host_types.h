@@ -629,7 +629,10 @@ enum
 #define MS_CB_BOP       0x35
 typedef struct
 {
-    LONG Bits, Buttons, X, Y;
+    LONG Bits;
+    LONG Buttons;
+    LONG X;
+    LONG Y;
 } MOUSE_EVENT_ENTRY;
 /* WE CANNOT HAND A WIN16 LAUNCH BACK. MEASURED, THREE WAYS:
  * This function used to try. It does not any more, because relaunching stock
@@ -902,7 +905,14 @@ enum
 #include "../shim/shim_api.h"   /* defines only: the host/shim contract (SHIM_API_VERSION, SHIM_GLOBAL_*) */
 typedef struct
 {
-    PVOID InByte, InWord, InStringByte, InStringWord, OutByte, OutWord, OutStringByte, OutStringWord;
+    PVOID InByte;
+    PVOID InWord;
+    PVOID InStringByte;
+    PVOID InStringWord;
+    PVOID OutByte;
+    PVOID OutWord;
+    PVOID OutStringByte;
+    PVOID OutStringWord;
 } ISV_IO_HANDLERS;
 #define ISV_MAX_HOOKS   16
 
@@ -919,7 +929,9 @@ enum
  */
 typedef struct _SKIP_IF_SITE
 {
-    WORD Cs, Ip, Stub;
+    WORD Cs;
+    WORD Ip;
+    WORD Stub;
     DWORD Count;
 } SKIP_IF_SITE, *PSKIP_IF_SITE;
 typedef const SKIP_IF_SITE *PCSKIP_IF_SITE;
@@ -938,7 +950,8 @@ typedef struct _PM_INTERRUPT_VECTOR
 typedef const PM_INTERRUPT_VECTOR *PCPM_INTERRUPT_VECTOR;
 typedef struct _DPMI_MEMORY_BLOCK
 {
-    DWORD Base, Size;
+    DWORD Base;
+    DWORD Size;
     BYTE Code;
 } DPMI_MEMORY_BLOCK, *PDPMI_MEMORY_BLOCK;
 typedef const DPMI_MEMORY_BLOCK *PCDPMI_MEMORY_BLOCK;
@@ -960,15 +973,19 @@ typedef struct _DPMI_CALLBACK
 typedef const DPMI_CALLBACK *PCDPMI_CALLBACK;
 typedef struct _IFV_TRACE_ENTRY
 {
-    BYTE Irq, Path, State;
-    WORD Cs, Ip;
+    BYTE Irq;
+    BYTE Path;
+    BYTE State;
+    WORD Cs;
+    WORD Ip;
     DWORD Flags;
 } IFV_TRACE_ENTRY, *PIFV_TRACE_ENTRY;
 typedef const IFV_TRACE_ENTRY *PCIFV_TRACE_ENTRY;
 typedef struct _PM_INJECT_SITE
 {
     WORD Cs;
-    DWORD Eip, Count;
+    DWORD Eip;
+    DWORD Count;
 } PM_INJECT_SITE, *PPM_INJECT_SITE;
 typedef const PM_INJECT_SITE *PCPM_INJECT_SITE;
 typedef struct _I33_FUNCTION_COUNT
@@ -979,22 +996,28 @@ typedef struct _I33_FUNCTION_COUNT
 typedef const I33_FUNCTION_COUNT *PCI33_FUNCTION_COUNT;
 typedef struct _I33_CALL_SITE
 {
-    DWORD Linear, Eip, Count;
-    WORD Cs, Ax;
+    DWORD Linear;
+    DWORD Eip;
+    DWORD Count;
+    WORD Cs;
+    WORD Ax;
     BYTE Source;
     BYTE Context[12];
 } I33_CALL_SITE, *PI33_CALL_SITE;
 typedef const I33_CALL_SITE *PCI33_CALL_SITE;
 typedef struct _RETRACE_SITE
 {
-    DWORD Cs, Ip, Count;
+    DWORD Cs;
+    DWORD Ip;
+    DWORD Count;
     BYTE Bytes[10];
 } RETRACE_SITE, *PRETRACE_SITE;
 typedef const RETRACE_SITE *PCRETRACE_SITE;
 typedef struct _ISV_IO_HOOK
 {
     HANDLE VddHandle;
-    WORD FirstPort, LastPort;
+    WORD FirstPort;
+    WORD LastPort;
     ISV_IO_HANDLERS Handlers;
     INT IsLive;
 } ISV_IO_HOOK, *PISV_IO_HOOK;
@@ -1002,8 +1025,10 @@ typedef const ISV_IO_HOOK *PCISV_IO_HOOK;
 /* A descriptor in the DPMI host's LDT shadow (g_Ldt). */
 typedef struct _DPMI_DESCRIPTOR
 {
-    DWORD Base, Limit;
-    BYTE Access, Flags;
+    DWORD Base;
+    DWORD Limit;
+    BYTE Access;
+    BYTE Flags;
 } DPMI_DESCRIPTOR, *PDPMI_DESCRIPTOR;
 /* PM IRQ injection: why the cooperative path did or did not deliver (g_PmCooperativeGate's columns). */
 enum
@@ -1014,7 +1039,9 @@ enum
 #define P12_SITE_MAX    24
 typedef struct _P12_SITE
 {
-    DWORD Cs, Ip, Count;
+    DWORD Cs;
+    DWORD Ip;
+    DWORD Count;
     BYTE Bytes[8];
 } P12_SITE, *PP12_SITE;
 #endif

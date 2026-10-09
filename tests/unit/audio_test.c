@@ -19,7 +19,8 @@
 #include "vdd_audio.h"
 #include "vdd_dma.h"
 
-static INT g_Total = 0, g_Failures = 0;
+static INT g_Total = 0;
+static INT g_Failures = 0;
 #define CHECK(condition,message) do{ g_Total++; if(condition){printf("  PASS  %s\n",(message));} \
     else{printf("  FAIL  %s\n",(message)); g_Failures++;} }while(0)
 
@@ -50,7 +51,9 @@ static INT16 g_Samples[44100];
 
 static double AudioTestMeasureHz(const INT16 *samples, INT count, INT rate)
 {
-    INT index, crossings = 0, wasPositive = 0;
+    INT index;
+    INT crossings = 0;
+    INT wasPositive = 0;
 
     for (index = 0; index < count; ++index)
     {
@@ -134,8 +137,10 @@ INT main(VOID)
      * resamples to 44100, so a pitch error here means the resampler is wrong.
      */
     {
-        INT modulator = VddOplOperatorIndex(0,0), carrier = VddOplOperatorIndex(0,1);
-        BYTE modulatorRegister = (BYTE)(modulator + 2*(modulator/6)), carrierRegister = (BYTE)(carrier + 2*(carrier/6));
+        INT modulator = VddOplOperatorIndex(0,0);
+        INT carrier = VddOplOperatorIndex(0,1);
+        BYTE modulatorRegister = (BYTE)(modulator + 2*(modulator/6));
+        BYTE carrierRegister = (BYTE)(carrier + 2*(carrier/6));
         double frequency;
         VddOplWriteRegister(&g_Opl, (BYTE)(0x20+modulatorRegister), 0x21);
         VddOplWriteRegister(&g_Opl, (BYTE)(0x40+modulatorRegister), 0x3F);   /* modulator silent */
@@ -208,7 +213,8 @@ INT main(VOID)
      * that overload clamps rather than wrapping (which would sound like a bang).
      */
     {
-        INT clipped = 0, voice;
+        INT clipped = 0;
+        INT voice;
         VddOplWriteRegister(&g_Opl, 0xB0, 0x00);                 /* all notes off */
         for (voice = 0; voice < 9; ++voice)
             VddOplWriteRegister(&g_Opl, (BYTE)(0xB0+voice), 0x00);
@@ -266,7 +272,10 @@ INT main(VOID)
      * advanced by the arithmetic amount and no more.
      */
     {
-        UINT32 before, after, expected, chunks = 8;
+        UINT32 before;
+        UINT32 after;
+        UINT32 expected;
+        UINT32 chunks = 8;
         for (index = 0; index < 4096; ++index)
             g_GuestMemory[0x50000 + index] = 0x80;
         AudioTestDmaProgram(0x50000, 4096, 1);                       /* auto-init ring */
@@ -304,7 +313,8 @@ INT main(VOID)
         NTVDD_DEVICE speakerDevice;
         INT16 speakerSamples[4410];
         double frequency;
-        long full, half;
+        long full;
+        long half;
         UINT32 value;
 
         memset(&pit, 0, sizeof pit);
@@ -506,7 +516,8 @@ INT main(VOID)
     static AUDIO_STATE opl3Mixer;
         static INT16 opl3Samples[2 * 8192];
         UINT32 hash = 2166136261u;
-        INT channel, round;
+        INT channel;
+        INT round;
         #define M3_EAT(frames) do { INT frameCount = (frames) * 44100 / 49716, sampleIndex;                        \
             VddAudioMixStereo(&opl3Mixer, opl3Samples, (UINT32)frameCount);                                 \
             for (sampleIndex = 0; sampleIndex < 2 * frameCount; ++sampleIndex) {                                         \
@@ -520,8 +531,10 @@ INT main(VOID)
         M3_W(0xBD, 0xC0);
         for (channel = 0; channel < 9; ++channel)
         {
-            INT modulatorIndex = VddOplOperatorIndex(channel, 0), carrierIndex = VddOplOperatorIndex(channel, 1);
-            UINT modulatorOffset = (UINT)(modulatorIndex + 2 * (modulatorIndex / 6)), carrierOffset = (UINT)(carrierIndex + 2 * (carrierIndex / 6));
+            INT modulatorIndex = VddOplOperatorIndex(channel, 0);
+            INT carrierIndex = VddOplOperatorIndex(channel, 1);
+            UINT modulatorOffset = (UINT)(modulatorIndex + 2 * (modulatorIndex / 6));
+            UINT carrierOffset = (UINT)(carrierIndex + 2 * (carrierIndex / 6));
             M3_W(0x20 + modulatorOffset, 0x21 | ((channel & 1) << 7) | ((channel & 2) << 5) | (channel & 4 ? 0x10 : 0) | (channel % 5));
             M3_W(0x20 + carrierOffset, 0x21 | ((channel & 2) << 6));
             M3_W(0x40 + modulatorOffset, (UINT)(0x10 + channel * 3) | ((channel % 4) << 6));

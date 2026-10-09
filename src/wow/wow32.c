@@ -643,7 +643,8 @@ INT Wow32Call(PWOW32_FRAME frame, PWOW32_DOSDATA dosData)
     {
         volatile BYTE *destination = Wow32ArgPointer(frame, WOW32_GETSHORTPATHNAME_ARG_BUFFER);
         WORD capacity = Wow32ArgWord(frame, WOW32_GETSHORTPATHNAME_ARG_CAPACITY);
-        CHAR source[MAX_PATH], output[MAX_PATH];
+        CHAR source[MAX_PATH];
+        CHAR output[MAX_PATH];
         DWORD number;
         if (!destination || !capacity || !Wow32ArgString(frame, WOW32_GETSHORTPATHNAME_ARG_PATH, source, sizeof source) || !source[0])
         {
@@ -733,7 +734,11 @@ INT Wow32Call(PWOW32_FRAME frame, PWOW32_DOSDATA dosData)
      */
     case WOW32_GETPRIVATEPROFILESTRING:
     {
-        CHAR application[WOW32_PROFILE_NAME_MAX], key[WOW32_PROFILE_NAME_MAX], defaultValue[MAX_PATH], fileName[MAX_PATH], buffer[WOW32_PROFILE_VALUE_MAX];
+        CHAR application[WOW32_PROFILE_NAME_MAX];
+        CHAR key[WOW32_PROFILE_NAME_MAX];
+        CHAR defaultValue[MAX_PATH];
+        CHAR fileName[MAX_PATH];
+        CHAR buffer[WOW32_PROFILE_VALUE_MAX];
         volatile BYTE *destination = Wow32ArgPointer(frame, WOW32_GETPRIVATEPROFILESTRING_ARG_BUFFER);
         WORD   number   = Wow32ArgWord(frame, WOW32_GETPRIVATEPROFILESTRING_ARG_SIZE);
         INT    hasApplication  = Wow32ArgString(frame, WOW32_GETPRIVATEPROFILESTRING_ARG_APP, application,  sizeof application);
@@ -771,7 +776,9 @@ INT Wow32Call(PWOW32_FRAME frame, PWOW32_DOSDATA dosData)
      */
     case WOW32_GETPRIVATEPROFILEINT:
     {
-        CHAR application[WOW32_PROFILE_NAME_MAX], key[WOW32_PROFILE_NAME_MAX], fileName[MAX_PATH];
+        CHAR application[WOW32_PROFILE_NAME_MAX];
+        CHAR key[WOW32_PROFILE_NAME_MAX];
+        CHAR fileName[MAX_PATH];
         INT  hasApplication = Wow32ArgString(frame, WOW32_GETPRIVATEPROFILEINT_ARG_APP, application, sizeof application);
         INT  hasKey = Wow32ArgString(frame, WOW32_GETPRIVATEPROFILEINT_ARG_KEY, key, sizeof key);
         WORD defaultValue = Wow32ArgWord(frame, WOW32_GETPRIVATEPROFILEINT_ARG_DEFAULT);
@@ -877,8 +884,11 @@ INT Wow32Call(PWOW32_FRAME frame, PWOW32_DOSDATA dosData)
      */
     case WOW32_WOWMSGBOX:
     {
-        CHAR captionText[WOW32_MSGBOX_TEXT_MAX], bodyText[WOW32_MSGBOX_TEXT_MAX], logLine[WOW32_MSGBOX_LOG_MAX];
-        PCSTR body, caption;
+        CHAR captionText[WOW32_MSGBOX_TEXT_MAX];
+        CHAR bodyText[WOW32_MSGBOX_TEXT_MAX];
+        CHAR logLine[WOW32_MSGBOX_LOG_MAX];
+        PCSTR body;
+        PCSTR caption;
         WORD type = Wow32ArgWord(frame, WOW32_WOWMSGBOX_ARG_TYPE);
         INT  number = 0;
         if (!Wow32ArgString(frame, WOW32_WOWMSGBOX_ARG_CAPTION, captionText, sizeof captionText))
@@ -944,7 +954,8 @@ INT Wow32Call(PWOW32_FRAME frame, PWOW32_DOSDATA dosData)
 
     case WOW32_GETPROFILEINT:
     {
-        CHAR application[WOW32_PROFILE_NAME_MAX], key[WOW32_PROFILE_NAME_MAX];
+        CHAR application[WOW32_PROFILE_NAME_MAX];
+        CHAR key[WOW32_PROFILE_NAME_MAX];
         WORD defaultValue;
         if (!Wow32ArgString(frame, WOW32_GETPROFILEINT_ARG_APP, application, sizeof application))
             application[0] = 0;
@@ -991,7 +1002,10 @@ INT Wow32Call(PWOW32_FRAME frame, PWOW32_DOSDATA dosData)
      */
     case WOW32_GETPROFILESTRING:
     {
-        CHAR application[WOW32_PROFILE_NAME_MAX], key[WOW32_PROFILE_NAME_MAX], defaultValue[MAX_PATH], buffer[WOW32_PROFILE_VALUE_MAX];
+        CHAR application[WOW32_PROFILE_NAME_MAX];
+        CHAR key[WOW32_PROFILE_NAME_MAX];
+        CHAR defaultValue[MAX_PATH];
+        CHAR buffer[WOW32_PROFILE_VALUE_MAX];
         volatile BYTE *destination = Wow32ArgPointer(frame, WOW32_GETPROFILESTRING_ARG_BUFFER);
         WORD  number = Wow32ArgWord(frame, WOW32_GETPROFILESTRING_ARG_SIZE);
         DWORD returned;
@@ -1040,7 +1054,9 @@ INT Wow32Call(PWOW32_FRAME frame, PWOW32_DOSDATA dosData)
      */
     case WOW32_WRITEPROFILESTRING:
     {
-        CHAR application[WOW32_PROFILE_WRITE_NAME_MAX], key[WOW32_PROFILE_WRITE_NAME_MAX], value[WOW32_PROFILE_WRITE_VALUE_MAX];
+        CHAR application[WOW32_PROFILE_WRITE_NAME_MAX];
+        CHAR key[WOW32_PROFILE_WRITE_NAME_MAX];
+        CHAR value[WOW32_PROFILE_WRITE_VALUE_MAX];
         INT  hasApplication = Wow32ArgString(frame, WOW32_WRITEPROFILESTRING_ARG_APP, application, sizeof application);
         INT  hasKey = Wow32ArgString(frame, WOW32_WRITEPROFILESTRING_ARG_KEY, key, sizeof key);
         INT  hasValue = Wow32ArgString(frame, WOW32_WRITEPROFILESTRING_ARG_VALUE, value, sizeof value);
@@ -1052,7 +1068,10 @@ INT Wow32Call(PWOW32_FRAME frame, PWOW32_DOSDATA dosData)
 
     case WOW32_WRITEPRIVATEPROFILESTRING:
     {
-        CHAR application[WOW32_PROFILE_WRITE_NAME_MAX], key[WOW32_PROFILE_WRITE_NAME_MAX], value[WOW32_PROFILE_WRITE_VALUE_MAX], fileName[MAX_PATH];
+        CHAR application[WOW32_PROFILE_WRITE_NAME_MAX];
+        CHAR key[WOW32_PROFILE_WRITE_NAME_MAX];
+        CHAR value[WOW32_PROFILE_WRITE_VALUE_MAX];
+        CHAR fileName[MAX_PATH];
         INT  hasApplication = Wow32ArgString(frame, WOW32_WRITEPRIVATEPROFILESTRING_ARG_APP, application, sizeof application);
         INT  hasKey = Wow32ArgString(frame, WOW32_WRITEPRIVATEPROFILESTRING_ARG_KEY,  key, sizeof key);
         INT  hasValue = Wow32ArgString(frame, WOW32_WRITEPRIVATEPROFILESTRING_ARG_VALUE,  value, sizeof value);

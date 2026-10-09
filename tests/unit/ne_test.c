@@ -28,7 +28,9 @@
 #include <stdint.h>
 #include "../../src/wow/ne.h"
 
-static INT g_Passes, g_Failures, g_Skips;
+static INT g_Passes;
+static INT g_Failures;
+static INT g_Skips;
 static VOID NeTestCheck(INT condition, PCSTR description)
 {
     if (condition)
@@ -94,7 +96,8 @@ static VOID NeTestLibraryWrite32(UINT32 offset, UINT32 value)
 
 static UINT32 NeTestLibraryString(UINT32 offset, PCSTR text, WORD ordinal)
 {
-    UINT32 length = (UINT32)strlen(text), index;
+    UINT32 length = (UINT32)strlen(text);
+    UINT32 index;
 
     g_LibraryImage[offset] = (BYTE)length;
     for (index = 0; index < length; ++index)
@@ -105,7 +108,9 @@ static UINT32 NeTestLibraryString(UINT32 offset, PCSTR text, WORD ordinal)
 
 static VOID NeTestBuildLibrary(VOID)
 {
-    UINT32 segment1Offset = 0x200, entryOffset, offset;
+    UINT32 segment1Offset = 0x200;
+    UINT32 entryOffset;
+    UINT32 offset;
 
     memset(g_LibraryImage, 0, sizeof g_LibraryImage);
     g_LibraryImage[0] = 'M';
@@ -177,7 +182,9 @@ static VOID NeTestBuildLibrary(VOID)
 
 static VOID NeTestBuild(INT imports)
 {
-    UINT32 segment1Offset = 0x200, segment2Offset = 0x400, relocations;
+    UINT32 segment1Offset = 0x200;
+    UINT32 segment2Offset = 0x400;
+    UINT32 relocations;
 
     memset(g_Image, 0, sizeof g_Image);
     g_Image[0] = 'M';
@@ -372,7 +379,9 @@ INT main(VOID)
     {   NE_MODULE library, application;
     NE_REGISTRY registry;
     BYTE applicationSegments[2][0x200];
-        WORD ordinal = 0, segmentNumber = 0, segmentOffset = 0;
+        WORD ordinal = 0;
+        WORD segmentNumber = 0;
+        WORD segmentOffset = 0;
         CHAR name[NE_MAX_NAME];
 
         NeTestBuildLibrary();
@@ -500,8 +509,11 @@ INT main(VOID)
     {
         static const struct
         {
-            PCSTR Path, OwnName;
-            INT SegmentCount, MovableCount, ModuleCount;
+            PCSTR Path;
+            PCSTR OwnName;
+            INT SegmentCount;
+            INT MovableCount;
+            INT ModuleCount;
             PCSTR MissingModule;
         } realModules[] = {
             { "guest/ne/krnl386.exe",   "KERNEL",    4, 164, 0, NULL },

@@ -51,7 +51,8 @@ enum
 /* Case-insensitive "does haystack contain needle" (needle is upper-case ASCII). */
 static inline INT MidiRouteHas(_In_opt_ PCSTR haystack, _In_opt_ PCSTR needle)
 {
-    INT start, offset;
+    INT start;
+    INT offset;
 
     if (!haystack || !needle || !needle[0])
         return 0;
@@ -84,7 +85,8 @@ static inline INT MidiRoutePick(
     static const PCSTR soundFontNames[]  = { "SOUNDFONT", "BASSMIDI", "VIRTUALMIDISYNTH",
                                         "FLUID", "SF2", 0 };
     const PCSTR *wanted;
-    INT deviceIndex, nameIndex;
+    INT deviceIndex;
+    INT nameIndex;
     if (choice == MIDI_ROUTE_MT32)
         wanted = mt32Names;
     else if (choice == MIDI_ROUTE_SF2)

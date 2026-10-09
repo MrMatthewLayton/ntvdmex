@@ -84,7 +84,8 @@
  * Runtime override so both can be heard without a rebuild; the default is
  * unchanged.
  */
-extern BYTE g_SbVersionMajor, g_SbVersionMinor;
+extern BYTE g_SbVersionMajor;
+extern BYTE g_SbVersionMinor;
 extern INT g_SbGate;    /* ACK gate, opt-in: deviates from the hardware. See vdd_sb.c */
 
 #define SB_DEVICE_NAME          "sb16"
@@ -115,8 +116,12 @@ typedef struct _SB_BLOCK_RECORD
     UINT32 BlockLength;        /* what the DSP was told a block is */
     UINT32 Physical;           /* 8237 current physical address, post-fetch */
     WORD CurrentCount;         /* 8237 count remaining (reloaded already on TC) */
-    WORD BaseAddress, BaseCount;
-    BYTE  Page, Mode, Ended, Reloaded;
+    WORD BaseAddress;
+    WORD BaseCount;
+    BYTE Page;
+    BYTE Mode;
+    BYTE Ended;
+    BYTE Reloaded;
 } SB_BLOCK_RECORD, *PSB_BLOCK_RECORD;
 
 typedef struct _SB_STATE
@@ -126,15 +131,19 @@ typedef struct _SB_STATE
     POPL_STATE Opl;            /* FM mirrored at 2x0-2x3 and 2x8-2x9 */
 
     WORD BasePort;             /* 0x220 by default */
-    BYTE  Irq, Dma8, Dma16;
+    BYTE Irq;
+    BYTE Dma8;
+    BYTE Dma16;
     BYTE  Model;                /* #231: SB_MODEL_* -- which card this DSP is */
 
     /* DSP command state machine */
     BYTE  Command;             /* command awaiting arguments (0 = none) */
     BYTE  Arguments[SB_ARGUMENTS_MAX];
-    BYTE  ArgumentCount, ArgumentsWanted;
+    BYTE ArgumentCount;
+    BYTE ArgumentsWanted;
     BYTE  OutputQueue[SB_OUTPUT_QUEUE_MAX];
-    BYTE  OutputQueueHead, OutputQueueLength;
+    BYTE OutputQueueHead;
+    BYTE OutputQueueLength;
     BYTE  IsResetAsserted;     /* 1 = reset asserted, waiting for the 0 write */
     BYTE  IsSpeakerOn;         /* DSP speaker on/off (does not gate DMA) */
 
@@ -172,7 +181,9 @@ typedef struct _SB_STATE
     BYTE  GateMode;            /* 0=off 1=ACK gate (VDMSound) 2=POLL gate */
     UINT32 GateMark;        /* Dma->CountReads as of the last block IRQ */
     INT16  LastSample;         /* held while the gate is closed */
-    INT16  LastLeft, LastRight;   /* #189: the same, as the pair the stereo render holds */
+    /* #189: the same, as the pair the stereo render holds */
+    INT16 LastLeft;
+    INT16 LastRight;
     UINT32 GateWait;           /* samples the gate has held THIS time */
     UINT32 GateStalled;        /* total samples held */
     UINT32 GateForced;         /* times the safety yielded -- must be ~0 */
@@ -200,7 +211,8 @@ typedef struct _SB_STATE
      * host writes it out at wind-down.
      */
     BYTE *CaptureBuffer;
-    UINT32 CaptureLength, CaptureCapacity;
+    UINT32 CaptureLength;
+    UINT32 CaptureCapacity;
 
     /* THE BLOCK-BOUNDARY LEDGER:
      * The click is not a rate fault (41.5 s of audio from a 45 s run) nor a framing
@@ -248,7 +260,9 @@ typedef struct _SB_STATE
     BYTE  LapBuffer[SB_LAP_MAX];    /* what we read at each ring offset last lap */
     UINT32 LapLength;               /* ring size currently being tracked (0 = off) */
     UINT32 LapSeen;                 /* bytes fetched since the ring was programmed */
-    UINT32 BlockSame, BlockBytes;   /* accumulators for the block in progress */
+    /* accumulators for the block in progress */
+    UINT32 BlockSame;
+    UINT32 BlockBytes;
     UINT32 BlocksChecked;           /* blocks that had a full previous lap to compare */
     UINT32 BlocksReplayed;          /* ...of which >=90% identical: DMX never refilled */
     /* [CAUTION]: ...AND THAT LAST COMMENT IS A CONCLUSION, NOT A MEASUREMENT. "identical to one
@@ -282,8 +296,12 @@ typedef struct _SB_STATE
     UINT32 FlatRun;                 /* consecutive FLAT blocks, in progress */
     UINT32 FlatRuns[SB_RUN_BUCKETS];             /* ...run lengths, same buckets. runs of 1 = the
                                        audible DROPOUTS; long runs = real silence.   */
-    UINT32 BlockMin, BlockMax;      /* range accumulators for the block in progress */
-    UINT32 LapSame, LapTotal;       /* byte-level rate, the live form of the 46% */
+    /* range accumulators for the block in progress */
+    UINT32 BlockMin;
+    UINT32 BlockMax;
+    /* byte-level rate, the live form of the 46% */
+    UINT32 LapSame;
+    UINT32 LapTotal;
     UINT32 LapTooBig;               /* rings larger than SB_LAP_MAX: check skipped */
     UINT32 LapOffset;               /* ring offset of the fetch in progress */
 } SB_STATE, *PSB_STATE;

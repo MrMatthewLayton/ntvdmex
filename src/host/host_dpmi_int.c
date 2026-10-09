@@ -261,7 +261,8 @@ DWORD g_WowSchedSwitches = 0;
 /* s92 (#306): the task launched last and not yet run -- see "(F) LAUNCH-FIRST" -- and
  * WOWEXEC (the first task resumed at (C)), whose launches keep the measured order.
  */
-WORD g_WowSchedLaunchChild, g_WowSchedShell;
+WORD g_WowSchedLaunchChild;
+WORD g_WowSchedShell;
 
 /* wowquiet.txt -- SILENCE THE TRACE, TO MEASURE WHAT IT COSTS (Importance = 3):
  * Session 51, from a user report that both Win16 games feel "laggy, like an
@@ -298,7 +299,8 @@ WORD g_WowSchedLaunchChild, g_WowSchedShell;
 /* BOPs serviced, and when the last WOWPERF line was printed. See the note at the
  * emission site.
  */
-static DWORD g_WowBops = 0, g_WowPerfMs = 0;
+static DWORD g_WowBops = 0;
+static DWORD g_WowPerfMs = 0;
 
 /* THE DESCRIPTOR-TABLE SHADOW:
  * krnl386 wants a writable window onto the descriptor table and uses it as its own
@@ -331,7 +333,9 @@ static DWORD g_WowBops = 0, g_WowPerfMs = 0;
  * total could not tell them apart.
  */
 static WOW32_DOSDATA g_WowDosData;
-DWORD g_Wow32Serviced = 0, g_Wow32Unimplemented = 0, g_Wow32Declined = 0;
+DWORD g_Wow32Serviced = 0;
+DWORD g_Wow32Unimplemented = 0;
+DWORD g_Wow32Declined = 0;
 
 DWORD g_WowSyncWrites = 0;      /* how many entries krnl386 has changed */
 
@@ -387,16 +391,28 @@ static PSTR DpmiInt31CallRealModeFar(
     else
         DpmiRmcsProbe(tib, esBase, (ax == DPMI_FN_CALL_REAL_MODE_IRET) ? 2 : 1, 0);   /* observation only */
     /* --- save the client's PM CONTEXT (full register file + MSW) --- */
-    DWORD savedEax=VDM_REG(tib,VTIB_EAX),savedEbx=VDM_REG(tib,VTIB_EBX),savedEcx=VDM_REG(tib,VTIB_ECX),
-          savedEdx=VDM_REG(tib,VTIB_EDX),savedEsi=VDM_REG(tib,VTIB_ESI),savedEdi=VDM_REG(tib,VTIB_EDI),
-          pmBp=VDM_REG(tib,VTIB_EBP),pmDs=VDM_REG(tib,VTIB_DS),pmEs=VDM_REG(tib,VTIB_ES),
-          pmFs=VDM_REG(tib,VTIB_FS),pmGs=VDM_REG(tib,VTIB_GS),pmCs=VDM_REG(tib,VTIB_CS),
-          pmIp=VDM_REG(tib,VTIB_EIP),pmSs=VDM_REG(tib,VTIB_SS),pmSp=VDM_REG(tib,VTIB_ESP),
-          pFlags=VDM_REG(tib,VTIB_EFLAGS);
+    DWORD savedEax=VDM_REG(tib,VTIB_EAX);
+    DWORD savedEbx=VDM_REG(tib,VTIB_EBX);
+    DWORD savedEcx=VDM_REG(tib,VTIB_ECX);
+    DWORD savedEdx=VDM_REG(tib,VTIB_EDX);
+    DWORD savedEsi=VDM_REG(tib,VTIB_ESI);
+    DWORD savedEdi=VDM_REG(tib,VTIB_EDI);
+    DWORD pmBp=VDM_REG(tib,VTIB_EBP);
+    DWORD pmDs=VDM_REG(tib,VTIB_DS);
+    DWORD pmEs=VDM_REG(tib,VTIB_ES);
+    DWORD pmFs=VDM_REG(tib,VTIB_FS);
+    DWORD pmGs=VDM_REG(tib,VTIB_GS);
+    DWORD pmCs=VDM_REG(tib,VTIB_CS);
+    DWORD pmIp=VDM_REG(tib,VTIB_EIP);
+    DWORD pmSs=VDM_REG(tib,VTIB_SS);
+    DWORD pmSp=VDM_REG(tib,VTIB_ESP);
+    DWORD pFlags=VDM_REG(tib,VTIB_EFLAGS);
     WORD machineStatusWord = *(volatile WORD *)(tib + VTIB_MSW);
     /* real-mode target + stack from the RMCS (default SS:SP to the code seg) */
-    WORD realCs = *(volatile WORD*)(registers+RMCS_CS), realIp = *(volatile WORD*)(registers+RMCS_IP);
-    WORD realSs = *(volatile WORD*)(registers+RMCS_SS), realSp = *(volatile WORD*)(registers+RMCS_SP);
+    WORD realCs = *(volatile WORD*)(registers+RMCS_CS);
+    WORD realIp = *(volatile WORD*)(registers+RMCS_IP);
+    WORD realSs = *(volatile WORD*)(registers+RMCS_SS);
+    WORD realSp = *(volatile WORD*)(registers+RMCS_SP);
     UINT round;
     INT done = 0;
     DWORD stackWordsToCopy = savedEcx & WORD_MASK;   /* words of PM stack to copy (DPMI 0.9) */
@@ -735,11 +751,20 @@ static VOID DpmiInt31SimulateRealModeInterrupt(
       } }
     InterlockedExchange(&g_SimIntBusy, 1);  /* no async injection in here */
     /* save the client's PM register file */
-    DWORD callerEax=VDM_REG(tib,VTIB_EAX),callerEbx=VDM_REG(tib,VTIB_EBX),callerEcx=VDM_REG(tib,VTIB_ECX),
-          callerEdx=VDM_REG(tib,VTIB_EDX),callerEsi=VDM_REG(tib,VTIB_ESI),callerEdi=VDM_REG(tib,VTIB_EDI),
-          callerEbp=VDM_REG(tib,VTIB_EBP),callerDs=VDM_REG(tib,VTIB_DS),callerEs=VDM_REG(tib,VTIB_ES),
-          callerFs=VDM_REG(tib,VTIB_FS),callerGs=VDM_REG(tib,VTIB_GS),
-          callerSs=VDM_REG(tib,VTIB_SS),callerSp=VDM_REG(tib,VTIB_ESP),sFlags=VDM_REG(tib,VTIB_EFLAGS);
+    DWORD callerEax=VDM_REG(tib,VTIB_EAX);
+    DWORD callerEbx=VDM_REG(tib,VTIB_EBX);
+    DWORD callerEcx=VDM_REG(tib,VTIB_ECX);
+    DWORD callerEdx=VDM_REG(tib,VTIB_EDX);
+    DWORD callerEsi=VDM_REG(tib,VTIB_ESI);
+    DWORD callerEdi=VDM_REG(tib,VTIB_EDI);
+    DWORD callerEbp=VDM_REG(tib,VTIB_EBP);
+    DWORD callerDs=VDM_REG(tib,VTIB_DS);
+    DWORD callerEs=VDM_REG(tib,VTIB_ES);
+    DWORD callerFs=VDM_REG(tib,VTIB_FS);
+    DWORD callerGs=VDM_REG(tib,VTIB_GS);
+    DWORD callerSs=VDM_REG(tib,VTIB_SS);
+    DWORD callerSp=VDM_REG(tib,VTIB_ESP);
+    DWORD sFlags=VDM_REG(tib,VTIB_EFLAGS);
     RMCS_REGS rmcsRegisters;
     /* -- #247: THE WHOLE REGISTER FILE IN, AND FLAGS WHERE THE ANSWER LANDS.
      * This loaded the low WORD of seven registers plus ES and DS, and
@@ -832,7 +857,8 @@ static VOID DpmiInt31SimulateRealModeInterrupt(
     {
         NTVDD_REGISTERS videoRegisters;
         RegistersLoad(&videoRegisters, tib);
-        WORD inAx = (WORD)videoRegisters.Eax, inCx = (WORD)videoRegisters.Ecx;
+        WORD inAx = (WORD)videoRegisters.Eax;
+        WORD inCx = (WORD)videoRegisters.Ecx;
         HOST_LOCK();
         VddBusDeliverInterrupt(&g_Bus, VECTOR_VIDEO, &videoRegisters);
         HOST_UNLOCK();
@@ -847,7 +873,8 @@ static VOID DpmiInt31SimulateRealModeInterrupt(
             static INT vbeLogged;
             if (vbeLogged++ < 48)
             {
-                CHAR vectorLine[160], *vectorCursor = vectorLine;
+                CHAR vectorLine[160];
+                CHAR *vectorCursor = vectorLine;
                 vectorCursor = LogPut(vectorCursor, "SIMINT10 VBE in=0x"); vectorCursor = LogHex(vectorCursor, inAx);
                 vectorCursor = LogPut(vectorCursor, " cx=0x"); vectorCursor = LogHex(vectorCursor, inCx);
                 vectorCursor = LogPut(vectorCursor, " -> ax=0x"); vectorCursor = LogHex(vectorCursor, (WORD)videoRegisters.Eax);
@@ -926,8 +953,12 @@ static VOID DpmiInt31ResizeMemory(PSTR *cursorIo, volatile BYTE * const tib, INT
      */
     DWORD handle  = (VDM_REG16(tib, VTIB_ESI) << WORD_SHIFT) | VDM_REG16(tib, VTIB_EDI);
     DWORD newSize = (VDM_REG16(tib, VTIB_EBX) << WORD_SHIFT) | VDM_REG16(tib, VTIB_ECX);
-    INT ownedIndex = DpmiOwnedFind(handle), plan, blockIndex;
-    DWORD end = handle, committed, newHandle;
+    INT ownedIndex = DpmiOwnedFind(handle);
+    INT plan;
+    INT blockIndex;
+    DWORD end = handle;
+    DWORD committed;
+    DWORD newHandle;
     UINT32 copy = 0;
     MEMORY_BASIC_INFORMATION memoryInfo;
 
@@ -964,7 +995,9 @@ static VOID DpmiInt31ResizeMemory(PSTR *cursorIo, volatile BYTE * const tib, INT
     if (plan == DPMI_RESIZE_MOVE)
     {
         PVOID memory = VirtualAlloc(NULL, newSize, MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE);
-        DWORD slotIndex, delta, moved = 0;
+        DWORD slotIndex;
+        DWORD delta;
+        DWORD moved = 0;
         if (!memory)
         {
             VDM_REG(tib, VTIB_EFLAGS) |= EFLAGS_CF_U;
@@ -1230,7 +1263,8 @@ static VOID DpmiInt31SetDescriptor(PSTR *cursorIo, volatile BYTE * const tib, IN
     INT ldtIndex = DPMI_SELECTOR_INDEX(VDM_REG16(tib, VTIB_EBX));
     DWORD esBase = DpmiSelectorBase((WORD)VDM_REG(tib, VTIB_ES));
     volatile DWORD *descriptor = (volatile DWORD *)(ULONG_PTR)DpmiRmcsPointer(tib, esBase);
-    DWORD low, high;
+    DWORD low;
+    DWORD high;
 
     DpmiRmcsProbe(tib, esBase, 4, 0);       /* observation only */
     if (ldtIndex < 1 || ldtIndex >= DPMI_LDT_LEGACY_LIMIT) { VDM_REG(tib, VTIB_EFLAGS) |= EFLAGS_CF_U;
@@ -1319,7 +1353,10 @@ static VOID DpmiInt31FreeDosMemory(PSTR *cursorIo, volatile BYTE * const tib)
      * It is released exactly as 0001h releases one.
      */
     WORD dxSelector = (WORD)VDM_REG16(tib, VTIB_EDX);
-    INT ldtIndex = DPMI_SELECTOR_INDEX(dxSelector), blockIndex, known = -1, freeError;
+    INT ldtIndex = DPMI_SELECTOR_INDEX(dxSelector);
+    INT blockIndex;
+    INT known = -1;
+    INT freeError;
     WORD segment = 0;
 
     if (DpmiClientSelectorOk(dxSelector))
@@ -1372,7 +1409,9 @@ static VOID DpmiInt31AllocateDosMemory(
     DOS_MACHINE * const machine)
 {
     PSTR cursor = *cursorIo;
-    WORD want = (WORD)VDM_REG16(tib, VTIB_EBX), segment = 0, maximum = 0;
+    WORD want = (WORD)VDM_REG16(tib, VTIB_EBX);
+    WORD segment = 0;
+    WORD maximum = 0;
     INT error = DosMcbAllocate(NULL, machine->FirstMcb, want, &segment, &maximum);
     INT ldtIndex = error ? -1 : DpmiLdtTake();   /* #248: free list first */
 
@@ -1532,7 +1571,8 @@ static VOID DpmiInt31NtvdmCommit(PSTR *cursorIo, volatile BYTE * const tib, INT 
      */
     WORD firstSelector = (WORD)VDM_REG16(tib, VTIB_EBX);
     DWORD selectorCount = VDM_REG16(tib, VTIB_ECX);
-    INT firstIndex = DPMI_SELECTOR_INDEX(firstSelector), done = 0;
+    INT firstIndex = DPMI_SELECTOR_INDEX(firstSelector);
+    INT done = 0;
 
     if (!selectorCount)
         selectorCount = 1;
@@ -1816,7 +1856,8 @@ static VOID DpmiInt31FreeDescriptor(PSTR *cursorIo, volatile BYTE * const tib)
     if (ldtIndex >= 1 && ldtIndex < DPMI_LDT_MAX && !reserved
         && g_Ldt[ldtIndex].Access != 0 && g_LdtFreeCount < DPMI_LDT_MAX)
     {
-        INT duplicate, isDuplicate = 0;
+        INT duplicate;
+        INT isDuplicate = 0;
         for (duplicate = 0; duplicate < g_LdtFreeCount; ++duplicate)   /* refuse a double free */
             if (g_LdtFree[duplicate] == (WORD)ldtIndex)
             {
@@ -1845,7 +1886,8 @@ static VOID DpmiInt31FreeDescriptor(PSTR *cursorIo, volatile BYTE * const tib)
 static VOID DpmiInt31AllocateDescriptors(PSTR *cursorIo, volatile BYTE * const tib)
 {
     PSTR cursor = *cursorIo;
-    DWORD cx = VDM_REG16(tib, VTIB_ECX), index;
+    DWORD cx = VDM_REG16(tib, VTIB_ECX);
+    DWORD index;
     WORD firstAllocatedSelector;
 
     if (cx == 0)
@@ -2098,7 +2140,8 @@ static INT Wow32FinishUserCall(
             WORD  callbackSelector = WowCallbackSelector();
             DWORD callbackStackBase = DpmiSelectorBase(
                 (WORD)VDM_REG16(tib, VTIB_SS));
-            INT argumentIndex, callbackAbsent = 0;
+            INT argumentIndex;
+            INT callbackAbsent = 0;
             cursor = LogPut(cursor, "WOWCALL: -> 0x");
             cursor = LogHex(cursor, frame->CallbackProcedure >> WORD_SHIFT);
             cursor = LogPut(cursor, ":0x"); cursor = LogHex(cursor, frame->CallbackProcedure & WORD_MASK);
@@ -2350,7 +2393,8 @@ static INT Wow32ServiceUser(
             && !WowMsgQuitFor(messageTask == WOWUSER_TASK_NONE16 ? 0 : messageTask))
         {
             INT woke = 0;
-            DWORD start = GetTickCount(), waited;
+            DWORD start = GetTickCount();
+            DWORD waited;
             /* [INFO]: SAY THE SETTING AT THE POINT OF USE, ONCE. The startup
              * knob-read logs where the answer is decided, which is
              * not where it matters and -- measured -- did not reach
@@ -2361,7 +2405,8 @@ static INT Wow32ServiceUser(
              */
             if (!g_WowMsgIsWaitAnnounced)
             {
-                CHAR siteLine[128], *siteCursor = siteLine;
+                CHAR siteLine[128];
+                CHAR *siteCursor = siteLine;
                 g_WowMsgIsWaitAnnounced = 1;
                 siteCursor = LogPut(siteCursor, "\n     WOWMSG: a blocked GetMessage waits ");
                 if (g_WowMsgWaitMs) { siteCursor = LogHex(siteCursor, g_WowMsgWaitMs);
@@ -2452,7 +2497,8 @@ static INT Wow32ServiceUser(
                                                   QS_ALLINPUT);
                     if (beats < 20 && GetTickCount() - beat >= 2000)
                     {
-                        CHAR handlerLine[160], *handlerCursor = handlerLine;
+                        CHAR handlerLine[160];
+                        CHAR *handlerCursor = handlerLine;
                         beat = GetTickCount();
                         ++beats;
                         handlerCursor = LogPut(handlerCursor, "     WOWMSG: blocked 0x");
@@ -2502,7 +2548,8 @@ static INT Wow32ServiceUser(
             WowLogFlush(base, &cursor);
         }
         {
-            INT exitCode, flow = Wow32FinishUserCall(&cursor, base, frame, note, tib, &exitCode);
+            INT exitCode;
+            INT flow = Wow32FinishUserCall(&cursor, base, frame, note, tib, &exitCode);
             if (flow == HOST_FLOW_RETURN)
             {
                 *cursorIo = cursor;
@@ -2590,7 +2637,8 @@ static INT Wow32ServiceKernelSecondTable(
     if (!frame->IsKernel && g_WowKernel2Segment && frame->StubSegment == g_WowKernel2Segment
         && frame->Id == WOW32K2_TASKENV)
     {
-        WORD  parameterBlockSelector = Wow32ArgWord(frame, WOW32K2_TASKENV_ARG_BLOCK_SELECTOR), parameterBlockOffset = Wow32ArgWord(frame, WOW32K2_TASKENV_ARG_BLOCK_OFFSET);
+        WORD parameterBlockSelector = Wow32ArgWord(frame, WOW32K2_TASKENV_ARG_BLOCK_SELECTOR);
+        WORD parameterBlockOffset = Wow32ArgWord(frame, WOW32K2_TASKENV_ARG_BLOCK_OFFSET);
         DWORD parameterBlockLinear = parameterBlockSelector ? DpmiSelectorBase(parameterBlockSelector) : 0;
         WORD  environment = 0;
         PCSTR source = "";
@@ -2629,7 +2677,8 @@ static INT Wow32ServiceKernelSecondTable(
                     (const volatile BYTE *)(ULONG_PTR)environmentLinear;
                 volatile BYTE *destinationBytes = (volatile BYTE *)(ULONG_PTR)
                                    ((DWORD)g_WowEnvironmentSegment << PARAGRAPH_SHIFT);
-                DWORD index = 0, item;
+                DWORD index = 0;
+                DWORD item;
                 WORD  selector;
                 /* The MS-DOS 3.0+ block: the strings, the empty string
                  * that ends them, a WORD count, then the program's own
@@ -2728,7 +2777,8 @@ static INT Wow32ServiceResolveModulePath(
     {
         volatile BYTE *source = Wow32ArgPointer(frame, WOW32_RESOLVEMODULEPATH_ARG_SOURCE);
         volatile BYTE *destination = Wow32ArgPointer(frame, WOW32_RESOLVEMODULEPATH_ARG_DESTINATION);
-        CHAR name[300], full[300];
+        CHAR name[300];
+        CHAR full[300];
         INT item;
         cursor = LogPut(cursor, "  WOW32 0xc5 ResolveModulePath ");
         if (!source)
@@ -2818,8 +2868,10 @@ static INT Wow32ServiceGetCurrentDirectory(
         DWORD directoryOffset  = Wow32ArgWord(frame, WOW32_GETCURDIR_ARG_BUFFER_OFFSET);
         WORD  directorySelector = Wow32ArgWord(frame, WOW32_GETCURDIR_ARG_BUFFER_SELECTOR);
         DWORD drive  = Wow32ArgWord(frame, WOW32_GETCURDIR_ARG_DRIVE) & BYTE_MASK;
-        DWORD savedAx = VDM_REG(tib, VTIB_EAX), savedDx = VDM_REG(tib, VTIB_EDX);
-        DWORD savedDs = VDM_REG(tib, VTIB_DS),  savedSi = VDM_REG(tib, VTIB_ESI);
+        DWORD savedAx = VDM_REG(tib, VTIB_EAX);
+        DWORD savedDx = VDM_REG(tib, VTIB_EDX);
+        DWORD savedDs = VDM_REG(tib, VTIB_DS);
+        DWORD savedSi = VDM_REG(tib, VTIB_ESI);
         DWORD directoryBase = DpmiSelectorBase(directorySelector);
         volatile BYTE *transfer = (volatile BYTE *)(ULONG_PTR)
                             ((DWORD)g_PmTransferSegment << PARAGRAPH_SHIFT);
@@ -3139,7 +3191,8 @@ static INT Wow32RunLaunchedTaskFirst(
         if (freshCurrentTask && freshCurrentTask != WOWUSER_TASK_NONE16 && freshCurrentTask != g_WowSchedLaunchChild)
         {
             WORD child = g_WowSchedLaunchChild;
-            INT  freshIndex, freshSlotIndex = -1;
+            INT freshIndex;
+            INT freshSlotIndex = -1;
             g_WowSchedLaunchChild = 0;
             for (freshIndex = 0; freshIndex < WOWSCHED_MAX; ++freshIndex)
                 if (g_WowSchedSlots[freshIndex].IsUsed && g_WowSchedSlots[freshIndex].IsFresh
@@ -3214,7 +3267,8 @@ static PSTR Wow32LogFrame(
                              | (frameBytes[WOW32_OFF_ID + 1] << BYTE_SHIFT));
         DWORD argumentBytes  = (DWORD)(frameBytes[WOW32_OFF_ARGB]
                              | (frameBytes[WOW32_OFF_ARGB + 1] << BYTE_SHIFT));
-        DWORD argumentCount   = argumentBytes / WOW_WORD_BYTES, item;
+        DWORD argumentCount   = argumentBytes / WOW_WORD_BYTES;
+        DWORD item;
         /* [INFO]: AN ID IS ONLY MEANINGFUL WITH ITS TABLE. The stub lives
          * in the module that owns the numbering, so print that
          * segment and only apply krnl386's names when the stub is
@@ -3566,7 +3620,8 @@ static INT Wow32ServiceBop(
             g_WowCallUntarget = WowSchedUntarget;
         }
         {
-            INT exitCode, flow = Wow32RunLaunchedTaskFirst(&cursor, base, &frame, tib, &exitCode);
+            INT exitCode;
+            INT flow = Wow32RunLaunchedTaskFirst(&cursor, base, &frame, tib, &exitCode);
             if (flow == HOST_FLOW_RETURN)
             {
                 *cursorIo = cursor;
@@ -3578,7 +3633,8 @@ static INT Wow32ServiceBop(
             }
         }
         {
-            INT exitCode, flow = Wow32ScheduleKernelCall(&cursor, base, &frame, tib, &exitCode);
+            INT exitCode;
+            INT flow = Wow32ScheduleKernelCall(&cursor, base, &frame, tib, &exitCode);
             if (flow == HOST_FLOW_RETURN)
             {
                 *cursorIo = cursor;
@@ -3629,7 +3685,8 @@ static INT Wow32ServiceBop(
             }
         }
         {
-            INT exitCode, flow = Wow32ServiceFileRead(&cursor, base, &frame, machine, tib, &exitCode);
+            INT exitCode;
+            INT flow = Wow32ServiceFileRead(&cursor, base, &frame, machine, tib, &exitCode);
             if (flow == HOST_FLOW_RETURN)
             {
                 *cursorIo = cursor;
@@ -3641,7 +3698,8 @@ static INT Wow32ServiceBop(
             }
         }
         {
-            INT exitCode, flow = Wow32ServiceGetCurrentDirectory(&cursor, base, &frame, tib, machine, &exitCode);
+            INT exitCode;
+            INT flow = Wow32ServiceGetCurrentDirectory(&cursor, base, &frame, tib, machine, &exitCode);
             if (flow == HOST_FLOW_RETURN)
             {
                 *cursorIo = cursor;
@@ -3653,7 +3711,8 @@ static INT Wow32ServiceBop(
             }
         }
         {
-            INT exitCode, flow = Wow32ServiceResolveModulePath(&cursor, base, &frame, tib, &exitCode);
+            INT exitCode;
+            INT flow = Wow32ServiceResolveModulePath(&cursor, base, &frame, tib, &exitCode);
             if (flow == HOST_FLOW_RETURN)
             {
                 *cursorIo = cursor;
@@ -3705,7 +3764,8 @@ static INT Wow32ServiceBop(
             cursor = LogPut(cursor, " (learned from the stub's own bytes in the file)");
         }
         {
-            INT exitCode, flow = Wow32ServiceKernelSecondTable(&cursor, base, &frame, tib, &exitCode);
+            INT exitCode;
+            INT flow = Wow32ServiceKernelSecondTable(&cursor, base, &frame, tib, &exitCode);
             if (flow == HOST_FLOW_RETURN)
             {
                 *cursorIo = cursor;
@@ -3731,7 +3791,8 @@ static INT Wow32ServiceBop(
             cursor = LogPut(cursor, " (learned from its own stub, not from the module table)");
         }
         {
-            INT exitCode, flow = Wow32ServiceUser(&cursor, base, &frame, tib, &exitCode);
+            INT exitCode;
+            INT flow = Wow32ServiceUser(&cursor, base, &frame, tib, &exitCode);
             if (flow == HOST_FLOW_RETURN)
             {
                 *cursorIo = cursor;
@@ -3760,7 +3821,8 @@ static INT Wow32ServiceBop(
                         " table)");
         }
         {
-            INT exitCode, flow = Wow32ServiceShell(&cursor, base, &frame, tib, &exitCode);
+            INT exitCode;
+            INT flow = Wow32ServiceShell(&cursor, base, &frame, tib, &exitCode);
             if (flow == HOST_FLOW_RETURN)
             {
                 *cursorIo = cursor;
@@ -3788,7 +3850,8 @@ static INT Wow32ServiceBop(
                         " table)");
         }
         {
-            INT exitCode, flow = Wow32ServiceCommonDialog(&cursor, base, &frame, tib, &exitCode);
+            INT exitCode;
+            INT flow = Wow32ServiceCommonDialog(&cursor, base, &frame, tib, &exitCode);
             if (flow == HOST_FLOW_RETURN)
             {
                 *cursorIo = cursor;
@@ -3856,7 +3919,8 @@ static INT Wow32ServiceBop(
                         " table)");
         }
         {
-            INT exitCode, flow = Wow32ServiceGdi(&cursor, base, &frame, tib, &exitCode);
+            INT exitCode;
+            INT flow = Wow32ServiceGdi(&cursor, base, &frame, tib, &exitCode);
             if (flow == HOST_FLOW_RETURN)
             {
                 *cursorIo = cursor;
@@ -4485,7 +4549,9 @@ static INT DpmiInt21Read(
 
     if (ah == DOS_FN_READ)                            /* read: BX=handle CX=cnt -> DS:DX */
     {
-        DWORD handle = VDM_REG16(tib, VTIB_EBX), count = VDM_REG16(tib, VTIB_ECX), bytesRead = 0;
+        DWORD handle = VDM_REG16(tib, VTIB_EBX);
+        DWORD count = VDM_REG16(tib, VTIB_ECX);
+        DWORD bytesRead = 0;
         DWORD dsBase = DpmiSelectorBase((WORD)VDM_REG(tib, VTIB_DS));
         PVOID buffer = (VOID *)(ULONG_PTR)(dsBase + VDM_REG16(tib, VTIB_EDX));
         VDM_REG(tib, VTIB_EFLAGS) &= ~EFLAGS_CF_U;
@@ -4692,7 +4758,8 @@ static INT DpmiInt21Write(
 
     if (ah == DOS_FN_WRITE)                            /* write BX=handle CX=cnt DS:DX=buf */
     {
-        DWORD bh = VDM_REG16(tib, VTIB_EBX), count = VDM_REG16(tib, VTIB_ECX);
+        DWORD bh = VDM_REG16(tib, VTIB_EBX);
+        DWORD count = VDM_REG16(tib, VTIB_ECX);
         DWORD dsBase = DpmiSelectorBase((WORD)VDM_REG(tib, VTIB_DS));
         const volatile BYTE *bytes = (const volatile BYTE *)(ULONG_PTR)
             (dsBase + VDM_REG16(tib, VTIB_EDX));
@@ -4742,7 +4809,8 @@ static INT DpmiInt21Write(
         }
         else if (bound)                       /* file handle */
         {
-            DWORD bytesWritten = 0, writeError = 0;
+            DWORD bytesWritten = 0;
+            DWORD writeError = 0;
             if (!WriteFile(machine->FileHandles[bh], (const VOID *)bytes, count, &bytesWritten, NULL))
                 writeError = GetLastError();
             if (!PmRwHardwareFail(machine, tib, DOS_FN_WRITE, writeError, &cursor))     /* #275 */
@@ -4969,7 +5037,8 @@ static PSTR WowCallbackEditFill(
             static CHAR savedEditText[16384];
             volatile BYTE *destinationBytes = (volatile BYTE *)(ULONG_PTR)(instanceBase + offset);
             INT cap = GetWindowTextLengthA(editWindow->Window32) + 1;
-            INT length, index;
+            INT length;
+            INT index;
             if (cap > (INT)sizeof savedEditText)
                 cap = (INT)sizeof savedEditText;
             length = GetWindowTextA(editWindow->Window32, savedEditText, cap);
@@ -5233,7 +5302,8 @@ static INT DpmiServiceInt21(
             }
         }
         {
-            INT exitCode, flow = DpmiInt21Write(&cursor, base, ah, tib, machine, &exitCode);
+            INT exitCode;
+            INT flow = DpmiInt21Write(&cursor, base, ah, tib, machine, &exitCode);
             if (flow == HOST_FLOW_RETURN)
             {
                 *cursorIo = cursor;
@@ -5242,7 +5312,8 @@ static INT DpmiServiceInt21(
             }
         }
         {
-            INT exitCode, flow = DpmiInt21CreateOpen(&cursor, base, ah, tib, ax, machine, &exitCode);
+            INT exitCode;
+            INT flow = DpmiInt21CreateOpen(&cursor, base, ah, tib, ax, machine, &exitCode);
             if (flow == HOST_FLOW_RETURN)
             {
                 *cursorIo = cursor;
@@ -5273,7 +5344,8 @@ static INT DpmiServiceInt21(
             }
         }
         {
-            INT exitCode, flow = DpmiInt21Read(&cursor, base, ah, tib, machine, &exitCode);
+            INT exitCode;
+            INT flow = DpmiInt21Read(&cursor, base, ah, tib, machine, &exitCode);
             if (flow == HOST_FLOW_RETURN)
             {
                 *cursorIo = cursor;
@@ -5283,7 +5355,8 @@ static INT DpmiServiceInt21(
         }
         if (ah == DOS_FN_SEEK)                            /* lseek: AL=org BX=h CX:DX=off */
         {
-            DWORD handle = VDM_REG16(tib, VTIB_EBX), seekMethod = ax & BYTE_MASK;
+            DWORD handle = VDM_REG16(tib, VTIB_EBX);
+            DWORD seekMethod = ax & BYTE_MASK;
             LONG seekDistance = (LONG)((VDM_REG16(tib, VTIB_ECX) << WORD_SHIFT) | VDM_REG16(tib, VTIB_EDX));
             VDM_REG(tib, VTIB_EFLAGS) &= ~EFLAGS_CF_U;
             if (handle >= DOS_STD_HANDLES && handle < DOS_MAX_FILES && machine->FileHandles[handle])
@@ -5315,7 +5388,8 @@ static INT DpmiServiceInt21(
             }
         }
         {
-            INT exitCode, flow = DpmiInt21Allocate(&cursor, base, ah, tib, machine, &exitCode);
+            INT exitCode;
+            INT flow = DpmiInt21Allocate(&cursor, base, ah, tib, machine, &exitCode);
             if (flow == HOST_FLOW_RETURN)
             {
                 *cursorIo = cursor;
@@ -5324,7 +5398,8 @@ static INT DpmiServiceInt21(
             }
         }
         {
-            INT exitCode, flow = DpmiInt21Free(&cursor, base, ah, tib, &exitCode);
+            INT exitCode;
+            INT flow = DpmiInt21Free(&cursor, base, ah, tib, &exitCode);
             if (flow == HOST_FLOW_RETURN)
             {
                 *cursorIo = cursor;
@@ -5333,7 +5408,8 @@ static INT DpmiServiceInt21(
             }
         }
         {
-            INT exitCode, flow = DpmiInt21SetGetVector(&cursor, base, ah, ax, tib, &exitCode);
+            INT exitCode;
+            INT flow = DpmiInt21SetGetVector(&cursor, base, ah, ax, tib, &exitCode);
             if (flow == HOST_FLOW_RETURN)
             {
                 *cursorIo = cursor;
@@ -5342,7 +5418,8 @@ static INT DpmiServiceInt21(
             }
         }
         {
-            INT exitCode, flow = DpmiInt21Resize(&cursor, base, ah, tib, &exitCode);
+            INT exitCode;
+            INT flow = DpmiInt21Resize(&cursor, base, ah, tib, &exitCode);
             if (flow == HOST_FLOW_RETURN)
             {
                 *cursorIo = cursor;
@@ -5526,7 +5603,8 @@ static INT DpmiServiceInt21(
             }
         }
         {
-            INT exitCode, flow = DpmiInt21CreatePsp(&cursor, base, ah, tib, &exitCode);
+            INT exitCode;
+            INT flow = DpmiInt21CreatePsp(&cursor, base, ah, tib, &exitCode);
             if (flow == HOST_FLOW_RETURN)
             {
                 *cursorIo = cursor;
@@ -5729,11 +5807,13 @@ static INT DpmiServiceInt31(
      * unmodified on the way out. The target now travels in simint_cs/ip.
      */
     INT simulatedVector = -1;
-    WORD simulatedCs = 0, simulatedIp = 0;
+    WORD simulatedCs = 0;
+    WORD simulatedIp = 0;
     if (ax == DPMI_FN_SIMULATE_REAL_MODE_INTERRUPT)
     {
         DWORD interruptVector = VDM_REG(tib, VTIB_EBX) & BYTE_MASK;
-        WORD handlerSegment = PeekWord(IVT_SEGMENT_ADDRESS(interruptVector)), handlerOffset = PeekWord(IVT_OFFSET_ADDRESS(interruptVector));
+        WORD handlerSegment = PeekWord(IVT_SEGMENT_ADDRESS(interruptVector));
+        WORD handlerOffset = PeekWord(IVT_OFFSET_ADDRESS(interruptVector));
         if (RmcsSimIntRoute(interruptVector, handlerSegment, handlerOffset, g_SimIntReflect, DOS_HDLR_SEG) == SIMINT_RUN)
         {
             simulatedVector = (INT)interruptVector;
@@ -5806,7 +5886,8 @@ static INT DpmiServiceInt31(
     case DPMI_FN_RESIZE_DOS_MEMORY:                               /* resize DOS memory block: BX=new paras, DX=sel */
     {
         INT ldtIndex = DPMI_SELECTOR_INDEX(VDM_REG16(tib, VTIB_EDX));
-        WORD want = (WORD)VDM_REG16(tib, VTIB_EBX), maximum = 0;
+        WORD want = (WORD)VDM_REG16(tib, VTIB_EBX);
+        WORD maximum = 0;
         if (ldtIndex >= 1 && ldtIndex < DPMI_LDT_MAX && g_Ldt[ldtIndex].Base)
         {
             WORD segment = (WORD)(g_Ldt[ldtIndex].Base >> PARAGRAPH_SHIFT);
@@ -5877,7 +5958,8 @@ static INT DpmiServiceInt31(
     {
         DWORD bl = VDM_REG(tib, VTIB_EBX) & BYTE_MASK;
         volatile WORD *interruptVector = (volatile WORD *)(ULONG_PTR)(IVT_OFFSET_ADDRESS(bl));
-        WORD previousSegment = interruptVector[1], previousOffset = interruptVector[0];
+        WORD previousSegment = interruptVector[1];
+        WORD previousOffset = interruptVector[0];
         interruptVector[0] = (WORD)VDM_REG16(tib, VTIB_EDX);
         interruptVector[1] = (WORD)VDM_REG16(tib, VTIB_ECX);
         VDM_REG(tib, VTIB_EFLAGS) &= ~EFLAGS_CF_U;
@@ -6143,7 +6225,8 @@ static INT DpmiServiceInt31(
 
     case DPMI_FN_CREATE_ALIAS:                               /* create data alias of sel BX */
     {
-        INT source = DPMI_SELECTOR_INDEX(VDM_REG16(tib, VTIB_EBX)), ldtIndex;
+        INT source = DPMI_SELECTOR_INDEX(VDM_REG16(tib, VTIB_EBX));
+        INT ldtIndex;
         /* #248: an invalid source is 8022h. It used to alias the CODE BASE
          * instead -- a working selector onto memory the client never named.
          */
@@ -6229,7 +6312,8 @@ static INT DpmiServiceInt31(
          * in the log rather than leaving it as an assumption.
          */
         volatile DWORD *descriptor = (volatile DWORD *)(ULONG_PTR)DpmiRmcsPointer(tib, esBase);
-        DWORD low = 0, high = 0;
+        DWORD low = 0;
+        DWORD high = 0;
         DpmiRmcsProbe(tib, esBase, 3, 0);       /* observation only */
         if (ldtIndex >= 1 && ldtIndex < DPMI_LDT_MAX)
             DpmiBuildDescriptor(g_Ldt[ldtIndex].Base, g_Ldt[ldtIndex].Limit,
@@ -6424,7 +6508,8 @@ static INT DpmiServiceInt31(
          * failed for good. The address must be EXACTLY one we handed out
          * and still live; anything else is 8024h.
          */
-        WORD callbackSegment = (WORD)VDM_REG(tib, VTIB_ECX), callbackOffset = (WORD)VDM_REG(tib, VTIB_EDX);
+        WORD callbackSegment = (WORD)VDM_REG(tib, VTIB_ECX);
+        WORD callbackOffset = (WORD)VDM_REG(tib, VTIB_EDX);
         INT callbackSlot = DpmiCallbackSlotOf(DPMI_CB_BASE_OFF, callbackSegment, DOS_HDLR_SEG, callbackOffset);
         cursor = LogPut(cursor, " cb 0x"); cursor = LogHex(cursor, callbackSegment); cursor = LogPut(cursor, ":0x"); cursor = LogHex(cursor, callbackOffset);
         if (callbackSlot < 0 || !g_Callbacks[callbackSlot].IsUsed)
@@ -6513,7 +6598,8 @@ static INT DpmiServiceInt2F(
         DWORD sourceOffset = VDM_REG16(tib, VTIB_ESI);
         const volatile BYTE *dataBytes = (const volatile BYTE *)(ULONG_PTR)(dataBase + sourceOffset);
         static const CHAR want[] = "MS-DOS";
-        INT item = 0, same = 1;
+        INT item = 0;
+        INT same = 1;
         for (item = 0; item < (INT)sizeof want; ++item)
             if (dataBytes[item] != (BYTE)want[item])
             {
@@ -6531,7 +6617,8 @@ static INT DpmiServiceInt2F(
         cursor = LogPut(cursor, "]");
         if (same)
         {
-            WORD vendorSegment = 0, vendorOffset = 0;
+            WORD vendorSegment = 0;
+            WORD vendorOffset = 0;
             if (WowVendorApiEntry(machine, &vendorSegment, &vendorOffset) == 0)
             {
                 VDM_SET16(tib, VTIB_EAX, (WORD)(ax & HIGH_BYTE_MASK));  /* AL=0 */
@@ -6695,7 +6782,8 @@ static INT DpmiServiceInt15(
            */
           DWORD microseconds = (VDM_REG16(tib, VTIB_ECX) << WORD_SHIFT)
                    | VDM_REG16(tib, VTIB_EDX);
-          LARGE_INTEGER waitNow, waitFrequency;
+          LARGE_INTEGER waitNow;
+          LARGE_INTEGER waitFrequency;
           QueryPerformanceCounter(&waitNow);
           QueryPerformanceFrequency(&waitFrequency);
           if (g_Int15EventEnd)                     /* an 83h countdown runs */
@@ -6848,7 +6936,8 @@ static INT DpmiServiceBreakpoint(
      */
     {   WORD dsValue = (WORD)VDM_REG16(tib, VTIB_DS);
         WORD esValue = (WORD)VDM_REG16(tib, VTIB_ES);
-        DWORD dsBase = DpmiSelectorBase(dsValue), esBase = DpmiSelectorBase(esValue);
+        DWORD dsBase = DpmiSelectorBase(dsValue);
+        DWORD esBase = DpmiSelectorBase(esValue);
         DWORD siValue = VDM_REG16(tib, VTIB_ESI);
         DWORD diValue = VDM_REG16(tib, VTIB_EDI);
         cursor = LogPut(cursor, "\r\n  dsbase=0x"); cursor = LogHex(cursor, dsBase);
@@ -6971,7 +7060,8 @@ static INT DpmiServiceClient32Int21(
     INT *exitCodeOut)
 {
     PSTR cursor = *cursorIo;
-    DWORD requestAh = (ax >> BYTE_SHIFT) & BYTE_MASK, vectorNumber = ax & BYTE_MASK;
+    DWORD requestAh = (ax >> BYTE_SHIFT) & BYTE_MASK;
+    DWORD vectorNumber = ax & BYTE_MASK;
 
     if ((requestAh == DOS_FN_SET_VECTOR || requestAh == DOS_FN_GET_VECTOR) && vectorNumber >= VECTOR_IRQ0 && vectorNumber <= VECTOR_IRQ7)
     {
@@ -7047,7 +7137,8 @@ static INT DpmiServiceWowBop(
     INT *exitCodeOut)
 {
     PSTR cursor = *cursorIo;
-    BYTE bopCode = bopBytes[VDM_BOP_NUMBER_OFFSET], bopSubcode = bopBytes[VDM_BOP_LENGTH];
+    BYTE bopCode = bopBytes[VDM_BOP_NUMBER_OFFSET];
+    BYTE bopSubcode = bopBytes[VDM_BOP_LENGTH];
     /* What a stepped-over 0x51 will hand back -- see the step-over note below.
      * Captured while the frame is still in scope. A separate flag, because
      * every 32-bit value is a possible hole value (0xFFFF is DECLINE) and a
@@ -7319,7 +7410,8 @@ static INT DpmiServiceWowBop(
      * sees it). Wow32SetReturn() is the only correct way.
      */
     {
-        INT exitCode, flow = Wow32ServiceBop(&cursor, base, bopCode, tib, machine, &wowStale, &wowStaleOk, &wowAnswer, &exitCode);
+        INT exitCode;
+        INT flow = Wow32ServiceBop(&cursor, base, bopCode, tib, machine, &wowStale, &wowStaleOk, &wowAnswer, &exitCode);
         if (flow == HOST_FLOW_RETURN)
         {
             *cursorIo = cursor;
@@ -7528,7 +7620,8 @@ INT DpmiServicePmIntBody(DOS_MACHINE *machine, volatile BYTE *tib, DWORD vector,
     PSTR cursor = report;
     SIZE_T const reportSize = sizeof report;
     DWORD ax = VDM_REG16(tib, VTIB_EAX);
-    DWORD event = VDM_REG(tib, VTIB_EVENT), eip = DpmiPmEip(tib);
+    DWORD event = VDM_REG(tib, VTIB_EVENT);
+    DWORD eip = DpmiPmEip(tib);
 
     (VOID)steps;
     /* First safe moment to re-plant anything the skip mode stepped over. */
@@ -7556,7 +7649,8 @@ INT DpmiServicePmIntBody(DOS_MACHINE *machine, volatile BYTE *tib, DWORD vector,
     if (g_PmWatchOffset && !g_PmWatchLinear && g_PmWatchSegment >= 1 &&
         g_PmWatchSegment <= WOW_PMBASE_MAX && g_WowPmBase[g_PmWatchSegment - 1])
     {
-        CHAR watchLine[160], *watchCursor = watchLine;
+        CHAR watchLine[160];
+        CHAR *watchCursor = watchLine;
         g_PmWatchLinear = g_WowPmBase[g_PmWatchSegment - 1] + g_PmWatchOffset;
         watchCursor = LogPut(watchCursor, "PMWATCH armed: seg "); watchCursor = LogHex(watchCursor, g_PmWatchSegment);
         watchCursor = LogPut(watchCursor, " + 0x"); watchCursor = LogHex(watchCursor, g_PmWatchOffset);
@@ -7576,7 +7670,8 @@ INT DpmiServicePmIntBody(DOS_MACHINE *machine, volatile BYTE *tib, DWORD vector,
             }
             else if (now != g_PmWatchLast)
             {
-                CHAR watchLine[200], *watchCursor = watchLine;
+                CHAR watchLine[200];
+                CHAR *watchCursor = watchLine;
                 watchCursor = LogPut(watchCursor, "PMWATCH linear 0x"); watchCursor = LogHex(watchCursor, g_PmWatchLinear);
                 watchCursor = LogPut(watchCursor, " CHANGED 0x"); watchCursor = LogHexByte(watchCursor, g_PmWatchLast);
                 watchCursor = LogPut(watchCursor, " -> 0x"); watchCursor = LogHexByte(watchCursor, now);
@@ -7635,7 +7730,8 @@ INT DpmiServicePmIntBody(DOS_MACHINE *machine, volatile BYTE *tib, DWORD vector,
         if (bopBytes[0] == VDM_BOP0 && bopBytes[1] == VDM_BOP1 && g_WowCallbackLinear && codeLinear == g_WowCallbackLinear)
         {
             {
-                INT exitCode, flow = WowFinishCallback(&cursor, base, tib, &exitCode);
+                INT exitCode;
+                INT flow = WowFinishCallback(&cursor, base, tib, &exitCode);
                 if (flow == HOST_FLOW_RETURN)
                     return exitCode;
             }
@@ -7643,7 +7739,8 @@ INT DpmiServicePmIntBody(DOS_MACHINE *machine, volatile BYTE *tib, DWORD vector,
         if (bopBytes[0] == VDM_BOP0 && bopBytes[1] == VDM_BOP1)
         {
             {
-                INT exitCode, flow = DpmiServiceWowBop(&cursor, base, bopBytes, tib, eip, reportSize, machine, &exitCode);
+                INT exitCode;
+                INT flow = DpmiServiceWowBop(&cursor, base, bopBytes, tib, eip, reportSize, machine, &exitCode);
                 if (flow == HOST_FLOW_RETURN)
                     return exitCode;
             }
@@ -7715,7 +7812,8 @@ INT DpmiServicePmIntBody(DOS_MACHINE *machine, volatile BYTE *tib, DWORD vector,
                     if (vector == VECTOR_DOS && g_DpmiIsClient32)
                     {
                         {
-                            INT exitCode, flow = DpmiServiceClient32Int21(&cursor, base, ax, tib, &exitCode);
+                            INT exitCode;
+                            INT flow = DpmiServiceClient32Int21(&cursor, base, ax, tib, &exitCode);
                             if (flow == HOST_FLOW_RETURN)
                                 return exitCode;
                         }
@@ -7743,7 +7841,8 @@ INT DpmiServicePmIntBody(DOS_MACHINE *machine, volatile BYTE *tib, DWORD vector,
                     if (vector == DPMI_BP_VEC)                        /* guest breakpoint hit */
                     {
                         {
-                            INT exitCode, flow = DpmiServiceBreakpoint(&cursor, base, tib, eip, steps, &exitCode);
+                            INT exitCode;
+                            INT flow = DpmiServiceBreakpoint(&cursor, base, tib, eip, steps, &exitCode);
                             if (flow == HOST_FLOW_RETURN)
                                 return exitCode;
                         }
@@ -7908,7 +8007,8 @@ INT DpmiServicePmIntBody(DOS_MACHINE *machine, volatile BYTE *tib, DWORD vector,
                     if (vector == VECTOR_SYSTEM)                               /* BIOS misc/system, in PM */
                     {
                         {
-                            INT exitCode, flow = DpmiServiceInt15(&cursor, base, tib, ax, &exitCode);
+                            INT exitCode;
+                            INT flow = DpmiServiceInt15(&cursor, base, tib, ax, &exitCode);
                             if (flow == HOST_FLOW_RETURN)
                                 return exitCode;
                         }
@@ -7937,7 +8037,8 @@ INT DpmiServicePmIntBody(DOS_MACHINE *machine, volatile BYTE *tib, DWORD vector,
                     if (vector == VECTOR_MULTIPLEX)                               /* INT 2Fh, from PM */
                     {
                         {
-                            INT exitCode, flow = DpmiServiceInt2F(&cursor, base, ax, tib, machine, &exitCode);
+                            INT exitCode;
+                            INT flow = DpmiServiceInt2F(&cursor, base, ax, tib, machine, &exitCode);
                             if (flow == HOST_FLOW_RETURN)
                                 return exitCode;
                         }
@@ -7945,7 +8046,8 @@ INT DpmiServicePmIntBody(DOS_MACHINE *machine, volatile BYTE *tib, DWORD vector,
                     if (vector == VECTOR_DPMI)                               /* DPMI INT 31h */
                     {
                         {
-                            INT exitCode, flow = DpmiServiceInt31(&cursor, base, &ax, tib, machine, &exitCode);
+                            INT exitCode;
+                            INT flow = DpmiServiceInt31(&cursor, base, &ax, tib, machine, &exitCode);
                             if (flow == HOST_FLOW_RETURN)
                                 return exitCode;
                         }
@@ -7953,7 +8055,8 @@ INT DpmiServicePmIntBody(DOS_MACHINE *machine, volatile BYTE *tib, DWORD vector,
                     if (vector == VECTOR_DOS)                               /* DOS INT 21h (in PM) */
                     {
                         {
-                            INT exitCode, flow = DpmiServiceInt21(&cursor, base, ax, steps, tib, machine, &exitCode);
+                            INT exitCode;
+                            INT flow = DpmiServiceInt21(&cursor, base, ax, steps, tib, machine, &exitCode);
                             if (flow == HOST_FLOW_RETURN)
                                 return exitCode;
                         }

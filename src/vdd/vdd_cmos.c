@@ -186,7 +186,9 @@ static INT CmosSecondEdge(PCMOS_STATE state)
     }
     if (state->StatusB & CMOS_B_AIE)              /* AIE: alarm */
     {
-        BYTE hours, minutes, seconds;
+        BYTE hours;
+        BYTE minutes;
+        BYTE seconds;
         if (CmosClockRegister(state, CMOS_SECONDS, &seconds) &&
             CmosClockRegister(state, CMOS_MINUTES, &minutes) &&
             CmosClockRegister(state, CMOS_HOURS, &hours) &&
@@ -204,7 +206,8 @@ static INT CmosSecondEdge(PCMOS_STATE state)
 
 VOID VddCmosAddClocks(PCMOS_STATE state, UINT32 clocks)
 {
-    UINT32 rateHz, period;
+    UINT32 rateHz;
+    UINT32 period;
     INT guard = 0;
 
     /* -- THE ONCE-A-SECOND EDGE, for UF and AF. Accumulated from the same clocks

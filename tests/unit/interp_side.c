@@ -95,7 +95,8 @@ static UINT32 InterpSideSegmentToLinear(WORD selector)
 
 static INT InterpSideSelectorDescriptor(WORD selector, UINT32 *accessRights, UINT32 *limit)
 {
-    UINT index = selector >> 3, kind = index & 3;
+    UINT index = selector >> 3;
+    UINT kind = index & 3;
 
     if (!(selector & 4) || index == 0 || kind == 3)
         return 0;
@@ -132,7 +133,8 @@ VOID FN(Sync)(PCBYTE image)
 INT FN(Step)(PINTERP_XCPU state, UINT64 *effects)
 {
     V86_CPU cpu;
-    INT isOk, index;
+    INT isOk;
+    INT index;
 
     for (index = 0; index < 8; ++index)
         cpu.Registers[index] = state->Registers[index];

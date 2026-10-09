@@ -21,7 +21,8 @@
 #define RECOVERY_TEST_MANY_FAILURES     99  /* A count that has kept rising */
 #define RECOVERY_TEST_SKIP_COUNT        6   /* The subsystems DOS_SAFE_SKIPS names */
 
-static INT g_Checks, g_Failures;
+static INT g_Checks;
+static INT g_Failures;
 
 static VOID RecoveryTestExpect(PCSTR description, LONG actual, LONG expected)
 {

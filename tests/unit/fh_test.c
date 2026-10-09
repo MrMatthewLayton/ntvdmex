@@ -35,7 +35,8 @@
 #define FH_TEST_NONE                0
 #define FH_TEST_MARK                TRUE
 
-static INT g_Checks, g_Failures;
+static INT g_Checks;
+static INT g_Failures;
 
 static VOID FhTestExpect(PCSTR description, LONG actual, LONG expected)
 {

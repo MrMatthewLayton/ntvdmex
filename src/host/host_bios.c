@@ -120,7 +120,8 @@ static INT g_FpuPresent = 1;
 WORD BiosEquipmentWord(VOID)
 {
     WORD equipment = BIOS_EQUIPMENT_ONE_PARALLEL | BIOS_EQUIPMENT_VIDEO_80X25_COLOUR | BIOS_EQUIPMENT_FLOPPY;                      /* floppy, 80x25 colour, 1 parallel */
-    INT portCount = 0, index;
+    INT portCount = 0;
+    INT index;
 
     for (index = 0; index < COMM_MAX_PORTS; ++index)
         if (VddCommIsFitted(&g_Comm, index))
@@ -250,7 +251,8 @@ INT LptSpoolPut(BYTE character)
                             CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
         if (g_Lpt == INVALID_HANDLE_VALUE)
         {
-            CHAR lineBuffer[128], *lineCursor = lineBuffer;
+            CHAR lineBuffer[128];
+            CHAR *lineCursor = lineBuffer;
             g_LptFailed = 1;
             lineCursor = LogPut(lineCursor, "  LPT1 spool OPEN FAILED err=0x");
             lineCursor = LogHex(lineCursor, GetLastError());
@@ -381,7 +383,8 @@ static VOID PrintScreenBop(volatile BYTE *tib, INT begin)
     static const INT savedRegisters[PRINT_SCREEN_SAVED_REGISTERS] = { VTIB_EAX, VTIB_EBX, VTIB_ECX, VTIB_EDX, VTIB_ESI,
                                VTIB_EDI, VTIB_EBP, VTIB_DS, VTIB_ES };
     BYTE character = 0;
-    INT status, index;
+    INT status;
+    INT index;
     if (begin)
     {
         NTVDD_REGISTERS registers;
@@ -481,16 +484,20 @@ volatile DWORD    g_Int15EventLinear;     /* linear address of its flag byte */
  * a descriptor pair that does not care.
  */
 static BYTE *g_ExtendedMemoryRaw;                  /* AH=88h's 15 MB, allocated on first use */
-static DWORD    g_Int15Function87Count, g_Int15Function87Refused;
+static DWORD g_Int15Function87Count;
+static DWORD g_Int15Function87Refused;
 /* `gdt_lin` = where the caller's 48-byte GDT is: ES:SI in V86; in PM the base of the
  * selector in ES plus (E)SI (#244, the PM arm).
  */
 UINT Int15MoveBlockAt(volatile BYTE *tib, DWORD gdtLinear)
 {
-    DWORD cx = VDM_REG16(tib, VTIB_ECX), length = cx * X86_WORD_SIZE;
+    DWORD cx = VDM_REG16(tib, VTIB_ECX);
+    DWORD length = cx * X86_WORD_SIZE;
     const volatile BYTE *gdt = (const volatile BYTE *)(ULONG_PTR)gdtLinear;
-    UINT32 source, destination;
-    BYTE *sourcePointer, *destinationPointer;
+    UINT32 source;
+    UINT32 destination;
+    BYTE *sourcePointer;
+    BYTE *destinationPointer;
     UINT status = 0;
 
     if (cx == 0)
@@ -528,7 +535,8 @@ out:
         static DWORD saidRefused = 0;
         if (!status || ++saidRefused <= 16)
         {
-            CHAR buffer[160], *cursor = buffer;
+            CHAR buffer[160];
+            CHAR *cursor = buffer;
             cursor = LogPut(cursor, "  INT15 AH=87h move 0x"); cursor = LogHex(cursor, length);
             cursor = LogPut(cursor, " bytes src=0x"); cursor = LogHex(cursor, gdt ? DosExtMemDescriptorBase(gdt + BIOS_MOVE_BLOCK_SOURCE) : 0);
             cursor = LogPut(cursor, " dst=0x");       cursor = LogHex(cursor, gdt ? DosExtMemDescriptorBase(gdt + 0x18) : 0);
@@ -541,7 +549,8 @@ out:
 
 static UINT Int15MoveBlock(volatile BYTE *tib)
 {
-    DWORD es = VDM_REG16(tib, VTIB_ES), si = VDM_REG16(tib, VTIB_ESI);
+    DWORD es = VDM_REG16(tib, VTIB_ES);
+    DWORD si = VDM_REG16(tib, VTIB_ESI);
 
     return Int15MoveBlockAt(tib, (es << PARAGRAPH_SHIFT) + si);
 }
@@ -678,7 +687,8 @@ INT V86BiosBop(volatile BYTE *tib, UINT bopNumber, PSTR *logCursor, PSTR base)
          */
         if (g_Net.IsPostPending)
         {
-            DWORD ss = VDM_REG16(tib, VTIB_SS), sp = VDM_REG16(tib, VTIB_ESP);
+            DWORD ss = VDM_REG16(tib, VTIB_SS);
+            DWORD sp = VDM_REG16(tib, VTIB_ESP);
             volatile WORD *frame = (volatile WORD *)(ULONG_PTR)((ss << PARAGRAPH_SHIFT) + sp);
             WORD flags = frame[X86_FRAME16_FLAGS_WORD];
             WORD newSp = (WORD)(sp - X86_IRET16_SIZE);
@@ -867,7 +877,8 @@ INT V86BiosBop(volatile BYTE *tib, UINT bopNumber, PSTR *logCursor, PSTR base)
                 else
                 {
                     DWORD microseconds = (VDM_REG16(tib, VTIB_ECX) << WORD_SHIFT) | VDM_REG16(tib, VTIB_EDX);
-                    WORD es = (WORD)VDM_REG16(tib, VTIB_ES), bx = (WORD)VDM_REG16(tib, VTIB_EBX);
+                    WORD es = (WORD)VDM_REG16(tib, VTIB_ES);
+                    WORD bx = (WORD)VDM_REG16(tib, VTIB_EBX);
                     g_Int15EventLinear = ((DWORD)es << PARAGRAPH_SHIFT) + bx;
                     *(volatile WORD  *)(ULONG_PTR)(BIOS_BDA_BASE + BIOS_BDA_WAIT_FLAG_POINTER) = bx;    /* 40:98 flag pointer */
                     *(volatile WORD  *)(ULONG_PTR)(BIOS_BDA_BASE + BIOS_BDA_WAIT_FLAG_SEGMENT) = es;
@@ -912,7 +923,8 @@ INT V86BiosBop(volatile BYTE *tib, UINT bopNumber, PSTR *logCursor, PSTR base)
                 UINT joystickDx = VDM_REG16(tib, VTIB_EDX);
                 { static INT said = 0;
                   if (!said) { said = 1;
-                    CHAR joystickLine[64], *joystickCursor = joystickLine;
+                    CHAR joystickLine[64];
+                    CHAR *joystickCursor = joystickLine;
                     joystickCursor = LogPut(joystickCursor, "  INT15 AH=84h joystick, dx=0x");
                     joystickCursor = LogHex(joystickCursor, joystickDx);
                     joystickCursor = LogPut(joystickCursor, VddJoystickIsLive(&g_Joystick) ? " (live)\r\n" : " (absent)\r\n");

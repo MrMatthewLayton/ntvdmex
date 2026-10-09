@@ -61,8 +61,9 @@ BOOL CsrssTaskDone(
 /* If CsrssTaskDone returned TRUE, CSRSS handed us the console's NEXT command
  * (a program launched into this console before ExitVDM); these hold it.
  */
-extern CHAR g_CsrssNextApp[CSRSS_APP_NAME_SIZE], g_CsrssNextCommand[CSRSS_COMMAND_LINE_SIZE],
-            g_CsrssNextDirectory[CSRSS_DIRECTORY_SIZE];
+extern CHAR g_CsrssNextApp[CSRSS_APP_NAME_SIZE];
+extern CHAR g_CsrssNextCommand[CSRSS_COMMAND_LINE_SIZE];
+extern CHAR g_CsrssNextDirectory[CSRSS_DIRECTORY_SIZE];
 extern HANDLE g_CsrssNextStandardHandles[CSRSS_STANDARD_HANDLES];
 /* ExitVDM(FALSE, 0): a DOS VDM leaving its console. Separate so a hang in either
  * call names itself in the log.

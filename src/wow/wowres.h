@@ -119,7 +119,8 @@ typedef struct _WOWRES_CACHE_ENTRY
 typedef struct _WOWRES_ACCEL
 {
     BYTE Flags;
-    WORD Key, Id;
+    WORD Key;
+    WORD Id;
 } WOWRES_ACCEL, *PWOWRES_ACCEL;
 
 /* THE APPLICATION'S OWN ICON (Importance = 2):

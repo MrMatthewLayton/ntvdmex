@@ -177,8 +177,10 @@ VOID AsyncWhyReport(VOID)
         "not32","setctx_fail","HOST_CS","?f","?10","?11","?12","?13",
         "not_in_exec","pic_refuse","unhooked","suspend_fail","getctx_fail",
         "v86_IF_off","in_our_hdlr","observed","ctx_busy","left_exec","simint_rm","nested_tick" };
-    CHAR base[1024], *cursor = base;
-    UINT line, reason;
+    CHAR base[1024];
+    CHAR *cursor = base;
+    UINT line;
+    UINT reason;
     /* NO SILENT CAPS: say how many ASYNC-EARLY lines were written and how many were
      * suppressed, so the log's thinness is never read as "it stopped happening". The
      * histogram below is the complete account either way.
@@ -216,7 +218,8 @@ VOID AsyncWhyReport(VOID)
  */
 VOID IfvReport(VOID)
 {
-    CHAR base[4096], *cursor = base;
+    CHAR base[4096];
+    CHAR *cursor = base;
 
   { INT path, state, line;
   DWORD starveMaximumMs = g_IfvStarveMaximumMs;
@@ -809,7 +812,9 @@ DWORD WINAPI DpmiWatchdog(LPVOID param)
       for (;;)
       {
         LONG iter;
-        DWORD enCs, enEip, base;
+        DWORD enCs;
+        DWORD enEip;
+        DWORD base;
         const BYTE *entryBytes;
         Sleep(DPMI_WATCHDOG_TICK_MS);
         if (g_DpmiDone)                                /* client exited cleanly -> keep the window */
@@ -953,7 +958,11 @@ DWORD WINAPI DpmiWatchdog(LPVOID param)
               if (g_HostCpu)
               {
                 CONTEXT context;
-                DWORD guestCs = 0, guestEip = 0, guestSs = 0, guestEsp = 0, guestFlags = 0;
+                DWORD guestCs = 0;
+                DWORD guestEip = 0;
+                DWORD guestSs = 0;
+                DWORD guestEsp = 0;
+                DWORD guestFlags = 0;
                 INT got = 0;
                 context.ContextFlags = CONTEXT_CONTROL;
                 if (SuspendThread(g_HostCpu) != (DWORD)-1)
@@ -1042,7 +1051,8 @@ DWORD WINAPI DpmiWatchdog(LPVOID param)
      */
     if (g_Machine && g_Machine->OutputLength > 0)
     {
-        DWORD offset = 0, total = (DWORD)g_Machine->OutputLength;
+        DWORD offset = 0;
+        DWORD total = (DWORD)g_Machine->OutputLength;
         cursor = lineBuffer; cursor = LogPut(cursor, "  ==> DOS OUTPUT (wedged): [\r\n");
         LogAppend(WDLOG_PATH, lineBuffer, cursor);
         while (offset < total)

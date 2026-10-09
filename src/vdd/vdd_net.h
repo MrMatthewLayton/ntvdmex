@@ -50,11 +50,16 @@
 typedef struct _NETBIOS_REQUEST
 {
     BYTE   Command;                /* wait form: bit 7 stripped */
-    BYTE   ReturnCode, LocalSession, NameNumber;
+    BYTE ReturnCode;
+    BYTE LocalSession;
+    BYTE NameNumber;
     BYTE  *Buffer;                 /* host address of the guest buffer, or NULL */
     WORD   Length;
-    BYTE   CallName[NETB_NAME_SIZE], Name[NETB_NAME_SIZE];
-    BYTE   ReceiveTimeout, SendTimeout, Adapter;
+    BYTE CallName[NETB_NAME_SIZE];
+    BYTE Name[NETB_NAME_SIZE];
+    BYTE ReceiveTimeout;
+    BYTE SendTimeout;
+    BYTE Adapter;
 } NETBIOS_REQUEST, *PNETBIOS_REQUEST;
 
 /* The host's NetBIOS. Synchronous; returns the final retcode (also in request->ReturnCode). */
@@ -65,15 +70,20 @@ typedef struct _NETBIOS_STATE
     PVDD_BUS       Bus;
     PNETBIOS_SUBMIT_ROUTINE Submit;
     PVOID SubmitContext;
-    UINT32 Calls, NoWaitCalls, PostsOwed, NoBackendCalls;
+    UINT32 Calls;
+    UINT32 NoWaitCalls;
+    UINT32 PostsOwed;
+    UINT32 NoBackendCalls;
     /* s91: a no-wait command's POST routine, owed to the guest as soon as INT 5Ch
      * returns. The HOST delivers it (it alone can edit the guest's return frame --
      * see v86_bios_bop) and clears IsPostPending; PostsOwed counts the ones that
      * could not be delivered.
      */
     INT    IsPostPending;
-    WORD   PostSegment, PostOffset;
-    BYTE   LastCommand, LastReturnCode;
+    WORD PostSegment;
+    WORD PostOffset;
+    BYTE LastCommand;
+    BYTE LastReturnCode;
 } NETBIOS_STATE, *PNETBIOS_STATE;
 
 INT  VddNetBiosInitialize(_In_ PVDD_BUS bus, _In_ PVOID context);

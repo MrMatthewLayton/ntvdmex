@@ -234,7 +234,10 @@ static PSTR ReportPitPacingAndHostCpuTime(PSTR cursor)
      * runs the guest -- so a cheaper wait shows up as a number, not an impression.
      */
     {   FILETIME creationTime, exitTime, kernelTime, userTime;
-    ULONGLONG previousKernel = 0, previousUser = 0, totalKernel = 0, totalUser = 0;
+    ULONGLONG previousKernel = 0;
+    ULONGLONG previousUser = 0;
+    ULONGLONG totalKernel = 0;
+    ULONGLONG totalUser = 0;
         if (GetProcessTimes(GetCurrentProcess(), &creationTime, &exitTime, &kernelTime, &userTime))
         {
             previousKernel = ((ULONGLONG)kernelTime.dwHighDateTime << DWORD_SHIFT | kernelTime.dwLowDateTime) / FILETIME_TICKS_PER_MILLISECOND_U;
@@ -1034,8 +1037,11 @@ static PSTR ReportDmxTaskAndDmaPolls(PSTR cursor)
     { const DWORD mixer = 0x57224u + 0x03AEDFECu;   /* DMX IRQ0 handler = table[0] */
       const volatile BYTE *stub = (const volatile BYTE *)(ULONG_PTR)0x03b431f0;
       MEMORY_BASIC_INFORMATION memoryInfo;
-      ULONG_PTR address = 0x00010000u, lim = 0x7ff00000u;   /* whole user space */
-      UINT found = 0, tries;
+      /* whole user space */
+      ULONG_PTR address = 0x00010000u;
+      ULONG_PTR lim = 0x7ff00000u;
+      UINT found = 0;
+      UINT tries;
       /* [CAUTION]: 0x03b431f0 IS DOOM'S ADDRESS, AND ONLY DOOM'S. Reading it unguarded is
        * the very mistake the note above says the scan got wrong -- made again,
        * one line below the warning. Under Doom the page is mapped and the probe
@@ -1053,7 +1059,9 @@ static PSTR ReportDmxTaskAndDmaPolls(PSTR cursor)
       cursor = LogPut(cursor, " mixer=0x"); cursor = LogHex(cursor, mixer);
       while (address < lim && found < 3)
       {
-          ULONG_PTR base, end, scan;
+          ULONG_PTR base;
+          ULONG_PTR end;
+          ULONG_PTR scan;
           INT readable;
           if (VirtualQuery((LPCVOID)address, &memoryInfo, sizeof memoryInfo) != sizeof memoryInfo)
               break;
@@ -1384,7 +1392,9 @@ static PSTR ReportPlanarVideoState(PSTR cursor, PCSTR const reportEnd)
      * (a file-read/decode fault, earlier). Bounded, one pass, exit only.
      */
     {   static const BYTE signature[12] = {0x00,0x2a,0x00,0x15,0x3f,0x15,0x15,0x15,0x15,0x2a,0x00,0x00};
-        UINT32 candidate, found = 0xFFFFFFFFu, hits = 0;
+        UINT32 candidate;
+        UINT32 found = 0xFFFFFFFFu;
+        UINT32 hits = 0;
         for (candidate = 0x400; candidate + 12 <= 0xA0000u; ++candidate)
         {
             if ((candidate & 0xFFF) == 0 && !InterpreterMemoryPageOk(candidate))
@@ -1424,7 +1434,8 @@ static PSTR ReportPlanarVideoState(PSTR cursor, PCSTR const reportEnd)
      */
     if (g_HeartbeatDs)
     {
-        UINT32 dataSegmentBase = (UINT32)g_HeartbeatDs << PARAGRAPH_SHIFT, index;
+        UINT32 dataSegmentBase = (UINT32)g_HeartbeatDs << PARAGRAPH_SHIFT;
+        UINT32 index;
         cursor = LogPut(cursor, "STAGE2: fade dump ds=0x"); cursor = LogHex(cursor, g_HeartbeatDs);
         if (InterpreterMemoryPageOk(dataSegmentBase + 0x1f7c))
         {
@@ -1446,7 +1457,8 @@ static PSTR ReportPlanarVideoState(PSTR cursor, PCSTR const reportEnd)
     /* The VRAM watchpoint. Silent unless cfg/vwatch.txt armed it. */
     if (g_Video.WatchOffset != VIDEO_OFFSET_NONE)
     {
-        UINT watchIndex2, watchCount = g_Video.WatchCount < VIDEO_WATCH_MAX ? g_Video.WatchCount : VIDEO_WATCH_MAX;
+        UINT watchIndex2;
+        UINT watchCount = g_Video.WatchCount < VIDEO_WATCH_MAX ? g_Video.WatchCount : VIDEO_WATCH_MAX;
         cursor = LogPut(cursor, "STAGE2: vwatch off=0x"); cursor = LogHex(cursor, g_Video.WatchOffset);
         cursor = LogPut(cursor, " writes="); cursor = LogDecimal(cursor, g_Video.WatchCount); cursor = LogPut(cursor, "\r\n");
         for (watchIndex2 = 0; watchIndex2 <= watchCount; ++watchIndex2)
@@ -1799,7 +1811,8 @@ static PSTR ReportGuestStateAtExit(PSTR cursor, PSTR const base, volatile BYTE *
      */
     LogAppend(LOG_PATH, base, cursor); cursor = base;
     { const volatile BYTE *zeroPage = (const volatile BYTE *)0;
-      DWORD cs2 = VDM_REG16(tib, VTIB_CS), ip2 = VDM_REG16(tib, VTIB_EIP);
+      DWORD cs2 = VDM_REG16(tib, VTIB_CS);
+      DWORD ip2 = VDM_REG16(tib, VTIB_EIP);
       const volatile BYTE *codeView = (const volatile BYTE *)((cs2 << PARAGRAPH_SHIFT) + ip2);
       UINT index3;
       cursor = LogPut(cursor, "STAGE2: ivt08="); cursor = LogHex(cursor, (DWORD)zeroPage[0x22] | ((DWORD)zeroPage[0x23] << BYTE_SHIFT));
@@ -1909,12 +1922,17 @@ static PSTR ReportModeY(PSTR cursor)
         cursor = LogPut(cursor, " bar_planes_equal_per_page:");
         for (page = 0; page < 3; ++page)
         {
-            UINT32 position, equalCount = 0, total = 0, base = page * 0x4000u;
+            UINT32 position;
+            UINT32 equalCount = 0;
+            UINT32 total = 0;
+            UINT32 base = page * 0x4000u;
             for (position = base + 168u * 80u; position < base + 200u * 80u; ++position)
             {
                 UINT32 windowOffset = position & (MODEY_WIN - 1u);
-                BYTE plane0Byte = ((BYTE *)g_ModeYView[0])[windowOffset], plane1Byte = ((BYTE *)g_ModeYView[1])[windowOffset];
-                BYTE plane2Byte = ((BYTE *)g_ModeYView[2])[windowOffset], plane3Byte = ((BYTE *)g_ModeYView[3])[windowOffset];
+                BYTE plane0Byte = ((BYTE *)g_ModeYView[0])[windowOffset];
+                BYTE plane1Byte = ((BYTE *)g_ModeYView[1])[windowOffset];
+                BYTE plane2Byte = ((BYTE *)g_ModeYView[2])[windowOffset];
+                BYTE plane3Byte = ((BYTE *)g_ModeYView[3])[windowOffset];
                 ++total;
                 if (plane0Byte == plane1Byte && plane1Byte == plane2Byte && plane2Byte == plane3Byte)
                     ++equalCount;
@@ -2235,8 +2253,11 @@ static PSTR ReportModeYBarDump(PSTR cursor, PSTR const base)
      */
     if (g_ModeYRemap && g_Video.ModeKind == VIDEO_KIND_LINEAR8 && !g_Video.IsChain4)
     {
-        UINT32 page, plane, row;
-        CHAR lineBuffer[220], *lineCursor;
+        UINT32 page;
+        UINT32 plane;
+        UINT32 row;
+        CHAR lineBuffer[220];
+        CHAR *lineCursor;
         LogAppend(LOG_PATH, base, cursor); SerialOut(base, cursor); cursor = base;  /* keep the log in order */
         lineCursor = lineBuffer; lineCursor = LogPut(lineCursor, "MODEYBAR dump: 3 pages x 4 planes x rows 168..199, "
                                "80 bytes/row (plane offset = row*80 + x/4)\r\n");
@@ -2245,7 +2266,8 @@ static PSTR ReportModeYBarDump(PSTR cursor, PSTR const base)
             for (plane = 0; plane < VIDEO_PLANES; ++plane)
                 for (row = 168; row < 200; ++row)
                 {
-                    UINT32 position = (page * 0x4000u + row * 80u) & (MODEY_WIN - 1u), pixelX;
+                    UINT32 position = (page * 0x4000u + row * 80u) & (MODEY_WIN - 1u);
+                    UINT32 pixelX;
                     const BYTE *source = (const BYTE *)g_ModeYView[plane];
                     lineCursor = lineBuffer;
                     lineCursor = LogPut(lineCursor, "MODEYBAR pg"); lineCursor = LogHexByte(lineCursor, page);
@@ -2280,7 +2302,8 @@ static PSTR ReportModeYBarDump(PSTR cursor, PSTR const base)
         LogAppend(LOG_PATH, lineBuffer, lineCursor); SerialOut(lineBuffer, lineCursor);
         for (row = 168; row < 200; ++row)
         {
-            UINT32 quarter, pixelX;
+            UINT32 quarter;
+            UINT32 pixelX;
             for (quarter = 0; quarter < 4; ++quarter)
             {
                 UINT32 position = (row * 320u + quarter * 80u) & (MODEY_WIN - 1u);

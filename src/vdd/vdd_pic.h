@@ -73,7 +73,8 @@ typedef const PIC_CHIP *PCPIC_CHIP;
 typedef struct _PIC_STATE
 {
     PVDD_BUS Bus;
-    PIC_CHIP Master, Slave;
+    PIC_CHIP Master;
+    PIC_CHIP Slave;
 } PIC_STATE, *PPIC_STATE;
 
 #define PIC_DEVICE_NAME     "pic"

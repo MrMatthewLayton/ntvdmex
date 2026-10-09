@@ -20,8 +20,12 @@
 
 typedef struct _DOS_IMAGE
 {
-    WORD     CodeSegment, InstructionPointer;   /* entry CS:IP */
-    WORD     StackSegment, StackPointer;        /* entry SS:SP */
+    /* entry CS:IP */
+    WORD CodeSegment;
+    WORD InstructionPointer;
+    /* entry SS:SP */
+    WORD StackSegment;
+    WORD StackPointer;
     BOOL     IsExe;         /* 1 = MZ .EXE, 0 = flat .COM */
     DWORD    ImageSize;     /* bytes placed in conventional memory */
 } DOS_IMAGE, *PDOS_IMAGE;
@@ -158,7 +162,8 @@ static inline DOS_IMAGE DosLoadImage(
  */
 static inline WORD DosImageParagraphs(_In_reads_bytes_(bytesRead) PCBYTE file, _In_ DWORD bytesRead)
 {
-    DWORD pageParagraphs, headerParagraphs;
+    DWORD pageParagraphs;
+    DWORD headerParagraphs;
 
     if (bytesRead < DOS_MZ_HEADER_MIN || file[0] != 'M' || file[1] != 'Z')
         return 0;
@@ -196,8 +201,11 @@ static inline INT DosExecSize(
     _Out_ PWORD allocation,
     _Out_ PBOOL loadHigh)
 {
-    DWORD imageParagraphs, needed, wanted;
-    WORD minimumAlloc, maximumAlloc;
+    DWORD imageParagraphs;
+    DWORD needed;
+    DWORD wanted;
+    WORD minimumAlloc;
+    WORD maximumAlloc;
 
     *loadHigh = FALSE;
     if (bytesRead < DOS_MZ_HEADER_MIN || file[0] != 'M' || file[1] != 'Z')
@@ -296,8 +304,14 @@ static inline DWORD DosLoadOverlay(
     _In_ WORD loadSegment,
     _In_ WORD relocationFactor)
 {
-    DWORD index, headerSize, relocationCount, relocationTable, totalUsed, imageSize;
-    WORD lastPageBytes, pageCount;
+    DWORD index;
+    DWORD headerSize;
+    DWORD relocationCount;
+    DWORD relocationTable;
+    DWORD totalUsed;
+    DWORD imageSize;
+    WORD lastPageBytes;
+    WORD pageCount;
     volatile BYTE *imageBytes;
 
     if (bytesRead < DOS_MZ_HEADER_MIN || file[0] != 'M' || file[1] != 'Z')

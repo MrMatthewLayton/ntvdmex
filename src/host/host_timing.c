@@ -132,10 +132,14 @@ static INT   g_AsyncTriedThisSync = 0;   /* see HostIrqSink: one attempt per PIT
  * either way -- so bucket the interval. QPC, because a tick period is smaller than
  * GetTickCount's granularity.
  */
-DWORD g_TickGap[12], g_TickGapMaximumMicroseconds, g_TickGapOver;   /* >11.6ms = a block */
+/* >11.6ms = a block */
+DWORD g_TickGap[12];
+DWORD g_TickGapMaximumMicroseconds;
+DWORD g_TickGapOver;
 VOID TickDeliveredNote(VOID)
 {
-    static LARGE_INTEGER frequency, prev;
+    static LARGE_INTEGER frequency;
+    static LARGE_INTEGER prev;
     LARGE_INTEGER now;
 
     if (!frequency.QuadPart && !QueryPerformanceFrequency(&frequency))
@@ -186,8 +190,11 @@ CRITICAL_SECTION g_PitCs;
  * storm (iobench case 1 could not accumulate 5 ticks in 30 s).
  */
 DWORD          g_EventIo         = 0;  /* port-I/O events serviced */
-LONGLONG       g_Irq0Start, g_Irq0TimePrevious;
-DWORD          g_Irq0NoteCs, g_Irq0NoteIp;      /* set by the caller */
+LONGLONG g_Irq0Start;
+LONGLONG g_Irq0TimePrevious;
+/* set by the caller */
+DWORD g_Irq0NoteCs;
+DWORD g_Irq0NoteIp;
 /* WHICH OF THREE MECHANISMS MAKES A LONG GAP? (Skyroads wobble, s61) (Importance = 2):
  * The s60 root-cause note reads the 8-20 ms gaps as ASYNC DELIVERY starving, and
  * the fix that follows from that is a lock-free courier thread. But two other
@@ -225,8 +232,14 @@ DWORD          g_Irq0NoteCs, g_Irq0NoteIp;      /* set by the caller */
  *   A gap is ANOMALOUS when it spans at least two programmed periods -- the same
  *   "the guest missed a tick" test, expressed in the guest's own units.
  */
-DWORD          g_Irq0RaiseCount, g_Irq0AttemptsCount, g_Irq0NieCount, g_Irq0YieldCount;
-static DWORD          g_Irq0PrRaise, g_Irq0PrAttempts, g_Irq0PrNie, g_Irq0PrYield;
+DWORD g_Irq0RaiseCount;
+DWORD g_Irq0AttemptsCount;
+DWORD g_Irq0NieCount;
+DWORD g_Irq0YieldCount;
+static DWORD g_Irq0PrRaise;
+static DWORD g_Irq0PrAttempts;
+static DWORD g_Irq0PrNie;
+static DWORD g_Irq0PrYield;
 VOID Irq0DeliveredNote(VOID)
 {
     LARGE_INTEGER now;
@@ -322,10 +335,13 @@ DWORD g_EventHistogram[EV_HIST_MAX];
  * between one VdmRunGuest's return and the next's entry, charged to the event that
  * returned (whatever the loop did to service it, interpreter slices included).
  */
-DWORD g_V86MicrosecondsTotal, g_HostMicrosecondsEvent[EV_HIST_MAX];
+DWORD g_V86MicrosecondsTotal;
+DWORD g_HostMicrosecondsEvent[EV_HIST_MAX];
 DWORD g_BopHistogram[BYTE_VALUES];            /* V86 BOP events by number (the busiest are printed) */
 DWORD g_PitPaceCalls;              /* PitPacerThread wakes (declared here for g_XsSnapshot) */
-DWORD g_XsStart, g_XsSeconds, g_XsSnapshot[XS_SECS][XS_N];
+DWORD g_XsStart;
+DWORD g_XsSeconds;
+DWORD g_XsSnapshot[XS_SECS][XS_N];
 #define PM_HEADLESS_GRACE_MS    3000    /* Grace for a clean wind-down before the hard backstop forces exit */
 
 /* Retry accounting for the one-attempt-per-sync device-IRQ offer in HostPitSync.
@@ -333,7 +349,9 @@ DWORD g_XsStart, g_XsSeconds, g_XsSnapshot[XS_SECS][XS_N];
  * `ok` counts the ones that landed. try==ok==0 is the healthy steady state -- it
  * means every device IRQ was placed at its raise instant and this cost nothing.
  */
-DWORD g_IrqNRetryTry = 0, g_IrqNRetryOk = 0, g_IrqNRetryWhy = 0;
+DWORD g_IrqNRetryTry = 0;
+DWORD g_IrqNRetryOk = 0;
+DWORD g_IrqNRetryWhy = 0;
 /* True when a line's vector still points at one of our own do-nothing stubs (the shared
  * device IRET at DOS_HDLR_SEG:0x66, or the default INT 09h at 0x4C). Those never send an
  * EOI, so anything delivered through them must be auto-EOI'd or the line latches.
@@ -405,7 +423,8 @@ enum
 static DWORD g_Irq0LastAttempt = 0;   /* GetTickCount()|1 at the last delivery attempt */
 INT Irq0CanDeliver(VOID)
 {
-    DWORD now = GetTickCount() | 1, gap = now - g_Irq0LastAttempt;
+    DWORD now = GetTickCount() | 1;
+    DWORD gap = now - g_Irq0LastAttempt;
 
     g_Irq0LastAttempt = now;
     if (VddPicCanDeliver(&g_Pic, PIC_IRQ_TIMER))
@@ -448,7 +467,9 @@ INT Irq0CanDeliver(VOID)
          */
         if (since && g_TibDebug)
         {
-            static DWORD lines = 0, episode = 0, step = 0;
+            static DWORD lines = 0;
+            static DWORD episode = 0;
+            static DWORD step = 0;
             DWORD milliseconds = GetTickCount() - since;
             if (episode != since)
             {
@@ -457,7 +478,8 @@ INT Irq0CanDeliver(VOID)
             }
             if (milliseconds >= (step + 1) * 50u && lines < 8)
             {
-                CHAR buffer[160], *cursor = buffer;
+                CHAR buffer[160];
+                CHAR *cursor = buffer;
                 step = milliseconds / 50u;
                 ++lines;
                 cursor = LogPut(cursor, "IRQ0-ISR-LONG in service ms=");  cursor = LogDecimal(cursor, milliseconds);
@@ -543,7 +565,8 @@ VOID Irq0PmUnclaim(VOID)
  */
 static UINT64 HostTimeMicrosecondsQpc(VOID)
 {
-    static LARGE_INTEGER frequency, base;
+    static LARGE_INTEGER frequency;
+    static LARGE_INTEGER base;
     LARGE_INTEGER now;
 
     if (!frequency.QuadPart)
@@ -572,14 +595,19 @@ enum
  */
 typedef struct
 {
-    UINT64 TscBase, MicrosecondsBase, Last, Resync;
+    UINT64 TscBase;
+    UINT64 MicrosecondsBase;
+    UINT64 Last;
+    UINT64 Resync;
     UINT32 Multiplier;
 } HOST_CLOCK;
 static DWORD g_ClockTls = TLS_OUT_OF_INDEXES;
 UINT64 HostTimeMicroseconds(VOID)
 {
-    UINT32 low, high;
-    UINT64 tsc, microseconds;
+    UINT32 low;
+    UINT32 high;
+    UINT64 tsc;
+    UINT64 microseconds;
     HOST_CLOCK *clock;
 
     /* Per thread through Win32 TLS (this build has no CRT, so no __thread): the slot
@@ -609,7 +637,8 @@ UINT64 HostTimeMicroseconds(VOID)
         UINT64 qpcMicroseconds = HostTimeMicrosecondsQpc();
         if (clock->TscBase && qpcMicroseconds > clock->MicrosecondsBase && tsc > clock->TscBase)
         {
-            UINT64 tscDelta = tsc - clock->TscBase, microsecondsDelta = qpcMicroseconds - clock->MicrosecondsBase;
+            UINT64 tscDelta = tsc - clock->TscBase;
+            UINT64 microsecondsDelta = qpcMicroseconds - clock->MicrosecondsBase;
             if (microsecondsDelta >= TSC_RESYNC_MIN_US)                         /* a usable interval: re-derive rate */
             {
                 UINT64 multiplier = (microsecondsDelta << DWORD_SHIFT) / tscDelta;
@@ -685,7 +714,8 @@ INT  g_PitPacePriority = THREAD_PRIORITY_NORMAL;
 INT  g_PitPaceInject = 1;
 LONGLONG Int15QpcAfterMicroseconds(DWORD microseconds)
 {
-    LARGE_INTEGER now, frequency;
+    LARGE_INTEGER now;
+    LARGE_INTEGER frequency;
 
     QueryPerformanceCounter(&now);
     QueryPerformanceFrequency(&frequency);
@@ -849,7 +879,8 @@ DWORD WINAPI TickCourierThread(LPVOID parameter)
                                         : THREAD_PRIORITY_HIGHEST);
     while (g_Running)
     {
-        LARGE_INTEGER start, now;
+        LARGE_INTEGER start;
+        LARGE_INTEGER now;
         /* The 50 ms cap is a backstop, not the mechanism: the raise site signals us.
          * Without it a lost signal would park the courier for the rest of the run.
          */
@@ -917,7 +948,9 @@ UINT HostCpuMhz(VOID)
     if (mhz == CPU_MHZ_UNKNOWN_U)
     {
         HKEY key;
-        DWORD value = 0, size = sizeof value, valueType = 0;
+        DWORD value = 0;
+        DWORD size = sizeof value;
+        DWORD valueType = 0;
         mhz = 0;
         if (RegOpenKeyExA(HKEY_LOCAL_MACHINE, HOST_REG_CPU_KEY,
                           0, KEY_READ, &key) == ERROR_SUCCESS)
@@ -1069,7 +1102,8 @@ VOID ExecEnterMark(VOID)
 
 VOID ExecLeaveMark(VOID)
 {
-    LONG enterMicroseconds, now;
+    LONG enterMicroseconds;
+    LONG now;
 
     if (!g_ExecTimingOn)
         return;
@@ -1146,8 +1180,12 @@ VOID CpuSpeedCooperativePark(VOID)
  * port traps / timer raises in that same second. Written by the throttle thread
  * only (the io and raise columns are snapshots of counters owned elsewhere).
  */
-static DWORD g_ControlExecMicroseconds[IRQ0TL_SECS], g_ControlHoldMicroseconds[IRQ0TL_SECS], g_ControlMissed[IRQ0TL_SECS];
-static DWORD g_ControlCooperative[IRQ0TL_SECS], g_ControlIo[IRQ0TL_SECS], g_ControlRaise[IRQ0TL_SECS];
+static DWORD g_ControlExecMicroseconds[IRQ0TL_SECS];
+static DWORD g_ControlHoldMicroseconds[IRQ0TL_SECS];
+static DWORD g_ControlMissed[IRQ0TL_SECS];
+static DWORD g_ControlCooperative[IRQ0TL_SECS];
+static DWORD g_ControlIo[IRQ0TL_SECS];
+static DWORD g_ControlRaise[IRQ0TL_SECS];
 static DWORD g_ControlRunMicroseconds[IRQ0TL_SECS];
 static INT CpuSpeedTimelineSeconds(VOID)
 {
@@ -1168,8 +1206,11 @@ static INT CpuSpeedTimelineSeconds(VOID)
 VOID CpuSpeedTimelineDump(PCSTR tag)
 {
     static PCSTR const names[7] = { "exec_ms", "hold_ms", "missed", "coop", "io", "raise", "run_us" };
-    CHAR buffer[1400], *cursor;
-    UINT column, second, last = 0;
+    CHAR buffer[1400];
+    CHAR *cursor;
+    UINT column;
+    UINT second;
+    UINT last = 0;
     for (second = 0; second < IRQ0TL_SECS; ++second)
         if (g_ControlExecMicroseconds[second] || g_ControlHoldMicroseconds[second])
             last = second;
@@ -1268,11 +1309,15 @@ VOID CpuSpeedRecompute(VOID)
  * number attached to it. cpuaff.txt = 1 to try it.
  */
 INT   g_CpuAffinityOn;              /* cpuaff.txt = 1 (file knob only): pin the guest */
-DWORD g_CpuAffinityGuest, g_CpuAffinityRest, g_CpuAffinityCpuCount;   /* what we chose */
+/* what we chose */
+DWORD g_CpuAffinityGuest;
+DWORD g_CpuAffinityRest;
+DWORD g_CpuAffinityCpuCount;
 static VOID CpuAffinityApply(VOID)
 {
     SYSTEM_INFO systemInfo;
-    DWORD_PTR processMask = 0, systemMask = 0;
+    DWORD_PTR processMask = 0;
+    DWORD_PTR systemMask = 0;
 
     if (!g_CpuAffinityOn || !g_HostCpu)
         return;
@@ -1457,7 +1502,8 @@ DWORD WINAPI CpuSpeedThread(LPVOID param)
                 Sleep((DWORD)(runMicroseconds / MICROSECONDS_PER_MILLISECOND_UL));
             else if (runMicroseconds && duty >= CPUSPEED_RUN_FLOOR_BP)
             {
-                LARGE_INTEGER runStart, runNow;
+                LARGE_INTEGER runStart;
+                LARGE_INTEGER runNow;
                 QueryPerformanceCounter(&runStart);
                 do
                 {
@@ -1476,15 +1522,19 @@ DWORD WINAPI CpuSpeedThread(LPVOID param)
          * at-or-ahead step forgives it).
          */
         {   DWORD started = GetTickCount();
-            INT done = 0, spins = 0;
+            INT done = 0;
+            INT spins = 0;
             LARGE_INTEGER parkStart;
             QueryPerformanceCounter(&parkStart);
 #define CPUSPD_YIELD_BURST  200
             while (!done && g_Running && !g_PauseWant && GetTickCount() - started < CPUSPEED_CATCH_TIMEOUT_MS)
             {
                 CONTEXT context;
-                LARGE_INTEGER roundTrip0, roundTrip1, now;
-                INT gotContext, caught = CPUSPEED_CATCH_NONE;
+                LARGE_INTEGER roundTrip0;
+                LARGE_INTEGER roundTrip1;
+                LARGE_INTEGER now;
+                INT gotContext;
+                INT caught = CPUSPEED_CATCH_NONE;
                 if (!g_HostCpu || g_InExec == 0)
                 {
                     /* #225: outside VdmRunGuest -- ask it to park at its next re-entry. */
@@ -1642,8 +1692,11 @@ DWORD WINAPI HeartbeatThread(LPVOID parameter)
          * the heartbeat thread died writing " 1f7c=" over the top of its own stack
          * (a host AV on a worker, mid-run). 2048 now, and aw5{} is capped at 6 codes.
          */
-        CHAR buffer[2048], *cursor = buffer;
-        DWORD cs = 0, ip = 0, eflags = 0;
+        CHAR buffer[2048];
+        CHAR *cursor = buffer;
+        DWORD cs = 0;
+        DWORD ip = 0;
+        DWORD eflags = 0;
         if (g_TibDebug)
         {
             cs  = VDM_REG16(g_TibDebug, VTIB_CS);
@@ -1674,7 +1727,8 @@ DWORD WINAPI HeartbeatThread(LPVOID parameter)
          */
         { INT index;
         DWORD pendingMask = 0;
-        WORD int0DOffset = PeekWord(IVT_OFFSET_ADDRESS(VECTOR_IRQ5)), int0DSegment = PeekWord(IVT_SEGMENT_ADDRESS(VECTOR_IRQ5));
+        WORD int0DOffset = PeekWord(IVT_OFFSET_ADDRESS(VECTOR_IRQ5));
+        WORD int0DSegment = PeekWord(IVT_SEGMENT_ADDRESS(VECTOR_IRQ5));
           for (index = 0; index < PIC_LINES; ++index)
               if (g_IrqNPending[index])
                   pendingMask |= 1u << index;
@@ -1767,7 +1821,8 @@ DWORD WINAPI HeartbeatThread(LPVOID parameter)
             cursor = LogPut(cursor, "/"); cursor = LogDecimal(cursor, g_Video.DacRowHistogram[2]);
             cursor = LogPut(cursor, "/"); cursor = LogDecimal(cursor, g_Video.DacRowHistogram[3]);
             cursor = LogPut(cursor, " lastrow=0x"); cursor = LogHex(cursor, (DWORD)g_Video.DacLastRow);
-            BYTE probeBytes[6], probeByte;
+            BYTE probeBytes[6];
+            BYTE probeByte;
             SIZE_T got = 0;
             cursor = LogPut(cursor, " pal2668=");
             if (ReadProcessMemory(GetCurrentProcess(), (LPCVOID)(ULONG_PTR)(dataSegmentBase + 0x2668), probeBytes, 6, &got)
@@ -1796,7 +1851,8 @@ DWORD WINAPI HeartbeatThread(LPVOID parameter)
 /* #238: guest time against host time, the host's share charged per event (g_HostMicrosecondsEvent). */
 VOID ExecShareReport(VOID)
 {
-    CHAR base[1024], *cursor = base;
+    CHAR base[1024];
+    CHAR *cursor = base;
     INT event;
 
     cursor = LogPut(cursor, "STAGE2: exec share (#238) v86_ms="); cursor = LogDecimal(cursor, g_V86MicrosecondsTotal / MICROSECONDS_PER_MILLISECOND_U);
@@ -1810,7 +1866,8 @@ VOID ExecShareReport(VOID)
     }
     {   /* the six busiest BOP numbers */
         DWORD seen[BYTE_VALUES];
-        INT index, rank;
+        INT index;
+        INT rank;
         for (index = 0; index < BYTE_VALUES; ++index)
             seen[index] = g_BopHistogram[index];
         cursor = LogPut(cursor, " bops:");
@@ -1877,8 +1934,12 @@ DWORD WINAPI HeadlessDeadlineThread(LPVOID parameter)
      * explain the run (`HOSTFAULT at=0x36303030`, i.e. "0006" as a return address).
      * Worst case per flush: ~1.1 KB, then ~0.6 KB (unclaimed + VESA).
      */
-    CHAR buffer[2048], *cursor = buffer;
-    DWORD snapshotCs = 0, snapshotIp = 0, snapshotEflags = 0, snapshotTick = 0;
+    CHAR buffer[2048];
+    CHAR *cursor = buffer;
+    DWORD snapshotCs = 0;
+    DWORD snapshotIp = 0;
+    DWORD snapshotEflags = 0;
+    DWORD snapshotTick = 0;
     BYTE  snapshotBytes[12];
     INT   snapshotOk = 0;
 
@@ -1908,12 +1969,14 @@ DWORD WINAPI HeadlessDeadlineThread(LPVOID parameter)
     if (g_MemoryDumpLength)                          /* MEMDUMP_FLAG: the guest is still mapped */
     {
         HANDLE dumpHandle = CreateFileA(MEMDUMP_PATH, GENERIC_WRITE, 0, NULL, CREATE_ALWAYS, 0, NULL);
-        DWORD done = 0, offset = 0;
+        DWORD done = 0;
+        DWORD offset = 0;
         if (dumpHandle != INVALID_HANDLE_VALUE)
         {
             while (offset < g_MemoryDumpLength)         /* page at a time, skipping what is not mapped */
             {
-                DWORD chunk = X86_PAGE_SIZE, bytesWritten = 0;
+                DWORD chunk = X86_PAGE_SIZE;
+                DWORD bytesWritten = 0;
                 PCVOID source = (const VOID *)(ULONG_PTR)(g_MemoryDumpLinear + offset);
                 if (chunk > g_MemoryDumpLength - offset)
                     chunk = g_MemoryDumpLength - offset;
@@ -2098,7 +2161,8 @@ VOID BackgroundPriorityTick(HWND window)
     static INT logged;
     DWORD now = GetTickCount();
     HWND foreground;
-    INT want, isBackground;
+    INT want;
+    INT isBackground;
 
     if (!g_ExecThread || now - last < BACKGROUND_PRIORITY_TICK_MS)
         return;
@@ -2119,7 +2183,8 @@ VOID BackgroundPriorityTick(HWND window)
     SetPriorityClass(GetCurrentProcess(), isBackground ? IDLE_PRIORITY_CLASS : NORMAL_PRIORITY_CLASS);
     if (logged++ < 32)
     {
-        CHAR buffer[128], *cursor = LogPut(buffer, "PRIO: guest thread -> ");
+        CHAR buffer[128];
+        CHAR *cursor = LogPut(buffer, "PRIO: guest thread -> ");
         cursor = LogPut(cursor, isBackground ? "idle class (background, another host running)"
                        : "its own priority");
         cursor = LogPut(cursor, " (#211)\r\n");
@@ -2262,7 +2327,9 @@ INT HostTickTake(UINT32 *ticks, UINT32 *wraps, UINT32 *since)
  */
 VOID HostTicksSet(PVOID context, UINT32 ticks)
 {
-    UINT32 takenTicks = ticks, wraps = 0, since = 0;
+    UINT32 takenTicks = ticks;
+    UINT32 wraps = 0;
+    UINT32 since = 0;
 
     (VOID)context;
     if (!HostTickTake(&takenTicks, &wraps, &since))
@@ -2307,7 +2374,8 @@ VOID HostPitGuard(PVOID context, INT enter)
  */
 VOID HostPitGenerate(VOID)
 {
-    static LARGE_INTEGER frequency, last;
+    static LARGE_INTEGER frequency;
+    static LARGE_INTEGER last;
     LARGE_INTEGER now;
     ULONGLONG delta;
 
@@ -2548,8 +2616,14 @@ VOID HostPitSync(VOID)
  */
 VOID PitLatchNote(BYTE command)
 {
-    UINT32 total, count, first, base, index, column = 0;
-    CHAR buffer[1200], *cursor = buffer;
+    UINT32 total;
+    UINT32 count;
+    UINT32 first;
+    UINT32 base;
+    UINT32 index;
+    UINT32 column = 0;
+    CHAR buffer[1200];
+    CHAR *cursor = buffer;
 
     /* [CAUTION]: The ring is opt-in (cfg\pitlatch.flag) and so is this: the dump is ~43
      * LogAppend calls issued from V86HostOut, i.e. FILE I/O UNDER g_Lock from inside
@@ -2639,7 +2713,12 @@ enum
 {
     RETRACE_IDLE_PATTERN_LENGTH = 4, RETRACE_IDLE_BACK_MAX = 3
 };   /* RetraceIdle: test/and al ; jcc back to the IN */
-volatile DWORD g_RetracePending, g_RetraceCs, g_RetraceIp, g_RetraceAl, g_RetraceCx, g_RetraceIdles;
+volatile DWORD g_RetracePending;
+volatile DWORD g_RetraceCs;
+volatile DWORD g_RetraceIp;
+volatile DWORD g_RetraceAl;
+volatile DWORD g_RetraceCx;
+volatile DWORD g_RetraceIdles;
 static INT g_RetraceOffset = -1;
 VOID RetraceNote(volatile BYTE *tib, WORD port, INT isIn, DWORD cs, DWORD ipAfter)
 {
@@ -2675,7 +2754,8 @@ VOID RetraceNote(volatile BYTE *tib, WORD port, INT isIn, DWORD cs, DWORD ipAfte
 VOID RetraceIdle(VOID)
 {
     const volatile BYTE *code;
-    INT want, bit3;
+    INT want;
+    INT bit3;
     DWORD ip;
     UINT32 microseconds;
 

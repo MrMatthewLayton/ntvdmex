@@ -76,7 +76,8 @@ typedef VOID (*PAUDIO_WAVE_FILL_ROUTINE)(PVOID context, INT16 *output, UINT32 fr
 typedef struct _AUDIO_WAVE
 {
     HMODULE   Module;
-    HANDLE    Thread, Event;
+    HANDLE Thread;
+    HANDLE Event;
     volatile LONG IsRunning;
     PVOID WaveOut;                      /* HWAVEOUT, opaque here */
     PVOID MidiOut;                      /* HMIDIOUT, opaque here */
@@ -123,8 +124,12 @@ typedef struct _AUDIO_WAVE
      */
     INT       WantsDirectSound;
     INT       IsUsingDirectSound;
-    PVOID DirectSound, DirectSoundBuffer;                 /* IDirectSound, IDirectSoundBuffer */
-    UINT32  DirectSoundBytes, DirectSoundWritePosition;        /* ring size, next byte we write */
+    /* IDirectSound, IDirectSoundBuffer */
+    PVOID DirectSound;
+    PVOID DirectSoundBuffer;
+    /* ring size, next byte we write */
+    UINT32 DirectSoundBytes;
+    UINT32 DirectSoundWritePosition;
     /* #136: Settings > Audio > MIDI (MIDI_ROUTE_*, midi_route.h). Set by the caller
      * BEFORE AudioWaveStart and preserved across its zeroing, like WantsDirectSound. 0 = Host
      * GM = device 0 without enumerating, which is every build so far. The rest is what
@@ -137,7 +142,8 @@ typedef struct _AUDIO_WAVE
     INT       IsMidiExternal;
     UINT32  MidiDeviceCount;
     char      MidiName[AUDIO_MIDI_NAME_LENGTH];         /* `char`, not CHAR: CHAR here moved code in AudioWaveStart (s93) */
-    UINT32  SysExSent, SysExDropped;
+    UINT32 SysExSent;
+    UINT32 SysExDropped;
 
     /* WAVEHDR + sample storage, allocated inline to avoid a heap dependency */
     BYTE Headers[AUDIO_WAVE_BUFFERS][AUDIO_WAVE_HEADER_BYTES];  /* WAVEHDR is 32 bytes on win32 */

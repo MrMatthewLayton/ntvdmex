@@ -89,7 +89,8 @@ UINT LauncherCompilerVariables(
     while (entry < environment + environmentCapacity && *entry)
     {
         PCSTR equals = entry;
-        UINT nameLength, wanted;
+        UINT nameLength;
+        UINT wanted;
         while (*equals && *equals != '=')
             ++equals;
         if (*equals != '=' || equals == entry)
@@ -103,7 +104,8 @@ UINT LauncherCompilerVariables(
             CHAR shortValue[512];
             PCSTR value = equals + 1;
             DWORD shortLength = GetShortPathNameA(value, shortValue, sizeof shortValue);
-            UINT valueLength, need;
+            UINT valueLength;
+            UINT need;
             if (shortLength && shortLength < sizeof shortValue)
                 value = shortValue;
             valueLength = (UINT)lstrlenA(value);
@@ -137,7 +139,9 @@ DWORD        g_HmaError;   /* why not, when g_Hma == 0 */
  * lose or misplace a line. Chasing that cost a cycle here, and the same defect
  * had already put a stray SysVars line at byte 0 of the log.
  */
-DWORD g_HmaState, g_HmaProtection;   /* what was already at 0x100000 */
+/* what was already at 0x100000 */
+DWORD g_HmaState;
+DWORD g_HmaProtection;
 VOID HmaTry(VOID)
 {
     MEMORY_BASIC_INFORMATION memoryInfo;
@@ -206,9 +210,23 @@ DOS_EMS_STATE    g_Ems;       /* M4: EMS expanded-memory manager */
 #define EXEC_MAX_DEPTH  8
 static struct
 {
-    DWORD Eax, Ebx, Ecx, Edx, Esi, Edi, Ebp, Esp, Eip, Eflags;
-    WORD  Cs, Ss, Ds, Es;
-    WORD  Psp, DtaSegment, DtaOffset;
+    DWORD Eax;
+    DWORD Ebx;
+    DWORD Ecx;
+    DWORD Edx;
+    DWORD Esi;
+    DWORD Edi;
+    DWORD Ebp;
+    DWORD Esp;
+    DWORD Eip;
+    DWORD Eflags;
+    WORD Cs;
+    WORD Ss;
+    WORD Ds;
+    WORD Es;
+    WORD Psp;
+    WORD DtaSegment;
+    WORD DtaOffset;
     WORD  ChildSegment;                  /* freed when the child terminates */
     WORD  EnvironmentSegment;                    /* the env COPY we made for it, if any; freed with it */
 } g_Exec[EXEC_MAX_DEPTH];
@@ -223,7 +241,9 @@ static struct
 static struct
 {
     WORD  Ivt[IVT_SIZE / X86_WORD_SIZE];                   /* 0000:0000-03FF as the parent left it */
-    BYTE  ImrMaster, ImrSlave, VideoMode;
+    BYTE ImrMaster;
+    BYTE ImrSlave;
+    BYTE VideoMode;
     DWORD Pit0;                       /* channel 0's effective reload */
     CHAR  ProgramName[64];               /* the PARENT's status-strip name (user, s84) */
 } g_ExecMachine[EXEC_MAX_DEPTH];
@@ -257,7 +277,9 @@ static INT ExecWindows(DOS_MACHINE *machine, INT kind, UINT subsystem, PSTR *log
     PROCESS_INFORMATION processInfo;
     const volatile BYTE *tail = (const volatile BYTE *)
         (((DWORD)machine->ExecTailSegment << PARAGRAPH_SHIFT) + machine->ExecTailOffset);
-    INT tailLength = tail[0] > DOS_PSP_COMMAND_TAIL_MAX ? DOS_PSP_COMMAND_TAIL_MAX : tail[0], index, wait = (kind == DOS_EXE_PE && subsystem == IMAGE_SUBSYSTEM_WINDOWS_CUI);
+    INT tailLength = tail[0] > DOS_PSP_COMMAND_TAIL_MAX ? DOS_PSP_COMMAND_TAIL_MAX : tail[0];
+    INT index;
+    INT wait = (kind == DOS_EXE_PE && subsystem == IMAGE_SUBSYSTEM_WINDOWS_CUI);
     PSTR cursor = command;
     DWORD exitCode = 0;
 
@@ -303,10 +325,15 @@ PSTR ExecBegin(DOS_MACHINE *machine, volatile BYTE *tib, PSTR cursor)
 {
     HANDLE fileHandle;
     DWORD bytesRead = 0;
-    WORD child = 0, maximumParagraphs = 0, want, environmentSegment = 0, environmentBlock = 0;
+    WORD child = 0;
+    WORD maximumParagraphs = 0;
+    WORD want;
+    WORD environmentSegment = 0;
+    WORD environmentBlock = 0;
     DOS_IMAGE image;
     volatile WORD *flagsPointer;
-    INT depth = g_ExecDepth, loadHigh = 0;
+    INT depth = g_ExecDepth;
+    INT loadHigh = 0;
 
     flagsPointer = (volatile WORD *)((VDM_REG16(tib, VTIB_SS) << PARAGRAPH_SHIFT)
            + ((VDM_REG16(tib, VTIB_ESP) + X86_FRAME16_FLAGS) & WORD_MASK));
@@ -397,7 +424,10 @@ PSTR ExecBegin(DOS_MACHINE *machine, volatile BYTE *tib, PSTR cursor)
         const volatile BYTE *parentPsp = (const volatile BYTE *)((DWORD)machine->PspSegment << PARAGRAPH_SHIFT);
         WORD parentEnvironmentSegment = environmentSegment ? environmentSegment : (WORD)(parentPsp[DOS_PSP_ENVIRONMENT] | (parentPsp[DOS_PSP_ENVIRONMENT + 1] << BYTE_SHIFT));
         const volatile BYTE *parentEnvironment = (const volatile BYTE *)((DWORD)parentEnvironmentSegment << PARAGRAPH_SHIFT);
-        DWORD environmentLength, nameLength = 0, total, index;
+        DWORD environmentLength;
+        DWORD nameLength = 0;
+        DWORD total;
+        DWORD index;
         volatile BYTE *childEnvironment;
         if (parentEnvironment[0] == 0)
             environmentLength = 1;                                              /* empty: one NUL ends the list */
@@ -421,9 +451,12 @@ PSTR ExecBegin(DOS_MACHINE *machine, volatile BYTE *tib, PSTR cursor)
             ++nameLength;
         if (nameLength >= DOS_EXTENDER_ARGV0_MAX)
         {
-            CHAR currentDirectory[MAX_PATH], shortCurrentDirectory[MAX_PATH];
-            DWORD currentDirectoryLength, shortCurrentDirectoryLength;
-            PCSTR executableBaseName = executableName, scan;
+            CHAR currentDirectory[MAX_PATH];
+            CHAR shortCurrentDirectory[MAX_PATH];
+            DWORD currentDirectoryLength;
+            DWORD shortCurrentDirectoryLength;
+            PCSTR executableBaseName = executableName;
+            PCSTR scan;
             for (scan = executableName; *scan; ++scan)
                 if (*scan == '\\')
                     executableBaseName = scan + 1;
@@ -541,7 +574,9 @@ PSTR ExecBegin(DOS_MACHINE *machine, volatile BYTE *tib, PSTR cursor)
      * one. Compared on the directory, long or 8.3 form.
      */
     {   CHAR systemDirectory[MAX_PATH], shortSystemDirectory[MAX_PATH];
-    DWORD systemLength, shortSystemLength = 0, directoryLength = 0;
+    DWORD systemLength;
+    DWORD shortSystemLength = 0;
+    DWORD directoryLength = 0;
     PCSTR scan;
         for (scan = machine->ExecPath; *scan; ++scan)
             if (*scan == '\\')
@@ -567,7 +602,8 @@ PSTR ExecBegin(DOS_MACHINE *machine, volatile BYTE *tib, PSTR cursor)
     { volatile BYTE *childPsp = (volatile BYTE *)(child << PARAGRAPH_SHIFT);
       const volatile BYTE *tail = (const volatile BYTE *)
           ((machine->ExecTailSegment << PARAGRAPH_SHIFT) + machine->ExecTailOffset);
-      INT index, count = tail[0] > DOS_PSP_COMMAND_TAIL_MAX ? DOS_PSP_COMMAND_TAIL_MAX : tail[0];
+      INT index;
+      INT count = tail[0] > DOS_PSP_COMMAND_TAIL_MAX ? DOS_PSP_COMMAND_TAIL_MAX : tail[0];
       for (index = 0; index <= count; ++index)
           childPsp[DOS_PSP_COMMAND_TAIL_LENGTH + index] = tail[index];
       childPsp[DOS_PSP_COMMAND_TAIL + count] = DOS_PSP_COMMAND_TAIL_END;
@@ -707,8 +743,17 @@ PSTR ExecBegin(DOS_MACHINE *machine, volatile BYTE *tib, PSTR cursor)
  */
 static struct
 {
-    DWORD Eax, Ebx, Ecx, Edx, Esi, Edi, Ebp, Eip;
-    WORD  Cs, Ds, Es;
+    DWORD Eax;
+    DWORD Ebx;
+    DWORD Ecx;
+    DWORD Edx;
+    DWORD Esi;
+    DWORD Edi;
+    DWORD Ebp;
+    DWORD Eip;
+    WORD Cs;
+    WORD Ds;
+    WORD Es;
     BYTE  Ah;                                  /* what the handler was told it may answer */
     BYTE  Function;                                  /* the INT 21h function that failed */
 } g_Critical;
@@ -762,7 +807,9 @@ VOID CriticalRaise(DOS_MACHINE *machine, volatile BYTE *tib, PSTR *logCursor)
 INT CriticalReturn(DOS_MACHINE *machine, volatile BYTE *tib, PSTR *logCursor)
 {
     volatile BYTE *swappableDataArea = (volatile BYTE *)(((DWORD)DOS_SDA_SEG << PARAGRAPH_SHIFT) + DOS_SDA_OFF);
-    BYTE criticalAction = (BYTE)(VDM_REG(tib, VTIB_EAX) & BYTE_MASK), said = criticalAction, allowed = g_Critical.Ah;
+    BYTE criticalAction = (BYTE)(VDM_REG(tib, VTIB_EAX) & BYTE_MASK);
+    BYTE said = criticalAction;
+    BYTE allowed = g_Critical.Ah;
     volatile WORD *flagsPointer;
 
     swappableDataArea[0] = 0;
@@ -962,7 +1009,8 @@ INT DosTerminate(DOS_MACHINE *machine, PVOID tib, PSTR *logCursor, PSTR base)
              * than a PSP is nonsense, so floor it at 16 rather than
              * hand back a block that does not contain its own header.
              */
-            WORD keep = machine->TsrKeep < DOS_PSP_PARAGRAPHS ? DOS_PSP_PARAGRAPHS : machine->TsrKeep, maximumParagraphs = 0;
+            WORD keep = machine->TsrKeep < DOS_PSP_PARAGRAPHS ? DOS_PSP_PARAGRAPHS : machine->TsrKeep;
+            WORD maximumParagraphs = 0;
             INT resizeResult = DosMcbResize(NULL, g_Exec[depth].ChildSegment, keep, &maximumParagraphs);
             *logCursor = LogPut(*logCursor, "  TSR: seg=0x"); *logCursor = LogHex(*logCursor, g_Exec[depth].ChildSegment);
             *logCursor = LogPut(*logCursor, " stays resident, 0x"); *logCursor = LogHex(*logCursor, keep);
@@ -994,13 +1042,15 @@ INT DosTerminate(DOS_MACHINE *machine, PVOID tib, PSTR *logCursor, PSTR base)
          */
         if (g_Exec[depth].ChildSegment)
         {
-            INT pass, freedCount = 0;
+            INT pass;
+            INT freedCount = 0;
             /* [CAUTION]: Was 64, and Skyroads owns MORE than that: closing it (#152) freed exactly
              * 0x40 and stopped, leaving the rest owned by a PSP that no longer exists.
              */
             for (pass = 0; pass < DOS_MCB_WALK_LIMIT; ++pass)
             {
-                WORD mcbSegment = machine->FirstMcb, hit = 0;
+                WORD mcbSegment = machine->FirstMcb;
+                WORD hit = 0;
                 INT guard = 0;
                 for (;;)
                 {
@@ -1035,7 +1085,8 @@ INT DosTerminate(DOS_MACHINE *machine, PVOID tib, PSTR *logCursor, PSTR base)
             for (;;)
             {
                 volatile BYTE *mcb = DosMcbSegmentAddress(NULL, mcbSegment);
-                WORD owner, size;
+                WORD owner;
+                WORD size;
                 if ((mcb[DOS_MCB_SIGNATURE] != DOS_MCB_MEMBER && mcb[DOS_MCB_SIGNATURE] != DOS_MCB_LAST) || ++guard > DOS_MCB_DUMP_GUARD)
                 {
                     *logCursor = LogPut(*logCursor, " <broken>");
@@ -1167,7 +1218,8 @@ static INT           g_DiskTried[1];
 PDOS_DISK_GEOMETRY DiskFor(UINT drive)
 {
     BYTE boot[DOS_SECTOR_SIZE];
-    DWORD got = 0, size;
+    DWORD got = 0;
+    DWORD size;
     UINT oldErrorMode;
 
     if (drive != 0)
@@ -1192,7 +1244,8 @@ PDOS_DISK_GEOMETRY DiskFor(UINT drive)
          * guessed cylinder count returns the WRONG SECTOR and reports success,
          * which is strictly worse than no drive.
          */
-        CHAR lineBuffer[160], *lineCursor = lineBuffer;
+        CHAR lineBuffer[160];
+        CHAR *lineCursor = lineBuffer;
         lineCursor = LogPut(lineCursor, "  INT13 image present but its BPB is not usable -- "
                       "treating drive 0 as ABSENT (GH #44)\r\n");
         LogAppend(LOG_PATH, lineBuffer, lineCursor); SerialOut(lineBuffer, lineCursor);
@@ -1217,7 +1270,8 @@ PDOS_DISK_GEOMETRY DiskFor(UINT drive)
  */
 INT DiskIo(UINT drive, UINT32 lba, UINT count, BYTE *guest, INT write)
 {
-    DWORD moved = 0, want = count * DOS_SECTOR_SIZE;
+    DWORD moved = 0;
+    DWORD want = count * DOS_SECTOR_SIZE;
 
     if (drive != 0 || g_DiskHandle[0] == INVALID_HANDLE_VALUE || !count)
         return 0;
@@ -1373,7 +1427,10 @@ static HANDLE StdioPebStdout(HANDLE proc)
     {
         LONG State;
         PVOID PebBase;
-        ULONG_PTR ProcessId, AffinityMask, BasePriority, ParentProcessId;
+        ULONG_PTR ProcessId;
+        ULONG_PTR AffinityMask;
+        ULONG_PTR BasePriority;
+        ULONG_PTR ParentProcessId;
     } basicInfo;
     ULONG got = 0;
     ULONG_PTR params = 0;
@@ -1410,7 +1467,10 @@ static HANDLE StdioPebHandle(HANDLE proc, UINT offset)
     {
         LONG State;
         PVOID PebBase;
-        ULONG_PTR ProcessId, AffinityMask, BasePriority, ParentProcessId;
+        ULONG_PTR ProcessId;
+        ULONG_PTR AffinityMask;
+        ULONG_PTR BasePriority;
+        ULONG_PTR ParentProcessId;
     } basicInfo;
     ULONG got = 0;
     ULONG_PTR params = 0;
@@ -1478,7 +1538,8 @@ static INT StdioParentIs(HANDLE proc, DWORD parentProcessId)
 {
     struct
     {
-        USHORT Length, Maximum;
+        USHORT Length;
+        USHORT Maximum;
         PVOID Buffer;
     } imagePath;
     ULONG_PTR params = 0;
@@ -1486,14 +1547,19 @@ static INT StdioParentIs(HANDLE proc, DWORD parentProcessId)
     {
         LONG State;
         PVOID PebBase;
-        ULONG_PTR ProcessId, AffinityMask, BasePriority, ParentProcessId;
+        ULONG_PTR ProcessId;
+        ULONG_PTR AffinityMask;
+        ULONG_PTR BasePriority;
+        ULONG_PTR ParentProcessId;
     } basicInfo;
     static PFN_NT_QUERY_INFORMATION_PROCESS queryInformationProcess;
     ULONG got = 0;
     SIZE_T bytesRead = 0;
     WCHAR path[MAX_PATH];
-    CHAR  narrow[MAX_PATH], want[MAX_PATH];
-    INT index, length;
+    CHAR narrow[MAX_PATH];
+    CHAR want[MAX_PATH];
+    INT index;
+    INT length;
     HANDLE snap;
     want[0] = 0;
     if (!queryInformationProcess) queryInformationProcess = (PFN_NT_QUERY_INFORMATION_PROCESS)(ULONG_PTR)GetProcAddress(
@@ -1553,7 +1619,8 @@ static INT StdioParentIs(HANDLE proc, DWORD parentProcessId)
             return 0;
         for (index = 0; index < wantLength; ++index)
         {
-            CHAR tailCharacter = tail[index], wantCharacter = want[index];
+            CHAR tailCharacter = tail[index];
+            CHAR wantCharacter = want[index];
             if (tailCharacter >= 'A' && tailCharacter <= 'Z')
                 tailCharacter = (CHAR)(tailCharacter + ASCII_CASE_BIT);
             if (wantCharacter >= 'A' && wantCharacter <= 'Z')
@@ -1570,7 +1637,8 @@ static PCSTR StdioFromParent(DWORD parentProcessId)
 {
     HANDLE proc = OpenProcess(PROCESS_QUERY_INFORMATION | PROCESS_VM_READ
                               | PROCESS_DUP_HANDLE, FALSE, parentProcessId);
-    HANDLE remote, duplicate = NULL;
+    HANDLE remote;
+    HANDLE duplicate = NULL;
     DWORD valueType;
 
     if (!proc)
@@ -1654,7 +1722,8 @@ PCSTR StdioInitialize(VOID)
      * we have eliminated a second route rather than assumed one.
      */
     {   HANDLE snap = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
-        DWORD threadId = GetCurrentProcessId(), parentProcessId = 0;
+        DWORD threadId = GetCurrentProcessId();
+        DWORD parentProcessId = 0;
         if (snap != INVALID_HANDLE_VALUE)
         {
             PROCESSENTRY32 entry;
@@ -1865,7 +1934,8 @@ INT HostConsoleIn(PVOID context)
  */
 #define TYPEIN_CAP  512
 static CHAR g_TypeIn[TYPEIN_CAP];
-static INT  g_TypeInHead, g_TypeInTail;
+static INT g_TypeInHead;
+static INT g_TypeInTail;
 static INT TypeInPop(VOID)
 {
     INT character = -1;
@@ -1881,7 +1951,9 @@ static INT TypeInPop(VOID)
 /* Queue a string. All or nothing: a half-typed command is worse than none. */
 INT TypeInPush(PCSTR text)
 {
-    INT length = lstrlenA(text), used, index;
+    INT length = lstrlenA(text);
+    INT used;
+    INT index;
 
     HOST_LOCK();
     used = (g_TypeInTail - g_TypeInHead + TYPEIN_CAP) % TYPEIN_CAP;
@@ -2011,9 +2083,13 @@ VOID HostXms(volatile BYTE *tib)
 {
     DWORD ah = (VDM_REG(tib, VTIB_EAX) >> BYTE_SHIFT) & BYTE_MASK;
     BYTE error = DOS_XMS_ERROR_NOT_IMPLEMENTED;
-    WORD handle, newHandle;
-    DWORD    largest, totalFree, linear;
-    BYTE lock, freeHandles;
+    WORD handle;
+    WORD newHandle;
+    DWORD largest;
+    DWORD totalFree;
+    DWORD linear;
+    BYTE lock;
+    BYTE freeHandles;
     DWORD sizeKb;
 
     #define X_SETAX(v) VDM_SET16(tib, VTIB_EAX, (v))
@@ -2140,7 +2216,8 @@ VOID HostXms(volatile BYTE *tib)
 
     case DOS_XMS_FN_MOVE:                                  /* move EMB: DS:SI -> move struct */
     {
-        DWORD ds = VDM_REG16(tib, VTIB_DS), si = VDM_REG16(tib, VTIB_ESI);
+        DWORD ds = VDM_REG16(tib, VTIB_DS);
+        DWORD si = VDM_REG16(tib, VTIB_ESI);
         const volatile BYTE *source = (const volatile BYTE *)((ds << PARAGRAPH_SHIFT) + si);
         DOS_XMS_MOVE move;
         move.Length     = (DWORD)source[DOS_XMS_MOVE_LENGTH] | ((DWORD)source[DOS_XMS_MOVE_LENGTH + 1] << BYTE_SHIFT) | ((DWORD)source[DOS_XMS_MOVE_LENGTH + 2] << WORD_SHIFT) | ((DWORD)source[DOS_XMS_MOVE_LENGTH + 3] << TOP_BYTE_SHIFT);
@@ -2241,7 +2318,9 @@ VOID HostEms(volatile BYTE *tib)
 {
     DWORD ah = (VDM_REG(tib, VTIB_EAX) >> BYTE_SHIFT) & BYTE_MASK;
     BYTE error = DOS_EMS_ERROR_UNDEFINED_FUNCTION;
-    WORD handle = 0, unallocatedPages = 0, totalPages = 0;
+    WORD handle = 0;
+    WORD unallocatedPages = 0;
+    WORD totalPages = 0;
 
     #define E_SETAH(v) VDM_REG(tib, VTIB_EAX) = (VDM_REG(tib, VTIB_EAX) & ~HIGH_BYTE_MASK_U) | (((DWORD)(v) & BYTE_MASK) << BYTE_SHIFT)
     #define E_SETAL(v) VDM_REG(tib, VTIB_EAX) = (VDM_REG(tib, VTIB_EAX) & ~BYTE_MASK_U) | ((v) & BYTE_MASK)
@@ -2331,7 +2410,8 @@ VOID HostEms(volatile BYTE *tib)
         BYTE pairs[DOS_EMS_MAX_HANDLES * DOS_EMS_HANDLE_PAGES_ENTRY];
         volatile BYTE *destination = (volatile BYTE *)(ULONG_PTR)
             ((VDM_REG16(tib, VTIB_ES) << PARAGRAPH_SHIFT) + VDM_REG16(tib, VTIB_EDI));
-        INT count = DosEmsGetAllHandlePages(&g_Ems, pairs), index;
+        INT count = DosEmsGetAllHandlePages(&g_Ems, pairs);
+        INT index;
         for (index = 0; index < count * DOS_EMS_HANDLE_PAGES_ENTRY; ++index)
             destination[index] = pairs[index];
         E_SETBX((WORD)count);
@@ -2405,7 +2485,8 @@ VOID ExecMachineRestore(INT depth, PSTR *logCursor)
     g_Irq0IsrSince = 0;
     if (VddPitEffectiveReload(&g_Pit) != g_ExecMachine[depth].Pit0)     /* a game's fast timer */
     {
-        UINT32 value = PIT_CONTROL_CHANNEL0_SQUARE, reload = g_ExecMachine[depth].Pit0 & WORD_MASK;
+        UINT32 value = PIT_CONTROL_CHANNEL0_SQUARE;
+        UINT32 reload = g_ExecMachine[depth].Pit0 & WORD_MASK;
         VddBusIo(&g_Bus, PIT_PORT_CONTROL, 1, VDD_IO_OUT, &value);
         value = reload & BYTE_MASK;
         VddBusIo(&g_Bus, PIT_PORT_COUNTER0, 1, VDD_IO_OUT, &value);

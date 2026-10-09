@@ -145,7 +145,8 @@ static DWORD g_IoSiteLogged = 0;
  */
 static VOID VddLogLine(PCSTR message)
 {
-    CHAR lineBuffer[512], *cursor = lineBuffer;
+    CHAR lineBuffer[512];
+    CHAR *cursor = lineBuffer;
     UINT index;
 
     cursor = LogPut(cursor, "  VDD: ");
@@ -171,7 +172,10 @@ VOID VddLoadThirdParty(VOID)
 {
     HANDLE handle;
     CHAR buffer[4096];
-    DWORD got = 0, index = 0, entryCount = 0, loaded = 0;
+    DWORD got = 0;
+    DWORD index = 0;
+    DWORD entryCount = 0;
+    DWORD loaded = 0;
 
     if (g_Safe.VddPlugins)
         return;                                    /* s90 #132: SAFE MODE */
@@ -197,7 +201,8 @@ VOID VddLoadThirdParty(VOID)
             continue;
         ++entryCount;
         {   HMODULE module = LoadLibraryA(path);
-            CHAR lineBuffer[MAX_PATH + 200], *cursor = lineBuffer;
+            CHAR lineBuffer[MAX_PATH + 200];
+            CHAR *cursor = lineBuffer;
             NtvdmexVddInitFn initialize;
             INT status;
             if (!module)
@@ -249,7 +254,8 @@ VOID VddLoadThirdParty(VOID)
  * pair does NOT have to sum to the device's own rd_count[1]: this sees only reads
  * dispatched through HostIoDo, and a gap between the two is itself informative.
  */
-UINT32 g_DmaPollInAsync, g_DmaPollMainline;
+UINT32 g_DmaPollInAsync;
+UINT32 g_DmaPollMainline;
 /* Record the first few DISTINCT ports the guest touches that no VDD claims. A game
  * hunting for hardware probes a fixed set of addresses, so this names the device it
  * wants -- e.g. 0x220-0x22F is a Sound Blaster looking for its DSP. Distinct-only
@@ -283,7 +289,8 @@ sited:
     if (g_IoSiteLogged < 6 && cs)
     {
         static DWORD seen[6];
-        DWORD slot, key = (cs << WORD_SHIFT) ^ ip;
+        DWORD slot;
+        DWORD key = (cs << WORD_SHIFT) ^ ip;
         for (slot = 0; slot < g_IoSiteLogged; ++slot)
             if (seen[slot] == key)
                 return;
@@ -320,7 +327,8 @@ static VOID IoUnclaimedNote(WORD port, INT isIn)
 static DWORD g_SoundIoLogged = 0;    /* bounded SNDIO trace; see the note below */
 static VOID HostIoDo(volatile BYTE *tib, VDD_BUS *bus, WORD port, INT isIn, INT width)
 {
-    UINT32 value, eax = VDM_REG(tib, VTIB_EAX);
+    UINT32 value;
+    UINT32 eax = VDM_REG(tib, VTIB_EAX);
 
     g_IoLastPort = port;              /* for the hot-port histogram */
     /* - THE LAST FORK IN THE ECHO. 91% of DMX's 8237 count reads happen outside any
@@ -349,7 +357,8 @@ static VOID HostIoDo(volatile BYTE *tib, VDD_BUS *bus, WORD port, INT isIn, INT 
         static WORD previous = 0;
         if (g_Pit.Reload != previous)
         {
-            CHAR buffer[128], *cursor = buffer;
+            CHAR buffer[128];
+            CHAR *cursor = buffer;
             previous = g_Pit.Reload;
             g_PitReloadLog++;
             cursor = LogPut(cursor, "PIT-RELOAD 0x"); cursor = LogHex(cursor, (DWORD)g_Pit.Reload);
@@ -410,7 +419,8 @@ static VOID HostIoDo(volatile BYTE *tib, VDD_BUS *bus, WORD port, INT isIn, INT 
          || (port >= OPL_PORT_FIRST && port <= OPL_PORT_FIRST + 1)      /* AdLib / OPL */
          || (port >= MPU_DEFAULT_BASE && port <= MPU_DEFAULT_BASE + 1)))    /* MPU-401 MIDI */
     {
-        CHAR soundIoLine[128], *lineCursor = soundIoLine;
+        CHAR soundIoLine[128];
+        CHAR *lineCursor = soundIoLine;
         ++g_SoundIoLogged;
         lineCursor = LogPut(lineCursor, "SNDIO "); lineCursor = LogPut(lineCursor, isIn ? "in  0x" : "out 0x");
         lineCursor = LogHex(lineCursor, port);
@@ -461,7 +471,9 @@ static DWORD HostIoLoopBurst(
     /* A 16-bit segment wraps offsets (and LOOP counts) at 64K; a 32-bit flat one
      * does not, and there LOOP counts in ECX. One mask drives both.
      */
-    DWORD cx, iterations, mask = is32 ? DWORD_MASK_U : WORD_MASK_U;
+    DWORD cx;
+    DWORD iterations;
+    DWORD mask = is32 ? DWORD_MASK_U : WORD_MASK_U;
     INT displacement;
 
     if (segment[ipNext & mask] != X86_OP_LOOP)
@@ -492,7 +504,12 @@ INT HostTryIo(volatile BYTE *tib, VDD_BUS *bus)
     DWORD cs = VDM_REG16(tib, VTIB_CS);
     DWORD ip = VDM_REG16(tib, VTIB_EIP);
     volatile BYTE *code = (volatile BYTE *)((cs << PARAGRAPH_SHIFT) + ip);   /* absolute V86 */
-    INT index = 0, operandSize = X86_WORD_SIZE, isIn, width, usedDx, length;
+    INT index = 0;
+    INT operandSize = X86_WORD_SIZE;
+    INT isIn;
+    INT width;
+    INT usedDx;
+    INT length;
     BYTE opcode;
     WORD port;
 
@@ -592,7 +609,9 @@ INT HostTryIoRetro(volatile BYTE *tib, VDD_BUS *bus)
     DWORD ip = VDM_REG16(tib, VTIB_EIP);
     volatile BYTE *segment = (volatile BYTE *)(cs << PARAGRAPH_SHIFT);
     BYTE opcode;
-    INT isIn, width, operandSize = X86_WORD_SIZE;
+    INT isIn;
+    INT width;
+    INT operandSize = X86_WORD_SIZE;
     WORD port;
     DWORD ioStart;
 
@@ -651,8 +670,16 @@ INT HostTryIoString(volatile BYTE *tib, VDD_BUS *bus)
     DWORD cs = VDM_REG16(tib, VTIB_CS);
     DWORD ip = VDM_REG16(tib, VTIB_EIP);
     volatile BYTE *segment = (volatile BYTE *)(cs << PARAGRAPH_SHIFT);
-    INT index = 0, operandSize = X86_WORD_SIZE, isIn, width, report = 0;
-    DWORD sover = 0, count, burst, step, element;
+    INT index = 0;
+    INT operandSize = X86_WORD_SIZE;
+    INT isIn;
+    INT width;
+    INT report = 0;
+    DWORD sover = 0;
+    DWORD count;
+    DWORD burst;
+    DWORD step;
+    DWORD element;
     WORD port;
     BYTE opcode;
 
@@ -742,11 +769,16 @@ INT HostTryIoString(volatile BYTE *tib, VDD_BUS *bus)
     return 1;
 }
 
-DWORD g_DmaPollEip[DMAPOLL_MAX], g_DmaPollHits[DMAPOLL_MAX];
-UINT g_DmaPollCount = 0, g_DmaPollOverflow = 0;
-DWORD g_PollStack[POLLSTK_MAX], g_PollStackHits[POLLSTK_MAX];
-DWORD g_PollGap[10], g_PollGapMaximumMicroseconds = 0;
-UINT g_PollStackCount = 0, g_PollStackOverflow = 0;
+DWORD g_DmaPollEip[DMAPOLL_MAX];
+DWORD g_DmaPollHits[DMAPOLL_MAX];
+UINT g_DmaPollCount = 0;
+UINT g_DmaPollOverflow = 0;
+DWORD g_PollStack[POLLSTK_MAX];
+DWORD g_PollStackHits[POLLSTK_MAX];
+DWORD g_PollGap[10];
+DWORD g_PollGapMaximumMicroseconds = 0;
+UINT g_PollStackCount = 0;
+UINT g_PollStackOverflow = 0;
 INT HostTryIoPm(volatile BYTE *tib, VDD_BUS *bus)
 {
     DWORD csValue = VDM_REG16(tib, VTIB_CS);
@@ -754,7 +786,12 @@ INT HostTryIoPm(volatile BYTE *tib, VDD_BUS *bus)
     INT is32 = DpmiSelectorIs32((WORD)csValue);
     DWORD eipOffset = is32 ? eip : (eip & WORD_MASK);
     volatile BYTE *code = (volatile BYTE *)(ULONG_PTR)(DpmiSelectorBase((WORD)csValue) + eipOffset);
-    INT index = 0, operandSize = is32 ? X86_DWORD_SIZE : X86_WORD_SIZE, isIn, width, usedDx, length;
+    INT index = 0;
+    INT operandSize = is32 ? X86_DWORD_SIZE : X86_WORD_SIZE;
+    INT isIn;
+    INT width;
+    INT usedDx;
+    INT length;
     BYTE opcode;
     WORD port;
 
@@ -900,7 +937,8 @@ INT HostTryIoPm(volatile BYTE *tib, VDD_BUS *bus)
           UINT slot;
           for (slot = 0; slot < 40; ++slot)
           {
-              DWORD word = stack[slot], distance = (word > site) ? (word - site) : (site - word);
+              DWORD word = stack[slot];
+              DWORD distance = (word > site) ? (word - site) : (site - word);
               UINT entry;
               if (distance > 0x60000u)
                   continue;                                  /* not a code address */
@@ -944,7 +982,8 @@ typedef VOID (WINAPI *PISV_OUT_BYTE_ROUTINE)(WORD, BYTE);    typedef VOID (WINAP
 VOID IsvIoIn(PVOID self, WORD port, BYTE width, UINT32 *value)
 {
     INT index = (INT)(ULONG_PTR)self;
-    BYTE lowByte = VDD_UNCLAIMED_READ_BYTE, highByte = VDD_UNCLAIMED_READ_BYTE;
+    BYTE lowByte = VDD_UNCLAIMED_READ_BYTE;
+    BYTE highByte = VDD_UNCLAIMED_READ_BYTE;
     WORD word = VDD_UNCLAIMED_READ_WORD;
 
     if (!g_IsvHooks[index].IsLive)
@@ -1009,7 +1048,8 @@ VOID IsvBop(volatile BYTE *tib, DWORD subfunction, PSTR *logCursor)
     PSTR cursor = *logCursor;
     DWORD ds = VDM_REG16(tib, VTIB_DS);
     INT isProtectedMode = g_DpmiPm;
-    WORD error = 0, vddHandle = 0;
+    WORD error = 0;
+    WORD vddHandle = 0;
     INT index;
 
     #define ISV_STR(reg) ((PCSTR)ShimMapFlat((WORD)ds, VDM_REG16(tib, reg), isProtectedMode))
@@ -1019,13 +1059,20 @@ VOID IsvBop(volatile BYTE *tib, DWORD subfunction, PSTR *logCursor)
          * takes any "name" pointer under 0x10000 for an ORDINAL -- the first rig run
          * answered ERROR_INVALID_ORDINAL for a routine stock found at once.
          */
-        CHAR dllBuffer[MAX_PATH], iniBuffer[128], dispatchBuffer[128];
-        PCSTR dllName = dllBuffer, iniName = iniBuffer, dispatchName = dispatchBuffer;
+        CHAR dllBuffer[MAX_PATH];
+        CHAR iniBuffer[128];
+        CHAR dispatchBuffer[128];
+        PCSTR dllName = dllBuffer;
+        PCSTR iniName = iniBuffer;
+        PCSTR dispatchName = dispatchBuffer;
         HMODULE module = NULL;
-        FARPROC initProcedure = NULL, dispatchProcedure = NULL;
+        FARPROC initProcedure = NULL;
+        FARPROC dispatchProcedure = NULL;
         {   PCSTR source[ISV_STRINGS];
         PSTR destination[ISV_STRINGS];
-        INT cap[ISV_STRINGS], index2, length;
+        INT cap[ISV_STRINGS];
+        INT index2;
+        INT length;
             source[ISV_STRING_DLL] = ISV_STR(VTIB_ESI);
             source[ISV_STRING_INIT] = ISV_STR(VTIB_EDI);
             source[ISV_STRING_DISPATCH] = ISV_STR(VTIB_EBX);

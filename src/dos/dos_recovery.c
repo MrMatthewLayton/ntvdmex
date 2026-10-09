@@ -37,7 +37,9 @@ DOS_SAFE_SKIPS DosRecoveryGetSafeSkips(_In_ DOS_START_MODE startMode)
 
 UINT DosRecoveryParseFailureCount(_In_reads_opt_(length) PCSTR text, _In_ UINT length)
 {
-    UINT value = 0, characterIndex, digitCount = 0;
+    UINT value = 0;
+    UINT characterIndex;
+    UINT digitCount = 0;
 
     if (!text)
         return 0;

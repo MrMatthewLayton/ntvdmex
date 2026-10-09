@@ -265,7 +265,8 @@ INT VddDmaAddDreq(PDMA_STATE state, PDMA_DREQ_ROUTINE dreqRoutine, PCVOID dreqCo
  */
 BYTE VddDmaDreq(PCDMA_STATE state)
 {
-    BYTE requests = 0, line;
+    BYTE requests = 0;
+    BYTE line;
     UINT entryIndex;
 
     for (entryIndex = 0; entryIndex < state->DreqCount; ++entryIndex)
@@ -297,7 +298,8 @@ static UINT32 DmaTransfer(
     UINT32 byteCount,
     INT *isTerminalCount)
 {
-    UINT32 unitBytes = ((channelNumber & DMA_CHANNEL_MASK) < DMA_CHANNELS_PER_CONTROLLER) ? 1u : DMA_WORD_UNIT_BYTES, transferred = 0;
+    UINT32 unitBytes = ((channelNumber & DMA_CHANNEL_MASK) < DMA_CHANNELS_PER_CONTROLLER) ? 1u : DMA_WORD_UNIT_BYTES;
+    UINT32 transferred = 0;
 
     if (isTerminalCount)
         *isTerminalCount = 0;
@@ -363,7 +365,9 @@ static BYTE *DmaMemory(PDMA_STATE state, UINT32 physical)
 static VOID DmaSoftwareBlock(PDMA_STATE state, BYTE channelNumber)
 {
     PDMA_CHANNEL channel = &state->Channels[channelNumber];
-    UINT32 unitBytes = (channelNumber < DMA_CHANNELS_PER_CONTROLLER) ? 1u : DMA_WORD_UNIT_BYTES, byteIndex, iterations;
+    UINT32 unitBytes = (channelNumber < DMA_CHANNELS_PER_CONTROLLER) ? 1u : DMA_WORD_UNIT_BYTES;
+    UINT32 byteIndex;
+    UINT32 iterations;
 
     state->SoftwareRuns++;
     for (iterations = 0; iterations < DMA_MAX_TRANSFERS; ++iterations)
@@ -393,7 +397,8 @@ static VOID DmaSoftwareBlock(PDMA_STATE state, BYTE channelNumber)
  */
 static VOID DmaMemoryToMemory(PDMA_STATE state)
 {
-    PDMA_CHANNEL channel0 = &state->Channels[0], channel1 = &state->Channels[1];
+    PDMA_CHANNEL channel0 = &state->Channels[0];
+    PDMA_CHANNEL channel1 = &state->Channels[1];
     UINT32 iterations;
 
     state->MemoryToMemoryRuns++;
@@ -446,7 +451,8 @@ static VOID DmaMemoryToMemory(PDMA_STATE state)
  */
 static VOID DmaSoftwareService(PDMA_STATE state)
 {
-    INT controller, line;
+    INT controller;
+    INT line;
 
     for (controller = 0; controller < DMA_CONTROLLERS; ++controller)
     {
@@ -505,7 +511,8 @@ static BYTE DmaReadHalf(WORD registerValue, BYTE *flipFlop)
 
 static VOID DmaMasterClear(PDMA_STATE state, INT controller)
 {
-    INT firstChannel = controller ? DMA_CHANNELS_PER_CONTROLLER : 0, channelNumber;
+    INT firstChannel = controller ? DMA_CHANNELS_PER_CONTROLLER : 0;
+    INT channelNumber;
 
     state->FlipFlop[controller]  = 0;
     state->Command[controller] = 0;
@@ -522,7 +529,9 @@ static VOID DmaPortOut(PVOID context, WORD port, BYTE width, UINT32 value)
 {
     PDMA_STATE state = (PDMA_STATE)context;
     BYTE byteValue = (BYTE)value;
-    INT controller, registerIndex, channelNumber;
+    INT controller;
+    INT registerIndex;
+    INT channelNumber;
 
     (VOID)width;
 
@@ -609,7 +618,10 @@ static VOID DmaPortOut(PVOID context, WORD port, BYTE width, UINT32 value)
 static VOID DmaPortIn(PVOID context, WORD port, BYTE width, UINT32 *value)
 {
     PDMA_STATE state = (PDMA_STATE)context;
-    INT controller, registerIndex, channelNumber, line;
+    INT controller;
+    INT registerIndex;
+    INT channelNumber;
+    INT line;
     /* `w` is OBSERVED but still not acted on: the 8237 is an 8-bit device and every
      * read below returns one half through the flip-flop, which is faithful for the
      * `in al,dx` the BIOS and every driver we have seen use. It is recorded because

@@ -14,7 +14,10 @@
 
 INT InstallIsSamePath(PCSTR first, PCSTR second)
 {
-    INT firstIndex = 0, secondIndex = 0, firstEnd, secondEnd;
+    INT firstIndex = 0;
+    INT secondIndex = 0;
+    INT firstEnd;
+    INT secondEnd;
 
     if (!first || !second)
         return 0;
@@ -36,7 +39,8 @@ INT InstallIsSamePath(PCSTR first, PCSTR second)
         return 0;
     while (firstIndex < firstEnd)
     {
-        CHAR firstChar = first[firstIndex], secondChar = second[secondIndex];
+        CHAR firstChar = first[firstIndex];
+        CHAR secondChar = second[secondIndex];
         if (firstChar >= 'A' && firstChar <= 'Z')
             firstChar = (CHAR)(firstChar - 'A' + 'a');
         if (secondChar >= 'A' && secondChar <= 'Z')
@@ -72,8 +76,10 @@ INSTALL_STATE InstallClassify(PCSTR current, PCSTR self)
 INT InstallNamesNtvdmex(PCSTR current)
 {
     static const CHAR wanted[] = INSTALL_HOST_NAME;
-    PCSTR scan, nameStart;
-    INT index, length = 0;
+    PCSTR scan;
+    PCSTR nameStart;
+    INT index;
+    INT length = 0;
 
     if (!current)
         return 0;

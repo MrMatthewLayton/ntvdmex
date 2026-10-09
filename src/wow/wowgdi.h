@@ -1089,14 +1089,24 @@ typedef struct _WOWGDI_METAFILE
 {
     INT     IsActive;
     PBYTE Bits;               /* GetMetaFileBitsEx snapshot, HeapAlloc'd */
-    DWORD   Length, End, Offset;      /* bytes; the walk's bound; the next record */
+    /* bytes; the walk's bound; the next record */
+    DWORD Length;
+    DWORD End;
+    DWORD Offset;
     UINT ObjectCount;              /* mtNoObjects = the callback's nObj */
     WORD    Tokens[WOWMF_MAXOBJ];  /* the persistent HANDLETABLE, as tokens */
     WORD    Dc16;
     HDC     Dc;                 /* NULL when the guest's hdc is not one of ours */
-    HGDIOBJ OriginalPen, OriginalBrush, OriginalFont;/* re-selected before the table is deleted */
-    DWORD   TableLinear, RecordLinear;   /* where the last callback's copies are (host lin) */
-    DWORD   RecordOffset, RecordBytes; /* the record in flight, in `Bits` */
+    /* re-selected before the table is deleted */
+    HGDIOBJ OriginalPen;
+    HGDIOBJ OriginalBrush;
+    HGDIOBJ OriginalFont;
+    /* where the last callback's copies are (host lin) */
+    DWORD TableLinear;
+    DWORD RecordLinear;
+    /* the record in flight, in `Bits` */
+    DWORD RecordOffset;
+    DWORD RecordBytes;
     INT     IsTruncated;          /* ...and whether its stack copy is cut short */
     DWORD   Records;
 } WOWGDI_METAFILE, *PWOWGDI_METAFILE;

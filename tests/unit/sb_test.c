@@ -25,7 +25,8 @@
 #include <string.h>
 #include "vdd_sb.h"
 
-static INT g_Total = 0, g_Failures = 0;
+static INT g_Total = 0;
+static INT g_Failures = 0;
 #define CHECK(condition,message) do{ g_Total++; if(condition){printf("  PASS  %s\n",(message));} \
     else{printf("  FAIL  %s\n",(message)); g_Failures++;} }while(0)
 
@@ -34,7 +35,8 @@ static VDD_BUS g_Bus;
 static DMA_STATE g_Dma;
 static OPL_STATE g_Opl;
 static SB_STATE  g_Sb;
-static INT g_IrqCount, g_IrqLast;
+static INT g_IrqCount;
+static INT g_IrqLast;
 
 static VOID SbTestIrqSink(PVOID context, BYTE irq)
 {
@@ -265,7 +267,10 @@ INT main(VOID)
      * and taking NO argument bytes -- so the byte after C6h is a command in its own right.
      */
     {   extern BYTE g_SbVersionMajor, g_SbVersionMinor;
-        BYTE oldMajor = g_SbVersionMajor, oldMinor = g_SbVersionMinor, major, minor;
+        BYTE oldMajor = g_SbVersionMajor;
+        BYTE oldMinor = g_SbVersionMinor;
+        BYTE major;
+        BYTE minor;
         g_SbVersionMajor = 3;
         g_SbVersionMinor = 2;
         g_Sb.Model = SB_MODEL_SBPRO;

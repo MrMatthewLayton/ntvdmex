@@ -239,7 +239,12 @@ static inline VOID DosDpbBuild(
     _In_ UINT nextSegment,
     _In_ UINT nextOffset)
 {
-    UINT byteIndex, shift = 0, remaining = sectorsPerCluster, fatSectors, rootStart, dataStart;
+    UINT byteIndex;
+    UINT shift = 0;
+    UINT remaining = sectorsPerCluster;
+    UINT fatSectors;
+    UINT rootStart;
+    UINT dataStart;
 
     for (byteIndex = 0; byteIndex < DOS_DPB_LEN; ++byteIndex)
         dpb[byteIndex] = 0;

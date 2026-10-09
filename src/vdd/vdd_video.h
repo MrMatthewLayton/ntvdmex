@@ -134,7 +134,13 @@
 typedef struct _VIDEO_WATCH_RECORD
 {
     UINT32 Pc;                        /* guest (CS<<16)|IP at the write */
-    BYTE  WriteMode, MapMask, EnableSetReset, SetReset, FunctionRotate, BitMask, Cpu;
+    BYTE WriteMode;
+    BYTE MapMask;
+    BYTE EnableSetReset;
+    BYTE SetReset;
+    BYTE FunctionRotate;
+    BYTE BitMask;
+    BYTE Cpu;
     BYTE  Latch[VIDEO_PLANES];                  /* the latches the write combined with */
     BYTE  After[VIDEO_PLANES];                  /* the four plane bytes it left behind */
 } VIDEO_WATCH_RECORD, *PVIDEO_WATCH_RECORD;
@@ -162,7 +168,10 @@ typedef const VIDEO_WATCH_RECORD *PCVIDEO_WATCH_RECORD;
 #define VIDEO_SITE_HASH(pc)     ((((pc) >> 1) ^ ((pc) >> 7) ^ ((pc) >> 13)) & (VIDEO_SITES - 1))
 typedef struct _VIDEO_SITE
 {
-    UINT32 Pc, Count, Low, High;
+    UINT32 Pc;
+    UINT32 Count;
+    UINT32 Low;
+    UINT32 High;
 } VIDEO_SITE, *PVIDEO_SITE;
 typedef const VIDEO_SITE *PCVIDEO_SITE;
 
@@ -180,7 +189,12 @@ typedef const VIDEO_SITE *PCVIDEO_SITE;
 #define VIDEO_CACHE_SITES   10
 typedef struct _VIDEO_CACHE_SITE
 {
-    UINT32 Pc, Count, Low, High, First, Last;
+    UINT32 Pc;
+    UINT32 Count;
+    UINT32 Low;
+    UINT32 High;
+    UINT32 First;
+    UINT32 Last;
     BYTE IsWrite;
 } VIDEO_CACHE_SITE, *PVIDEO_CACHE_SITE;
 typedef const VIDEO_CACHE_SITE *PCVIDEO_CACHE_SITE;
@@ -190,13 +204,20 @@ typedef const VIDEO_CACHE_SITE *PCVIDEO_CACHE_SITE;
  */
 typedef struct _VIDEO_FONT_QUERY
 {
-    BYTE Al, Bh;
-    WORD Segment, Offset, Cx;
+    BYTE Al;
+    BYTE Bh;
+    WORD Segment;
+    WORD Offset;
+    WORD Cx;
 } VIDEO_FONT_QUERY;
 typedef struct _VIDEO_MODE_QUERY
 {
-    BYTE Mode, Kind, Columns, Rows;
-    WORD Width, Height;
+    BYTE Mode;
+    BYTE Kind;
+    BYTE Columns;
+    BYTE Rows;
+    WORD Width;
+    WORD Height;
 } VIDEO_MODE_QUERY;
 
 typedef struct _VIDEO_STATE
@@ -204,7 +225,8 @@ typedef struct _VIDEO_STATE
     PVDD_BUS Bus;
     BYTE *VideoMemory;                      /* the 128KB aperture (A0000); caller-set */
     BYTE  Mode;                      /* 0x03 text, 0x13 graphics */
-    BYTE  Columns, Rows;
+    BYTE Columns;
+    BYTE Rows;
     /* THE CELL HEIGHT IS THE GUEST'S, NOT A COMPILE-TIME 16:
      * A VGA text mode has 400 scan lines and the BIOS divides them by whatever font
      * is loaded: 8x16 gives 25 rows, 8x14 gives 28, 8x8 gives 50 -- and INT 10h
@@ -223,7 +245,9 @@ typedef struct _VIDEO_STATE
      * any of these before, so every one read as zero.
      */
     BYTE *BiosData;
-    WORD GraphicsWidth, GraphicsHeight;                    /* graphics resolution of the current mode */
+    /* graphics resolution of the current mode */
+    WORD GraphicsWidth;
+    WORD GraphicsHeight;
     BYTE  ModeKind;                     /* VID_KIND_* below */
     BYTE  CgaBpp;                   /* 2 for modes 4/5, 1 for mode 6 */
     BYTE  CgaPalette;                   /* AH=0Bh BH=1: which 4-colour CGA palette */
@@ -231,7 +255,9 @@ typedef struct _VIDEO_STATE
     BYTE  IsBlink;                     /* AH=10h AL=03: blink vs bright background */
     BYTE  DacPage;                  /* AH=10h AL=13: DAC page state */
     BYTE  PaletteRegisters[VIDEO_PALETTE_REGISTER_FILE];                  /* the 16 EGA palette registers + border */
-    WORD VesaStartX, VesaStartY;/* 4F07 display start (pixels, rows); the */
+    /* 4F07 display start (pixels, rows); the */
+    WORD VesaStartX;
+    WORD VesaStartY;
                                         /* 4F06 logical pitch lives in VesaStride */
     /* -- THE VESA DISPLAY START ON THE HARDWARE'S SCHEDULE (#226), the same three stages
      * as the CRTC start (CrtcStart -> StartVs -> CrtcStartLive, see VideoLatch):
@@ -240,7 +266,9 @@ typedef struct _VIDEO_STATE
      * because VBE 3.0's 4F07 BL=02h/82h hand one over directly; BL=00h/80h derive it
      * from (x, y) at the current pitch. VesaStartX/Y stay what BL=01h reports.
      */
-    UINT32 VesaOrigin, VesaOriginVs, VesaOriginLive;
+    UINT32 VesaOrigin;
+    UINT32 VesaOriginVs;
+    UINT32 VesaOriginLive;
     /* -- 4F07 BL=80h/82h "SET DISPLAY START DURING VERTICAL RETRACE" MUST NOT RETURN
      * BEFORE THE RETRACE. The INT 10h handler runs under the host lock, so it cannot
      * spin there; it computes when the call completes, in the model's microseconds
@@ -255,7 +283,8 @@ typedef struct _VIDEO_STATE
     BYTE  VesaDacWidth;             /* 4F08 bits per DAC primary (6 or 8) -- the */
                                         /* RAMDAC's width: 3C9h, AH=10h and 4F09 all */
                                         /* obey it (#226); any mode set resets it to 6 */
-    BYTE  CursorRow, CursorColumn;
+    BYTE CursorRow;
+    BYTE CursorColumn;
     WORD CursorShape;                 /* INT 10h AH=01 CX: start/end scan lines */
     BYTE  IsCursorBlink;              /* host setting: blink it, as a real CRTC does */
     BYTE  Page;
@@ -263,14 +292,18 @@ typedef struct _VIDEO_STATE
      * CursorColumn stay THE ACTIVE PAGE's (everything that draws the cursor reads them);
      * PageRow/PageColumn hold the other seven, swapped in and out by AH=05h.
      */
-    BYTE  PageRow[8], PageColumn[8];
+    BYTE PageRow[8];
+    BYTE PageColumn[8];
     /* AH=12h state a later call or mode set acts on (#252):
      * ScanSelect   BL=30h: 0 = 200, 1 = 350, 2 = 400 lines for the next TEXT mode set
      * IsGreySum   BL=33h: sum the DAC to grey on mode-set / AH=10h DAC loads
      * IsCursorEmulationOff BL=34h: CGA cursor emulation off -- AH=01h CX taken literally
      * IsVideoOff    BL=32h: CPU addressing of video memory disabled (recorded only)
      */
-    BYTE  ScanSelect, IsGreySum, IsCursorEmulationOff, IsVideoOff;
+    BYTE ScanSelect;
+    BYTE IsGreySum;
+    BYTE IsCursorEmulationOff;
+    BYTE IsVideoOff;
     /* TWO TABLES, AND CONFLATING THEM IS A BUG:
      * dac[]  is the DAC: 256 ARGB entries, written by port 0x3C9 and the INT 10h
      *      palette calls. It is what the GUEST programs.
@@ -293,10 +326,16 @@ typedef struct _VIDEO_STATE
     UINT32 PaletteFrameNumber;              /* frame the bookkeeping last rebased on */
     UINT32 PaletteSplitNotes;           /* mid-frame palette writes seen (STAGE2) */
     /* DAC (ports 3C7/3C8/3C9) write/read state */
-    BYTE  DacWriteIndex, DacReadIndex, DacComponent, DacLatch[VIDEO_DAC_COMPONENTS];
+    BYTE DacWriteIndex;
+    BYTE DacReadIndex;
+    BYTE DacComponent;
+    BYTE DacLatch[VIDEO_DAC_COMPONENTS];
     /* VESA VBE state */
     BYTE  IsVesa;                   /* a VESA mode is active */
-    WORD VesaMode, VesaWidth, VesaHeight; /* current VESA mode + resolution */
+    /* current VESA mode + resolution */
+    WORD VesaMode;
+    WORD VesaWidth;
+    WORD VesaHeight;
     WORD VesaBank;                 /* current 64KB window bank (4F05) */
     BYTE  VesaBpp;                  /* 8/15/16/24 -- bits per pixel of the mode */
     UINT32 VesaStride;               /* bytes per scan line of the current mode */
@@ -308,7 +347,9 @@ typedef struct _VIDEO_STATE
      * independent of how WE choose to interpret stride/origin. The only way to tell
      * "the demo put its picture there" from "we are reading the buffer wrong".
      */
-    UINT32 VramLow, VramHigh, VramNonZero;
+    UINT32 VramLow;
+    UINT32 VramHigh;
+    UINT32 VramNonZero;
     /* Hi-colour frames are handed to the presenter as 32-bit ARGB: the frame
      * contract has a bpp field but every consumer indexed a palette, so a direct
      * colour mode has to be converted somewhere. Here is the only place that knows
@@ -318,7 +359,8 @@ typedef struct _VIDEO_STATE
     BYTE  VesaVram[VIDEO_VESA_VRAM];  /* full packed-256 framebuffer */
     BYTE  Planes[VIDEO_PLANES][VIDEO_PLANE_SIZE];  /* mode 12h: 4 bit-planes (640x480x16) */
     /* VGA planar write engine (Sequencer 3C4/3C5 + Graphics Controller 3CE/3CF) */
-    BYTE  SequencerIndex, GcIndex;
+    BYTE SequencerIndex;
+    BYTE GcIndex;
     BYTE  MapMask;     /* SR2: planes enabled for writes (reset 0x0F) */
     BYTE  SetReset;    /* GR0 */
     BYTE  EnableSetReset;    /* GR1 */
@@ -451,7 +493,9 @@ typedef struct _VIDEO_STATE
      * answer that only changes when the guest programs the CRTC. IsVerticalTimingValid = 0 means
      * "not a plausible screen", and the caller keeps the old two-case constants.
      */
-    WORD VerticalTotal, VerticalActive, VerticalBlank;
+    WORD VerticalTotal;
+    WORD VerticalActive;
+    WORD VerticalBlank;
     BYTE  IsVerticalTimingValid;
     /* #325: the register file describes the mode on screen -- a measured register set
      * was loaded at the mode set, or the guest programmed a geometry register (CR01 /
@@ -526,13 +570,15 @@ typedef struct _VIDEO_STATE
      * legitimately miss a vblank if it was away longer than one blanking interval,
      * so if this stays well under a frame the guest missed nothing.
      */
-    UINT64 Time3DaFirst, Time3DaLast;
+    UINT64 Time3DaFirst;
+    UINT64 Time3DaLast;
     /* The guest's previous poll of bit 0: which scanline (absolute, frames included)
      * and what it read. A poll in a LATER line whose predecessor saw the display
      * active is owed the blanking that passed between them -- see VideoStatusIn.
      */
     UINT64 Port3DaLastLine;
-    BYTE  Port3DaLastBit0, IsPort3DaHaveLast;
+    BYTE Port3DaLastBit0;
+    BYTE IsPort3DaHaveLast;
     UINT32 Port3DaHblOwed;   /* blanks reported by that rule (STAGE2) */
     BYTE  IsPort3DaLastVbl;   /* the previous poll was in vertical blanking */
     /* #225: the same rule for bit 3, ONLY while the host's CPU throttle is on. A
@@ -640,7 +686,9 @@ typedef struct _VIDEO_STATE
     WORD VesaBl[0x16];
     WORD VesaTextMode;            /* 0x108..0x10C while a VESA TEXT mode is set (4F03 reports it); 0 otherwise */
     BYTE  VesaPmState;             /* 4F10 VBE/PM: 0 on 1 standby 2 suspend 4 off 8 reduced-on */
-    WORD Vesa07MaxX, Vesa07MaxY;/* largest display start a guest asked for */
+    /* largest display start a guest asked for */
+    WORD Vesa07MaxX;
+    WORD Vesa07MaxY;
     UINT32 Vesa07Rejected;               /* 4F07 sets refused (would not fit) */
     /* -- #53: THE PORTS THE 4F0Ah PROTECTED-MODE CODE DRIVES (01CEh index, 01CFh data;
      * see vbe_pm.asm). VbeIndex = the selected index, VbeStartLow the low word of a
@@ -648,8 +696,11 @@ typedef struct _VIDEO_STATE
      * a client is calling the PM block instead of INT 10h: banks set, starts set, and
      * writes refused (no VESA mode, out of range).
      */
-    WORD VbeIndex, VbeStartLow;
-    UINT32 VbePmBankCount, VbePmStartCount, VbePmRejected;
+    WORD VbeIndex;
+    WORD VbeStartLow;
+    UINT32 VbePmBankCount;
+    UINT32 VbePmStartCount;
+    UINT32 VbePmRejected;
     NTVDD_FRAME Frame;
     /* Mode-Y de-interleave instrumentation. `plane-nonzero` in STAGE2 has always
      * counted st->Planes[] -- the 16-colour PLANAR array -- which mode Y never touches,
@@ -801,7 +852,10 @@ typedef struct _VIDEO_STATE
     BYTE  CrtcRegisters[32];              /* CR00-CR18 (32 decoded) */
     BYTE  GcRegisters[16];                /* GR0-GR8 (16 decoded) */
     BYTE  AttributeRegisters[32];              /* AR00-AR14 (32 decoded) */
-    UINT32 SequencerWrites[8], CrtcWrites[32], GcWrites[16], AttributeWrites[32];
+    UINT32 SequencerWrites[8];
+    UINT32 CrtcWrites[32];
+    UINT32 GcWrites[16];
+    UINT32 AttributeWrites[32];
     /* External/general registers. Ports 3C2/3C3/3C6/3CA/3CC were claimed by NOBODY
      * before this, so a write vanished and a read returned the bus's 0xFF.
      */
@@ -809,7 +863,10 @@ typedef struct _VIDEO_STATE
     BYTE  FeatureControl;                 /* 3?A write / 3CA read */
     BYTE  VgaEnable;                /* 3C3 */
     BYTE  DacMask;                  /* 3C6 -- ANDed with every pixel; fades use it */
-    UINT32 MiscWrites, FeatureWrites, VgaEnableWrites, DacMaskWrites;
+    UINT32 MiscWrites;
+    UINT32 FeatureWrites;
+    UINT32 VgaEnableWrites;
+    UINT32 DacMaskWrites;
     /* CR00-CR07 writes refused because CR11 bit 7 (write protect) was set --
      * real hardware refuses them and we used to accept them. Counted rather than
      * silent: an absence in a report means nothing.
@@ -819,7 +876,8 @@ typedef struct _VIDEO_STATE
      * CR11 bit 5 = 0 (enable, active low) and bit 4 = 1 (not clearing); set by the
      * first retrace start after VintArmTime; cleared by writing CR11 bit 4 = 0.
      */
-    BYTE  IsVintArmed, IsVintPending;
+    BYTE IsVintArmed;
+    BYTE IsVintPending;
     UINT64 VintArmTime;
     /* #266: THE GRAPHICS FONT VECTORS AND THE CGA COLOUR SELECT:
      * i43_* is what INT 43h holds (the graphics-mode character table) and i1f_* what
@@ -832,8 +890,12 @@ typedef struct _VIDEO_STATE
      * `CgaSelect` shadows 0040:0066 (the CGA colour-select byte AH=0Bh maintains) for a
      * run with no BDA wired (the off-VM battery); with a BDA the byte itself is read.
      */
-    WORD Int43Segment, Int43Offset, Int1FSegment, Int1FOffset;
-    BYTE  IsGraphicsFontUser, IsInt1FUser;
+    WORD Int43Segment;
+    WORD Int43Offset;
+    WORD Int1FSegment;
+    WORD Int1FOffset;
+    BYTE IsGraphicsFontUser;
+    BYTE IsInt1FUser;
     BYTE  CgaSelect;
     /* SR1 bit 5 "screen off" was in force for the frame last composed (#266): the
      * frame went out black, and frame_touch must not re-arm a raster split over it.

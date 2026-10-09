@@ -320,7 +320,9 @@ static VOID SettingsRegistryPut(HKEY key, PCSTR name, DWORD value)
 /* 1 = the value was there and was used. A value of the wrong TYPE is not "there". */
 static INT SettingsRegistryTry(HKEY key, PCSTR name, DWORD *out)
 {
-    DWORD value = 0, size = sizeof value, type = 0;
+    DWORD value = 0;
+    DWORD size = sizeof value;
+    DWORD type = 0;
 
     if (RegQueryValueExA(key, name, NULL, &type, (BYTE *)&value, &size) == ERROR_SUCCESS
         && type == REG_DWORD && size == sizeof value)
@@ -333,7 +335,8 @@ static INT SettingsRegistryTry(HKEY key, PCSTR name, DWORD *out)
 
 static INT SettingsRegistryGetString(HKEY key, PCSTR name, PSTR out, INT capacity)
 {
-    DWORD size = (DWORD)capacity, type = 0;
+    DWORD size = (DWORD)capacity;
+    DWORD type = 0;
 
     if (RegQueryValueExA(key, name, NULL, &type, (BYTE *)out, &size) != ERROR_SUCCESS
         || type != REG_SZ || size == 0)
@@ -386,8 +389,10 @@ VOID SettingsSave(const NTVDMEX_SETTINGS *settings)
 
 VOID SettingsParseVersion(PCSTR text, DWORD *major, DWORD *minor)
 {
-    DWORD majorValue = 0, minorValue = 0;
-    INT index = 0, isSeen = 0;
+    DWORD majorValue = 0;
+    DWORD minorValue = 0;
+    INT index = 0;
+    INT isSeen = 0;
 
     while (text[index] == ' ' || text[index] == '\t')
         ++index;
@@ -415,7 +420,8 @@ VOID SettingsParseVersion(PCSTR text, DWORD *major, DWORD *minor)
 INT SettingsParseUnsigned(PCSTR text, DWORD *out)
 {
     DWORD value = 0;
-    INT index = 0, isSeen = 0;
+    INT index = 0;
+    INT isSeen = 0;
 
     while (text[index] == ' ' || text[index] == '\t')
         ++index;
@@ -435,7 +441,8 @@ INT SettingsParseUnsigned(PCSTR text, DWORD *out)
 
 INT SettingsItem(PCSTR items, INT number, PSTR out, INT capacity)
 {
-    INT index = 0, length = 0;
+    INT index = 0;
+    INT length = 0;
 
     if (!items)
         return 0;

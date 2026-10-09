@@ -25,9 +25,15 @@
  */
 #define VDM_ICA_BUFFER_SIZE         256
 #define VDM_ICA_BOP_TABLE_SIZE      1024
-static BYTE  g_IcaLock[VDM_ICA_BUFFER_SIZE], g_IcaMaster[VDM_ICA_BUFFER_SIZE],
-             g_IcaSlave[VDM_ICA_BUFFER_SIZE], g_IcaBopTable[VDM_ICA_BOP_TABLE_SIZE];
-static DWORD g_IcaDelayIrq, g_IcaUndelayIrq, g_IcaDelayIret, g_IcaIretHooked, g_IcaNinth;
+static BYTE g_IcaLock[VDM_ICA_BUFFER_SIZE];
+static BYTE g_IcaMaster[VDM_ICA_BUFFER_SIZE];
+static BYTE g_IcaSlave[VDM_ICA_BUFFER_SIZE];
+static BYTE g_IcaBopTable[VDM_ICA_BOP_TABLE_SIZE];
+static DWORD g_IcaDelayIrq;
+static DWORD g_IcaUndelayIrq;
+static DWORD g_IcaDelayIret;
+static DWORD g_IcaIretHooked;
+static DWORD g_IcaNinth;
 static VDMICAUSERDATA     g_IcaUserData;
 static VDM_INITIALIZE_DATA g_InitializeData;
 
@@ -88,7 +94,8 @@ LONG VdmSetupMemory(VOID)
     PFN_NtMapViewOfSection  NtMapViewOfSection =
         (PFN_NtMapViewOfSection)GetProcAddress(ntdll, VDM_NT_MAP_VIEW_OF_SECTION);
     OBJ_ATTR objectAttributes;
-    LARGE_INTEGER maximumSize, sectionOffset;
+    LARGE_INTEGER maximumSize;
+    LARGE_INTEGER sectionOffset;
     PVOID baseAddress;
     SIZE_T viewSize;
     LONG status;
@@ -450,7 +457,8 @@ LONG VdmRegisterLdtTable(WORD startSelector, const DWORD *entries, INT count)
      */
     static DWORD ldtInformation[VDM_LDT_INFO_HEADER_DWORDS + VDM_LDT_DWORDS_PER_ENTRY * VDM_LDT_MAX_DESCRIPTORS];
     DWORD serviceData[VDM_LDT_SERVICE_DWORDS];
-    INT dwordIndex, entryDwords = count * VDM_LDT_DWORDS_PER_ENTRY;
+    INT dwordIndex;
+    INT entryDwords = count * VDM_LDT_DWORDS_PER_ENTRY;
 
     if (entryDwords > (INT)(sizeof(ldtInformation)/sizeof(ldtInformation[0])) - VDM_LDT_INFO_HEADER_DWORDS)
         return VDM_LDT_TABLE_TOO_LARGE;

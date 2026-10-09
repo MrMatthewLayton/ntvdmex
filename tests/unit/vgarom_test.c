@@ -32,7 +32,9 @@
 #include <stdint.h>
 #include "vga_defaults.h"
 
-static INT g_Passes = 0, g_Failures = 0, g_Skips = 0;
+static INT g_Passes = 0;
+static INT g_Failures = 0;
+static INT g_Skips = 0;
 static VOID VgaRomTestCheck(INT condition, PCSTR description)
 {
     if (condition)
@@ -131,7 +133,8 @@ INT main(VOID)
      * likely cause is that someone "tidied" a value.
      */
     {   UINT row;
-    INT found = 0, tried = 0;
+    INT found = 0;
+    INT tried = 0;
         for (row = 0; row < 9; ++row)
         {
             long offset = VgaRomTestFind(rom, romLength, g_VgaCrtcDefaults[row], 25);
@@ -148,7 +151,8 @@ INT main(VOID)
      * implicit in a table: 640x350 is the mode that broke the old two-case guess.
      */
     {   PCBYTE crtc = g_VgaCrtcDefaults[6];      /* modes 0Fh, 10h */
-        UINT overflow = crtc[0x07], maximumScanLine = crtc[0x09];
+        UINT overflow = crtc[0x07];
+        UINT maximumScanLine = crtc[0x09];
         UINT verticalTotal  = crtc[0x06] | ((overflow >> 0 & 1) << 8) | ((overflow >> 5 & 1) << 9);
         UINT verticalDisplayEnd = crtc[0x12] | ((overflow >> 1 & 1) << 8) | ((overflow >> 6 & 1) << 9);
         UINT verticalBlankStart = crtc[0x15] | ((overflow >> 3 & 1) << 8) | ((maximumScanLine >> 5 & 1) << 9);

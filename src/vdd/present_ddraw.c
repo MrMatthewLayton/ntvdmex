@@ -104,7 +104,10 @@ static VOID PresentMonitorQuery(PPRESENT_DDRAW presenter)
 
 static VOID PresentWaitVerticalBlank(PPRESENT_DDRAW presenter)
 {
-    DWORD scanLine = 0, height, periodUs, spin;
+    DWORD scanLine = 0;
+    DWORD height;
+    DWORD periodUs;
+    DWORD spin;
     HRESULT result;
 
     if (!presenter->IsVsync || !presenter->DirectDraw)
@@ -202,7 +205,9 @@ static VOID PresentHintDraw(
     INT destinationWidth)
 {
     SIZE textSize;
-    INT length = 0, textX, textY = destinationY + PRESENT_HINT_TOP;
+    INT length = 0;
+    INT textX;
+    INT textY = destinationY + PRESENT_HINT_TOP;
 
     if (presenter->IsOsdOff)
         return;                                     /* #217: Show on-screen messages off */
@@ -292,7 +297,8 @@ static const BYTE *PresentSnapshotDib(
 {
     static UINT32 resolved32[NTVDD_FRAME_MAX_WIDTH * NTVDD_FRAME_MAX_HEIGHT];  /* a split frame resolved per row, or ARGB */
     const BYTE *pixels = presenter->Snapshot;
-    INT sourceWidth = presenter->SnapshotWidth, sourceHeight = presenter->SnapshotHeight;
+    INT sourceWidth = presenter->SnapshotWidth;
+    INT sourceHeight = presenter->SnapshotHeight;
     UINT index;
     /* A direct-colour frame takes the same 32bpp DIB route a raster-split frame
      * does -- it is already ARGB, so it needs no resolving, just no palette.
@@ -333,7 +339,8 @@ static const BYTE *PresentSnapshotDib(
     }
     if (isSplit || isDirect)           /* resolve to a 32bpp DIB */
     {
-        INT row, column;
+        INT row;
+        INT column;
         for (row = 0; row < sourceHeight; ++row)
         {
             UINT32 *destinationRow = resolved32 + (size_t)row * sourceWidth;
@@ -369,9 +376,14 @@ static INT PresentBlitPicture(
     INT filter)
 {
     static HDC scratchDc;
-    static HBITMAP scratchBitmap, scratchOld;
-    static INT scratchWidth, scratchHeight;
-    INT scaleX, scaleY, integerWidth, integerHeight;
+    static HBITMAP scratchBitmap;
+    static HBITMAP scratchOld;
+    static INT scratchWidth;
+    static INT scratchHeight;
+    INT scaleX;
+    INT scaleY;
+    INT integerWidth;
+    INT integerHeight;
 
     if (sourceWidth < 1 || sourceHeight < 1)
         return 0;
@@ -427,11 +439,19 @@ static INT PresentBlitPicture(
 
 static VOID PresentGdi(PPRESENT_DDRAW presenter)
 {
-    HDC dc, windowDc, memoryDc;
+    HDC dc;
+    HDC windowDc;
+    HDC memoryDc;
     RECT clientRect;
-    INT clientWidth, clientHeight, destinationX, destinationY, destinationWidth, destinationHeight;
+    INT clientWidth;
+    INT clientHeight;
+    INT destinationX;
+    INT destinationY;
+    INT destinationWidth;
+    INT destinationHeight;
     const BYTE *pixels;
-    INT sourceWidth, sourceHeight;
+    INT sourceWidth;
+    INT sourceHeight;
     PRESENT_SNAPSHOT_DIB dib;
 
     windowDc = GetDC(presenter->Window);
@@ -559,7 +579,9 @@ static INT PresentFullscreenSetup(PPRESENT_DDRAW presenter)
 {
     DDSURFACEDESC2 description;
     DDSCAPS2 caps;
-    LPDIRECTDRAWSURFACE7 primary = 0, back = 0, staging = 0;
+    LPDIRECTDRAWSURFACE7 primary = 0;
+    LPDIRECTDRAWSURFACE7 back = 0;
+    LPDIRECTDRAWSURFACE7 staging = 0;
     INT backBuffers;
 
     /* [INFO]: AN EXPLICIT MODE IS TRIED FIRST, AND ONLY IF THE USER ASKED FOR ONE. Try 32bpp
@@ -658,7 +680,8 @@ static INT PresentFullscreenSetup(PPRESENT_DDRAW presenter)
 /* convert an NTVDD_FRAME into the locked back buffer, packed to its depth. */
 static VOID PresentMaskInfo(DWORD mask, INT *shift, INT *bits)
 {
-    INT shiftCount=0,bitCount=0;
+    INT shiftCount=0;
+    INT bitCount=0;
 
     if(mask)
     {
@@ -701,7 +724,9 @@ static VOID PresentPutPixel(
     INT blueShift,
     INT blueBits)
 {
-    UINT32 red = (argb >> PRESENT_RED_SHIFT) & PRESENT_CHANNEL_MASK, green = (argb >> PRESENT_GREEN_SHIFT) & PRESENT_CHANNEL_MASK, blue = argb & PRESENT_CHANNEL_MASK;
+    UINT32 red = (argb >> PRESENT_RED_SHIFT) & PRESENT_CHANNEL_MASK;
+    UINT32 green = (argb >> PRESENT_GREEN_SHIFT) & PRESENT_CHANNEL_MASK;
+    UINT32 blue = argb & PRESENT_CHANNEL_MASK;
 
     if (bitsPerPixel == PRESENT_SURFACE_BPP_32)
         ((DWORD *)destinationRow)[column] = argb;
@@ -725,8 +750,14 @@ static INT PresentFullscreenStage(PPRESENT_DDRAW presenter, LPDIRECTDRAWSURFACE7
 {
     DDSURFACEDESC2 description;
     DWORD bitsPerPixel;
-    INT redShift,redBits,greenShift,greenBits,blueShift,blueBits;
-    INT row, column;
+    INT redShift;
+    INT redBits;
+    INT greenShift;
+    INT greenBits;
+    INT blueShift;
+    INT blueBits;
+    INT row;
+    INT column;
 
     ZeroMemory(&description, sizeof description);
     description.dwSize = sizeof description;
@@ -766,8 +797,16 @@ static VOID PresentFullscreenSoftware(
     DDSURFACEDESC2 description;
     LPDIRECTDRAWSURFACE7 back = PRESENT_SURFACE(presenter->Back);
     DWORD bitsPerPixel;
-    INT redShift,redBits,greenShift,greenBits,blueShift,blueBits;
-    INT sourceRow, sourceColumn, destinationRow, column;
+    INT redShift;
+    INT redBits;
+    INT greenShift;
+    INT greenBits;
+    INT blueShift;
+    INT blueBits;
+    INT sourceRow;
+    INT sourceColumn;
+    INT destinationRow;
+    INT column;
 
     ZeroMemory(&description, sizeof description);
     description.dwSize = sizeof description;
@@ -853,8 +892,13 @@ static LPDIRECTDRAWSURFACE7 PresentFullscreenStageSurface(
 
 static VOID PresentFullscreen(PPRESENT_DDRAW presenter)
 {
-    LPDIRECTDRAWSURFACE7 back = PRESENT_SURFACE(presenter->Back), staging;
-    INT fitX, fitY, fitWidth, fitHeight, isDone = 0;
+    LPDIRECTDRAWSURFACE7 back = PRESENT_SURFACE(presenter->Back);
+    LPDIRECTDRAWSURFACE7 staging;
+    INT fitX;
+    INT fitY;
+    INT fitWidth;
+    INT fitHeight;
+    INT isDone = 0;
 
     if (!back)
         return;
@@ -897,7 +941,8 @@ static VOID PresentFullscreen(PPRESENT_DDRAW presenter)
         if (SUCCEEDED(IDirectDrawSurface7_GetDC(back, &dc)))
         {
             PRESENT_SNAPSHOT_DIB dib;
-            INT sourceWidth, sourceHeight;
+            INT sourceWidth;
+            INT sourceHeight;
             const BYTE *pixels = PresentSnapshotDib(presenter, &dib, &sourceWidth, &sourceHeight, PRESENT_SNAPSHOT_2X);
             isDone = PresentBlitPicture(dc, fitX, fitY, fitWidth, fitHeight, pixels, &dib, sourceWidth, sourceHeight, presenter->Filter);   /* #325 */
             IDirectDrawSurface7_ReleaseDC(back, dc);
@@ -906,7 +951,8 @@ static VOID PresentFullscreen(PPRESENT_DDRAW presenter)
     staging = isDone ? NULL : PresentFullscreenStageSurface(presenter, presenter->SnapshotWidth, presenter->SnapshotHeight);
     if (!isDone && staging && presenter->SnapshotWidth > 0 && presenter->SnapshotHeight > 0 && PresentFullscreenStage(presenter, staging) == 0)
     {
-        RECT source, destination;
+        RECT source;
+        RECT destination;
         source.left = 0;
         source.top = 0;
         source.right = presenter->SnapshotWidth;
@@ -970,7 +1016,8 @@ static VOID PresentFullscreen(PPRESENT_DDRAW presenter)
      * blocking DDFLIP_WAIT, since dropping would mean drawing into the queued buffer.
      */
     {   LPDIRECTDRAWSURFACE7 primary = PRESENT_SURFACE(presenter->Primary);
-        DWORD flags, scanLine = 0;
+        DWORD flags;
+        DWORD scanLine = 0;
         HRESULT result;
         INT isOurWait = presenter->IsVsync && presenter->IsFlipOurWait;
         PresentMonitorQuery(presenter);
@@ -1132,7 +1179,8 @@ VOID PresentDdrawSnapshot(PPRESENT_DDRAW presenter, PCNTVDD_FRAME frame)
         presenter->IsSnapshotValid = 1;
         if (presenter->Tint)                             /* #229: per pixel, only here */
         {
-            size_t index, count = (size_t)frame->Width * frame->Height;
+            size_t index;
+            size_t count = (size_t)frame->Width * frame->Height;
             for (index = 0; index < count; ++index)
                 presenter->Snapshot32[index] = PresentTint(presenter->Snapshot32[index], presenter->Tint);
         }
@@ -1204,7 +1252,9 @@ VOID PresentDdrawPresent(PPRESENT_DDRAW presenter)
      * covers "we asked for DirectDraw fullscreen and it refused" -- which must fall
      * back to drawing something rather than to drawing nothing.
      */
-    LARGE_INTEGER frequency, start, end;
+    LARGE_INTEGER frequency;
+    LARGE_INTEGER start;
+    LARGE_INTEGER end;
     INT isFullscreen = (presenter->IsFullscreen && presenter->DirectDraw && presenter->Back);
     QueryPerformanceCounter(&start);
     if (isFullscreen)
@@ -1262,10 +1312,17 @@ static VOID PresentStoreLe32(BYTE *bytes, DWORD value)
 
 INT PresentDdrawSaveBmp(PPRESENT_DDRAW presenter, PCSTR path)
 {
-    INT width = presenter->SnapshotWidth, height = presenter->SnapshotHeight, column, row;
-    DWORD rowBytes, imageBytes, dataOffset, written;
+    INT width = presenter->SnapshotWidth;
+    INT height = presenter->SnapshotHeight;
+    INT column;
+    INT row;
+    DWORD rowBytes;
+    DWORD imageBytes;
+    DWORD dataOffset;
+    DWORD written;
     HANDLE file;
-    BYTE fileHeader[BMP_FILE_HEADER_BYTES], infoHeader[BMP_INFO_HEADER_BYTES];
+    BYTE fileHeader[BMP_FILE_HEADER_BYTES];
+    BYTE infoHeader[BMP_INFO_HEADER_BYTES];
     static BYTE palette[NTVDD_PALETTE_ENTRIES * BMP_QUAD_BYTES];
     static BYTE row8[NTVDD_FRAME_MAX_WIDTH + BMP_ROW_SLACK];
     /* 24bpp output is needed for a split palette AND for a direct-colour frame:

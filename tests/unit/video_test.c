@@ -27,7 +27,8 @@
  */
 static VOID VideoTestFillFonts(VOID)
 {
-    INT character, row;
+    INT character;
+    INT row;
 
     for (character = 0; character < 256; ++character)
     {
@@ -59,7 +60,8 @@ static INT VideoTestClaimsPort(const VDD_BUS *bus, WORD port)
     return 0;
 }
 
-static INT g_Total = 0, g_Failures = 0;
+static INT g_Total = 0;
+static INT g_Failures = 0;
 #define CHECK(condition,message) do{ g_Total++; if(condition){printf("  PASS  %s\n",(message));} \
     else{printf("  FAIL  %s\n",(message)); g_Failures++;} }while(0)
 
@@ -261,7 +263,9 @@ INT main(VOID)
      */
     { WORD fontSegment = 0x4000, fontOffset = 0x0000;
       PBYTE fontBitmap = &g_GuestMemory[(fontSegment << 4) + fontOffset];
-      INT glyphRow, glyphColumn, solid = 1;
+      INT glyphRow;
+      INT glyphColumn;
+      INT solid = 1;
       memset(fontBitmap, 0xFF, 16);                       /* one glyph: every pixel set */
       memset(&registers,0,sizeof registers);
       VddSetAh(&registers,0x11);
@@ -431,8 +435,10 @@ INT main(VOID)
      */
     { WORD segment=0x3000, offset=0x0000;
     PBYTE buffer=&g_GuestMemory[(segment<<4)+offset];
-    UINT32 modeListOffset, oemStringOffset;
-    INT index, clean=1;
+    UINT32 modeListOffset;
+    UINT32 oemStringOffset;
+    INT index;
+    INT clean=1;
       memset(buffer, 0xAA, 512);
       memset(&registers,0,sizeof registers);
       VddSetAh(&registers,0x4F);
@@ -471,7 +477,8 @@ INT main(VOID)
       { UINT pointerOffsets[4] = { 6, 22, 26, 30 }, index, inside = 1, distinct = 1;
         for (index = 0; index < 4; ++index)
         {
-          UINT pointerOffset = buffer[pointerOffsets[index]] | (buffer[pointerOffsets[index]+1] << 8), pointerSegment = buffer[pointerOffsets[index]+2] | (buffer[pointerOffsets[index]+3] << 8);
+          UINT pointerOffset = buffer[pointerOffsets[index]] | (buffer[pointerOffsets[index]+1] << 8);
+          UINT pointerSegment = buffer[pointerOffsets[index]+2] | (buffer[pointerOffsets[index]+3] << 8);
           if (pointerSegment != segment || pointerOffset < 0x100 || pointerOffset >= 0x200)
               inside = 0;
           if (index && pointerOffset == (UINT)(buffer[pointerOffsets[index-1]] | (buffer[pointerOffsets[index-1]+1] << 8)))
@@ -691,8 +698,10 @@ INT main(VOID)
      */
     { WORD segment=0x3300;
     PBYTE stateBuffer=&g_GuestMemory[(segment<<4)];
-    WORD blocks, blocks1c;
-    UINT index, spill=0;
+    WORD blocks;
+    WORD blocks1c;
+    UINT index;
+    UINT spill=0;
       memset(&registers,0,sizeof registers);
       VddSetAh(&registers,0x4F);
       VddSetAl(&registers,0x04);
@@ -1051,7 +1060,8 @@ INT main(VOID)
     /* T12f: 4F15 VBE/DDC -- a synthesised EDID 1.3 block ------------------------ */
     { WORD segment=0x3500;
     PBYTE edid=&g_GuestMemory[(segment<<4)];
-    UINT index, sum=0;
+    UINT index;
+    UINT sum=0;
       memset(&registers,0,sizeof registers);
       VddSetAh(&registers,0x4F);
       VddSetAl(&registers,0x15);
@@ -1679,7 +1689,9 @@ INT main(VOID)
      * test: set the microsecond time, read the port, assert the bits.
      */
     { UINT32 value;
-    INT index, highCount, lowCount;
+    INT index;
+    INT highCount;
+    INT lowCount;
       g_Video.TimeUs = VideoTestFakeClock;
 
       /* --- 640x480 (mode 12h): 60 Hz, 525 lines, 480 active --------------- */
@@ -1750,7 +1762,11 @@ INT main(VOID)
        * several frames still owes only ONE. --------------------------------
        */
       { UINT32 firstRead, secondRead, thirdRead, fourthRead, owedBefore;
-      UINT64 time, firstRetrace = 0, secondRetrace = 0, framePeriod, pollTime;
+      UINT64 time;
+      UINT64 firstRetrace = 0;
+      UINT64 secondRetrace = 0;
+      UINT64 framePeriod;
+      UINT64 pollTime;
         /* The frame is MEASURED off the model rather than assumed: find two
          * successive retrace starts, then poll 2 ms before one (active picture).
          */
@@ -1840,7 +1856,9 @@ INT main(VOID)
      *   Vertical Blank Start = 0x63 | ov bit3<<8 | ms bit5<<9 = 355
      */
     {   UINT32 value;
-    INT index, highCount, lowCount;
+    INT index;
+    INT highCount;
+    INT lowCount;
     INT lowEdge = -1;
         g_Video.TimeUs = VideoTestFakeClock;
         g_Video.GraphicsHeight = 350;                      /* what the old model could not express */
@@ -2060,7 +2078,9 @@ INT main(VOID)
         {   UINT32 step;
         INT same = 1;
         UINT plane;
-            const UINT32 sourceOffset = 0xF91F, destinationOffset = 0x1E42, length = 0x6E0;
+            const UINT32 sourceOffset = 0xF91F;
+            const UINT32 destinationOffset = 0x1E42;
+            const UINT32 length = 0x6E0;
             /* A pattern that differs per byte AND per plane, so a stale latch or a
              * wrong plane cannot coincidentally reproduce it.
              */
@@ -2112,7 +2132,8 @@ INT main(VOID)
          * a check that only looked at the picture would pass while the bug remained.
          */
         {   NTVDD_REGISTERS registers;
-            UINT32 offscreenOffset = 0xF91F, visibleOffset = 0x0100;
+            UINT32 offscreenOffset = 0xF91F;
+            UINT32 visibleOffset = 0x0100;
             INT plane;
 
             for (plane = 0; plane < 4; ++plane)
@@ -2163,10 +2184,15 @@ INT main(VOID)
          * the order they happened.
          */
         {   UINT32 step;
-        UINT index, readCount = 0, writeCount = 0;
-            UINT32 firstWrite = 0, firstRead = 0;
-            const UINT32 sourceOffset = 0xF91F, destinationOffset = 0x1E42;
-            const UINT32 composePc = 0x01105815, blitPc = 0x01107626;
+        UINT index;
+        UINT readCount = 0;
+        UINT writeCount = 0;
+            UINT32 firstWrite = 0;
+            UINT32 firstRead = 0;
+            const UINT32 sourceOffset = 0xF91F;
+            const UINT32 destinationOffset = 0x1E42;
+            const UINT32 composePc = 0x01105815;
+            const UINT32 blitPc = 0x01107626;
 
             memset(g_Video.CacheSites, 0, sizeof g_Video.CacheSites);
             g_Video.CacheSitesLost = 0;
@@ -2290,7 +2316,8 @@ INT main(VOID)
                                             0x10,0x11,0x12,0x13,0x14,0x15,0x16,0x17 };
         static const BYTE egaAttributes[16] = { 0x00,0x01,0x02,0x03,0x04,0x05,0x14,0x07,
                                             0x38,0x39,0x3A,0x3B,0x3C,0x3D,0x3E,0x3F };
-        INT index, isOk;
+        INT index;
+        INT isOk;
 
         memset(&registers,0,sizeof registers);
         VddSetAh(&registers,0x00);
@@ -2403,7 +2430,8 @@ INT main(VOID)
          * Lemmings blit cases then did. Snapshot here and assert the change; the claim
          * is just as tight and it no longer depends on what else the file does.
          */
-        UINT32 readMode0Before = g_Video.ReadModeHistogram[0], readMode1Before = g_Video.ReadModeHistogram[1];
+        UINT32 readMode0Before = g_Video.ReadModeHistogram[0];
+        UINT32 readMode1Before = g_Video.ReadModeHistogram[1];
         memset(&registers,0,sizeof registers);
         VddSetAh(&registers,0x00);
         VddSetAl(&registers,0x12);
@@ -2524,7 +2552,8 @@ INT main(VOID)
      * never. 0Dh: 70 Hz, F = 14285 us, 449 lines, retrace from line 400 (~12726 us).
      */
     {   UINT32 value;
-    const UINT64 framePeriod = 14285u, duration = 1000u * 14285u;
+    const UINT64 framePeriod = 14285u;
+    const UINT64 duration = 1000u * 14285u;
         value = 0x0C;
         VddBusIo(&bus,0x3D4,1,0,&value);
         value = 0x00;
@@ -2810,7 +2839,8 @@ INT main(VOID)
      * RENDER or a byte in guest memory, not as a return code.
      */
     {   static BYTE textBiosData[0x100];
-        INT glyphRow, glyphColumn;
+        INT glyphRow;
+        INT glyphColumn;
         memset(textBiosData, 0, sizeof textBiosData);
         g_Video.BiosData = textBiosData;
         memset(&registers,0,sizeof registers);
@@ -3038,7 +3068,8 @@ INT main(VOID)
          * is armed sets it. 70 Hz: F = 14285 us, retrace from line 400 (~12726 us).
          */
         {   const UINT64 framePeriod = 14285u, duration = 2000u * 14285u;
-            UINT32 crtc11, portValue;
+            UINT32 crtc11;
+            UINT32 portValue;
             UINT64 (*oldClock)(VOID) = g_Video.TimeUs;
             UINT32 oldGraphicsHeight = g_Video.GraphicsHeight;
             g_Video.TimeUs = VideoTestFakeClock;
@@ -3117,8 +3148,10 @@ INT main(VOID)
         struct
         {
             PCSTR Name;
-            WORD IndexPort, DataPort;
-            BYTE Index, Expected;
+            WORD IndexPort;
+            WORD DataPort;
+            BYTE Index;
+            BYTE Expected;
         }
         registerCases[] = {
             { "SR02", 0x3C4, 0x3C5, 0x02, 0x03 },
@@ -3197,7 +3230,8 @@ INT main(VOID)
     {
         NTVDD_REGISTERS registers2;
         static BYTE biosData[0x100];
-        INT row, isOk;
+        INT row;
+        INT isOk;
         UINT32 value;
         g_Video.BiosData = biosData;
 #define I10(ax_, bx_, cx_, dx_) do { memset(&registers2, 0, sizeof registers2); registers2.Eax = (ax_); registers2.Ebx = (bx_); \
@@ -3503,8 +3537,12 @@ INT main(VOID)
         /* 0040:00A8 -> the save pointer table -> the parameter table */
         VddVideoInstallFonts(&g_Video);
         { WORD saveOffset = (WORD)(biosData[0xA8] | (biosData[0xA9] << 8)), saveSegment = (WORD)(biosData[0xAA] | (biosData[0xAB] << 8));
-          PCBYTE savePointer = g_GuestMemory + ((UINT32)saveSegment << 4) + saveOffset, parameterTable, mode3Entry, mode13Entry;
-          WORD parameterOffset = (WORD)(savePointer[0] | (savePointer[1] << 8)), parameterSegment = (WORD)(savePointer[2] | (savePointer[3] << 8));
+          PCBYTE savePointer = g_GuestMemory + ((UINT32)saveSegment << 4) + saveOffset;
+          PCBYTE parameterTable;
+          PCBYTE mode3Entry;
+          PCBYTE mode13Entry;
+          WORD parameterOffset = (WORD)(savePointer[0] | (savePointer[1] << 8));
+          WORD parameterSegment = (WORD)(savePointer[2] | (savePointer[3] << 8));
           BYTE reference[64];
           INT isOk3;
           parameterTable = g_GuestMemory + ((UINT32)parameterSegment << 4) + parameterOffset;
@@ -3564,7 +3602,8 @@ INT main(VOID)
         static const struct
         {
             BYTE Mode;
-            WORD Width, Height;
+            WORD Width;
+            WORD Height;
         }
         graphicsModes[] = {
             { 0x0D, 320, 200 }, { 0x0E, 640, 200 }, { 0x10, 640, 350 },
@@ -3575,7 +3614,8 @@ INT main(VOID)
         NTVDD_REGISTERS modeRegisters;
         for (index = 0; index < sizeof graphicsModes / sizeof graphicsModes[0]; ++index)
         {
-            INT graphicsWidth, graphicsHeight;
+            INT graphicsWidth;
+            INT graphicsHeight;
             memset(&modeRegisters, 0, sizeof modeRegisters);
             VddSetAh(&modeRegisters, 0x00);
             VddSetAl(&modeRegisters, graphicsModes[index].Mode);
@@ -3632,7 +3672,8 @@ INT main(VOID)
      * after a 16-colour mode (0Dh) colour 15 drew grey, seen on the rig.
      */
     {   NTVDD_REGISTERS registers3;
-    UINT32 mode13Colour, vesaColour;
+    UINT32 mode13Colour;
+    UINT32 vesaColour;
         memset(&registers3, 0, sizeof registers3);
         VddSetAh(&registers3, 0x00);
         VddSetAl(&registers3, 0x13);

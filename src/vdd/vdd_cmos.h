@@ -107,7 +107,8 @@ typedef struct _CMOS_STATE
      * calls RtcNow once a SECOND instead of once a tick.
      */
     UINT64   SecondAccumulator;
-    UINT32   UpdateEndedRaised, AlarmRaised;
+    UINT32 UpdateEndedRaised;
+    UINT32 AlarmRaised;
     /* The clock. NULL means the registers read as whatever `Ram` holds, which is
      * what the off-VM battery uses to pin exact values.
      */

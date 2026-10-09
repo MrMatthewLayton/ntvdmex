@@ -146,7 +146,8 @@ static VOID InputBdaWriteWord(PINPUT_STATE state, INT offset, WORD value)
  */
 static VOID InputKeyboardBounds(PCINPUT_STATE state, WORD *bufferStart, WORD *bufferEnd)
 {
-    WORD startPointer = InputBdaReadWord(state, BIOS_BDA_KEYBOARD_START_POINTER), endPointer = InputBdaReadWord(state, BIOS_BDA_KEYBOARD_END_POINTER);
+    WORD startPointer = InputBdaReadWord(state, BIOS_BDA_KEYBOARD_START_POINTER);
+    WORD endPointer = InputBdaReadWord(state, BIOS_BDA_KEYBOARD_END_POINTER);
 
     if ((startPointer & 1) || (endPointer & 1) || startPointer >= endPointer || (WORD)(endPointer - startPointer) < INPUT_RING_MINIMUM_SIZE)
     {
@@ -166,7 +167,11 @@ static WORD InputBdaNext(WORD pointer, WORD bufferStart, WORD bufferEnd)
 
 INT VddInputPush(PINPUT_STATE state, WORD key)
 {
-    WORD head, tail, nextTail, bufferStart, bufferEnd;
+    WORD head;
+    WORD tail;
+    WORD nextTail;
+    WORD bufferStart;
+    WORD bufferEnd;
 
     if (!state->BiosData)
         return 0;                                 /* no guest memory yet: nowhere to put it */
@@ -197,7 +202,10 @@ INT VddInputPush(PINPUT_STATE state, WORD key)
 
 INT VddInputPop(PINPUT_STATE state, WORD *key)
 {
-    WORD head, tail, bufferStart, bufferEnd;
+    WORD head;
+    WORD tail;
+    WORD bufferStart;
+    WORD bufferEnd;
 
     if (!state->BiosData)
         return 0;
@@ -215,7 +223,10 @@ INT VddInputPop(PINPUT_STATE state, WORD *key)
 
 INT VddInputPeek(PINPUT_STATE state, WORD *key)
 {
-    WORD head, tail, bufferStart, bufferEnd;
+    WORD head;
+    WORD tail;
+    WORD bufferStart;
+    WORD bufferEnd;
 
     if (!state->BiosData)
         return 0;
@@ -528,7 +539,9 @@ static WORD InputExtendedCtrl(BYTE code)
  */
 typedef struct _KEYBOARD_OVERRIDE
 {
-    BYTE ScanCode, Plain, Shifted;
+    BYTE ScanCode;
+    BYTE Plain;
+    BYTE Shifted;
 } KEYBOARD_OVERRIDE, *PKEYBOARD_OVERRIDE;
 /* United Kingdom (XP layout 00000809): 5 keys differ from US. */
 static const KEYBOARD_OVERRIDE g_KeyboardUk[] = {
@@ -775,7 +788,8 @@ static INT InputBiosTranslate(PINPUT_STATE state, BYTE scanCode)
     INT isBreak = (scanCode & INPUT_SCAN_BREAK_BIT) != 0;
     BYTE code = (BYTE)(scanCode & INPUT_SCAN_CODE_MASK);
     INT isExtended = state->IsExtendedPending;
-    BYTE shiftFlags, ascii = 0;
+    BYTE shiftFlags;
+    BYTE ascii = 0;
     WORD key;
 
     if (scanCode == INPUT_SCAN_PREFIX_E0)                                    /* prefix: the next code is extended */
@@ -1019,7 +1033,8 @@ VOID VddInputPauseCancel(PINPUT_STATE state)
 
 WORD VddInputDosKey(WORD key)
 {
-    BYTE scanCode = (BYTE)(key >> BYTE_SHIFT), character = (BYTE)key;
+    BYTE scanCode = (BYTE)(key >> BYTE_SHIFT);
+    BYTE character = (BYTE)key;
 
     if (scanCode == INPUT_KEY_EXTENDED_MARKER)
         return (WORD)(((character == INPUT_CHAR_CARRIAGE_RETURN || character == INPUT_CHAR_LINE_FEED) ? INPUT_KEY_ENTER_SCAN_CODE : INPUT_KEY_SLASH_SCAN_CODE) | character);
@@ -1392,7 +1407,8 @@ static VOID InputKeyboardPortOut(PVOID context, WORD port, BYTE width, UINT32 va
  */
 static INT InputKeyCompatible(WORD *key)
 {
-    BYTE scanCode = (BYTE)(*key >> BYTE_SHIFT), character = (BYTE)*key;
+    BYTE scanCode = (BYTE)(*key >> BYTE_SHIFT);
+    BYTE character = (BYTE)*key;
 
     if (scanCode == INPUT_KEY_EXTENDED_MARKER)                         /* keypad Enter / keypad '/' */
     {
@@ -1497,7 +1513,8 @@ static VOID InputInt16(PVOID context, PNTVDD_REGISTERS registers)
          * 0018 has SysReq at bit 2, Pause at 3 and Insert at 7; the right-hand keys
          * live in 0096 bits 2/3. This copied 0018 whole, which nothing wrote.
          */
-        BYTE shiftFlags2 = InputBdaByte(state, BIOS_BDA_SHIFT_FLAGS2), flags3 = InputBdaByte(state, BIOS_BDA_KEYBOARD_FLAGS3);
+        BYTE shiftFlags2 = InputBdaByte(state, BIOS_BDA_SHIFT_FLAGS2);
+        BYTE flags3 = InputBdaByte(state, BIOS_BDA_KEYBOARD_FLAGS3);
         VddSetAl(registers, InputShiftFlags(state));
         VddSetAh(registers, (BYTE)((shiftFlags2 & INPUT_INT16_SHIFT2_BITS) | (flags3 & INPUT_INT16_RIGHT_KEY_BITS) | ((shiftFlags2 & INPUT_SHIFT2_SYSREQ) ? INPUT_INT16_SYSREQ_HELD : 0)));
         registers->ZeroFlag = 0;

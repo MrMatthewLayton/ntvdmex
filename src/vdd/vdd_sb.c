@@ -405,7 +405,8 @@ static VOID SbDspWrite(PSB_STATE state, BYTE value)
 static VOID SbPortOut(PVOID context, WORD port, BYTE width, UINT32 value)
 {
     PSB_STATE state = (PSB_STATE)context;
-    BYTE offset = (BYTE)(port - state->BasePort), byteValue = (BYTE)value;
+    BYTE offset = (BYTE)(port - state->BasePort);
+    BYTE byteValue = (BYTE)value;
 
     (VOID)width;
     switch (offset)
@@ -611,7 +612,8 @@ static INT16 SbFetchSample(PSB_STATE state, INT *isEnded)
     BYTE rawBytes[SB_FRAME_BYTES_MAX];
     UINT32 bytesWanted = (UINT32)(state->Is16Bit ? SB_SAMPLE16_BYTES : 1) * (state->IsStereo ? SB_STEREO_CHANNELS : 1u);
     UINT32 bytesRead;
-    INT32 left = 0, right = 0;
+    INT32 left = 0;
+    INT32 right = 0;
     INT isTerminalCount = 0;
 
     *isEnded = 0;
@@ -822,7 +824,8 @@ static UINT32 SbRender(PSB_STATE state, INT16 *output, UINT32 frames, INT isSter
 
         if (state->IdleRun)                     /* a gap just ended: bucket its length */
         {
-            UINT32 runLength = state->IdleRun, bucket = 0;
+            UINT32 runLength = state->IdleRun;
+            UINT32 bucket = 0;
             while (runLength > 1 && bucket < SB_RUN_LAST_BUCKET)
             {
                 runLength >>= 1;
@@ -906,7 +909,8 @@ static UINT32 SbRender(PSB_STATE state, INT16 *output, UINT32 frames, INT isSter
                 }
                 else if (state->FlatRun)
                 {
-                    UINT32 runLength = state->FlatRun, bucket;
+                    UINT32 runLength = state->FlatRun;
+                    UINT32 bucket;
                     if      (runLength < 4)
                         bucket = runLength - 1;                               /* 1, 2, 3 exactly */
                     else if (runLength < 8)
@@ -934,7 +938,8 @@ static UINT32 SbRender(PSB_STATE state, INT16 *output, UINT32 frames, INT isSter
                 }
                 else if (state->ReplayRun)
                 {
-                    UINT32 runLength = state->ReplayRun, bucket;
+                    UINT32 runLength = state->ReplayRun;
+                    UINT32 bucket;
                     if      (runLength < 4)
                         bucket = runLength - 1;                               /* 1, 2, 3 exactly */
                     else if (runLength < 8)
@@ -993,8 +998,11 @@ VOID VddSbReset(PVOID context)
     PDMA_STATE dma = state->Dma;
     OPL_STATE *opl = state->Opl;
     WORD basePort = state->BasePort;
-    BYTE irq = state->Irq, dma8 = state->Dma8, dma16 = state->Dma16;
-    UINT32 dspWrites = state->DspWrites, blocks = state->Blocks;
+    BYTE irq = state->Irq;
+    BYTE dma8 = state->Dma8;
+    BYTE dma16 = state->Dma16;
+    UINT32 dspWrites = state->DspWrites;
+    UINT32 blocks = state->Blocks;
     UINT byteIndex;
     BYTE *bytes = (BYTE *)state;
 

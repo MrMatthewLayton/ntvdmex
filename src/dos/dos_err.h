@@ -357,12 +357,14 @@ static inline INT DosCritDriveFromNtName(
         return DOS_CRIT_NO_DRIVE;
     for (driveIndex = 0; driveIndex < DOS_CRIT_DRIVE_COUNT; ++driveIndex)
     {
-        PCSTR devicePosition = devices[driveIndex], namePosition = ntName;
+        PCSTR devicePosition = devices[driveIndex];
+        PCSTR namePosition = ntName;
         if (!devicePosition || !*devicePosition)
             continue;
         while (*devicePosition && *namePosition)
         {
-            CHAR deviceChar = *devicePosition, nameChar = *namePosition;
+            CHAR deviceChar = *devicePosition;
+            CHAR nameChar = *namePosition;
             if (deviceChar >= 'A' && deviceChar <= 'Z')
                 deviceChar = (CHAR)(deviceChar + ASCII_CASE_BIT);
             if (nameChar >= 'A' && nameChar <= 'Z')

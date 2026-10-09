@@ -65,7 +65,8 @@
 #define PRTSC_TEST_LAST_CELL_OF_ROW_0   82
 #define PRTSC_TEST_NO_CONTEXT           0
 
-static INT g_Checks = 0, g_Failures = 0;
+static INT g_Checks = 0;
+static INT g_Failures = 0;
 
 static VOID PrintScreenTestCheck(BOOL passed, PCSTR message)
 {
@@ -102,7 +103,8 @@ static INT PrintScreenTestRunJob(
     INT failAt,
     BYTE failStatus)
 {
-    BYTE nextByte, printerStatus = PRTSC_TEST_FIRST_STATUS;
+    BYTE nextByte;
+    BYTE printerStatus = PRTSC_TEST_FIRST_STATUS;
     INT result;
 
     g_OutputCount = 0;
@@ -124,7 +126,9 @@ static INT PrintScreenTestRunJob(
 INT main(VOID)
 {
     BIOS_PRINT_SCREEN_JOB job;
-    INT result, row, column;
+    INT result;
+    INT row;
+    INT column;
     BOOL passed;
 
     printf("== prtsc_test: the default INT 05h (#274) ==\n");

@@ -84,7 +84,8 @@
 
 #define ERR_TEST_LABEL_SIZE             128
 
-static INT g_Checks, g_Failures;
+static INT g_Checks;
+static INT g_Failures;
 
 static VOID ErrTestExpect(PCSTR description, INT32 actual, INT32 expected)
 {
@@ -246,7 +247,9 @@ INT main(VOID)
          * that only checked "not 2".
          */
         {
-            WORD fileNotFound, pathNotFound, accessDenied;
+            WORD fileNotFound;
+            WORD pathNotFound;
+            WORD accessDenied;
             DosErrFromWin32(DOS_ERR_WIN32_FILE_NOT_FOUND, &fileNotFound);
             DosErrFromWin32(DOS_ERR_WIN32_PATH_NOT_FOUND, &pathNotFound);
             DosErrFromWin32(DOS_ERR_WIN32_ACCESS_DENIED,  &accessDenied);
@@ -312,7 +315,8 @@ INT main(VOID)
      * expectations below are replaced by its rows, not the other way round.
      */
     {
-        BYTE readAh = DosCritInt24Ah(ERR_TEST_READ), writeAh = DosCritInt24Ah(ERR_TEST_WRITE);
+        BYTE readAh = DosCritInt24Ah(ERR_TEST_READ);
+        BYTE writeAh = DosCritInt24Ah(ERR_TEST_WRITE);
         ErrTestExpect("3Fh AH=3E (data area, read, F+R+I)", readAh, ERR_TEST_AH_READ);
         ErrTestExpect("40h AH=3F (data area, WRITE, F+R+I)", writeAh, ERR_TEST_AH_WRITE);
         ErrTestExpect("3Fh read bit (0) clear", readAh & ERR_TEST_AH_WRITE_BIT, 0);

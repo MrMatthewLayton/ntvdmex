@@ -77,7 +77,8 @@ int main(void)
     NTVDD_REGISTERS registers;
     UINT32 value;
     long poll;
-    struct timespec start, end;
+    struct timespec start;
+    struct timespec end;
     double nanoseconds;
 
     VddBusInitialize(&bus, g_GuestMemory);

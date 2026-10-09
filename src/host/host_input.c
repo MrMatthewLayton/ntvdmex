@@ -50,7 +50,8 @@ static VOID ModifierTrack(BYTE rawScancode, INT extended, INT down);
  */
 #define KEYLAT_RING     32
 static volatile LONGLONG g_KeyLatencyTimes[KEYLAT_RING];
-static volatile LONG     g_KeyLatencyHead, g_KeyLatencyTail;
+static volatile LONG g_KeyLatencyHead;
+static volatile LONG g_KeyLatencyTail;
 static VOID KeyLatencyBucket(DWORD *histogram, DWORD milliseconds)
 {
     UINT bucket = 0;
@@ -131,7 +132,8 @@ enum
  */
 VOID HostKeyTypematicInitialize(VOID)
 {
-    DWORD delay = 1, speed = KEYBOARD_SPEED_MAX;
+    DWORD delay = 1;
+    DWORD speed = KEYBOARD_SPEED_MAX;
 
     if (!SystemParametersInfoA(SPI_GETKEYBOARDDELAY, 0, &delay, 0))
         delay = 1;
@@ -149,9 +151,13 @@ VOID HostKeyTypematicInitialize(VOID)
 
 #define KEY_TYPEMATIC_DELAY_US      g_TypematicDelayMicroseconds
 #define KEY_TYPEMATIC_PERIOD_US     g_TypematicPeriodMicroseconds
-static BYTE  g_TypematicScanCode, g_TypematicExtended, g_TypematicOn;
+static BYTE g_TypematicScanCode;
+static BYTE g_TypematicExtended;
+static BYTE g_TypematicOn;
 static LONGLONG g_TypematicDue;
-UINT32 g_TypematicSent, g_TypematicOsRepeats;  /* ours generated / OS ones suppressed */
+/* ours generated / OS ones suppressed */
+UINT32 g_TypematicSent;
+UINT32 g_TypematicOsRepeats;
 
 static VOID HostKeyTypematicPress(BYTE scanCode, INT extended)
 {
@@ -624,7 +630,9 @@ VOID KeyMessageNote(VOID)
 static INT HostKeySpecial(BYTE rawScancode, INT extended, INT isBreak)
 {
     BYTE bytes[6];
-    INT count, noReport, index;
+    INT count;
+    INT noReport;
+    INT index;
 
     count = VddInputHostKeyBytes(rawScancode, extended, isBreak, bytes, &noReport);
     if (!noReport)

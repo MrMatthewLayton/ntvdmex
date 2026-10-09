@@ -56,7 +56,8 @@
 #define EMS_TEST_THIRD_WINDOW_MARK      0xD4
 #define EMS_TEST_DIRTY_MARK             0x5A
 
-static INT g_Checks = 0, g_Failures = 0;
+static INT g_Checks = 0;
+static INT g_Failures = 0;
 
 static VOID EmsTestCheck(BOOL passed, PCSTR description)
 {
@@ -111,7 +112,11 @@ INT main(VOID)
 {
     static BYTE frame[DOS_EMS_FRAME_SIZE];   /* the 64 KB page-frame window */
     DOS_EMS_STATE state;
-    WORD firstHandle, secondHandle, freePages, totalPages, pages;
+    WORD firstHandle;
+    WORD secondHandle;
+    WORD freePages;
+    WORD totalPages;
+    WORD pages;
     BYTE errorCode;
     BOOL succeeded;
 

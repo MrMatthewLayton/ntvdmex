@@ -20,7 +20,9 @@
 
 #define MEMSZ   0x200000u
 static BYTE g_Memory[MEMSZ];
-static UINT32 g_OutPort, g_OutValue, g_OutCount;
+static UINT32 g_OutPort;
+static UINT32 g_OutValue;
+static UINT32 g_OutCount;
 static BYTE  Pm32HostRead8(UINT32 linear)
 {
     return linear < MEMSZ ? g_Memory[linear] : 0xFF;
@@ -54,7 +56,8 @@ static VOID     Pm32HostOut(WORD port, INT width, UINT32 value)
 
 #include "../../src/host/pm32interp.h"
 
-static INT g_Total = 0, g_Failures = 0;
+static INT g_Total = 0;
+static INT g_Failures = 0;
 #define CHECK(condition,message) do{ g_Total++; if(condition){printf("  PASS  %s\n",(message));} \
     else{printf("  FAIL  %s\n",(message)); g_Failures++;} }while(0)
 
@@ -297,7 +300,8 @@ INT main(VOID)
                       0xBF, 0x00, 0x54, 0x00, 0x00, 0xB9, 0x04, 0x00, 0x00, 0x00,
                       0x88, 0x1F, 0x83, 0xC7, 0x50, 0x49, 0x75, 0xF8, 0x61, 0xC3 };
       PM32_CPU cpu = Pm32InterpTestMakeCpu(code, (INT)sizeof code);
-      UINT32 stackPointer, count = 0;
+      UINT32 stackPointer;
+      UINT32 count = 0;
       INT index;
       /* a return address on the stack, as if called */
       cpu.Registers[4] -= 4;

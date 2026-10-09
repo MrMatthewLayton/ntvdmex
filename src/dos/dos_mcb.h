@@ -118,7 +118,8 @@ static inline VOID DosMcbSetOwnerName(
     _In_ PCSTR path)
 {
     volatile BYTE *mcb = DosMcbSegmentAddress(base, (WORD)(pspSegment - 1));
-    PCSTR baseName = path, cursor;
+    PCSTR baseName = path;
+    PCSTR cursor;
     INT index;
 
     for (cursor = path; *cursor; ++cursor)
@@ -213,7 +214,8 @@ static inline WORD DosMcbReserveTop(
     _In_ WORD firstMcb,
     _In_ WORD paragraphs)
 {
-    WORD mcbSegment = firstMcb, previousSegment = 0;
+    WORD mcbSegment = firstMcb;
+    WORD previousSegment = 0;
     INT walkCount = 0;
     BOOL hasPrevious = FALSE;
 
@@ -224,7 +226,8 @@ static inline WORD DosMcbReserveTop(
         if (mcb[DOS_MCB_SIGNATURE] == DOS_MCB_LAST && DosMcbReadWord(mcb + DOS_MCB_OWNER) == DOS_MCB_OWNER_DOS && hasPrevious)
         {
             volatile BYTE *previousMcb = DosMcbSegmentAddress(base, previousSegment);
-            WORD previousSize = DosMcbReadWord(previousMcb + DOS_MCB_SIZE), newSegment;
+            WORD previousSize = DosMcbReadWord(previousMcb + DOS_MCB_SIZE);
+            WORD newSegment;
             if (previousSize < (WORD)(paragraphs + 2))
                 return DOS_MCB_NO_SEGMENT;
             DosMcbWriteWord(previousMcb + DOS_MCB_SIZE, (WORD)(previousSize - paragraphs - 1));
@@ -262,7 +265,9 @@ static inline INT DosMcbAllocate(
     _Out_opt_ PWORD allocatedSegment,
     _Out_opt_ PWORD largestFree)
 {
-    WORD mcbSegment = firstMcb, biggest = 0, result = 0;
+    WORD mcbSegment = firstMcb;
+    WORD biggest = 0;
+    WORD result = 0;
     BOOL isDone = FALSE;
 
     for (;;)

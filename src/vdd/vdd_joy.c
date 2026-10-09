@@ -34,7 +34,8 @@ static VOID VddJoystickPortIn(PVOID context, WORD port, BYTE width, UINT32 *valu
     (VOID)port;
     (VOID)width;
     BYTE result = JOYSTICK_NO_BUTTONS_PRESSED;   /* no buttons pressed */
-    INT axisIndex, wiredAxes = VddJoystickAxes(state);
+    INT axisIndex;
+    INT wiredAxes = VddJoystickAxes(state);
     state->PortReads++;
     if (state->Type == JOYSTICK_TYPE_NONE)
     {

@@ -335,7 +335,8 @@ static VOID FdcSeekDone(PFDC_STATE state, BYTE drive, BYTE head)
 static VOID FdcExecute(PFDC_STATE state)
 {
     BYTE opcode = (BYTE)(state->Command[0] & FDC_OPCODE_MASK);
-    BYTE drive, head;
+    BYTE drive;
+    BYTE head;
 
     state->Commands++;
     switch (opcode)
@@ -462,7 +463,10 @@ static VOID FdcExecute(PFDC_STATE state)
     case FDC_CMD_WRITE_DELETED_DATA:
     case FDC_CMD_READ_DELETED_DATA:
     {
-        BYTE cylinder, headAddress, sector, sizeCode;
+        BYTE cylinder;
+        BYTE headAddress;
+        BYTE sector;
+        BYTE sizeCode;
         drive = (BYTE)(state->Command[1] & FDC_DRIVE_MASK);
         head  = (BYTE)((state->Command[1] >> FDC_HEAD_SHIFT) & 1);
         cylinder = state->Command[FDC_PARAMETER_2];

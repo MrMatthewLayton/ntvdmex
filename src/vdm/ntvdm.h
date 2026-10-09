@@ -35,8 +35,14 @@ typedef struct
     ULONG  CreationFlags;
     ULONG  ExitCode;
     ULONG  CodePage;
-    HANDLE StdIn, StdOut, StdErr;
-    LPSTR  CmdLine, AppName, PifFile, CurDirectory, Env;
+    HANDLE StdIn;
+    HANDLE StdOut;
+    HANDLE StdErr;
+    LPSTR CmdLine;
+    LPSTR AppName;
+    LPSTR PifFile;
+    LPSTR CurDirectory;
+    LPSTR Env;
     ULONG  EnvLen;
     STARTUPINFOA StartupInfo;
     LPSTR  Desktop;
@@ -45,7 +51,12 @@ typedef struct
     ULONG TitleLen;
     LPVOID Reserved;
     ULONG ReservedLen;
-    USHORT CmdLen, AppLen, PifLen, CurDirectoryLen, VDMState, CurrentDrive;
+    USHORT CmdLen;
+    USHORT AppLen;
+    USHORT PifLen;
+    USHORT CurDirectoryLen;
+    USHORT VDMState;
+    USHORT CurrentDrive;
     BOOLEAN ComingFromBat;
 } VDM_COMMAND_INFO;
 
@@ -122,8 +133,15 @@ typedef BOOL (WINAPI *PFN_GetNextVDMCommand)(VDM_COMMAND_INFO *);
 
 typedef struct              /* VDMICAUSERDATA -- 9 pointers (XP ntvdm fills 9) */
 {
-    PVOID pIcaLock, pIcaMaster, pIcaSlave, pDelayIrq, pUndelayIrq,
-          pDelayIret, pIretHooked, pAddrIretBopTable, p9;
+    PVOID pIcaLock;
+    PVOID pIcaMaster;
+    PVOID pIcaSlave;
+    PVOID pDelayIrq;
+    PVOID pUndelayIrq;
+    PVOID pDelayIret;
+    PVOID pIretHooked;
+    PVOID pAddrIretBopTable;
+    PVOID p9;
 } VDMICAUSERDATA;
 
 typedef struct              /* VDM_INITIALIZE_DATA */
@@ -150,9 +168,11 @@ typedef BOOL (WINAPI *PFN_RegisterConsoleVDM)(DWORD, HANDLE, HANDLE, HANDLE,
 typedef struct                  /* OBJECT_ATTRIBUTES (24 bytes) */
 {
     ULONG Length;
-    PVOID RootDirectory, ObjectName;
+    PVOID RootDirectory;
+    PVOID ObjectName;
     ULONG Attributes;
-    PVOID SecurityDescriptor, SecurityQOS;
+    PVOID SecurityDescriptor;
+    PVOID SecurityQOS;
 } OBJ_ATTR;
 
 typedef LONG (WINAPI *PFN_NtCreateSection)(PHANDLE, ULONG, OBJ_ATTR *,

@@ -280,7 +280,9 @@ typedef struct _WOWCALL_FRAME
     WOWSCHED_SLOT Saved;   /* the interrupted context, verbatim */
     DWORD ReturnLinear;      /* the originating WOW32 frame's return hole, or 0 */
     DWORD Procedure;         /* what we called -- for the log and the failure */
-    WORD  Window, Message;   /* for the log; 0/0 when the call is not a message */
+    /* for the log; 0/0 when the call is not a message */
+    WORD Window;
+    WORD Message;
     INT   ReturnMode;        /* WOWCALL_RET_* -- see above */
     /* [INFO]: WHERE THE ANSWER ALSO GOES. A call the host makes for its OWN reasons
      * (LocalAlloc, to get an edit control a text handle) has a result the host

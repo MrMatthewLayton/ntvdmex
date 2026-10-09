@@ -230,7 +230,8 @@ WOWMSG g_WowMsgReplay;
 
 INT WowMsgTake(WORD window, WORD filterMin, WORD filterMax, INT isRemove, PWOWMSG output)
 {
-    INT position, index;
+    INT position;
+    INT index;
 
     if (!g_WowMsgCount)
         return 0;
@@ -273,7 +274,8 @@ INT WowMsgTake(WORD window, WORD filterMin, WORD filterMax, INT isRemove, PWOWMS
 /* s92 (#306): how many queued messages are `task`'s (all of them for task 0). */
 INT WowMsgCountFor(WORD task)
 {
-    INT position, count = 0;
+    INT position;
+    INT count = 0;
 
     for (position = 0; position < g_WowMsgCount; ++position)
         if (WowMsgIsFor(g_WowMsgRing[(g_WowMsgHead + position) % WOWMSG_MAX].Window, task))

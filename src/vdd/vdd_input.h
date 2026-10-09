@@ -82,7 +82,9 @@ typedef struct _INPUT_STATE
      * codes; the guest drains one per IN 0x60. Separate from the INT 16h ring.
      */
     BYTE  ScanCodeQueue[INPUT_SCANCODE_QUEUE_SIZE];
-    INT      ScanCodeHead, ScanCodeTail; /* scancode FIFO: empty when ScanCodeHead==ScanCodeTail */
+    /* scancode FIFO: empty when ScanCodeHead==ScanCodeTail */
+    INT ScanCodeHead;
+    INT ScanCodeTail;
     /* HOW THE GUEST ASKS FOR KEYS. Arrow keys work in a Skyroads level but not in its
      * menus, which means the two read the keyboard by different routes -- so count them:
      * [0]=INT 16h AH=00/10 (blocking read), [1]=AH=01/11 (peek), [2]=AH=02 (shift flags),

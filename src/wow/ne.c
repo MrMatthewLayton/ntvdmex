@@ -153,8 +153,10 @@ static INT NeEntryLookupEx(
         return -1;
     while (position + NE_BUNDLE_HEADER_SIZE <= end)
     {
-        BYTE count = module->Image[position], indicator = module->Image[position + 1];
-        UINT32 record = position + NE_BUNDLE_HEADER_SIZE, step;
+        BYTE count = module->Image[position];
+        BYTE indicator = module->Image[position + 1];
+        UINT32 record = position + NE_BUNDLE_HEADER_SIZE;
+        UINT32 step;
         if (!count)
             break;                               /* count 0 terminates */
         step = (indicator == NE_ENT_MOVEABLE) ? NE_ENTRY_MOVEABLE_SIZE : (indicator == 0 ? 0u : NE_ENTRY_FIXED_SIZE);
@@ -278,7 +280,8 @@ static INT NeNamesFind(
     PCSTR wanted,
     PWORD ordinal)
 {
-    UINT32 position = offset, end = offset + length;
+    UINT32 position = offset;
+    UINT32 end = offset + length;
     INT isFirst = 1;
 
     if (!length || !NeInBounds(module, offset, length))
@@ -328,7 +331,9 @@ INT NeExportByOrdinal(PCNE_MODULE module, WORD ordinal, PWORD segmentNumber, PWO
 INT NeApplyRelocations(PNE_MODULE module, INT index, PNE_IMPORT importer, PVOID context)
 {
     PNE_SEGMENT segment = &module->Segments[index];
-    UINT32 position, count, recordIndex;
+    UINT32 position;
+    UINT32 count;
+    UINT32 recordIndex;
 
     if (!(segment->Flags & NE_SEG_RELOCS) || !segment->Sector)
         return 0;
@@ -349,9 +354,13 @@ INT NeApplyRelocations(PNE_MODULE module, INT index, PNE_IMPORT importer, PVOID 
     for (recordIndex = 0; recordIndex < count; ++recordIndex)
     {
         PCBYTE record = module->Image + position + recordIndex * NE_RELOC_SIZE;
-        BYTE  addressType = record[0], relocationType = record[1];
-        WORD site = NeRead16(record + NE_RELOC_SITE), fieldA = NeRead16(record + NE_RELOC_TARGET_A), fieldB = NeRead16(record + NE_RELOC_TARGET_B);
-        WORD targetSelector = 0, targetOffset = 0;
+        BYTE addressType = record[0];
+        BYTE relocationType = record[1];
+        WORD site = NeRead16(record + NE_RELOC_SITE);
+        WORD fieldA = NeRead16(record + NE_RELOC_TARGET_A);
+        WORD fieldB = NeRead16(record + NE_RELOC_TARGET_B);
+        WORD targetSelector = 0;
+        WORD targetOffset = 0;
 
         switch (relocationType & NE_REL_TYPE_MASK)
         {
@@ -496,9 +505,12 @@ INT NeRegistryResolve(
     PWORD offset)
 {
     PNE_REGISTRY registry = (PNE_REGISTRY)context;
-    CHAR moduleName[NE_MAX_NAME], functionName[NE_MAX_NAME];
+    CHAR moduleName[NE_MAX_NAME];
+    CHAR functionName[NE_MAX_NAME];
     PNE_MODULE target;
-    WORD ordinal = ordinalOrName, segmentNumber = 0, segmentOffset = 0;
+    WORD ordinal = ordinalOrName;
+    WORD segmentNumber = 0;
+    WORD segmentOffset = 0;
     INT index;
 
     functionName[0] = 0;

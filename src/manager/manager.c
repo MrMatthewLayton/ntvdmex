@@ -84,7 +84,8 @@ typedef struct _MGR_SESSION
     BOOL   IsUsed;
     DWORD  ProcessId;
     DWORD  Kind;
-    HWND   CommandWindow, ShowTargetWindow;
+    HWND CommandWindow;
+    HWND ShowTargetWindow;
     HANDLE Process;
     DWORD  Sequence;                  /* registration order -- the menu's order */
     CHAR   Name[MGR_NAME_SIZE];
@@ -93,13 +94,15 @@ typedef struct _MGR_SESSION
 static MGR_SESSION g_Sessions[MGR_MAX];
 static DWORD  g_Sequence;
 static HWND   g_Window;
-static UINT   g_CommandMessage, g_TaskbarCreatedMessage;
+static UINT g_CommandMessage;
+static UINT g_TaskbarCreatedMessage;
 static BOOL   g_HasTrayIcon;
 static HICON  g_Icon;
 
 static INT MgrSessionCount(VOID)
 {
-    INT slot, count = 0;
+    INT slot;
+    INT count = 0;
 
     for (slot = 0; slot < MGR_MAX; ++slot)
         if (g_Sessions[slot].IsUsed)
@@ -169,7 +172,8 @@ static VOID MgrSessionDrop(INT slot)
 /* Upsert by pid. Returns TRUE if accepted. */
 static BOOL MgrSessionHello(PCMGR_MESSAGE message)
 {
-    INT slot, freeSlot = MGR_NO_SLOT;
+    INT slot;
+    INT freeSlot = MGR_NO_SLOT;
     BOOL hasChanged = FALSE;
 
     for (slot = 0; slot < MGR_MAX; ++slot)
@@ -229,7 +233,11 @@ static VOID MgrTrayMenu(VOID)
 {
     HMENU menu = CreatePopupMenu();
     POINT cursor;
-    INT order[MGR_MAX], count = 0, slot, position, menuId;
+    INT order[MGR_MAX];
+    INT count = 0;
+    INT slot;
+    INT position;
+    INT menuId;
 
     if (!menu)
         return;
@@ -398,7 +406,8 @@ int WINAPI WinMain(
 {
     WNDCLASSA windowClass;
     HANDLE singleInstance;
-    DWORD startedAt = GetTickCount(), emptySince = 0;
+    DWORD startedAt = GetTickCount();
+    DWORD emptySince = 0;
     BOOL hasEverHadPrograms = FALSE;
 
     (VOID)previousInstance;
@@ -436,7 +445,9 @@ int WINAPI WinMain(
     for (;;)
     {
         HANDLE processes[MGR_MAX];
-        INT    slotOfHandle[MGR_MAX], handleCount = 0, slot;
+        INT slotOfHandle[MGR_MAX];
+        INT handleCount = 0;
+        INT slot;
         DWORD  waitResult;
         MSG    queued;
         for (slot = 0; slot < MGR_MAX; ++slot)

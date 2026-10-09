@@ -281,7 +281,9 @@ typedef struct _I33_SETTINGS
 {
     BYTE Type;           /* 00h: as 24h's CH -- 4 = PS/2 */
     BYTE Language;       /* 01h: as 23h -- 0 = English */
-    BYTE HorizontalSpeed, VerticalSpeed;   /* 02h/03h: 1Ah's horizontal/vertical speed (0-100) */
+    /* 02h/03h: 1Ah's horizontal/vertical speed (0-100) */
+    BYTE HorizontalSpeed;
+    BYTE VerticalSpeed;
     BYTE DoubleSpeed;         /* 04h: 1Ah's double-speed threshold (0-100) */
     BYTE Curve;          /* 05h: the active acceleration profile (2Dh) */
     BYTE Rate;           /* 06h: 1Ch's code */

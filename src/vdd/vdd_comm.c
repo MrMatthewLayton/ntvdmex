@@ -315,7 +315,8 @@ static VOID CommPortIn(PVOID context, WORD port, BYTE width, UINT32 *value)
 static VOID CommPortOut(PVOID context, WORD port, BYTE width, UINT32 value)
 {
     PCOMM_STATE state = (PCOMM_STATE)context;
-    BYTE registerIndex = 0, byteValue = (BYTE)(value & COMM_LOW_BYTE);
+    BYTE registerIndex = 0;
+    BYTE byteValue = (BYTE)(value & COMM_LOW_BYTE);
     PCOMM_PORT uart = CommFind(state, port, &registerIndex);
 
     (VOID)width;
@@ -439,7 +440,9 @@ static BYTE CommLineStatus(PCOMM_PORT uart)
 static VOID CommInt14(PVOID context, PNTVDD_REGISTERS registers)
 {
     PCOMM_STATE state = (PCOMM_STATE)context;
-    UINT functionCode = VddGetAh(registers), argumentByte = VddGetAl(registers), portIndex = VddGetDx(registers) & COMM_INT14_PORT_MASK;
+    UINT functionCode = VddGetAh(registers);
+    UINT argumentByte = VddGetAl(registers);
+    UINT portIndex = VddGetDx(registers) & COMM_INT14_PORT_MASK;
     PCOMM_PORT uart;
 
     if (portIndex >= COMM_MAX_PORTS || !state->Ports[portIndex].IsFitted)
@@ -561,7 +564,8 @@ static VOID LptPortIn(PVOID context, WORD port, BYTE width, UINT32 *value)
 static VOID LptPortOut(PVOID context, WORD port, BYTE width, UINT32 value)
 {
     PCOMM_STATE state = (PCOMM_STATE)context;
-    BYTE registerIndex = 0, byteValue = (BYTE)(value & COMM_LOW_BYTE);
+    BYTE registerIndex = 0;
+    BYTE byteValue = (BYTE)(value & COMM_LOW_BYTE);
     PLPT_PORT printer = LptFind(state, port, &registerIndex);
 
     (VOID)width;
@@ -638,7 +642,8 @@ VOID VddCommReset(PVOID context)
     for (portIndex = 0; portIndex < COMM_MAX_PORTS; ++portIndex)
     {
         PCOMM_PORT uart = &state->Ports[portIndex];
-        BYTE hasBase = uart->BasePort ? 1 : 0, fitted = uart->IsFitted;
+        BYTE hasBase = uart->BasePort ? 1 : 0;
+        BYTE fitted = uart->IsFitted;
         WORD basePort = uart->BasePort;
         BYTE irq = uart->Irq;
         (VOID)hasBase;
@@ -675,7 +680,8 @@ VOID VddCommReset(PVOID context)
 INT VddCommInitialize(PVDD_BUS bus, PVOID context)
 {
     PCOMM_STATE state = (PCOMM_STATE)context;
-    INT portIndex, anyFitted = 0;
+    INT portIndex;
+    INT anyFitted = 0;
 
     state->Bus = bus;
     for (portIndex = 0; portIndex < COMM_MAX_PORTS; ++portIndex)

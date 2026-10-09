@@ -144,7 +144,8 @@ INT WowCallEnter(
     frame->PreviousTask = 0;
     if (window && g_WowCallRetarget)            /* s92 #306: see g_WowCallRetarget */
     {
-        WORD newStackSelector = 0, newStackPointer = 0;
+        WORD newStackSelector = 0;
+        WORD newStackPointer = 0;
         DWORD newStackBase = 0;
         if (g_WowCallRetarget(window, &newStackSelector, &newStackPointer, &newStackBase, &frame->PreviousTask) && newStackBase)
         {

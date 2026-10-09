@@ -49,8 +49,12 @@ typedef struct _AUDIO_RESAMPLER
     UINT32 SourceHz;
     UINT32 Step;            /* (SourceHz << 16) / OutputHz */
     UINT32 Fraction;            /* 16.16 position between Previous and Current */
-    INT32  Previous, Current; /* the two source samples being interpolated */
-    INT32  PreviousRight, CurrentRight;   /* #189: ...and the right channel's, for a stereo source */
+    /* the two source samples being interpolated */
+    INT32 Previous;
+    INT32 Current;
+    /* #189: ...and the right channel's, for a stereo source */
+    INT32 PreviousRight;
+    INT32 CurrentRight;
     INT      IsPrimed;
 } AUDIO_RESAMPLER, *PAUDIO_RESAMPLER;
 typedef const AUDIO_RESAMPLER *PCAUDIO_RESAMPLER;
@@ -76,7 +80,10 @@ typedef struct _AUDIO_STATE
     PEMU8K_STATE Emu8k;      /* AWE32 EMU8000 wavetable; NULL = not fitted (#233) */
     PCSPEAKER_STATE Speaker;  /* PC speaker; NULL = not fitted */
     UINT32   OutputHz;
-    AUDIO_RESAMPLER OplResampler, SbResampler, GusResampler, Emu8kResampler;
+    AUDIO_RESAMPLER OplResampler;
+    AUDIO_RESAMPLER SbResampler;
+    AUDIO_RESAMPLER GusResampler;
+    AUDIO_RESAMPLER Emu8kResampler;
     /* Speaker phase as a 16-bit fraction of one cycle, clocked at OutputHz. The
      * top bit IS the half-cycle, so the sample is one test and no branch on the
      * frequency; it persists across calls so a held tone does not restart (and
@@ -102,7 +109,9 @@ typedef struct _AUDIO_STATE
      * gated>0 with frames=0 means the frequency was refused; both non-zero
      * means we produced samples and the fault is downstream of the mixer.
      */
-    UINT32   SpeakerGated, SpeakerFrames, SpeakerHz;
+    UINT32 SpeakerGated;
+    UINT32 SpeakerFrames;
+    UINT32 SpeakerHz;
 } AUDIO_STATE, *PAUDIO_STATE;
 typedef const AUDIO_STATE *PCAUDIO_STATE;
 

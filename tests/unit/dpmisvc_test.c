@@ -28,7 +28,8 @@
 
 #include "../../src/host/dpmi_svc.h"
 
-static INT g_Total = 0, g_Failures = 0;
+static INT g_Total = 0;
+static INT g_Failures = 0;
 #define CHECK(condition,message) do{ g_Total++; if(condition){printf("  PASS  %s\n",(message));} \
     else{printf("  FAIL  %s\n",(message)); g_Failures++;} }while(0)
 
@@ -38,7 +39,8 @@ static INT g_Total = 0, g_Failures = 0;
 
 INT main(VOID)
 {
-    INT slot, isOk;
+    INT slot;
+    INT isOk;
 
     printf("== DPMI INT 31h service rules (GH #248) ==\n");
 

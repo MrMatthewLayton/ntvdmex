@@ -95,7 +95,8 @@ PCSTR NtvdmexPath(PCSTR subdirectory, PCSTR name);
  * to debug\out\2\, and so on (the instance claim in WinMain) -- so no host clears another's log.
  */
 extern CHAR g_OutSubdirectory[24];
-extern INT  g_Instance, g_InstanceAbandoned;
+extern INT g_Instance;
+extern INT g_InstanceAbandoned;
 
 #define NTVDMEX_OUT     NtvdmexPath(g_OutSubdirectory, "")
 #define CFG_(n)         NtvdmexPath("cfg\\", n)

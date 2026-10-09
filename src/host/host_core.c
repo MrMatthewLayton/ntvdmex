@@ -22,13 +22,15 @@
  * to debug\out\2\, and so on (the instance claim in WinMain) -- so no host clears another's log.
  */
 CHAR g_OutSubdirectory[24] = HOST_OUT_SUBDIRECTORY;
-INT  g_Instance = 1, g_InstanceAbandoned;
+INT g_Instance = 1;
+INT g_InstanceAbandoned;
 DWORD g_OsVersion;       /* GetVersion(): 0x0500 = 2000, 0x0501 = XP */
 
 PFN_ATTACH_CONSOLE           g_PfnAttachConsole;
 VOID OsCompatBind(VOID)
 {
-    HMODULE kernel32 = GetModuleHandleA(HOST_MODULE_KERNEL32), user32 = GetModuleHandleA(HOST_MODULE_USER32);
+    HMODULE kernel32 = GetModuleHandleA(HOST_MODULE_KERNEL32);
+    HMODULE user32 = GetModuleHandleA(HOST_MODULE_USER32);
 
     g_OsVersion = GetVersion();
     g_PfnAddVeh        = (PFN_ADD_VECTORED_EXCEPTION_HANDLER)(ULONG_PTR)GetProcAddress(kernel32, HOST_EXPORT_ADD_VECTORED_EXCEPTION_HANDLER);
@@ -55,7 +57,9 @@ PCSTR NtvdmexRoot(VOID)
     {
         CHAR self[MAX_PATH + 16];
         DWORD length = GetModuleFileNameA(NULL, self, sizeof self - 2);
-        INT index, last = -1, prev = -1;
+        INT index;
+        INT last = -1;
+        INT prev = -1;
         if (length == 0 || length >= sizeof self - 2)
         {
             for (index = 0; NTVDMEX_DIR_DEFAULT[index]; ++index)
@@ -136,7 +140,8 @@ PCSTR NtvdmexPath(PCSTR subdirectory, PCSTR name)
     next = (UINT *)(ring + NTVDMEX_PATH_SLOTS * NTVDMEX_PATH_SLOT);
     slot = ring + ((*next)++ & (NTVDMEX_PATH_SLOTS - 1)) * NTVDMEX_PATH_SLOT;
     PCSTR root = NtvdmexRoot();
-    INT length = 0, index;
+    INT length = 0;
+    INT index;
     for (index = 0; root[index] && length < MAX_PATH + 90; ++index)
         slot[length++] = root[index];
     for (index = 0; subdirectory[index] && length < MAX_PATH + 90; ++index)
@@ -156,7 +161,8 @@ INT StrStrNoCase(PCSTR block, PCSTR name)
 
     while (*line)
     {
-        PCSTR cursor = line, nameCursor = name;
+        PCSTR cursor = line;
+        PCSTR nameCursor = name;
         while (*nameCursor && *cursor && ((*cursor | ASCII_CASE_BIT) == (*nameCursor | ASCII_CASE_BIT) || (*cursor == *nameCursor)))
         {
             ++cursor;
@@ -173,7 +179,8 @@ INT StrStrNoCase(PCSTR block, PCSTR name)
 }
 
 CRITICAL_SECTION g_Lock;             /* serialises all bus dispatch */
-static DWORD    g_LockOwner, g_LockDepth;
+static DWORD g_LockOwner;
+static DWORD g_LockDepth;
 static LONGLONG g_LockSince;
 UINT32 QpcMicroseconds(LONGLONG ticks)
 {
@@ -195,7 +202,8 @@ UINT64 QpcMicroseconds64(LONGLONG ticks)
 
 VOID HostLockEnter(INT site)
 {
-    LARGE_INTEGER waitStart, acquired;
+    LARGE_INTEGER waitStart;
+    LARGE_INTEGER acquired;
     DWORD threadId = GetCurrentThreadId();
     INT nested = (g_LockOwner == threadId && g_LockDepth != 0);
 
@@ -280,7 +288,8 @@ static DWORD PatchMapHash(DWORD linear)
 
 BYTE PatchMapGet(DWORD linear)
 {
-    DWORD start = PatchMapHash(linear), probe;
+    DWORD start = PatchMapHash(linear);
+    DWORD probe;
 
     if (!linear)
         return 0;
@@ -297,7 +306,8 @@ BYTE PatchMapGet(DWORD linear)
 
 VOID PatchMapSet(DWORD linear, BYTE vector)
 {
-    DWORD start = PatchMapHash(linear), probe;
+    DWORD start = PatchMapHash(linear);
+    DWORD probe;
 
     if (!linear || g_PatchMapCount >= DPMI_PMAP_SLOTS - PATCH_MAP_HEADROOM)
         return;                                                                       /* leave headroom, never fill */
@@ -325,7 +335,8 @@ VOID PatchMapSet(DWORD linear, BYTE vector)
  */
 VOID PatchMapClear(DWORD linear)
 {
-    DWORD start = PatchMapHash(linear), probe;
+    DWORD start = PatchMapHash(linear);
+    DWORD probe;
 
     for (probe = 0; probe < DPMI_PMAP_SLOTS; ++probe)
     {

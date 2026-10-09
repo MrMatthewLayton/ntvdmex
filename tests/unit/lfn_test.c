@@ -138,7 +138,8 @@
 
 #define LFN_TEST_LABEL_SIZE                 160
 
-static INT g_Checks, g_Failures;
+static INT g_Checks;
+static INT g_Failures;
 
 static VOID LfnTestExpect(PCSTR description, UINT64 actual, UINT64 expected)
 {
@@ -166,7 +167,8 @@ static VOID LfnTestFileTimeToDos(
     UINT expectedTime,
     UINT expectedTenMs)
 {
-    WORD dosDate = LFN_TEST_POISON_WORD, dosTime = LFN_TEST_POISON_WORD;
+    WORD dosDate = LFN_TEST_POISON_WORD;
+    WORD dosTime = LFN_TEST_POISON_WORD;
     BYTE tenMs = LFN_TEST_POISON_BYTE;
     CHAR label[LFN_TEST_LABEL_SIZE];
     BOOL didConvert = DosLfnFileTimeToDos(fileTime, &dosDate, &dosTime, &tenMs);
@@ -206,7 +208,8 @@ static VOID LfnTestDosToFileTime(
 
 static VOID LfnTestShortName(PCSTR longName, PCSTR expectedShortName, PCSTR expectedFcbName)
 {
-    CHAR shortName[DOS_SHORT_NAME_SIZE], fcbName[DOS_FCB_NAME_SIZE + 1];
+    CHAR shortName[DOS_SHORT_NAME_SIZE];
+    CHAR fcbName[DOS_FCB_NAME_SIZE + 1];
     CHAR label[LFN_TEST_LABEL_SIZE];
 
     memset(shortName, LFN_TEST_POISON_CHAR, sizeof shortName);
@@ -284,7 +287,8 @@ INT main(VOID)
     /* 714Eh/714Fh: the 318-byte record: */
     {   BYTE record[DOS_LFN_FIND_RECORD_SIZE + LFN_TEST_GUARD_BYTES];
         DOS_LFN_FIND_ENTRY entry;
-        INT byteIndex, strayBits = 0;
+        INT byteIndex;
+        INT strayBits = 0;
         memset(record, LFN_TEST_GUARD, sizeof record);
         entry.Attributes = LFN_TEST_ARCHIVE;
         entry.SizeHigh = LFN_TEST_FILE_SIZE_HIGH;

@@ -309,7 +309,8 @@ static inline BOOL DosXmsReallocate(
 {
     PDOS_XMS_HANDLE handleEntry = DosXmsGetHandle(state, handle);
     PVOID newBuffer = 0;
-    DWORD byteIndex, bytesToKeep;
+    DWORD byteIndex;
+    DWORD bytesToKeep;
 
     if (!handleEntry)
     {
@@ -363,7 +364,8 @@ static inline BOOL DosXmsGetHandleInformation(
     _Out_opt_ PDWORD sizeKb,
     _Out_opt_ PBYTE errorCode)
 {
-    INT handleIndex, freeHandleCount = 0;
+    INT handleIndex;
+    INT freeHandleCount = 0;
     PCDOS_XMS_HANDLE handleEntry;
 
     if (handle == DOS_XMS_CONVENTIONAL_HANDLE || handle > DOS_XMS_MAX_HANDLES
@@ -464,8 +466,10 @@ static inline BOOL DosXmsMove(
     _In_ PCDOS_XMS_MOVE move,
     _Out_opt_ PBYTE errorCode)
 {
-    volatile BYTE *source, *destination;
-    DWORD length = move->Length, byteIndex;
+    volatile BYTE *source;
+    volatile BYTE *destination;
+    DWORD length = move->Length;
+    DWORD byteIndex;
 
     if (length == 0)
         return TRUE;                        /* a 0-length move is a legal no-op */
@@ -478,8 +482,8 @@ static inline BOOL DosXmsMove(
 
     if (move->SourceHandle == DOS_XMS_CONVENTIONAL_HANDLE)
     {
-        DWORD segment = (move->SourceOffset >> DOS_XMS_FAR_SEGMENT_SHIFT) & WORD_MASK,
-              offset = move->SourceOffset & WORD_MASK;
+        DWORD segment = (move->SourceOffset >> DOS_XMS_FAR_SEGMENT_SHIFT) & WORD_MASK;
+        DWORD offset = move->SourceOffset & WORD_MASK;
         if ((segment << PARAGRAPH_SHIFT) + offset + length > DOS_XMS_CONVENTIONAL_LIMIT)
         {
             if (errorCode)

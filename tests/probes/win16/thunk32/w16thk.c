@@ -114,8 +114,11 @@ __declspec(dllexport) DWORD WINAPI T_Glob(void)
     PWOW_GLOBAL_UNLOCK_FREE16 globalUnlockFree = (PWOW_GLOBAL_UNLOCK_FREE16)ThunkWow32Procedure("WOWGlobalUnlockFree16");
     PWOW_GLOBAL_LOCK_SIZE16   globalLockSize   = (PWOW_GLOBAL_LOCK_SIZE16)ThunkWow32Procedure("WOWGlobalLockSize16");
     PWOW_GET_VDM_POINTER      getVdmPointer    = (PWOW_GET_VDM_POINTER)ThunkWow32Procedure("WOWGetVDMPointer");
-    DWORD answers = 0, pointer16, size = 0;
-    WORD handle, fixedHandle = 0;
+    DWORD answers = 0;
+    DWORD pointer16;
+    DWORD size = 0;
+    WORD handle;
+    WORD fixedHandle = 0;
     BYTE *bytes;
 
     if (!globalAlloc || !globalFree || !globalLock || !globalUnlock || !globalAllocLock || !globalUnlockFree || !globalLockSize || !getVdmPointer)

@@ -29,7 +29,8 @@
  */
 INT VddOplOperatorIndex(INT channel, INT isCarrier)
 {
-    INT arrayIndex, localChannel;
+    INT arrayIndex;
+    INT localChannel;
 
     if (channel < 0 || channel >= OPL3_CHANNELS)
         return -1;
@@ -56,7 +57,9 @@ INT VddOplIsNewMode(PCOPL_STATE state)
  */
 INT OplFourOperatorRole(PCOPL_STATE state, INT channel)
 {
-    INT localChannel, bit, role;
+    INT localChannel;
+    INT bit;
+    INT role;
 
     if (!VddOplIsNewMode(state) || channel < 0 || channel >= OPL3_CHANNELS)
         return 0;
@@ -83,7 +86,9 @@ INT OplFourOperatorRole(PCOPL_STATE state, INT channel)
  */
 static INT OplOffsetToOperator(BYTE registerNumber)
 {
-    INT offset = registerNumber & OPL_OPERATOR_OFFSET_MASK, bank = offset >> OPL_OPERATOR_BANK_SHIFT, slot = offset & OPL_OPERATOR_SLOT_MASK;
+    INT offset = registerNumber & OPL_OPERATOR_OFFSET_MASK;
+    INT bank = offset >> OPL_OPERATOR_BANK_SHIFT;
+    INT slot = offset & OPL_OPERATOR_SLOT_MASK;
 
     if (slot >= OPL_OPERATOR_BANK_SLOTS || bank >= OPL_OPERATOR_BANKS)
         return OPL_NO_OPERATOR;
@@ -201,7 +206,8 @@ static VOID OplRhythmRekey(
 
     for (operatorIndex = OPL_RHYTHM_FIRST_OPERATOR; operatorIndex < OPL_OPERATORS; ++operatorIndex)
     {
-        INT wasHeld = OplRhythmHeld(operatorIndex, bdBefore, channelKeysBefore), isHeldNow = OplRhythmHeld(operatorIndex, bdAfter, channelKeysAfter);
+        INT wasHeld = OplRhythmHeld(operatorIndex, bdBefore, channelKeysBefore);
+        INT isHeldNow = OplRhythmHeld(operatorIndex, bdAfter, channelKeysAfter);
         if (wasHeld == isHeldNow)
             continue;
         OplKeyOperator(state, operatorIndex, isHeldNow);
@@ -237,14 +243,17 @@ static VOID OplRhythmWrite(POPL_STATE state, BYTE oldValue, BYTE value)
  */
 static VOID OplKeyChannel(POPL_STATE state, INT channel, INT isKeyOn)
 {
-    INT channelCount = (OplFourOperatorRole(state, channel) == OPL_FOUR_OPERATOR_FIRST) ? OPL_FOUR_OPERATOR_PAIR_CHANNELS : 1, pairIndex;
+    INT channelCount = (OplFourOperatorRole(state, channel) == OPL_FOUR_OPERATOR_FIRST) ? OPL_FOUR_OPERATOR_PAIR_CHANNELS : 1;
+    INT pairIndex;
 
     if (isKeyOn && !state->Channels[channel].IsKeyOn)   /* key-on edge: restart */
     {
-        INT isAm = 0, isVibrato = 0;
+        INT isAm = 0;
+        INT isVibrato = 0;
         for (pairIndex = 0; pairIndex < channelCount; ++pairIndex)
         {
-            INT modulator = VddOplOperatorIndex(channel + OPL_FOUR_OPERATOR_PARTNER * pairIndex, OPL_MODULATOR), carrier = VddOplOperatorIndex(channel + OPL_FOUR_OPERATOR_PARTNER * pairIndex, OPL_CARRIER);
+            INT modulator = VddOplOperatorIndex(channel + OPL_FOUR_OPERATOR_PARTNER * pairIndex, OPL_MODULATOR);
+            INT carrier = VddOplOperatorIndex(channel + OPL_FOUR_OPERATOR_PARTNER * pairIndex, OPL_CARRIER);
             state->Operators[modulator].EnvelopeState = OPL_ENVELOPE_ATTACK;
             state->Operators[modulator].Phase = 0;
             state->Operators[carrier].EnvelopeState = OPL_ENVELOPE_ATTACK;
@@ -283,8 +292,10 @@ static VOID OplKeyChannel(POPL_STATE state, INT channel, INT isKeyOn)
  */
 VOID VddOplWriteRegister(POPL_STATE state, WORD registerNumber, BYTE value)
 {
-    INT operatorIndex, arrayIndex;
-    BYTE arrayRegister, oldValue;
+    INT operatorIndex;
+    INT arrayIndex;
+    BYTE arrayRegister;
+    BYTE oldValue;
 
     if (registerNumber >= OPL3_REGISTERS)
         return;
@@ -411,7 +422,8 @@ VOID VddOplWriteRegister(POPL_STATE state, WORD registerNumber, BYTE value)
     }
     if (arrayRegister >= OPL_REGISTER_KEY_BLOCK && arrayRegister <= OPL_REGISTER_KEY_BLOCK_LAST)                     /* key-on / block / F hi */
     {
-        INT channel = arrayRegister - OPL_REGISTER_KEY_BLOCK + arrayIndex * OPL_CHANNELS, isKeyOn = (value >> OPL_KEY_ON_SHIFT) & 1;
+        INT channel = arrayRegister - OPL_REGISTER_KEY_BLOCK + arrayIndex * OPL_CHANNELS;
+        INT isKeyOn = (value >> OPL_KEY_ON_SHIFT) & 1;
         state->Channels[channel].FNumber  = (WORD)((state->Channels[channel].FNumber & OPL_FNUMBER_LOW_BITS) | ((value & OPL_FNUMBER_HIGH_MASK) << OPL_FNUMBER_HIGH_SHIFT));
         state->Channels[channel].Block = (value >> OPL_BLOCK_SHIFT) & OPL_BLOCK_MASK;
         /* In rhythm mode channels 6-8 ARE the percussion voices, keyed from 0xBD.
@@ -570,8 +582,10 @@ VOID VddOplReset(PVOID context)
 {
     POPL_STATE state = (POPL_STATE)context;
     PVDD_BUS bus = state->Bus;
-    UINT32 frameUs = state->FrameUs, sampleHz = state->SampleHz;
-    BYTE  isExternalClock = state->IsExternalClock, isOpl3 = state->IsOpl3;
+    UINT32 frameUs = state->FrameUs;
+    UINT32 sampleHz = state->SampleHz;
+    BYTE isExternalClock = state->IsExternalClock;
+    BYTE isOpl3 = state->IsOpl3;
     UINT index;
     BYTE *bytes = (BYTE *)state;
 

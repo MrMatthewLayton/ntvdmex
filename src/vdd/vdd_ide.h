@@ -91,7 +91,8 @@ typedef struct _IDE_STATE
     /* Diagnostics only -- what a guest tried to do to the empty channels. Nothing
      * here is ever read back to the guest; there is no state to read.
      */
-    UINT32 PortReads, PortWrites;
+    UINT32 PortReads;
+    UINT32 PortWrites;
     UINT32 Commands;            /* writes to 1F7h/177h: commands nobody received */
     BYTE   LastCommand;         /* the last of them (ECh = IDENTIFY, etc.) */
 } IDE_STATE, *PIDE_STATE;

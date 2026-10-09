@@ -17,13 +17,16 @@
 #include <string.h>
 #include "vdd_net.h"
 
-static INT g_Total = 0, g_Failures = 0;
+static INT g_Total = 0;
+static INT g_Failures = 0;
 #define CHECK(condition,message) do{ g_Total++; if(condition){printf("  PASS  %s\n",(message));} \
     else{printf("  FAIL  %s\n",(message)); g_Failures++;} }while(0)
 
 static NETBIOS_REQUEST g_SeenRequest;
 static INT      g_Calls;
-static BYTE  g_ReturnCode, g_LocalSession, g_NameNumber;
+static BYTE g_ReturnCode;
+static BYTE g_LocalSession;
+static BYTE g_NameNumber;
 static WORD g_Length;
 
 static BYTE NetTestFakeBackend(PVOID context, PNETBIOS_REQUEST request)
@@ -46,7 +49,8 @@ static BYTE NetTestFakeBackend(PVOID context, PNETBIOS_REQUEST request)
 INT main(VOID)
 {
     NETBIOS_STATE state;
-    BYTE controlBlock[NETB_NCB_SIZE], buffer[64];
+    BYTE controlBlock[NETB_NCB_SIZE];
+    BYTE buffer[64];
     BYTE returnCode;
 
     memset(&state, 0, sizeof state);

@@ -138,7 +138,9 @@ static VOID AsyncWhyNote(UINT irq, UINT why)
  */
 DWORD g_IfvCensus[IFV_PATHS][8];
 DWORD g_IfvShadow[PIC_LINES];
-DWORD g_IfvStarveT0, g_IfvStarveMaximumMs, g_IfvStarveCount;
+DWORD g_IfvStarveT0;
+DWORD g_IfvStarveMaximumMs;
+DWORD g_IfvStarveCount;
 INT   g_IfvStarveOpen;
 static INT   g_VifLiveSeen;   /* a live V86 frame has shown VIF set: VME is keeping it */
 static DWORD IfvState(DWORD flags)
@@ -224,7 +226,8 @@ DWORD PmWatchAddress(INT index)
     return g_LeLoadBase ? g_LeLoadBase + g_PmWatch[index] : 0;
 }
 
-DWORD g_PmInjectDecl[2], g_PmInjectDeclTl[IRQ0TL_SECS];
+DWORD g_PmInjectDecl[2];
+DWORD g_PmInjectDeclTl[IRQ0TL_SECS];
 VOID PmInjectDeclineNote(INT why, WORD cs, DWORD eip)
 {
     g_PmInjectDecl[why]++;
@@ -291,7 +294,8 @@ static INT AsyncSiteNew(WORD cs, DWORD eip)
  */
 static VOID AsyncEarlyBail(UINT irq, UINT why)
 {
-    CHAR lineBuffer[96], *lineCursor = lineBuffer;
+    CHAR lineBuffer[96];
+    CHAR *lineCursor = lineBuffer;
 
     g_AsyncBail++;
     AsyncWhyNote(irq, why);
@@ -340,7 +344,11 @@ INT AsyncInjectIrq(UINT irq)
         return 0;
     }
     CONTEXT context;
-    DWORD eflags, ss, sp, cs, ip;
+    DWORD eflags;
+    DWORD ss;
+    DWORD sp;
+    DWORD cs;
+    DWORD ip;
     WORD flags;
     INT isOk = 0;
 
@@ -490,7 +498,8 @@ INT AsyncInjectIrq(UINT irq)
      */
     if (!(eflags & EFLAGS_VM) && (cs & DPMI_SELECTOR_TI) && AsyncSiteNew((WORD)cs, context.Eip))
     {
-        CHAR lineBuffer[160], *lineCursor = lineBuffer;
+        CHAR lineBuffer[160];
+        CHAR *lineCursor = lineBuffer;
         DWORD codeLinear = DpmiSelectorBase((WORD)cs) + context.Eip;
         ResumeThread(g_HostCpu);                    /* NEVER log while the guest is held */
         ASYNC_CTX_RELEASE();
@@ -584,7 +593,8 @@ INT AsyncInjectIrq(UINT irq)
          */
         if (isOk || g_AsyncPmBail2 <= 4000)
         {
-            CHAR lineBuffer[224], *lineCursor = lineBuffer;
+            CHAR lineBuffer[224];
+            CHAR *lineCursor = lineBuffer;
             /* - SAY WHICH LINE. This said "vec=0x08" literally, whatever interrupt it
              * had just delivered, so a run could not be asked "did any keyboard
              * interrupt reach the client?" -- every line claimed to be the timer.
@@ -747,7 +757,8 @@ INT AsyncInjectIrq(UINT irq)
      */
     if (g_AsyncInjected + g_AsyncBail <= 4)
     {
-        CHAR lineBuffer[256], *lineCursor = lineBuffer;
+        CHAR lineBuffer[256];
+        CHAR *lineCursor = lineBuffer;
         INT logVector;
         lineCursor = LogPut(lineCursor, "ASYNC-INJ vec=0x");  lineCursor = LogHex(lineCursor, (DWORD)VddPicVector(&g_Pic, (BYTE)irq));
         lineCursor = LogPut(lineCursor, " ok=0x");            lineCursor = LogHex(lineCursor, (DWORD)isOk);
@@ -769,7 +780,8 @@ INT AsyncInjectIrq(UINT irq)
 INT AsyncVectorIsOurStub(UINT irq)
 {
     UINT vector = VddPicVector(&g_Pic, (BYTE)irq);
-    WORD segment = PeekWord(IVT_SEGMENT_ADDRESS(vector)), offset = PeekWord(IVT_OFFSET_ADDRESS(vector));
+    WORD segment = PeekWord(IVT_SEGMENT_ADDRESS(vector));
+    WORD offset = PeekWord(IVT_OFFSET_ADDRESS(vector));
 
     return segment == DOS_HDLR_SEG && (offset == DOS_IRET_STUB_OFF || offset == DOS_HDLR_INT09_STUB_OFF);
 }
@@ -975,7 +987,8 @@ VOID HostIrqSink(PVOID context, BYTE irq)
            */
           if (g_KeyIrqLogged++ < 64)
           {
-              CHAR lineBuffer[160], *lineCursor = lineBuffer;
+              CHAR lineBuffer[160];
+              CHAR *lineCursor = lineBuffer;
               lineCursor = LogPut(lineCursor, "KEYIRQ raise gate="); lineCursor = LogHex(lineCursor, (DWORD)gate);
               lineCursor = LogPut(lineCursor, " ok=");        lineCursor = LogHex(lineCursor, (DWORD)isOk);
               lineCursor = LogPut(lineCursor, " pm=");        lineCursor = LogHex(lineCursor, (DWORD)g_DpmiPm);
@@ -1080,7 +1093,8 @@ static INT GuestIfEnabled(volatile BYTE *tib)
 
     if (IsOurStubCsIp(cs, VDM_REG16(tib, VTIB_EIP)))
     {
-        DWORD ss = VDM_REG16(tib, VTIB_SS), sp = VDM_REG16(tib, VTIB_ESP);
+        DWORD ss = VDM_REG16(tib, VTIB_SS);
+        DWORD sp = VDM_REG16(tib, VTIB_ESP);
         return (PeekWord((ss << PARAGRAPH_SHIFT) + ((sp + X86_FRAME16_FLAGS) & WORD_MASK)) & EFLAGS_IF) != 0;
     }
     return IfOrVif(VDM_REG(tib, VTIB_EFLAGS));
@@ -1097,7 +1111,8 @@ static INT GuestIfEnabled(volatile BYTE *tib)
  */
 VOID VdmStateSample(PCSTR label, volatile BYTE *tib, INT *budget)
 {
-    CHAR buffer[128], *cursor = buffer;
+    CHAR buffer[128];
+    CHAR *cursor = buffer;
 
     if (*budget <= 0)
         return;
@@ -1114,8 +1129,10 @@ VOID VdmStateSample(PCSTR label, volatile BYTE *tib, INT *budget)
 
 VOID InjectInt(volatile BYTE *tib, UINT vector)
 {
-    WORD ss = (WORD)VDM_REG(tib, VTIB_SS),  sp = (WORD)VDM_REG(tib, VTIB_ESP);
-    WORD cs = (WORD)VDM_REG(tib, VTIB_CS),  ip = (WORD)VDM_REG(tib, VTIB_EIP);
+    WORD ss = (WORD)VDM_REG(tib, VTIB_SS);
+    WORD sp = (WORD)VDM_REG(tib, VTIB_ESP);
+    WORD cs = (WORD)VDM_REG(tib, VTIB_CS);
+    WORD ip = (WORD)VDM_REG(tib, VTIB_EIP);
     DWORD eflags = VDM_REG(tib, VTIB_EFLAGS);
     WORD flags = (WORD)eflags;                           /* push the live frame's FLAGS */
 
@@ -1159,7 +1176,8 @@ DWORD WINAPI QueueIrqProbeThread(LPVOID parameter)
     Sleep(500);                                  /* let the guest install its ISRs */
     for (round = 0; round < 40 && g_Running; ++round)
     {
-        DWORD before = *(volatile DWORD *)(ULONG_PTR)FIXED_NTVDMSTATE_LINEAR, after = before;
+        DWORD before = *(volatile DWORD *)(ULONG_PTR)FIXED_NTVDMSTATE_LINEAR;
+        DWORD after = before;
         INT attempt;
         HostIrqSink(NULL, QIRQ_PROBE_IRQ);
         for (attempt = 0; attempt < 50; ++attempt)
@@ -1171,7 +1189,8 @@ DWORD WINAPI QueueIrqProbeThread(LPVOID parameter)
         }
         if (round < 8)
         {
-            CHAR buffer[256], *cursor = buffer;
+            CHAR buffer[256];
+            CHAR *cursor = buffer;
             cursor = LogPut(cursor, "QIRQ: raise#0x");   cursor = LogHex(cursor, (DWORD)round);
             cursor = LogPut(cursor, " bits=0x");         cursor = LogHex(cursor, g_QiBits);
             cursor = LogPut(cursor, " st=0x");           cursor = LogHex(cursor, (DWORD)g_QiStatus);
@@ -1215,7 +1234,8 @@ INT V86DeliverDeviceIrq(volatile BYTE *tib)
  * vectored as INT 8+irq. Skip while inside our own timer/keyboard stubs.
  */
 { INT irq;
-  DWORD currentCs = VDM_REG16(tib, VTIB_CS), currentIp = VDM_REG16(tib, VTIB_EIP);
+  DWORD currentCs = VDM_REG16(tib, VTIB_CS);
+  DWORD currentIp = VDM_REG16(tib, VTIB_EIP);
   /* Only the BOP itself is off-limits (we would re-enter mid-service);
    * once past it the guest is running a handler with IF set, and a real
    * PC delivers a device IRQ there quite happily.
@@ -1290,8 +1310,10 @@ INT V86DeliverDeviceIrq(volatile BYTE *tib)
           g_IrqNRefuseTotal++;
       if (pend && g_IrqNRefuseLog < 16)
       {
-          CHAR lineBuffer[256], *lineCursor = lineBuffer;
-          DWORD ss = VDM_REG16(tib, VTIB_SS), sp = VDM_REG16(tib, VTIB_ESP);
+          CHAR lineBuffer[256];
+          CHAR *lineCursor = lineBuffer;
+          DWORD ss = VDM_REG16(tib, VTIB_SS);
+          DWORD sp = VDM_REG16(tib, VTIB_ESP);
           g_IrqNRefuseLog++;
           lineCursor = LogPut(lineCursor, "IRQN-REFUSE irq=0x");  lineCursor = LogHex(lineCursor, (DWORD)pend);
           lineCursor = LogPut(lineCursor, " cs:ip=0x");           lineCursor = LogHex(lineCursor, currentCs);

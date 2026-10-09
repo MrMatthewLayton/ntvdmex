@@ -71,7 +71,12 @@ typedef struct _WOWENUM
     DWORD ReturnLinear;                      /* the caller's return hole -- revised only on a STOP */
     WORD  Parent;                            /* WOWENUM_CHILDREN */
     INT   Index;                             /* cursor: the next window slot, or the next point */
-    INT   StartX, StartY, EndX, EndY, Steps; /* WOWENUM_LINE */
+    /* WOWENUM_LINE */
+    INT StartX;
+    INT StartY;
+    INT EndX;
+    INT EndY;
+    INT Steps;
     DWORD Calls;                             /* how many callbacks were made, for the log */
 } WOWENUM, *PWOWENUM;
 

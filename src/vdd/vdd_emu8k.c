@@ -53,8 +53,9 @@ static INT   g_Emu8kTablesBuilt;
 static DWORD Emu8kExp2(INT32 exponent)
 {
     INT32  octave = exponent >> EMU8K_Q16_SHIFT;           /* arithmetic: floor */
-    DWORD  fraction = (DWORD)exponent & EMU8K_Q16_FRACTION_MASK,
-           tableIndex = fraction >> BYTE_SHIFT, mantissa;
+    DWORD fraction = (DWORD)exponent & EMU8K_Q16_FRACTION_MASK;
+    DWORD tableIndex = fraction >> BYTE_SHIFT;
+    DWORD mantissa;
 
     mantissa = g_Emu8kExp2Table[tableIndex]
              + (DWORD)(((UINT64)(g_Emu8kExp2Table[tableIndex + 1] - g_Emu8kExp2Table[tableIndex])
@@ -74,7 +75,9 @@ static DWORD Emu8kExp2(INT32 exponent)
 static INT32 Emu8kLog2(DWORD value)
 {
     INT32 octave = 0;
-    DWORD lowIndex = 0, highIndex = EMU8K_EXP2_STEPS, tableIndex;
+    DWORD lowIndex = 0;
+    DWORD highIndex = EMU8K_EXP2_STEPS;
+    DWORD tableIndex;
 
     if (!value)
         return -(EMU8K_LOG2_OF_ZERO_OCTAVES << EMU8K_Q16_SHIFT);
@@ -514,7 +517,13 @@ static double Emu8kCos(double angle) { double angleSquared = angle * angle;
 
 static VOID Emu8kFilterSetup(PEMU8K_VOICE voice, WORD cutoff, BYTE resonance)
 {
-    double cutoffHz, angularFrequency, sine, cosine, alpha, quality, normaliser;
+    double cutoffHz;
+    double angularFrequency;
+    double sine;
+    double cosine;
+    double alpha;
+    double quality;
+    double normaliser;
 
     if (voice->FilterIsValid && voice->FilterCutoff == cutoff && voice->FilterQ == resonance)
         return;
@@ -589,8 +598,10 @@ static INT32 Emu8kFilterRun(PEMU8K_VOICE voice, INT32 input)
 
 static VOID Emu8kVoiceTick(PEMU8K_VOICE voice)
 {
-    INT32 currentVolume, volumeTarget;
-    DWORD pitchTarget, cutoffTarget;
+    INT32 currentVolume;
+    INT32 volumeTarget;
+    DWORD pitchTarget;
+    DWORD cutoffTarget;
 
     if (!(voice->Dcysusv & EMU8K_DCYSUSV_ENGINE_OFF) && !(voice->Ccca & EMU8K_CCCA_DMA))
     {
@@ -598,7 +609,9 @@ static VOID Emu8kVoiceTick(PEMU8K_VOICE voice)
         INT32 modulation  = (INT32)Emu8kEnvelopeTick(&voice->ModulationEnvelope, voice->Envval, voice->Atkhld, voice->Dcysus);
         INT32 lfo1        = Emu8kLfoTick(&voice->Lfo1Phase, &voice->Lfo1Delay, (BYTE)voice->Tremfrq);
         INT32 lfo2        = Emu8kLfoTick(&voice->Lfo2Phase, &voice->Lfo2Delay, (BYTE)voice->Fm2frq2);
-        INT32 octaves, cutoff, attenuation;
+        INT32 octaves;
+        INT32 cutoff;
+        INT32 attenuation;
         DWORD gain;
         /* pitch: IP E000h = unity, 1000h per octave (p.16) -> Q16 octaves; then ENV1 x
          * PEFE hi (+/-1 oct), LFO1 x FMMOD hi (+/-1 oct), LFO2 x FM2FRQ2 hi (+/-1 oct)
@@ -778,7 +791,8 @@ static VOID Emu8kWriteDcysusv(PEMU8K_VOICE voice, WORD value, PEMU8K_STATE state
 
 static VOID Emu8kDataWrite(PEMU8K_STATE state, INT dataPort, INT isHighHalf, WORD value)
 {
-    BYTE registerNumber = (BYTE)((state->Pointer >> EMU8K_POINTER_REGISTER_SHIFT) & EMU8K_POINTER_REGISTER_MASK), channel = (BYTE)(state->Pointer & EMU8K_POINTER_CHANNEL_MASK);
+    BYTE registerNumber = (BYTE)((state->Pointer >> EMU8K_POINTER_REGISTER_SHIFT) & EMU8K_POINTER_REGISTER_MASK);
+    BYTE channel = (BYTE)(state->Pointer & EMU8K_POINTER_CHANNEL_MASK);
     PEMU8K_VOICE voice = &state->Voices[channel];
 
     if (dataPort == EMU8K_DATA0)                     /* Data0: all doublewords */
@@ -985,7 +999,8 @@ static VOID Emu8kDataWrite(PEMU8K_STATE state, INT dataPort, INT isHighHalf, WOR
 
 static WORD Emu8kDataRead(PEMU8K_STATE state, INT dataPort, INT isHighHalf)
 {
-    BYTE registerNumber = (BYTE)((state->Pointer >> EMU8K_POINTER_REGISTER_SHIFT) & EMU8K_POINTER_REGISTER_MASK), channel = (BYTE)(state->Pointer & EMU8K_POINTER_CHANNEL_MASK);
+    BYTE registerNumber = (BYTE)((state->Pointer >> EMU8K_POINTER_REGISTER_SHIFT) & EMU8K_POINTER_REGISTER_MASK);
+    BYTE channel = (BYTE)(state->Pointer & EMU8K_POINTER_CHANNEL_MASK);
     PEMU8K_VOICE voice = &state->Voices[channel];
 
     if (dataPort == EMU8K_DATA0)
@@ -1160,7 +1175,8 @@ static WORD Emu8kDataRead(PEMU8K_STATE state, INT dataPort, INT isHighHalf)
 /* A word transfer at offset `portOffset` from the base (000h/002h, 400h/402h, 800h/802h). */
 static VOID Emu8kWordOut(PEMU8K_STATE state, WORD portOffset, WORD value)
 {
-    BYTE registerNumber = (BYTE)((state->Pointer >> EMU8K_POINTER_REGISTER_SHIFT) & EMU8K_POINTER_REGISTER_MASK), channel = (BYTE)(state->Pointer & EMU8K_POINTER_CHANNEL_MASK);
+    BYTE registerNumber = (BYTE)((state->Pointer >> EMU8K_POINTER_REGISTER_SHIFT) & EMU8K_POINTER_REGISTER_MASK);
+    BYTE channel = (BYTE)(state->Pointer & EMU8K_POINTER_CHANNEL_MASK);
 
     switch (portOffset)
     {
@@ -1198,7 +1214,8 @@ static VOID Emu8kWordOut(PEMU8K_STATE state, WORD portOffset, WORD value)
 
 static WORD Emu8kWordIn(PEMU8K_STATE state, WORD portOffset)
 {
-    BYTE registerNumber = (BYTE)((state->Pointer >> EMU8K_POINTER_REGISTER_SHIFT) & EMU8K_POINTER_REGISTER_MASK), channel = (BYTE)(state->Pointer & EMU8K_POINTER_CHANNEL_MASK);
+    BYTE registerNumber = (BYTE)((state->Pointer >> EMU8K_POINTER_REGISTER_SHIFT) & EMU8K_POINTER_REGISTER_MASK);
+    BYTE channel = (BYTE)(state->Pointer & EMU8K_POINTER_CHANNEL_MASK);
 
     switch (portOffset)
     {
@@ -1311,13 +1328,17 @@ static VOID Emu8kPortIn(PVOID context, WORD port, BYTE accessWidth, UINT32 *valu
 
 VOID VddEmu8kRenderStereo(PEMU8K_STATE state, PINT16 output, DWORD frameCount)
 {
-    DWORD frame, voiceIndex;
+    DWORD frame;
+    DWORD voiceIndex;
     INT isAudible = (state->Hwcf3 & EMU8K_HWCF3_AUDIO_ENABLE) != 0;  /* section 4: HWCF3 enables audio output */
 
     state->Renders++;
     for (frame = 0; frame < frameCount; ++frame)
     {
-        INT32 accumulatorLeft = 0, accumulatorRight = 0, sampleLeft, sampleRight;
+        INT32 accumulatorLeft = 0;
+        INT32 accumulatorRight = 0;
+        INT32 sampleLeft;
+        INT32 sampleRight;
         if (state->TickPosition == 0)
             for (voiceIndex = 0; voiceIndex < EMU8K_VOICES; ++voiceIndex)
                 Emu8kVoiceTick(&state->Voices[voiceIndex]);
@@ -1325,7 +1346,11 @@ VOID VddEmu8kRenderStereo(PEMU8K_STATE state, PINT16 output, DWORD frameCount)
         for (voiceIndex = 0; voiceIndex < EMU8K_VOICES; ++voiceIndex)
         {
             PEMU8K_VOICE voice = &state->Voices[voiceIndex];
-            DWORD currentAddress, addressFraction, loopStart, loopEnd, step;
+            DWORD currentAddress;
+            DWORD addressFraction;
+            DWORD loopStart;
+            DWORD loopEnd;
+            DWORD step;
             INT32 gain;
             if (voice->Ccca & EMU8K_CCCA_DMA)
                 continue;                                   /* a DMA channel makes no sound */
@@ -1348,7 +1373,9 @@ VOID VddEmu8kRenderStereo(PEMU8K_STATE state, PINT16 output, DWORD frameCount)
                 /* CA is "one word lower than the actual audio location" (p.10): the
                  * interpolator reads CA+1 and CA+2, weighted by the fraction.
                  */
-                INT32 sample0 = Emu8kReadMemory(state, currentAddress + EMU8K_INTERPOLATOR_TAP0), sample1 = Emu8kReadMemory(state, currentAddress + EMU8K_INTERPOLATOR_TAP1), sample;
+                INT32 sample0 = Emu8kReadMemory(state, currentAddress + EMU8K_INTERPOLATOR_TAP0);
+                INT32 sample1 = Emu8kReadMemory(state, currentAddress + EMU8K_INTERPOLATOR_TAP1);
+                INT32 sample;
                 Emu8kFilterSetup(voice, (WORD)voice->Cvcf, (BYTE)(voice->Ccca >> EMU8K_CCCA_Q_SHIFT));
                 sample = sample0 + (INT32)(((INT64)(sample1 - sample0) * (INT32)addressFraction) >> EMU8K_Q16_SHIFT);
                 sample = Emu8kFilterRun(voice, sample);
@@ -1374,7 +1401,8 @@ VOID VddEmu8kRenderStereo(PEMU8K_STATE state, PINT16 output, DWORD frameCount)
         output[EMU8K_STEREO_SIDES * frame + EMU8K_RIGHT] = (INT16)sampleRight;
         if (sampleLeft || sampleRight)
         {
-            DWORD magnitudeLeft = (DWORD)(sampleLeft < 0 ? -sampleLeft : sampleLeft), magnitudeRight = (DWORD)(sampleRight < 0 ? -sampleRight : sampleRight);
+            DWORD magnitudeLeft = (DWORD)(sampleLeft < 0 ? -sampleLeft : sampleLeft);
+            DWORD magnitudeRight = (DWORD)(sampleRight < 0 ? -sampleRight : sampleRight);
             state->NonZeroSamplesOut++;
             if (magnitudeLeft > state->PeakSampleOut)
                 state->PeakSampleOut = magnitudeLeft;

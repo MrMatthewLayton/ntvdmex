@@ -62,7 +62,8 @@ static VOID V86HostOut(WORD port, INT width, DWORD value)
 #include "dos_layout.h"
 #include "dos_auxprn.h"
 
-static INT g_Total = 0, g_Failures = 0;
+static INT g_Total = 0;
+static INT g_Failures = 0;
 #define AUXPRN_TEST_CHECK(condition, message) do{ g_Total++; \
     if(condition){printf("  PASS  %s\n",(message));} \
     else{printf("  FAIL  %s\n",(message)); g_Failures++;} }while(0)
@@ -144,7 +145,8 @@ static INT g_Total = 0, g_Failures = 0;
 typedef struct _AUXPRN_TEST_CALL
 {
     INT  Vector;
-    WORD Ax, Dx;
+    WORD Ax;
+    WORD Dx;
 } AUXPRN_TEST_CALL, *PAUXPRN_TEST_CALL;
 
 static AUXPRN_TEST_CALL g_Calls[AUXPRN_TEST_MAX_CALLS];
@@ -185,7 +187,8 @@ static INT AuxPrnTestRunEntry(PV86_CPU cpu, UINT entry, WORD callerFlags)
         {
             INT vector = (cpu->Segments[AUXPRN_TEST_CS] == AUXPRN_TEST_INT17_SEGMENT)
                          ? AUXPRN_TEST_INT17 : AUXPRN_TEST_INT14;
-            WORD ax = (WORD)cpu->Registers[AUXPRN_TEST_AX], ah = ax >> AUXPRN_TEST_AH_SHIFT;
+            WORD ax = (WORD)cpu->Registers[AUXPRN_TEST_AX];
+            WORD ah = ax >> AUXPRN_TEST_AH_SHIFT;
             if (g_CallCount < AUXPRN_TEST_MAX_CALLS)
             {
                 g_Calls[g_CallCount].Vector = vector;

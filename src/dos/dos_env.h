@@ -287,7 +287,8 @@ static inline DWORD DosEnvBuildWithCard(
         while (*remaining)
         {
             PCSTR line = remaining;
-            INT lineLength = 0, characterIndex;
+            INT lineLength = 0;
+            INT characterIndex;
             while (line[lineLength] && line[lineLength] != '\n' && line[lineLength] != '\r' && line[lineLength] != ';')
                 ++lineLength;
             /* Drop the entry WHOLE if it cannot fit -- see the cap note above. */

@@ -70,7 +70,8 @@ static inline INT DosExtMemClassify(
         for (handleIndex = 0; handleIndex < DOS_XMS_MAX_HANDLES; ++handleIndex)
         {
             PCDOS_XMS_HANDLE handleEntry = &xmsState->Handles[handleIndex];
-            DWORD blockBase, blockEnd;
+            DWORD blockBase;
+            DWORD blockEnd;
             if (!handleEntry->InUse || !handleEntry->Memory || !handleEntry->SizeKb)
                 continue;
             blockBase = (DWORD)(UINT_PTR)handleEntry->Memory;

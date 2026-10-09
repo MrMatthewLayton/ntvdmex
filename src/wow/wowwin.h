@@ -170,7 +170,8 @@ DWORD DpmiSelectorBase(WORD selector);            /* main.c: a selector's linear
  */
 typedef struct _WOWWIN_SENDING
 {
-    WORD Window16, Message;
+    WORD Window16;
+    WORD Message;
 } WOWWIN_SENDING;
 /* -- s93: A WM_CHAR EXISTS ONLY IF THE PROGRAM ASKS FOR IT. On Win16 the character
  * comes from TranslateMessage, which the program calls -- or does not, for a key it
@@ -186,7 +187,8 @@ typedef struct _WOWWIN_SENDING
 #define WOWWIN_MAX_HELD_CHARS   16
 typedef struct _WOWWIN_HELD_CHAR
 {
-    WORD Window16, Character;
+    WORD Window16;
+    WORD Character;
     DWORD LParam;
     DWORD Sequence;
 } WOWWIN_HELD_CHAR;

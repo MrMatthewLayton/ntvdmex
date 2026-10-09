@@ -61,9 +61,11 @@ static INT g_WowResCacheCount = 0;
 INT WowResOpen(PCSTR path)
 {
     HANDLE file;
-    DWORD size = 0, bytesRead = 0;
+    DWORD size = 0;
+    DWORD bytesRead = 0;
     PBYTE image;
-    INT index, slot;
+    INT index;
+    INT slot;
 
     if (!path || !path[0])
         return 0;
@@ -114,7 +116,9 @@ INT WowResOpen(PCSTR path)
 /* Locate a resource by integer type and integer id. 0 = not found. */
 static DWORD WowResFind(WORD type, WORD id, PDWORD length)
 {
-    DWORD header, resourceTable, position;
+    DWORD header;
+    DWORD resourceTable;
+    DWORD position;
     WORD shift;
 
     if (!g_WowResImage)
@@ -132,7 +136,9 @@ static DWORD WowResFind(WORD type, WORD id, PDWORD length)
     position = resourceTable + WOW_WORD_BYTES;
     while (position + WOWRES_TYPEINFO_SIZE <= g_WowResLength)
     {
-        WORD typeId = WowResReadWord(position), count = WowResReadWord(position + WOWRES_TYPEINFO_COUNT), index;
+        WORD typeId = WowResReadWord(position);
+        WORD count = WowResReadWord(position + WOWRES_TYPEINFO_COUNT);
+        WORD index;
         if (!typeId)
             break;
         position += WOWRES_TYPEINFO_SIZE;
@@ -159,7 +165,9 @@ static DWORD WowResFind(WORD type, WORD id, PDWORD length)
 /* The first resource of a type, whatever its id -- see the accelerator note. */
 static DWORD WowResFindAny(WORD type, PWORD idOutput, PDWORD length)
 {
-    DWORD header, resourceTable, position;
+    DWORD header;
+    DWORD resourceTable;
+    DWORD position;
     WORD shift;
 
     if (!g_WowResImage)
@@ -177,7 +185,9 @@ static DWORD WowResFindAny(WORD type, PWORD idOutput, PDWORD length)
     position = resourceTable + WOW_WORD_BYTES;
     while (position + WOWRES_TYPEINFO_SIZE <= g_WowResLength)
     {
-        WORD typeId = WowResReadWord(position), count = WowResReadWord(position + WOWRES_TYPEINFO_COUNT), index;
+        WORD typeId = WowResReadWord(position);
+        WORD count = WowResReadWord(position + WOWRES_TYPEINFO_COUNT);
+        WORD index;
         if (!typeId)
             break;
         position += WOWRES_TYPEINFO_SIZE;
@@ -203,7 +213,8 @@ static DWORD WowResFindAny(WORD type, PWORD idOutput, PDWORD length)
 /* Parse the module's accelerator table. Returns the number of entries. */
 INT WowResAccelFirst(PWOWRES_ACCEL output, INT capacity, PWORD resourceId)
 {
-    DWORD length = 0, offset = WowResFindAny(WOWRES_RT_ACCEL, resourceId, &length);
+    DWORD length = 0;
+    DWORD offset = WowResFindAny(WOWRES_RT_ACCEL, resourceId, &length);
     INT count = 0;
 
     if (!offset || !output)
@@ -257,7 +268,8 @@ static INT WowResNameIs(DWORD resourceTable, WORD idWord, PCSTR wanted)
         return 0;
     for (index = 0; index < (INT)nameLength; ++index)
     {
-        CHAR stored = (CHAR)g_WowResImage[stringOffset + 1 + index], expected = wanted[index];
+        CHAR stored = (CHAR)g_WowResImage[stringOffset + 1 + index];
+        CHAR expected = wanted[index];
         if (stored >= 'a' && stored <= 'z')
             stored = (CHAR)(stored - WOWRES_LOWER_TO_UPPER);
         if (expected >= 'a' && expected <= 'z')
@@ -273,7 +285,9 @@ static INT WowResNameIs(DWORD resourceTable, WORD idWord, PCSTR wanted)
  */
 static DWORD WowResFindNamed(WORD type, PCSTR name, PDWORD length)
 {
-    DWORD header, resourceTable, position;
+    DWORD header;
+    DWORD resourceTable;
+    DWORD position;
     WORD shift;
 
     if (!g_WowResImage || !name || !name[0])
@@ -291,7 +305,9 @@ static DWORD WowResFindNamed(WORD type, PCSTR name, PDWORD length)
     position = resourceTable + WOW_WORD_BYTES;
     while (position + WOWRES_TYPEINFO_SIZE <= g_WowResLength)
     {
-        WORD typeId = WowResReadWord(position), count = WowResReadWord(position + WOWRES_TYPEINFO_COUNT), index;
+        WORD typeId = WowResReadWord(position);
+        WORD count = WowResReadWord(position + WOWRES_TYPEINFO_COUNT);
+        WORD index;
         if (!typeId)
             break;
         position += WOWRES_TYPEINFO_SIZE;
@@ -398,7 +414,8 @@ static HMENU WowResMenuAt(DWORD offset, DWORD length, PINT items)
 
 HMENU WowResMenu(WORD id, PINT items)
 {
-    DWORD length = 0, offset = WowResFind(WOWRES_RT_MENU, id, &length);
+    DWORD length = 0;
+    DWORD offset = WowResFind(WOWRES_RT_MENU, id, &length);
 
     return WowResMenuAt(offset, length, items);
 }
@@ -408,29 +425,34 @@ HMENU WowResMenu(WORD id, PINT items)
  */
 HMENU WowResMenuByName(PCSTR name, PINT items)
 {
-    DWORD length = 0, offset = WowResFindNamed(WOWRES_RT_MENU, name, &length);
+    DWORD length = 0;
+    DWORD offset = WowResFindNamed(WOWRES_RT_MENU, name, &length);
 
     return WowResMenuAt(offset, length, items);
 }
 
 HICON WowResIconNamed(PCSTR name, PINT picked, INT width, INT height)
 {
-    DWORD groupLength = 0, groupOffset = WowResFindNamed(WOWRES_RT_GROUP_ICON, name, &groupLength);
+    DWORD groupLength = 0;
+    DWORD groupOffset = WowResFindNamed(WOWRES_RT_GROUP_ICON, name, &groupLength);
 
     return WowResIconAt(groupOffset, groupLength, picked, width, height);
 }
 
 HICON WowResIcon(WORD groupId, PINT picked, INT width, INT height)
 {
-    DWORD groupLength = 0, groupOffset = WowResFind(WOWRES_RT_GROUP_ICON, groupId, &groupLength);
+    DWORD groupLength = 0;
+    DWORD groupOffset = WowResFind(WOWRES_RT_GROUP_ICON, groupId, &groupLength);
 
     return WowResIconAt(groupOffset, groupLength, picked, width, height);
 }
 
 static HCURSOR WowResCursorAt(DWORD groupOffset, DWORD groupLength)
 {
-    DWORD cursorLength = 0, cursorOffset;
-    WORD count, id;
+    DWORD cursorLength = 0;
+    DWORD cursorOffset;
+    WORD count;
+    WORD id;
 
     if (!groupOffset || groupLength < WOWRES_GROUP_HEADER_SIZE + WOWRES_GROUP_ENTRY_SIZE)
         return NULL;
@@ -451,7 +473,8 @@ static HCURSOR WowResCursorAt(DWORD groupOffset, DWORD groupLength)
 
 HCURSOR WowResCursorNamed(PCSTR name)
 {
-    DWORD groupLength = 0, groupOffset = WowResFindNamed(WOWRES_RT_GROUP_CURSOR, name, &groupLength);
+    DWORD groupLength = 0;
+    DWORD groupOffset = WowResFindNamed(WOWRES_RT_GROUP_CURSOR, name, &groupLength);
 
     return WowResCursorAt(groupOffset, groupLength);
 }
@@ -459,7 +482,8 @@ HCURSOR WowResCursorNamed(PCSTR name)
 /* s89 (#216): the same, for a cursor group asked for by ordinal. */
 HCURSOR WowResCursor(WORD groupId)
 {
-    DWORD groupLength = 0, groupOffset = WowResFind(WOWRES_RT_GROUP_CURSOR, groupId, &groupLength);
+    DWORD groupLength = 0;
+    DWORD groupOffset = WowResFind(WOWRES_RT_GROUP_CURSOR, groupId, &groupLength);
 
     return WowResCursorAt(groupOffset, groupLength);
 }
@@ -486,8 +510,11 @@ HCURSOR WowResCursor(WORD groupId)
  */
 static HICON WowResIconAt(DWORD groupOffset, DWORD groupLength, PINT picked, INT width, INT height)
 {
-    DWORD iconLength = 0, iconOffset;
-    WORD count, index, bestId = 0;
+    DWORD iconLength = 0;
+    DWORD iconOffset;
+    WORD count;
+    WORD index;
+    WORD bestId = 0;
     INT bestBits = -1;
 
     if (picked)

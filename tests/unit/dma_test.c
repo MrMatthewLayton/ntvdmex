@@ -21,7 +21,8 @@
 #include <string.h>
 #include "vdd_dma.h"
 
-static INT g_Total = 0, g_Failures = 0;
+static INT g_Total = 0;
+static INT g_Failures = 0;
 #define CHECK(condition,message) do{ g_Total++; if(condition){printf("  PASS  %s\n",(message));} \
     else{printf("  FAIL  %s\n",(message)); g_Failures++;} }while(0)
 
@@ -105,8 +106,10 @@ INT main(VOID)
     memset(&dma, 0, sizeof dma);
     NTVDD_DEVICE dmaDevice = VddDmaDevice(&dma);
     BYTE buffer[512];
-    UINT32 value, actual;
-    INT isTerminalCount, index;
+    UINT32 value;
+    UINT32 actual;
+    INT isTerminalCount;
+    INT index;
 
     printf("== sound epic: ISA DMA controller battery ==\n");
 

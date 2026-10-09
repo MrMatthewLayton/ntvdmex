@@ -104,7 +104,10 @@
 /* Days since 1970-01-01 of a proleptic Gregorian date (H. Hinnant's days_from_civil). */
 static inline INT64 DosLfnDaysFromCivil(_In_ INT64 year, _In_ UINT month, _In_ UINT day)
 {
-    INT64 era, yearOfEra, dayOfYear, dayOfEra;
+    INT64 era;
+    INT64 yearOfEra;
+    INT64 dayOfYear;
+    INT64 dayOfEra;
 
     year -= month <= DOS_LFN_FEBRUARY;
     era = (year >= 0 ? year : year - DOS_LFN_ERA_FLOOR_ADJUST) / DOS_LFN_YEARS_PER_ERA;
@@ -123,7 +126,11 @@ static inline VOID DosLfnCivilFromDays(
     _Out_ PUINT month,
     _Out_ PUINT day)
 {
-    INT64 era, dayOfEra, yearOfEra, dayOfYear, shiftedMonth;
+    INT64 era;
+    INT64 dayOfEra;
+    INT64 yearOfEra;
+    INT64 dayOfYear;
+    INT64 shiftedMonth;
 
     days += DOS_LFN_CIVIL_EPOCH_DAYS;
     era = (days >= 0 ? days : days - DOS_LFN_DAYS_PER_ERA_LESS_ONE) / DOS_LFN_DAYS_PER_ERA;
@@ -164,11 +171,16 @@ static inline BOOL DosLfnFileTimeToDos(
     _Out_ PWORD dosTime,
     _Out_ PBYTE tenMs)
 {
-    UINT64 seconds = fileTime / DOS_LFN_FILETIME_TICKS_PER_SECOND,
-           remainder = fileTime % DOS_LFN_FILETIME_TICKS_PER_SECOND;
-    INT64  days = (INT64)(seconds / DOS_LFN_SECONDS_PER_DAY) - DOS_LFN_FILETIME_UNIX_DAYS, year;
-    UINT   secondOfDay = (UINT)(seconds % DOS_LFN_SECONDS_PER_DAY), month, day, hour, minute,
-           second;
+    UINT64 seconds = fileTime / DOS_LFN_FILETIME_TICKS_PER_SECOND;
+    UINT64 remainder = fileTime % DOS_LFN_FILETIME_TICKS_PER_SECOND;
+    INT64 days = (INT64)(seconds / DOS_LFN_SECONDS_PER_DAY) - DOS_LFN_FILETIME_UNIX_DAYS;
+    INT64 year;
+    UINT secondOfDay = (UINT)(seconds % DOS_LFN_SECONDS_PER_DAY);
+    UINT month;
+    UINT day;
+    UINT hour;
+    UINT minute;
+    UINT second;
 
     DosLfnCivilFromDays(days, &year, &month, &day);
     if (year < DOS_LFN_DOS_EPOCH_YEAR || year > DOS_LFN_DOS_LAST_YEAR)
@@ -198,11 +210,11 @@ static inline BOOL DosLfnDosToFileTime(
     _Out_ PUINT64 fileTime)
 {
     INT64 year   = DOS_LFN_DOS_EPOCH_YEAR + (dosDate >> DOS_LFN_DATE_YEAR_SHIFT);
-    UINT  month  = (dosDate >> DOS_LFN_DATE_MONTH_SHIFT) & DOS_LFN_DATE_MONTH_MASK,
-          day    = dosDate & DOS_LFN_DATE_DAY_MASK;
-    UINT  hour   = dosTime >> DOS_LFN_TIME_HOUR_SHIFT,
-          minute = (dosTime >> DOS_LFN_TIME_MINUTE_SHIFT) & DOS_LFN_TIME_MINUTE_MASK,
-          second = (dosTime & DOS_LFN_TIME_SECONDS_MASK) * DOS_LFN_TIME_SECONDS_UNIT;
+    UINT month  = (dosDate >> DOS_LFN_DATE_MONTH_SHIFT) & DOS_LFN_DATE_MONTH_MASK;
+    UINT day    = dosDate & DOS_LFN_DATE_DAY_MASK;
+    UINT hour   = dosTime >> DOS_LFN_TIME_HOUR_SHIFT;
+    UINT minute = (dosTime >> DOS_LFN_TIME_MINUTE_SHIFT) & DOS_LFN_TIME_MINUTE_MASK;
+    UINT second = (dosTime & DOS_LFN_TIME_SECONDS_MASK) * DOS_LFN_TIME_SECONDS_UNIT;
     INT64 days;
 
     if (month < DOS_LFN_JANUARY || month > DOS_LFN_DECEMBER || day < DOS_LFN_FIRST_DAY
@@ -260,7 +272,8 @@ typedef struct _DOS_LFN_FIND_ENTRY
     DWORD  Attributes;
     UINT64 CreationTime, LastAccessTime, LastWriteTime;  /* FILETIMEs, in whatever zone the
                                                             caller wants                    */
-    DWORD  SizeHigh, SizeLow;
+    DWORD SizeHigh;
+    DWORD SizeLow;
     PCSTR  LongName;
     PCSTR  ShortName;            /* "" when the long name is already 8.3 */
 } DOS_LFN_FIND_ENTRY, *PDOS_LFN_FIND_ENTRY;
@@ -284,7 +297,8 @@ static inline VOID DosLfnPutTime(
 {
     if (isDosFormat)
     {
-        WORD dosDate = 0, dosTime = 0;
+        WORD dosDate = 0;
+        WORD dosTime = 0;
         BYTE tenMs = 0;
         if (!fileTime || !DosLfnFileTimeToDos(fileTime, &dosDate, &dosTime, &tenMs))
         {
@@ -396,7 +410,9 @@ static inline CHAR DosLfnUpperCase(_In_ CHAR character)
 /* Is `name` (one path component) already a legal 8.3 name? */
 static inline BOOL DosLfnIsShortName(_In_ PCSTR name)
 {
-    INT baseLength = 0, extensionLength = DOS_LFN_NO_EXTENSION, charIndex;
+    INT baseLength = 0;
+    INT extensionLength = DOS_LFN_NO_EXTENSION;
+    INT charIndex;
 
     if (!name[0] || name[0] == DOS_LFN_EXTENSION_DOT)
         return FALSE;
@@ -436,9 +452,14 @@ static inline VOID DosLfnShortName(
     _Out_writes_(DOS_SHORT_NAME_SIZE) CHAR shortName[DOS_SHORT_NAME_SIZE],
     _Out_writes_(DOS_FCB_NAME_SIZE) CHAR fcbName[DOS_FCB_NAME_SIZE])
 {
-    PCSTR component = longName, cursor, lastDot = 0;
-    CHAR base[DOS_LFN_BASE_BUFFER_SIZE], extension[DOS_LFN_EXTENSION_BUFFER_SIZE];
-    INT baseLength = 0, extensionLength = 0, charIndex;
+    PCSTR component = longName;
+    PCSTR cursor;
+    PCSTR lastDot = 0;
+    CHAR base[DOS_LFN_BASE_BUFFER_SIZE];
+    CHAR extension[DOS_LFN_EXTENSION_BUFFER_SIZE];
+    INT baseLength = 0;
+    INT extensionLength = 0;
+    INT charIndex;
 
     for (cursor = longName; *cursor; ++cursor)                         /* last component */
         if (*cursor == '\\' || *cursor == '/' || *cursor == ':')
@@ -533,8 +554,8 @@ static inline VOID DosLfnShortName(
 
 static inline UINT DosExtOpenDisposition(_In_ UINT action)
 {
-    UINT ifExists = action & DOS_EXT_OPEN_ACTION_MASK,
-         ifMissing = (action >> DOS_EXT_OPEN_IF_MISSING_SHIFT) & DOS_EXT_OPEN_ACTION_MASK;
+    UINT ifExists = action & DOS_EXT_OPEN_ACTION_MASK;
+    UINT ifMissing = (action >> DOS_EXT_OPEN_IF_MISSING_SHIFT) & DOS_EXT_OPEN_ACTION_MASK;
 
     if (ifExists == DOS_EXT_OPEN_IF_EXISTS_TRUNCATE && ifMissing == DOS_EXT_OPEN_IF_MISSING_CREATE)
         return DOS_EXT_OPEN_CREATE_ALWAYS;

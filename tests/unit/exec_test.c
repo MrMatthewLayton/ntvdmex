@@ -61,7 +61,8 @@
 #define EXEC_TEST_COM_FIRST_BYTE        0xB4
 #define EXEC_TEST_COM_SIZE              0x100
 
-static INT g_Checks, g_Failures;
+static INT g_Checks;
+static INT g_Failures;
 
 static VOID ExecTestExpect(PCSTR description, LONG actual, LONG expected)
 {

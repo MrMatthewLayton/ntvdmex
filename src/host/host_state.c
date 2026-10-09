@@ -90,13 +90,19 @@ INT g_InPmIrq     = 0;             /* #2b: re-entrancy guard while inside an inj
  *   the one that actually matters.
  */
 LARGE_INTEGER g_QpcFrequency;
-INT      g_LockSite, g_LockHoldSite, g_LockWaitSite;
-UINT32 g_LockHoldMicroseconds, g_LockWaitMicroseconds, g_UiGapMicroseconds;
+INT g_LockSite;
+INT g_LockHoldSite;
+INT g_LockWaitSite;
+UINT32 g_LockHoldMicroseconds;
+UINT32 g_LockWaitMicroseconds;
+UINT32 g_UiGapMicroseconds;
 INT      g_UiTickMinimumMs = UITICK_AUTO;
 DWORD    g_KeyMessageHistogram[8];     /* queue delay ms: 0,1,2,4,8,16,32,64+ */
-DWORD    g_KeyMessageMaximumMs, g_KeyMessageCount;
+DWORD g_KeyMessageMaximumMs;
+DWORD g_KeyMessageCount;
 DWORD    g_KeyDeliveryHistogram[8];     /* queue->INT 09h ms: same buckets */
-DWORD    g_KeyDeliveryMaximumMs, g_KeyDeliveryCount;
+DWORD g_KeyDeliveryMaximumMs;
+DWORD g_KeyDeliveryCount;
 INT      g_KeyIrqRetry = KEYIRQ_RETRY_ON;      /* keyirq.txt = 0 restores single-attempt */
 HWND         g_Window;
 HANDLE       g_KeyEvent;            /* signalled when a key is pushed */
@@ -142,11 +148,19 @@ DWORD          g_IoExtra      = 0;  /* accesses absorbed by the LOOP burst */
 DWORD          g_Irq0Injected      = 0;  /* INT 08h injections into the guest */
 DWORD          g_Irq0TimeLast[IRQ0TL_SECS];   /* deliveries per second of run */
 DWORD          g_Irq0GapHistogram[8];       /* ms: <1,1,2,4,8,16,32,64+ */
-DWORD          g_Irq0GapMaximumMs, g_Irq0GapCount;
+DWORD g_Irq0GapMaximumMs;
+DWORD g_Irq0GapCount;
 /* Anomalous gaps (>= 2 programmed periods) and normal ones, with I/O as a RATE. */
-DWORD          g_Irq0AnomalyCount, g_Irq0AnomalyMicroseconds, g_Irq0AnomalyIo;
-DWORD          g_Irq0AnomalyRaise, g_Irq0AnomalyAttempts, g_Irq0AnomalyNie, g_Irq0AnomalyYield;
-DWORD          g_Irq0AnomalyGeneration, g_Irq0AnomalyDelete;   /* B and A, by raise count */
+DWORD g_Irq0AnomalyCount;
+DWORD g_Irq0AnomalyMicroseconds;
+DWORD g_Irq0AnomalyIo;
+DWORD g_Irq0AnomalyRaise;
+DWORD g_Irq0AnomalyAttempts;
+DWORD g_Irq0AnomalyNie;
+DWORD g_Irq0AnomalyYield;
+/* B and A, by raise count */
+DWORD g_Irq0AnomalyGeneration;
+DWORD g_Irq0AnomalyDelete;
 volatile LONG  g_WoundDown    = 0;  /* exec loop exited: clean shutdown in progress */
 INT   g_IoHotCount = 0;
 WORD g_Unclaimed[IO_UNCLAIMED_MAX];
@@ -244,8 +258,11 @@ DWORD          g_AsyncBail    = 0;   /* attempts declined (guest not in a safe s
 LONG g_AsyncWhy = 0;
 DWORD g_AsyncWhyHistogram[PIC_LINES_PER_CHIP][ASYNC_WHY_MAX];
 volatile LONG g_AsyncPmActive = 0;  /* an async PM interrupt is in flight */
-DWORD g_AsyncPmEip = 0, g_AsyncPmEsp = 0, g_AsyncPmEflags = 0;
-WORD  g_AsyncPmCs  = 0, g_AsyncPmSs  = 0;
+DWORD g_AsyncPmEip = 0;
+DWORD g_AsyncPmEsp = 0;
+DWORD g_AsyncPmEflags = 0;
+WORD g_AsyncPmCs  = 0;
+WORD g_AsyncPmSs  = 0;
 DWORD g_LeLoadBase   = 0;           /* first [LE CODE OBJECT] allocation */
 /* -- A DPMI REAL-MODE SIMULATION IS A WINDOW IN WHICH THE VDM HAS NO SETTLED
  * MODE, AND THE ASYNC INJECTOR MUST NOT LOOK INTO IT. (s72, Doom's E1M1 crash)
@@ -283,9 +300,13 @@ volatile LONG g_SimIntBusy = 0;
  *   through: our stubs in DOS_HDLR_SEG BOP, and the nested loop services no such BOP.
  */
 volatile LONG g_NestedRm = 0;
-INT    g_PitPaceOn = 1, g_PitPaceMs = 1;
+INT g_PitPaceOn = 1;
+INT g_PitPaceMs = 1;
 volatile LONGLONG g_Int15EventEnd;     /* QPC of the AH=83h deadline; 0 = none */
-DWORD g_Int15Waits, g_Int15Events, g_Int15Posted, g_Int15Busy;
+DWORD g_Int15Waits;
+DWORD g_Int15Events;
+DWORD g_Int15Posted;
+DWORD g_Int15Busy;
 /* [CAUTION]: DEFAULT OFF, AND THE REASON IS THE MEASUREMENT, NOT THE MECHANISM (Importance = 2):
  * The mechanism above is established: raises - attempts == yields, exactly, in
  * every run taken. What is NOT established is that this thread is a net win, and
@@ -305,7 +326,10 @@ DWORD g_Int15Waits, g_Int15Events, g_Int15Posted, g_Int15Busy;
  * exactly that.
  */
 INT    g_CourierOn = 0;              /* courier.txt = 1 enables */
-DWORD  g_CourierWakes, g_CourierInjected, g_CourierTries, g_CourierGiveUp;
+DWORD g_CourierWakes;
+DWORD g_CourierInjected;
+DWORD g_CourierTries;
+DWORD g_CourierGiveUp;
 /* APPROXIMATE CPU SPEED: THE V86 HALF. (GH #56) (Importance = 1):
  * The arithmetic and the whole argument for it are in src/host/cpuspeed.h. This
  * is the mechanism: a thread that, for the milliseconds the Bresenham says the
@@ -347,17 +371,21 @@ DWORD  g_CourierWakes, g_CourierInjected, g_CourierTries, g_CourierGiveUp;
 INT    g_CpuSpeedIndex      = 0;      /* CPUSPEED_* index; 0 = unlimited */
 volatile LONG g_CpuSpeedDuty = CPUSPEED_BP_FULL;   /* basis points, read by the thread */
 volatile LONG g_CpuSpeedDutyRm = CPUSPEED_BP_FULL;   /* #225: the same, for a real-mode program */
-DWORD  g_CpuSpeedRunMs, g_CpuSpeedHeldMs;   /* what the throttle really did */
+/* what the throttle really did */
+DWORD g_CpuSpeedRunMs;
+DWORD g_CpuSpeedHeldMs;
 DWORD  g_CpuSpeedMissed;   /* held millisecond the guest was not in exec for */
 DWORD  g_CpuSpeedHoldMaximumMicroseconds;   /* #225: the longest single hold, and */
 DWORD    g_CpuSpeedPeriods;      /* how many run/hold cycles were completed */
 DWORD    g_StartMs;            /* GetTickCount at throttle start, for exec_bp */
 
-DWORD         g_CpuSpeedCooperativeCatches, g_CpuSpeedCooperativeTimeouts;
+DWORD g_CpuSpeedCooperativeCatches;
+DWORD g_CpuSpeedCooperativeTimeouts;
 UINT32 g_TypematicPeriodMicroseconds =  TYPEMATIC_DEFAULT_PERIOD_US;
 INT           g_MouseSensitivity = PERCENT;       /* percent; msens.txt tunes feel per-guest */
 /* DPMI 0300 (simulate real-mode interrupt) vectors we do NOT service. See the 0300 arm. */
-DWORD g_SimIntUnhandled, g_SimIntVector[IVT_VECTORS];
+DWORD g_SimIntUnhandled;
+DWORD g_SimIntVector[IVT_VECTORS];
 /* 0Ch / 14h: THE EVENT HANDLER. STORED AND REPORTED; NOT YET CALLED:
  * A guest installs a far pointer and a call mask and expects the driver to CALL IT
  * on the masked events. We do not do that yet -- invoking guest code out of band
@@ -371,9 +399,15 @@ DWORD g_SimIntUnhandled, g_SimIntVector[IVT_VECTORS];
  *   log says plainly "this guest wants callbacks and is not getting them" instead of
  *   leaving it to be re-diagnosed from behaviour.
  */
-volatile LONG g_MouseEventMask, g_MouseEventSegment, g_MouseEventOffset;
+volatile LONG g_MouseEventMask;
+volatile LONG g_MouseEventSegment;
+volatile LONG g_MouseEventOffset;
 INT    g_MouseCallbackActive;           /* a callback is in flight */
-DWORD  g_MouseCallbackInjected, g_MouseCallbackDone, g_MouseCallbackLost, g_MouseCallbackPm, g_MouseCallbackStray;
+DWORD g_MouseCallbackInjected;
+DWORD g_MouseCallbackDone;
+DWORD g_MouseCallbackLost;
+DWORD g_MouseCallbackPm;
+DWORD g_MouseCallbackStray;
 /* Why a delivery attempt did NOT happen, by reason -- a zero cb_inj must be readable:
  * [0] in flight  [1] no mask/no events  [2] no handler  [3] inside our stub  [4] IF off
  */
@@ -479,7 +513,8 @@ DOS_SB_CONFIG g_SbConfig = { SB_DEFAULT_BASE, SB_DEFAULT_IRQ, SB_DEFAULT_DMA8,
  * the state a real machine is in with no HIMEM/EMM386 line in CONFIG.SYS -- and
  * which some games specifically want.
  */
-INT g_XmsOn = 1, g_EmsOn = 1;
+INT g_XmsOn = 1;
+INT g_EmsOn = 1;
 
 /* PROBE A GUEST POINTER WITHOUT FAULTING. Session 17, and it cost a run:
  * IsBadReadPtr does its job by TOUCHING the memory inside an SEH frame -- so on a bad
@@ -521,7 +556,8 @@ BYTE *g_WowShadow = NULL;
  * [CAUTION]: Its own stack, below 0301's default one (the code segment at FF00), so a reflection
  * can never land on a frame that call is using.
  */
-DWORD g_PmIrqRmReflects = 0, g_PmIrqRmFail = 0;
+DWORD g_PmIrqRmReflects = 0;
+DWORD g_PmIrqRmFail = 0;
 
 /* The shared tables that had anonymous types (#335). */
 SKIP_IF_SITE g_SkipIfSite[SKIPIF_SITES];

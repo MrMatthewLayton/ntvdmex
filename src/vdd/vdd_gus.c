@@ -371,8 +371,10 @@ static INT GusIsVoicePending(PCGUS_STATE state)
 
 static BYTE GusIrqStatus(PCGUS_STATE state)            /* 2X6 */
 {
-    BYTE status = 0, voiceIndex;
-    INT isWave = 0, isVolume = 0;
+    BYTE status = 0;
+    BYTE voiceIndex;
+    INT isWave = 0;
+    INT isVolume = 0;
 
     for (voiceIndex = 0; voiceIndex < GUS_VOICES; ++voiceIndex)
     {
@@ -426,7 +428,8 @@ static VOID GusIrqUpdate(PGUS_STATE state)
            || (state->IsTimer1Expired && (state->TimerControl & GUS_TIMER1_IRQ_ENABLE))
            || (state->IsTimer2Expired && (state->TimerControl & GUS_TIMER2_IRQ_ENABLE));
     INT isMidi = GusMidiTransmitIrq(state) || GusMidiReceiveIrq(state);
-    BYTE gf1Line = state->Gf1IrqLine, midiLine = state->MidiIrqLine;
+    BYTE gf1Line = state->Gf1IrqLine;
+    BYTE midiLine = state->MidiIrqLine;
 
     if (!(state->ResetRegister & GUS_RESET_MASTER_IRQ) || !GusAreDriversOn(state))
         isGf1 = isMidi = 0;
@@ -496,7 +499,8 @@ static INT GusIsDmaReady(PCGUS_STATE state, BYTE channel)
 static BYTE GusDreq(PCVOID context)
 {
     PCGUS_STATE state = (PCGUS_STATE )context;
-    BYTE mask = 0, channel;
+    BYTE mask = 0;
+    BYTE channel;
 
     channel = GusDramDma(state);
     if (state->IsDmaWaiting && channel)
@@ -518,8 +522,11 @@ static BYTE GusDreq(PCVOID context)
 static VOID GusDmaTry(PGUS_STATE state)
 {
     BYTE channel = GusDramDma(state);
-    UINT32 remaining, address, moved;
-    INT isTerminalCount = 0, isCardToPc;
+    UINT32 remaining;
+    UINT32 address;
+    UINT32 moved;
+    INT isTerminalCount = 0;
+    INT isCardToPc;
     BYTE buffer[GUS_DMA_CHUNK];
 
     if (!state->IsDmaWaiting || !state->Dram || !GusIsDmaReady(state, channel))
@@ -531,7 +538,8 @@ static VOID GusDmaTry(PGUS_STATE state)
         address = GusUntranslate16(address);
     while (remaining && !isTerminalCount)
     {
-        UINT32 byteIndex, chunk = remaining > sizeof buffer ? (UINT32)sizeof buffer : remaining;
+        UINT32 byteIndex;
+        UINT32 chunk = remaining > sizeof buffer ? (UINT32)sizeof buffer : remaining;
         if (isCardToPc)
         {
             for (byteIndex = 0; byteIndex < chunk; ++byteIndex)
@@ -591,8 +599,11 @@ static VOID GusDmaTry(PGUS_STATE state)
  */
 static VOID GusRecord(PGUS_STATE state, UINT32 nanoseconds)
 {
-    BYTE channel = GusRecordDma(state), buffer[AUDIO_STEREO_CHANNELS];
-    UINT32 rate, period, unit;
+    BYTE channel = GusRecordDma(state);
+    BYTE buffer[AUDIO_STEREO_CHANNELS];
+    UINT32 rate;
+    UINT32 period;
+    UINT32 unit;
     INT isTerminalCount = 0;
 
     if (!(state->SampleControl & GUS_SAMPLE_GO))
@@ -1167,7 +1178,8 @@ UINT32 VddGusVolumeGain(WORD volume12)
     /* ref section 7: the SDK's own linear table pins the curve -- one exponent step per
      * octave, the mantissa linear within it: amplitude ~ 2^E x (256 + M) / 256.
      */
-    UINT32 exponent = (volume12 >> GUS_VOLUME_EXPONENT_SHIFT) & GUS_VOLUME_EXPONENT_MASK, mantissa = volume12 & GUS_VOLUME_MANTISSA_MASK;
+    UINT32 exponent = (volume12 >> GUS_VOLUME_EXPONENT_SHIFT) & GUS_VOLUME_EXPONENT_MASK;
+    UINT32 mantissa = volume12 & GUS_VOLUME_MANTISSA_MASK;
 
     if (!volume12)
         return 0;
@@ -1194,7 +1206,8 @@ static INT32 GusFetch(PCGUS_STATE state, PCGUS_VOICE voice, UINT32 address)
 
 static VOID GusVoiceStep(PGUS_STATE state, PGUS_VOICE voice)
 {
-    UINT32 increment = (UINT32)(voice->FrequencyControl >> 1), oldPosition = voice->Position;
+    UINT32 increment = (UINT32)(voice->FrequencyControl >> 1);
+    UINT32 oldPosition = voice->Position;
 
     if (voice->Control & GUS_VOICE_STOP_BITS)
         return;                                                     /* stopped: holds its place */
@@ -1265,7 +1278,10 @@ static VOID GusVoiceStep(PGUS_STATE state, PGUS_VOICE voice)
 static VOID GusRampStep(PGUS_VOICE voice)
 {
     static const UINT32 divider[GUS_RAMP_RATES] = { 1, 8, 64, 512 };
-    INT32 volume12, low, high, step;
+    INT32 volume12;
+    INT32 low;
+    INT32 high;
+    INT32 step;
     if (voice->VolumeControl & GUS_RAMP_STOP_BITS)
         return;
     if (++voice->RampDivider < divider[(voice->RampRate >> GUS_RAMP_RATE_SHIFT) & GUS_RAMP_RATE_MASK])
@@ -1392,21 +1408,29 @@ static INT16 GusClip(INT32 value)
  */
 static VOID GusRender(PGUS_STATE state, INT16 *output, UINT32 count, INT isStereo)
 {
-    UINT32 sampleIndex, voiceIndex, nanoseconds = NANOSECONDS_PER_SECOND_U / (VddGusRateHz(state) ? VddGusRateHz(state) : GUS_FALLBACK_RATE_HZ);
+    UINT32 sampleIndex;
+    UINT32 voiceIndex;
+    UINT32 nanoseconds = NANOSECONDS_PER_SECOND_U / (VddGusRateHz(state) ? VddGusRateHz(state) : GUS_FALLBACK_RATE_HZ);
 
     state->Renders++;
     GusDmaTry(state);                                /* a DMA that was waiting on the 8237 */
     for (sampleIndex = 0; sampleIndex < count; ++sampleIndex)
     {
-        INT32 sum = 0, sumLeft = 0, sumRight = 0;
+        INT32 sum = 0;
+        INT32 sumLeft = 0;
+        INT32 sumRight = 0;
         INT16 mono;
         if (state->Dram && (state->ResetRegister & GUS_RESET_RUNNING) == GUS_RESET_RUNNING)     /* running, DAC enabled */
         {
             for (voiceIndex = 0; voiceIndex < state->ActiveVoices && voiceIndex < GUS_VOICES; ++voiceIndex)
             {
                 PGUS_VOICE voice = &state->Voices[voiceIndex];
-                UINT32 address = voice->Position >> GUS_POSITION_FRACTION_BITS, fraction = voice->Position & GUS_POSITION_FRACTION_MASK;
-                INT32 sample0, sample1, sample, gain;
+                UINT32 address = voice->Position >> GUS_POSITION_FRACTION_BITS;
+                UINT32 fraction = voice->Position & GUS_POSITION_FRACTION_MASK;
+                INT32 sample0;
+                INT32 sample1;
+                INT32 sample;
+                INT32 gain;
                 gain = (INT32)VddGusVolumeGain((WORD)(voice->Volume >> GUS_VOLUME_SHIFT));
                 if (gain)
                 {

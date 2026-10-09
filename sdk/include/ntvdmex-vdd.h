@@ -90,8 +90,15 @@ typedef void (*ntvdmex_frame_fn)(void *self);
  */
 typedef struct ntvdmex_regs
 {
-    uint32_t eax, ebx, ecx, edx, esi, edi, ebp;
-    uint16_t ds, es;
+    uint32_t eax;
+    uint32_t ebx;
+    uint32_t ecx;
+    uint32_t edx;
+    uint32_t esi;
+    uint32_t edi;
+    uint32_t ebp;
+    uint16_t ds;
+    uint16_t es;
     uint8_t  cf;
 } ntvdmex_regs;
 

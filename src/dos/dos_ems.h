@@ -151,7 +151,8 @@ static inline VOID DosEmsInitialize(
     _In_opt_ PDOS_EMS_FREE_ROUTINE free,
     _In_opt_ PVOID context)
 {
-    INT handleIndex, windowIndex;
+    INT handleIndex;
+    INT windowIndex;
 
     state->FrameSegment = frameSegment;
     state->TotalPages = totalPages;
@@ -392,7 +393,8 @@ static inline BOOL DosEmsGetHandlePages(
 /* --- fn 4Bh: number of open handles ---------------------------------------- */
 static inline INT DosEmsGetHandleCount(_In_ PCDOS_EMS_STATE state)
 {
-    INT handleIndex, handleCount = 0;
+    INT handleIndex;
+    INT handleCount = 0;
 
     for (handleIndex = 0; handleIndex < DOS_EMS_MAX_HANDLES; ++handleIndex)
         if (state->Handles[handleIndex].InUse)
@@ -410,7 +412,8 @@ static inline INT DosEmsGetAllHandlePages(
     _In_ PCDOS_EMS_STATE state,
     _Out_writes_bytes_opt_(DOS_EMS_MAX_HANDLES * DOS_EMS_HANDLE_PAGES_ENTRY_SIZE) PBYTE entries)
 {
-    INT handleIndex, entryCount = 0;
+    INT handleIndex;
+    INT entryCount = 0;
 
     for (handleIndex = 0; handleIndex < DOS_EMS_MAX_HANDLES; ++handleIndex)
     {
@@ -477,7 +480,8 @@ static inline BOOL DosEmsReallocatePages(
 {
     PDOS_EMS_HANDLE handleEntry = DosEmsGetHandle(state, handle);
     PVOID newBuffer = 0;
-    DWORD bytesToKeep, byteIndex;
+    DWORD bytesToKeep;
+    DWORD byteIndex;
     INT windowIndex;
 
     if (!handleEntry)

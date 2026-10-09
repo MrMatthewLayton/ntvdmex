@@ -30,7 +30,8 @@
 #include <string.h>
 #include "vdd_fdc.h"
 
-static INT g_Total = 0, g_Failures = 0;
+static INT g_Total = 0;
+static INT g_Failures = 0;
 #define CHECK(condition, message) do {                                  \
         g_Total++;                                               \
         if (condition) { printf("  PASS  %s\n", (message)); }           \
@@ -94,7 +95,8 @@ static INT FdcTestDriverSend(PVDD_BUS bus, BYTE byte)
  */
 static INT FdcTestDriverDrain(PVDD_BUS bus, PBYTE output, INT maximum)
 {
-    INT count = 0, spin;
+    INT count = 0;
+    INT spin;
 
     for (spin = 0; spin < 10000 && count < maximum; ++spin)
     {
@@ -248,7 +250,8 @@ INT main(VOID)
     CHECK(FdcTestRead(&bus, FDC_MSR) == 0x80, "reset: released -> ready for a command");
     CHECK(g_Irq6Count == 1, "reset: raises one interrupt");
     {
-        INT index, isOk = 1;
+        INT index;
+        INT isOk = 1;
         for (index = 0; index < 4; ++index)
         {
             FdcTestDriverSend(&bus, 0x08);

@@ -184,7 +184,8 @@ static INT32 OplExp2Negative(INT32 logValue)
  */
 static INT32 OplLogSinFull(UINT32 phaseIndex, INT *isNegative)
 {
-    UINT32 quadrant = (phaseIndex >> OPL_QUARTER_SHIFT) & OPL_QUADRANT_MASK, index = phaseIndex & OPL_QUARTER_MASK;
+    UINT32 quadrant = (phaseIndex >> OPL_QUARTER_SHIFT) & OPL_QUADRANT_MASK;
+    UINT32 index = phaseIndex & OPL_QUARTER_MASK;
 
     *isNegative = (quadrant & OPL_QUADRANT_NEGATIVE) ? 1 : 0;
     return (INT32)g_OplLogSin[(quadrant & OPL_QUADRANT_MIRRORED) ? (OPL_QUARTER_LAST - index) : index];
@@ -510,8 +511,11 @@ static INT32 OplOperatorOutput(
     PCOPL_OPERATOR operatorState,
     UINT32 phaseIndex)
 {
-    INT32 logValue, attenuation, amplitude;
-    INT isNegative = 0, isMuted = 0;
+    INT32 logValue;
+    INT32 attenuation;
+    INT32 amplitude;
+    INT isNegative = 0;
+    INT isMuted = 0;
 
     logValue = OplWaveform(OplEffectiveWaveform(state, operatorState), phaseIndex & OPL_PHASE_MASK, &isNegative, &isMuted);
     if (isMuted)
@@ -662,10 +666,18 @@ static VOID OplRhythmSample(
     INT32 *channel7Output,
     INT32 *channel8Output)
 {
-    INT32 modulatorOutput, carrierOutput, feedbackModulation = 0;
-    POPL_OPERATOR modulator = &state->Operators[OPL_OPERATOR_BASS_DRUM_MODULATOR], carrier = &state->Operators[OPL_OPERATOR_BASS_DRUM_CARRIER];
-    POPL_OPERATOR hihat = &state->Operators[OPL_OPERATOR_HIHAT], snare = &state->Operators[OPL_OPERATOR_SNARE], cymbal = &state->Operators[OPL_OPERATOR_CYMBAL];
-    UINT32 phase13, phase17, phase17Previous, phaseBit;
+    INT32 modulatorOutput;
+    INT32 carrierOutput;
+    INT32 feedbackModulation = 0;
+    POPL_OPERATOR modulator = &state->Operators[OPL_OPERATOR_BASS_DRUM_MODULATOR];
+    POPL_OPERATOR carrier = &state->Operators[OPL_OPERATOR_BASS_DRUM_CARRIER];
+    POPL_OPERATOR hihat = &state->Operators[OPL_OPERATOR_HIHAT];
+    POPL_OPERATOR snare = &state->Operators[OPL_OPERATOR_SNARE];
+    POPL_OPERATOR cymbal = &state->Operators[OPL_OPERATOR_CYMBAL];
+    UINT32 phase13;
+    UINT32 phase17;
+    UINT32 phase17Previous;
+    UINT32 phaseBit;
 
     *channel6Output = *channel7Output = *channel8Output = 0;
 
@@ -739,9 +751,14 @@ static VOID OplRhythmSample(
  */
 static INT32 OplVoiceTwoOperator(POPL_STATE state, INT channel)
 {
-    INT modulatorIndex = VddOplOperatorIndex(channel, OPL_MODULATOR), carrierIndex = VddOplOperatorIndex(channel, OPL_CARRIER);
-    POPL_OPERATOR modulator = &state->Operators[modulatorIndex], carrier = &state->Operators[carrierIndex];
-    INT32 modulatorOutput, carrierOutput, feedbackModulation = 0, output;
+    INT modulatorIndex = VddOplOperatorIndex(channel, OPL_MODULATOR);
+    INT carrierIndex = VddOplOperatorIndex(channel, OPL_CARRIER);
+    POPL_OPERATOR modulator = &state->Operators[modulatorIndex];
+    POPL_OPERATOR carrier = &state->Operators[carrierIndex];
+    INT32 modulatorOutput;
+    INT32 carrierOutput;
+    INT32 feedbackModulation = 0;
+    INT32 output;
 
     if (modulator->EnvelopeState == OPL_ENVELOPE_OFF && carrier->EnvelopeState == OPL_ENVELOPE_OFF)
         return 0;
@@ -787,11 +804,18 @@ static INT32 OplVoiceTwoOperator(POPL_STATE state, INT channel)
  */
 static INT32 OplVoiceFourOperator(POPL_STATE state, INT channel)
 {
-    INT operator1 = VddOplOperatorIndex(channel, OPL_MODULATOR),     operator2 = VddOplOperatorIndex(channel, OPL_CARRIER);
-    INT operator3 = VddOplOperatorIndex(channel + OPL_FOUR_OPERATOR_PARTNER, OPL_MODULATOR), operator4 = VddOplOperatorIndex(channel + OPL_FOUR_OPERATOR_PARTNER, OPL_CARRIER);
+    INT operator1 = VddOplOperatorIndex(channel, OPL_MODULATOR);
+    INT operator2 = VddOplOperatorIndex(channel, OPL_CARRIER);
+    INT operator3 = VddOplOperatorIndex(channel + OPL_FOUR_OPERATOR_PARTNER, OPL_MODULATOR);
+    INT operator4 = VddOplOperatorIndex(channel + OPL_FOUR_OPERATOR_PARTNER, OPL_CARRIER);
     POPL_OPERATOR firstOperator = &state->Operators[operator1];
-    INT connection1 = state->Channels[channel].Connection, connection2 = state->Channels[channel + OPL_FOUR_OPERATOR_PARTNER].Connection;
-    INT32 sample1, sample2, sample3, sample4, feedbackModulation = 0;
+    INT connection1 = state->Channels[channel].Connection;
+    INT connection2 = state->Channels[channel + OPL_FOUR_OPERATOR_PARTNER].Connection;
+    INT32 sample1;
+    INT32 sample2;
+    INT32 sample3;
+    INT32 sample4;
+    INT32 feedbackModulation = 0;
 
     if (firstOperator->EnvelopeState == OPL_ENVELOPE_OFF && state->Operators[operator2].EnvelopeState == OPL_ENVELOPE_OFF &&
         state->Operators[operator3].EnvelopeState == OPL_ENVELOPE_OFF && state->Operators[operator4].EnvelopeState == OPL_ENVELOPE_OFF)
@@ -857,8 +881,10 @@ static VOID OplSampleStereo(POPL_STATE state, INT32 *leftOutput, INT32 *rightOut
 {
     INT isNewMode = VddOplIsNewMode(state);
     INT isRhythm = (state->Registers[OPL_REGISTER_RHYTHM] & OPL_BD_RHYTHM) ? 1 : 0;
-    INT channelCount = isNewMode ? OPL3_CHANNELS : OPL_CHANNELS, channel;
-    INT32 left = 0, right = 0;
+    INT channelCount = isNewMode ? OPL3_CHANNELS : OPL_CHANNELS;
+    INT channel;
+    INT32 left = 0;
+    INT32 right = 0;
 
     /* The noise generator runs from power-on whatever the mode, like the LFOs:
      * the drums read it where it has got to, never from a restart.
@@ -866,7 +892,9 @@ static VOID OplSampleStereo(POPL_STATE state, INT32 *leftOutput, INT32 *rightOut
     state->Noise = OplNoiseStep(state->Noise);
     if (isRhythm)
     {
-        INT32 channel6Output, channel7Output, channel8Output;
+        INT32 channel6Output;
+        INT32 channel7Output;
+        INT32 channel8Output;
         OplRhythmSample(state, &channel6Output, &channel7Output, &channel8Output);
         OplRoute(state, isNewMode, OPL_RHYTHM_CHANNEL_BASS_DRUM, channel6Output, &left, &right);
         OplRoute(state, isNewMode, OPL_RHYTHM_CHANNEL_HIHAT_SNARE, channel7Output, &left, &right);
@@ -903,7 +931,8 @@ VOID VddOplRender(POPL_STATE state, INT16 *output, UINT32 frames)
 
     for (frame = 0; frame < frames; ++frame)
     {
-        INT32 left, right;
+        INT32 left;
+        INT32 right;
         OplSampleStereo(state, &left, &right);
         /* Without NEW, l == r IS the chip's one output: returned as it always was.
          * With NEW, the fold the mixer's own mono path uses.
@@ -919,7 +948,8 @@ VOID VddOplRenderStereo(POPL_STATE state, INT16 *output, UINT32 frames)
 
     for (frame = 0; frame < frames; ++frame)
     {
-        INT32 left, right;
+        INT32 left;
+        INT32 right;
         OplSampleStereo(state, &left, &right);
         output[OPL_STEREO_CHANNELS * frame]     = OplClip(left);
         output[OPL_STEREO_CHANNELS * frame + 1] = OplClip(right);

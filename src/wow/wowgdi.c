@@ -162,7 +162,8 @@ static INT CALLBACK WowGdiFontCollect(
     const ENUMLOGFONTA *enumLogFont = (const ENUMLOGFONTA *)logFont;
     const NEWTEXTMETRICA *newTextMetric = (const NEWTEXTMETRICA *)textMetric;
     PWOWENUM_FONT entry;
-    PBYTE blob, metrics;
+    PBYTE blob;
+    PBYTE metrics;
     INT index;
 
     (VOID)unused;
@@ -338,7 +339,8 @@ INT WowGdiMetafileNext(INT room, PINT blobLength, PINT tableOffset, UINT *functi
     UINT recordFunction = 0;
     INT tableBytes = (INT)(g_WowGdiMetafile.ObjectCount ? g_WowGdiMetafile.ObjectCount : 1) * WOW_WORD_BYTES;    /* lpht always points at
                                                            something, even nObj 0 */
-    INT copyBytes, index;
+    INT copyBytes;
+    INT index;
 
     *function = 0;
     if (!g_WowGdiMetafile.IsActive || g_WowGdiMetafile.Offset >= g_WowGdiMetafile.End)
@@ -399,7 +401,8 @@ INT WowGdiCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
         WORD itemIndex = Wow32ArgWord(frame, WOWGDI_GDC_ARG_INDEX);
         INT  kind = -1;
         HGDIOBJ object = WowGdiH32(dc16, &kind);
-        INT noteLength = 0, value;
+        INT noteLength = 0;
+        INT value;
         INT isDc = (kind == WOWGDI_KIND_DC || kind == WOWGDI_KIND_WINDC);
         WowNotePut(note, noteCapacity, &noteLength, "GetDeviceCaps(0x");
         WowNoteHex(note, noteCapacity, &noteLength, dc16, WOW_HEX_WORD_DIGITS);
@@ -483,10 +486,12 @@ INT WowGdiCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
         INT  sourceX = (INT)(SHORT)Wow32ArgWord(frame, WOWGDI_BB_ARG_SRCX);
         INT  sourceY = (INT)(SHORT)Wow32ArgWord(frame, WOWGDI_BB_ARG_SRCY);
         DWORD rasterOp = Wow32ArgDword(frame, WOWGDI_BB_ARG_ROP);
-        INT  dcKind = -1, sourceKind = -1;
+        INT dcKind = -1;
+        INT sourceKind = -1;
         HGDIOBJ destination = WowGdiH32(destDc16, &dcKind);
         HGDIOBJ source = WowGdiH32(sourceDc16, &sourceKind);
-        INT  noteLength = 0, isOk;
+        INT noteLength = 0;
+        INT isOk;
         WowNotePut(note, noteCapacity, &noteLength, "BitBlt dst 0x");
         WowNoteHex(note, noteCapacity, &noteLength, destDc16, WOW_HEX_WORD_DIGITS);
         WowNotePut(note, noteCapacity, &noteLength, " (");
@@ -550,10 +555,12 @@ INT WowGdiCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
         INT  sourceWidth = (INT)(SHORT)Wow32ArgWord(frame, WOWGDI_SB_ARG_SRCW);
         INT  sourceHeight = (INT)(SHORT)Wow32ArgWord(frame, WOWGDI_SB_ARG_SRCH);
         DWORD rasterOp = Wow32ArgDword(frame, WOWGDI_SB_ARG_ROP);
-        INT  dcKind = -1, sourceKind = -1;
+        INT dcKind = -1;
+        INT sourceKind = -1;
         HGDIOBJ destination = WowGdiH32(destDc16, &dcKind);
         HGDIOBJ source = WowGdiH32(sourceDc16, &sourceKind);
-        INT  noteLength = 0, isOk;
+        INT noteLength = 0;
+        INT isOk;
         WowNotePut(note, noteCapacity, &noteLength, "StretchBlt dst 0x");
         WowNoteHex(note, noteCapacity, &noteLength, destDc16, WOW_HEX_WORD_DIGITS);
         WowNotePut(note, noteCapacity, &noteLength, " (");
@@ -653,7 +660,8 @@ INT WowGdiCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
         INT  positionY = (INT)(SHORT)Wow32ArgWord(frame, WOWGDI_PV_ARG_Y);
         INT  kind = -1;
         HGDIOBJ object = WowGdiH32(dc16, &kind);
-        INT  noteLength = 0, result;
+        INT noteLength = 0;
+        INT result;
         WowNotePut(note, noteCapacity, &noteLength, "PtVisible(0x");
         WowNoteHex(note, noteCapacity, &noteLength, dc16, WOW_HEX_WORD_DIGITS);
         WowNotePut(note, noteCapacity, &noteLength, ", ");
@@ -686,7 +694,9 @@ INT WowGdiCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
         INT  kind = -1;
         HGDIOBJ object = WowGdiH32(dc16, &kind);
         POINT points[WOWGDI_MAX_POINTS];
-        INT  noteLength = 0, index, count = (INT)itemCount;
+        INT noteLength = 0;
+        INT index;
+        INT count = (INT)itemCount;
         INT isLine = (frame->Id == WOWGDI_POLYLINE);
         INT isPolygon = (frame->Id == WOWGDI_POLYGON) || isLine;
         WowNotePut(note, noteCapacity, &noteLength,
@@ -904,7 +914,8 @@ INT WowGdiCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
         INT  mode = (INT)(SHORT)Wow32ArgWord(frame, WOWGDI_MODE_ARG_MODE);
         INT  kind = -1;
         HGDIOBJ object = WowGdiH32(dc16, &kind);
-        INT  noteLength = 0, previous;
+        INT noteLength = 0;
+        INT previous;
         WowNotePut(note, noteCapacity, &noteLength,
                 frame->Id == WOWGDI_SETROP2         ? "SetROP2(0x" :
                 frame->Id == WOWGDI_SETSTRETCHMODE  ? "SetStretchBltMode(0x" :
@@ -980,7 +991,8 @@ INT WowGdiCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
         INT  level = isSave ? 0 : (INT)(SHORT)Wow32ArgWord(frame, WOWGDI_RDC2_ARG_LEVEL);
         INT  kind = -1;
         HGDIOBJ object = WowGdiH32(dc16, &kind);
-        INT  noteLength = 0, result;
+        INT noteLength = 0;
+        INT result;
         WowNotePut(note, noteCapacity, &noteLength, isSave ? "SaveDC(0x" : "RestoreDC(0x");
         WowNoteHex(note, noteCapacity, &noteLength, dc16, WOW_HEX_WORD_DIGITS);
         if (!isSave)
@@ -1160,10 +1172,13 @@ INT WowGdiCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
     case WOWGDI_CREATEDC:
     case WOWGDI_CREATEDC2:
     {
-        CHAR driverName[WOWGDI_DEVICE_NAME_MAX], deviceName[WOWGDI_DEVICE_NAME_MAX];
+        CHAR driverName[WOWGDI_DEVICE_NAME_MAX];
+        CHAR deviceName[WOWGDI_DEVICE_NAME_MAX];
         HDC dc;
         WORD token;
-        INT  noteLength = 0, isDisplay, index;
+        INT noteLength = 0;
+        INT isDisplay;
+        INT index;
         INT  isCreateDc = (frame->Id == WOWGDI_CREATEDC);
         DWORD initData = Wow32ArgDword(frame, WOWGDI_CDC_ARG_INITDATA);
         Wow32ArgString(frame, WOWGDI_CDC_ARG_DRIVER, driverName, sizeof driverName);
@@ -1306,7 +1321,8 @@ INT WowGdiCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
         INT  escape  = (INT)(SHORT)Wow32ArgWord(frame, WOWGDI_ESC_ARG_ESCAPE);
         INT  count  = (INT)(SHORT)Wow32ArgWord(frame, WOWGDI_ESC_ARG_COUNT);
         volatile BYTE *input = Wow32ArgPointer(frame, WOWGDI_ESC_ARG_IN);
-        INT  noteLength = 0, wanted = 0;
+        INT noteLength = 0;
+        INT wanted = 0;
         WowNotePut(note, noteCapacity, &noteLength, "Escape(dc 0x");
         WowNoteHex(note, noteCapacity, &noteLength, dc16, WOW_HEX_WORD_DIGITS);
         WowNotePut(note, noteCapacity, &noteLength, ", nEscape=");
@@ -1345,8 +1361,12 @@ INT WowGdiCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
     case WOWGDI_CREATEBITMAPINDIRECT:
     {
         const volatile BYTE *bitmap16 = Wow32ArgPointer(frame, WOWGDI_CBI_ARG_BITMAP);
-        INT  noteLength = 0, width, height;
-        WORD planes, bitsPerPixel, token;
+        INT noteLength = 0;
+        INT width;
+        INT height;
+        WORD planes;
+        WORD bitsPerPixel;
+        WORD token;
         DWORD bits;
         HBITMAP bitmap;
         WowNotePut(note, noteCapacity, &noteLength, "CreateBitmapIndirect ");
@@ -1410,7 +1430,10 @@ INT WowGdiCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
         WORD lastChar  = Wow32ArgWord(frame, WOWGDI_ABCW_ARG_LAST);
         volatile BYTE *output = Wow32ArgPointer(frame, WOWGDI_ABCW_ARG_ABC);
         HDC dc = (HDC)WowGdiH32(dc16, NULL);
-        INT noteLength = 0, itemCount, index, isOk = 0;
+        INT noteLength = 0;
+        INT itemCount;
+        INT index;
+        INT isOk = 0;
         WowNotePut(note, noteCapacity, &noteLength, "GetCharABCWidths(dc 0x");
         WowNoteHex(note, noteCapacity, &noteLength, dc16, WOW_HEX_WORD_DIGITS);
         WowNotePut(note, noteCapacity, &noteLength, ", ");
@@ -1471,7 +1494,8 @@ INT WowGdiCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
         volatile BYTE *input = Wow32ArgPointer(frame, WOWGDI_GPE_ARG_ENTRIES);
         HPALETTE palette = (HPALETTE)WowGdiH32(palette16, NULL);
         static PALETTEENTRY paletteEntry[WOWGDI_PALETTE_MAX];
-        INT  noteLength = 0, index;
+        INT noteLength = 0;
+        INT index;
         UINT returned = 0;
         WowNotePut(note, noteCapacity, &noteLength, "SetPaletteEntries(0x");
         WowNoteHex(note, noteCapacity, &noteLength, palette16, WOW_HEX_WORD_DIGITS);
@@ -1507,7 +1531,9 @@ INT WowGdiCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
     case WOWGDI_GETBITMAPDIMENSION:
     {
         WORD handle16 = Wow32ArgWord(frame, 0);
-        INT  kind = -1, noteLength = 0, isOk = 0;
+        INT kind = -1;
+        INT noteLength = 0;
+        INT isOk = 0;
         HGDIOBJ object = WowGdiH32(handle16, &kind);
         SIZE size;
         PCSTR callName = frame->Id == WOWGDI_GETVIEWPORTEXT ? "GetViewportExt(0x"
@@ -1599,7 +1625,8 @@ INT WowGdiCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
         WORD  objectType  = Wow32ArgWord(frame, WOWGDI_EOB_ARG_TYPE);
         DWORD procedure = Wow32ArgDword(frame, WOWGDI_EOB_ARG_PROC);
         DWORD lParam   = Wow32ArgDword(frame, WOWGDI_EOB_ARG_LPARAM);
-        INT   kind = -1, noteLength = 0;
+        INT kind = -1;
+        INT noteLength = 0;
         HGDIOBJ object = WowGdiH32(dc16, &kind);
         HDC   dc;
         INT   isOwned = 0;
@@ -1670,7 +1697,8 @@ INT WowGdiCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
         DWORD lParam   = Wow32ArgDword(frame, WOWGDI_EFF_ARG_LPARAM);
         CHAR  family[WOWGDI_FAMILY_MAX];
         INT   hasFamily = Wow32ArgString(frame, WOWGDI_EFF_ARG_FAMILY, family, sizeof family) && family[0];
-        INT   kind = -1, noteLength = 0;
+        INT kind = -1;
+        INT noteLength = 0;
         HGDIOBJ object = WowGdiH32(dc16, &kind);
         HDC   dc;
         INT   isOwned = 0;
@@ -1945,7 +1973,8 @@ INT WowGdiCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
     {
         WORD dc16 = Wow32ArgWord(frame, WOWGDI_SEL_ARG_HDC);
         WORD object16 = Wow32ArgWord(frame, WOWGDI_SEL_ARG_OBJ);
-        INT  dcKind = -1, objectKind = -1;
+        INT dcKind = -1;
+        INT objectKind = -1;
         HGDIOBJ dcObject = WowGdiH32(dc16, &dcKind);
         HGDIOBJ object = WowGdiH32(object16, &objectKind);
         HGDIOBJ previous;
@@ -2005,7 +2034,9 @@ INT WowGdiCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
         HGDIOBJ object = WowGdiH32(handle16, &kind);
         BYTE blob[WOWGDI_LOGFONT16_SIZE];
         DWORD type;
-        INT itemCount = 0, noteLength = 0, index;
+        INT itemCount = 0;
+        INT noteLength = 0;
+        INT index;
         PCSTR description = "?";
 
         WowNotePut(note, noteCapacity, &noteLength, "GetObject 0x");
@@ -2196,7 +2227,8 @@ INT WowGdiCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
         WORD handle16 = Wow32ArgWord(frame, WOWGDI_DOBJ_ARG_HANDLE);
         INT  kind = -1;
         HGDIOBJ object = WowGdiH32(handle16, &kind);
-        INT noteLength = 0, isOk;
+        INT noteLength = 0;
+        INT isOk;
         INT wantedKind = isDeleteDc ? WOWGDI_KIND_DC : WOWGDI_KIND_OBJ;
         WowNotePut(note, noteCapacity, &noteLength, isDeleteDc ? "DeleteDC 0x" : "DeleteObject 0x");
         WowNoteHex(note, noteCapacity, &noteLength, handle16, WOW_HEX_WORD_DIGITS);
@@ -2358,7 +2390,8 @@ INT WowGdiCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
         WORD  type = Wow32ArgWord(frame, WOWGDI_FF_ARG_TYPE);
         INT   kind = -1;
         HGDIOBJ object = WowGdiH32(dc16, &kind);
-        INT   noteLength = 0, isOk;
+        INT noteLength = 0;
+        INT isOk;
         WowNotePut(note, noteCapacity, &noteLength, "ExtFloodFill(0x");
         WowNoteHex(note, noteCapacity, &noteLength, dc16, WOW_HEX_WORD_DIGITS);
         WowNotePut(note, noteCapacity, &noteLength, ", ");
@@ -2647,10 +2680,12 @@ INT WowGdiCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
     {
         WORD dc16  = Wow32ArgWord(frame, WOWGDI_SCR_ARG_HDC);
         WORD region16 = Wow32ArgWord(frame, WOWGDI_SCR_ARG_RGN);
-        INT  dcKind = -1, regionKind = -1;
+        INT dcKind = -1;
+        INT regionKind = -1;
         HGDIOBJ dcObject = WowGdiH32(dc16, &dcKind);
         HGDIOBJ region = WowGdiH32(region16, &regionKind);
-        INT  noteLength = 0, regionResult;
+        INT noteLength = 0;
+        INT regionResult;
         WowNotePut(note, noteCapacity, &noteLength, "SelectClipRgn(0x");
         WowNoteHex(note, noteCapacity, &noteLength, dc16, WOW_HEX_WORD_DIGITS);
         WowNotePut(note, noteCapacity, &noteLength, ", 0x");
@@ -2688,11 +2723,18 @@ INT WowGdiCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
      */
     case WOWGDI_COMBINERGN:
     {
-        WORD destHandle = Wow32ArgWord(frame, WOWGDI_CBR_ARG_DEST), source1Handle = Wow32ArgWord(frame, WOWGDI_CBR_ARG_SRC1);
-        WORD source2Handle = Wow32ArgWord(frame, WOWGDI_CBR_ARG_SRC2), mode = Wow32ArgWord(frame, WOWGDI_CBR_ARG_MODE);
-        INT objectKind = -1, source1Kind = -1, source2Kind = -1, noteLength = 0, regionResult;
-        HGDIOBJ destination = WowGdiH32(destHandle, &objectKind), source1 = WowGdiH32(source1Handle, &source1Kind),
-                source2 = WowGdiH32(source2Handle, &source2Kind);
+        WORD destHandle = Wow32ArgWord(frame, WOWGDI_CBR_ARG_DEST);
+        WORD source1Handle = Wow32ArgWord(frame, WOWGDI_CBR_ARG_SRC1);
+        WORD source2Handle = Wow32ArgWord(frame, WOWGDI_CBR_ARG_SRC2);
+        WORD mode = Wow32ArgWord(frame, WOWGDI_CBR_ARG_MODE);
+        INT objectKind = -1;
+        INT source1Kind = -1;
+        INT source2Kind = -1;
+        INT noteLength = 0;
+        INT regionResult;
+        HGDIOBJ destination = WowGdiH32(destHandle, &objectKind);
+        HGDIOBJ source1 = WowGdiH32(source1Handle, &source1Kind);
+        HGDIOBJ source2 = WowGdiH32(source2Handle, &source2Kind);
         WowNotePut(note, noteCapacity, &noteLength, "CombineRgn(0x");
         WowNoteHex(note, noteCapacity, &noteLength, destHandle, WOW_HEX_WORD_DIGITS);
         WowNotePut(note, noteCapacity, &noteLength, ", 0x");
@@ -2760,7 +2802,8 @@ INT WowGdiCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
     case WOWGDI_SETRECTRGN:
     {
         WORD region16 = Wow32ArgWord(frame, WOWGDI_SRR_ARG_RGN);
-        INT  regionKind = -1, noteLength = 0;
+        INT regionKind = -1;
+        INT noteLength = 0;
         HGDIOBJ region = WowGdiH32(region16, &regionKind);
         WowNotePut(note, noteCapacity, &noteLength, "SetRectRgn(0x");
         WowNoteHex(note, noteCapacity, &noteLength, region16, WOW_HEX_WORD_DIGITS);
@@ -2796,7 +2839,8 @@ INT WowGdiCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
         volatile BYTE *pointBytes = Wow32ArgPointer(frame, WOWGDI_CPR_ARG_POINTS);
         WORD itemCount  = Wow32ArgWord(frame, WOWGDI_CPR_ARG_COUNT);
         WORD mode = Wow32ArgWord(frame, WOWGDI_CPR_ARG_MODE);
-        INT  noteLength = 0, index;
+        INT noteLength = 0;
+        INT index;
         POINT points[WOWGDI_MAX_POLYPTS];
         HRGN region;
         WORD token;
@@ -2840,7 +2884,9 @@ INT WowGdiCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
     {
         WORD dc16 = Wow32ArgWord(frame, WOWGDI_GCX_ARG_HDC);
         volatile BYTE *rectBytes = Wow32ArgPointer(frame, WOWGDI_GCX_ARG_RECT);
-        INT dcKind = -1, noteLength = 0, regionResult;
+        INT dcKind = -1;
+        INT noteLength = 0;
+        INT regionResult;
         HGDIOBJ dcObject = WowGdiH32(dc16, &dcKind);
         RECT rect32;
         WowNotePut(note, noteCapacity, &noteLength, "GetClipBox(0x");
@@ -2891,7 +2937,10 @@ INT WowGdiCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
         WORD dc16 = Wow32ArgWord(frame, WOWGDI_GTF_ARG_HDC);
         WORD count = Wow32ArgWord(frame, WOWGDI_GTF_ARG_COUNT);
         volatile BYTE *buffer16 = Wow32ArgPointer(frame, WOWGDI_GTF_ARG_BUF);
-        INT dcKind = -1, noteLength = 0, returned, index;
+        INT dcKind = -1;
+        INT noteLength = 0;
+        INT returned;
+        INT index;
         HGDIOBJ dcObject = WowGdiH32(dc16, &dcKind);
         CHAR faceName[LF_FACESIZE + 1];
         WowNotePut(note, noteCapacity, &noteLength, "GetTextFace(0x");
@@ -2932,7 +2981,9 @@ INT WowGdiCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
         WORD dc16 = Wow32ArgWord(frame, WOWGDI_STJ_ARG_HDC);
         INT  extra  = (INT)(SHORT)Wow32ArgWord(frame, WOWGDI_STJ_ARG_EXTRA);
         INT  breakCount  = (INT)(SHORT)Wow32ArgWord(frame, WOWGDI_STJ_ARG_COUNT);
-        INT  dcKind = -1, noteLength = 0, regionResult;
+        INT dcKind = -1;
+        INT noteLength = 0;
+        INT regionResult;
         HGDIOBJ dcObject = WowGdiH32(dc16, &dcKind);
         WowNotePut(note, noteCapacity, &noteLength, "SetTextJustification(0x");
         WowNoteHex(note, noteCapacity, &noteLength, dc16, WOW_HEX_WORD_DIGITS);
@@ -3088,7 +3139,8 @@ INT WowGdiCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
         INT  top = (INT)(SHORT)Wow32ArgWord(frame, WOWGDI_ICR_ARG_TOP);
         INT  right = (INT)(SHORT)Wow32ArgWord(frame, WOWGDI_ICR_ARG_RIGHT);
         INT  bottom = (INT)(SHORT)Wow32ArgWord(frame, WOWGDI_ICR_ARG_BOTTOM);
-        INT  kind = -1, regionResult;
+        INT kind = -1;
+        INT regionResult;
         HGDIOBJ object = WowGdiH32(token, &kind);
         INT  noteLength = 0;
         WowNotePut(note, noteCapacity, &noteLength, "IntersectClipRect(0x");
@@ -3110,7 +3162,9 @@ INT WowGdiCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
     {
         WORD token = Wow32ArgWord(frame, WOWGDI_RV_ARG_HDC);
         volatile BYTE *rectBytes = Wow32ArgPointer(frame, WOWGDI_RV_ARG_RECT);
-        INT kind = -1, index, isVisible;
+        INT kind = -1;
+        INT index;
+        INT isVisible;
         HGDIOBJ object = WowGdiH32(token, &kind);
         BYTE rect16[WOWCONV_RECT16_SIZE];
         RECT result;
@@ -3180,7 +3234,10 @@ INT WowGdiCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
         INT kind = -1;
         HGDIOBJ object = WowGdiH32(token, &kind);
         INT widths32[WOWGDI_CHAR_WIDTHS_MAX];
-        INT noteLength = 0, itemCount, index, isOk;
+        INT noteLength = 0;
+        INT itemCount;
+        INT index;
+        INT isOk;
         WowNotePut(note, noteCapacity, &noteLength, "GetCharWidth(0x");
         WowNoteHex(note, noteCapacity, &noteLength, token, WOW_HEX_WORD_DIGITS);
         WowNotePut(note, noteCapacity, &noteLength, ", ");
@@ -3217,7 +3274,8 @@ INT WowGdiCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
         CHAR path[MAX_PATH];
         HDC  memoryDc;
         WORD token;
-        INT  noteLength = 0, isNamed;
+        INT noteLength = 0;
+        INT isNamed;
         path[0] = 0;
         isNamed = Wow32ArgString(frame, WOWGDI_CMF_ARG_FILE, path, (INT)sizeof path);
         memoryDc = CreateMetaFileA(isNamed && path[0] ? path : NULL);
@@ -3263,7 +3321,8 @@ INT WowGdiCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
         WORD token = Wow32ArgWord(frame, WOWGDI_MF1_ARG_H);
         INT  kind = -1;
         HGDIOBJ object = WowGdiH32(token, &kind);
-        INT  noteLength = 0, result = 0;
+        INT noteLength = 0;
+        INT result = 0;
         WowNotePut(note, noteCapacity, &noteLength, "DeleteMetaFile(0x");
         WowNoteHex(note, noteCapacity, &noteLength, token, WOW_HEX_WORD_DIGITS);
         if (object && kind == WOWGDI_KIND_OBJ)
@@ -3287,7 +3346,10 @@ INT WowGdiCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
     {
         WORD dc16 = Wow32ArgWord(frame, WOWGDI_PMF_ARG_HDC);
         WORD token = Wow32ArgWord(frame, WOWGDI_PMF_ARG_HMF);
-        INT  objectKind = -1, metafileKind = -1, noteLength = 0, result = 0;
+        INT objectKind = -1;
+        INT metafileKind = -1;
+        INT noteLength = 0;
+        INT result = 0;
         HGDIOBJ dc = WowGdiH32(dc16, &objectKind);
         HGDIOBJ metafile = WowGdiH32(token, &metafileKind);
         WowNotePut(note, noteCapacity, &noteLength, "PlayMetaFile(0x");
@@ -3324,13 +3386,16 @@ INT WowGdiCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
         WORD  token  = Wow32ArgWord(frame, WOWGDI_EMF_ARG_HMF);
         DWORD procedure = Wow32ArgDword(frame, WOWGDI_EMF_ARG_PROC);
         DWORD lParam   = Wow32ArgDword(frame, WOWGDI_EMF_ARG_LPARAM);
-        INT   objectKind = -1, metafileKind = -1, noteLength = 0;
+        INT objectKind = -1;
+        INT metafileKind = -1;
+        INT noteLength = 0;
         HGDIOBJ dc = WowGdiH32(dc16, &objectKind);
         HGDIOBJ metafile = WowGdiH32(token, &metafileKind);
         UINT  itemCount;
         PBYTE bits;
         UINT objectCount = 0;
-        unsigned long firstRecord, recordsEnd = 0;
+        unsigned long firstRecord;
+        unsigned long recordsEnd = 0;
         WowNotePut(note, noteCapacity, &noteLength, "EnumMetaFile(0x");
         WowNoteHex(note, noteCapacity, &noteLength, dc16, WOW_HEX_WORD_DIGITS);
         WowNotePut(note, noteCapacity, &noteLength, ", 0x");
@@ -3422,9 +3487,16 @@ INT WowGdiCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
         DWORD recordFar = Wow32ArgDword(frame, WOWGDI_PMFR_ARG_MR);
         volatile BYTE *recordGuest = Wow32ArgPointer(frame, WOWGDI_PMFR_ARG_MR);
         volatile BYTE *handleTable = Wow32ArgPointer(frame, WOWGDI_PMFR_ARG_HT);
-        INT   objectKind = -1, noteLength = 0, result = 0, index, created = 0, deleted = 0, isFull = 0;
+        INT objectKind = -1;
+        INT noteLength = 0;
+        INT result = 0;
+        INT index;
+        INT created = 0;
+        INT deleted = 0;
+        INT isFull = 0;
         HGDIOBJ dc = WowGdiH32(dc16, &objectKind);
-        DWORD recordWords = 0, bytes;
+        DWORD recordWords = 0;
+        DWORD bytes;
         PCBYTE record;
         WORD  tokens[WOWMF_MAXOBJ];
         HGDIOBJ objectsBefore[WOWMF_MAXOBJ];
@@ -3531,7 +3603,8 @@ INT WowGdiCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
         CHAR path[MAX_PATH];
         HMETAFILE metafile;
         WORD metafileToken;
-        INT  noteLength = 0, isNamed;
+        INT noteLength = 0;
+        INT isNamed;
         path[0] = 0;
         isNamed = Wow32ArgString(frame, WOWGDI_CPMF_ARG_FILE, path, (INT)sizeof path);
         WowNotePut(note, noteCapacity, &noteLength, "CopyMetaFile(0x");
@@ -3564,8 +3637,12 @@ INT WowGdiCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
         HGDIOBJ object = WowGdiH32(dc16, &kind);
         CHAR buffer[WOWGDI_TEXT_MAX];
         INT  spacing[WOWGDI_TEXT_MAX];
-        RECT regionResult, *clipRect = NULL;
-        INT  noteLength = 0, index, count = (INT)itemCount, isOk;
+        RECT regionResult;
+        RECT *clipRect = NULL;
+        INT noteLength = 0;
+        INT index;
+        INT count = (INT)itemCount;
+        INT isOk;
         WowNotePut(note, noteCapacity, &noteLength, "ExtTextOut(0x");
         WowNoteHex(note, noteCapacity, &noteLength, dc16, WOW_HEX_WORD_DIGITS);
         WowNotePut(note, noteCapacity, &noteLength, ", ");
@@ -3633,7 +3710,9 @@ INT WowGdiCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
         INT  kind = -1;
         HGDIOBJ object = WowGdiH32(dc16, &kind);
         CHAR buffer[WOWGDI_TEXT_MAX];
-        INT  noteLength = 0, index, count = (INT)itemCount;
+        INT noteLength = 0;
+        INT index;
+        INT count = (INT)itemCount;
         SIZE size;
         WowNotePut(note, noteCapacity, &noteLength, isTextOut ? "TextOut(0x" : "GetTextExtent(0x");
         WowNoteHex(note, noteCapacity, &noteLength, dc16, WOW_HEX_WORD_DIGITS);
@@ -3691,7 +3770,8 @@ INT WowGdiCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
         INT  kind = -1;
         HGDIOBJ object = WowGdiH32(dc16, &kind);
         TEXTMETRICA textMetric;
-        INT noteLength = 0, index;
+        INT noteLength = 0;
+        INT index;
         BYTE blob[WOWGDI_TEXTMETRIC16_SIZE];
         WowNotePut(note, noteCapacity, &noteLength, "GetTextMetrics(0x");
         WowNoteHex(note, noteCapacity, &noteLength, dc16, WOW_HEX_WORD_DIGITS);
@@ -3758,7 +3838,8 @@ INT WowGdiCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
     {
         volatile BYTE *argument = Wow32ArgPointer(frame, 0);
         LOGFONTA logFont;
-        INT noteLength = 0, index;
+        INT noteLength = 0;
+        INT index;
         HFONT font;
         WORD token;
         WowNotePut(note, noteCapacity, &noteLength, "CreateFontIndirect(");
@@ -3880,10 +3961,12 @@ INT WowGdiCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
         WORD  usage = Wow32ArgWord(frame, WOWGDI_DIB_ARG_USAGE);
         volatile BYTE *bits = Wow32ArgPointer(frame, WOWGDI_DIB_ARG_BITS);
         volatile BYTE *bitmapInfo  = Wow32ArgPointer(frame, WOWGDI_DIB_ARG_BMI);
-        INT   dcKind = -1, bitmapKind = -1;
+        INT dcKind = -1;
+        INT bitmapKind = -1;
         HGDIOBJ dcObject = WowGdiH32(dc16, &dcKind);
         HGDIOBJ bitmapObject = WowGdiH32(bitmap16, &bitmapKind);
-        INT   noteLength = 0, result;
+        INT noteLength = 0;
+        INT result;
         WowNotePut(note, noteCapacity, &noteLength, isGet ? "GetDIBits(dc 0x" : "SetDIBits(dc 0x");
         WowNoteHex(note, noteCapacity, &noteLength, dc16, WOW_HEX_WORD_DIGITS);
         WowNotePut(note, noteCapacity, &noteLength, ", bm 0x");
@@ -3973,7 +4056,8 @@ INT WowGdiCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
         volatile BYTE *bitmapInfo  = Wow32ArgPointer(frame, WOWGDI_SDI_ARG_BMI);
         INT   kind = -1;
         HGDIOBJ object = WowGdiH32(dc16, &kind);
-        INT   noteLength = 0, result;
+        INT noteLength = 0;
+        INT result;
         WowNotePut(note, noteCapacity, &noteLength, "StretchDIBits(0x");
         WowNoteHex(note, noteCapacity, &noteLength, dc16, WOW_HEX_WORD_DIGITS);
         WowNotePut(note, noteCapacity, &noteLength, " dst(");
@@ -4095,7 +4179,8 @@ INT WowGdiCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
         WORD  usage = Wow32ArgWord(frame, WOWGDI_SDD_ARG_USAGE);
         INT   kind = -1;
         HGDIOBJ object = WowGdiH32(dc16, &kind);
-        INT   noteLength = 0, result;
+        INT noteLength = 0;
+        INT result;
         WowNotePut(note, noteCapacity, &noteLength, "SetDIBitsToDevice(dc 0x");
         WowNoteHex(note, noteCapacity, &noteLength, dc16, WOW_HEX_WORD_DIGITS);
         WowNotePut(note, noteCapacity, &noteLength, " dst(");

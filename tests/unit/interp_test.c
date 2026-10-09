@@ -54,7 +54,8 @@ static VOID V86HostOut(WORD port, INT width, UINT32 value)
 
 #include "../../src/host/v86interp.h"
 
-static INT g_Total = 0, g_Failures = 0;
+static INT g_Total = 0;
+static INT g_Failures = 0;
 #define CHECK(cpu,message) do{ g_Total++; if(cpu){printf("  PASS  %s\n",(message));} \
     else{printf("  FAIL  %s\n",(message)); g_Failures++;} }while(0)
 
@@ -447,7 +448,8 @@ static VOID InterpTestO32Battery(VOID)
     g_V86SegmentToLinear = InterpTestSegmentToLinear;
     g_V86SelectorDescriptor = InterpTestSelectorDescriptor;
     { V86_CPU cpu = InterpTestMakeCpu();
-    UINT32 stackBase = InterpTestSegmentToLinear(0x17), linear = InterpTestSegmentToLinear(0x0F) + 0x20;
+    UINT32 stackBase = InterpTestSegmentToLinear(0x17);
+    UINT32 linear = InterpTestSegmentToLinear(0x0F) + 0x20;
       cpu.Segments[1] = 0x000F;
       cpu.Segments[2] = 0x0017;
       cpu.Registers[4] = 0x100;
@@ -463,7 +465,8 @@ static VOID InterpTestO32Battery(VOID)
       CHECK(InterpTestStepOnce(&cpu) && cpu.Ip == 0x1234 && cpu.Segments[1] == 0x000F && (cpu.Registers[4] & 0xFFFF) == 0x106
             && (cpu.Flags & 0xFFFF) == 0x0203, "PM iret: same ring, 16-bit code target, FLAGS loaded"); }
     { V86_CPU cpu = InterpTestMakeCpu();
-    UINT32 stackBase = InterpTestSegmentToLinear(0x17), linear = InterpTestSegmentToLinear(0x0F) + 0x20;
+    UINT32 stackBase = InterpTestSegmentToLinear(0x17);
+    UINT32 linear = InterpTestSegmentToLinear(0x0F) + 0x20;
       cpu.Segments[1] = 0x000F;
       cpu.Segments[2] = 0x0017;
       cpu.Registers[4] = 0x100;
@@ -485,7 +488,8 @@ static VOID InterpTestO32Battery(VOID)
       g_Memory[stackBase + 0x101] = 0x12;
       CHECK(InterpTestStepOnce(&cpu) == 0, "PM iret to an invalid selector: bails"); }
     { V86_CPU cpu = InterpTestMakeCpu();
-    UINT32 stackBase = InterpTestSegmentToLinear(0x17), linear = InterpTestSegmentToLinear(0x0F) + 0x20;
+    UINT32 stackBase = InterpTestSegmentToLinear(0x17);
+    UINT32 linear = InterpTestSegmentToLinear(0x0F) + 0x20;
       cpu.Segments[1] = 0x000F;
       cpu.Segments[2] = 0x0017;
       cpu.Registers[4] = 0x100;
@@ -533,10 +537,13 @@ static VOID InterpTestO32Replay(VOID)
     CHAR line[4096];
     BYTE reference[1024];
     INT referenceCount = 0;
-    WORD measureOffset, resultOffset, resultLength;
+    WORD measureOffset;
+    WORD resultOffset;
+    WORD resultLength;
     V86_CPU cpu;
     long steps = 0;
-    INT index, first = -1;
+    INT index;
+    INT first = -1;
 
     printf("== #194: p_o32.com replayed through the interpreter vs the rig ==\n");
     file = fopen("p_o32.com", "rb");
@@ -1604,7 +1611,8 @@ INT main(VOID)
     /* ---- T66: cmpsb (A6) compares DS:SI with ES:DI, CMP flags, both advance --- */
     { V86_CPU cpu = InterpTestMakeCpu();
     BYTE bytes[] = { 0xA6 };
-      UINT32 sourceBase = (UINT32)0x3000 << 4, destinationBase = (UINT32)0x4000 << 4;
+      UINT32 sourceBase = (UINT32)0x3000 << 4;
+      UINT32 destinationBase = (UINT32)0x4000 << 4;
       g_Memory[sourceBase] = 0x10;
       g_Memory[destinationBase] = 0x20;
       cpu.Segments[3] = 0x3000;
@@ -1619,7 +1627,8 @@ INT main(VOID)
     /* ---- T67: repe cmpsw (F3 A7) with DF=1 walks DOWN by words ---------------- */
     { V86_CPU cpu = InterpTestMakeCpu();
     BYTE bytes[] = { 0xF3, 0xA7 };
-      UINT32 sourceBase = (UINT32)0x3000 << 4, destinationBase = (UINT32)0x4000 << 4;
+      UINT32 sourceBase = (UINT32)0x3000 << 4;
+      UINT32 destinationBase = (UINT32)0x4000 << 4;
       g_Memory[sourceBase+8]=0x11;
       g_Memory[sourceBase+9]=0x22;
       g_Memory[destinationBase+8]=0x11;
@@ -1679,7 +1688,8 @@ INT main(VOID)
     /* ---- T72: POP r/m16 (8F /0) -- Bubbles' `pop [bx+7]`, 1.16M bails a run ------- */
     { V86_CPU cpu = InterpTestMakeCpu();
     BYTE bytes[] = { 0x8F, 0x47, 0x07, 0x9B };   /* POP [BX+7]; WAIT */
-      UINT32 stackBase = (UINT32)0x8000 << 4, dataBase = (UINT32)0x5000 << 4;
+      UINT32 stackBase = (UINT32)0x8000 << 4;
+      UINT32 dataBase = (UINT32)0x5000 << 4;
       cpu.Segments[2] = 0x8000;
       cpu.Registers[4] = 0x0100;
       g_Memory[stackBase+0x100] = 0xCD;

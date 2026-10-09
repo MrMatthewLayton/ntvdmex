@@ -16,7 +16,8 @@
 #include <string.h>
 #include "vdd_input.h"
 
-static INT g_Total = 0, g_Failures = 0;
+static INT g_Total = 0;
+static INT g_Failures = 0;
 #define CHECK(condition,message) do{ g_Total++; if(condition){printf("  PASS  %s\n",(message));} \
     else{printf("  FAIL  %s\n",(message)); g_Failures++;} }while(0)
 
@@ -811,7 +812,12 @@ INT main(VOID)
     {   WORD alValue;
         UINT32 value;
         BYTE  bytes[6];
-        INT      count, noRepeat, scanCode, action, index, isOk;
+        INT count;
+        INT noRepeat;
+        INT scanCode;
+        INT action;
+        INT index;
+        INT isOk;
 #define KEY(scanCode)           (VddInputPushScanCode(&input, (BYTE)(scanCode)), VddInputBiosConsume(&input))
 #define EXPECT(code, message)   CHECK(VddInputPop(&input, &key) == 1 && key == (code), message)
 #define NOKEY(message)          CHECK(VddInputPop(&input, &key) == 0, message)

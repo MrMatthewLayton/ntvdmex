@@ -108,8 +108,12 @@ typedef BYTE (*PDMA_DREQ_ROUTINE)(PCVOID context);
 
 typedef struct _DMA_CHANNEL
 {
-    WORD BaseAddress, CurrentAddress;   /* byte offset (ch0-3) or word offset (ch4-7) */
-    WORD BaseCount, CurrentCount; /* transfers-1, as the guest programmed it */
+    /* byte offset (ch0-3) or word offset (ch4-7) */
+    WORD BaseAddress;
+    WORD CurrentAddress;
+    /* transfers-1, as the guest programmed it */
+    WORD BaseCount;
+    WORD CurrentCount;
     BYTE  Page;                  /* high address bits, from ports 0x80-0x8F */
     BYTE  Mode;                  /* last mode byte written for this channel */
     BYTE  IsMasked;                /* 1 = channel disabled (mask register) */
@@ -156,7 +160,9 @@ typedef struct _DMA_STATE
      * 5), so temp[1] stays 0.
      */
     BYTE  Temporary[DMA_CONTROLLERS];
-    UINT32 SoftwareRuns, MemoryToMemoryRuns;      /* diagnostics: requests served by the 8237 itself */
+    /* diagnostics: requests served by the 8237 itself */
+    UINT32 SoftwareRuns;
+    UINT32 MemoryToMemoryRuns;
     PDMA_DREQ_ROUTINE DreqRoutines[DMA_DREQ_MAX];   /* who drives DREQ -- host wiring, see above */
     PCVOID DreqContexts[DMA_DREQ_MAX];
     BYTE  DreqCount;
@@ -172,7 +178,9 @@ typedef struct _DMA_STATE
      * two today: SNDIO traces only the card's own ports, and the hot-port
      * histogram is empty for a protected-mode client. Three counters settle it.
      */
-    UINT32 AddressReads[DMA_CHANNELS], ChannelCountReads[DMA_CHANNELS];  /* guest reads of CurrentAddress / CurrentCount */
+    /* guest reads of CurrentAddress / CurrentCount */
+    UINT32 AddressReads[DMA_CHANNELS];
+    UINT32 ChannelCountReads[DMA_CHANNELS];
     /* A COUNT READ IS THE GUEST'S MIXER SAYING 'I AM RUNNING NOW':
      * DMX's refill routine polls the 8237's current count as its FIRST action
      * (DOOM.EXE 0x56884), before it decides which block to fill. So a read of the
@@ -191,7 +199,10 @@ typedef struct _DMA_STATE
      * and the whole "DMX looks less often than blocks complete" reading rests on
      * it. Count the widths and let the run say.
      */
-    UINT32 CountReadsByte, CountReadsWord, CountReadsDword;      /* count-register reads by operand width */
+    /* count-register reads by operand width */
+    UINT32 CountReadsByte;
+    UINT32 CountReadsWord;
+    UINT32 CountReadsDword;
 } DMA_STATE, *PDMA_STATE;
 
 typedef const DMA_STATE *PCDMA_STATE;
