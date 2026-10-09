@@ -41,7 +41,6 @@
 #include "../wow/wowres.h" /* GH #128: ...and the guest's OWN menu and icons */
 #include "../wow/wowres.c"
 #include "../wow/wowwin.h" /* GH #128: ...and a Win16 window IS a real Win32 window */
-#include "../wow/wowwin.c"
 /* ⚠ wowgdi.h COMES BEFORE wowuser.h, and the order is load-bearing: USER's
      GetDC/GetWindowDC issue a GDI token, so the object map has to be in scope by
      the time USER's dispatcher is compiled. It used to be last only because it

@@ -191,4 +191,11 @@ extern HWND g_WowWinSetFocusWindow;
 VOID WowWinMenuReplay(PCWOWMSG replay);
 INT WowWinRegister(PCSTR name16, PSTR className32, INT capacity, HCURSOR cursor, HICON icon, HICON smallIcon, PINT isCursorDefaulted, HBRUSH background);
 INT WowWinCoordinate(WORD value);
+extern LRESULT (*g_WowWinCtlColor)(HWND window, WORD window16, UINT message, WPARAM wParam, LPARAM lParam, PINT isHandled);
+extern INT (*g_WowWinSend16)(WORD window16, WORD message, WORD wParam, DWORD lParam, PWORD result);
+extern LRESULT (*g_WowWinOwnerDraw)(HWND window, WORD window16, UINT message, WPARAM wParam, LPARAM lParam, PINT isHandled);
+extern INT (*g_WowWinSend16Blob)(WORD window16, WORD message, WORD wParam, PBYTE blob, INT blobLength, const INT *fixups, INT fixupCount, PWORD result);
+extern LONGLONG g_WowWinPumpTicks;
+extern DWORD g_WowWinPumpCalls;
+INT WowWinPump(INT budget);
 #endif /* NTVDMEX_WOWWIN_H */

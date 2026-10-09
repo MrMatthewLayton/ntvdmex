@@ -132,7 +132,7 @@ INT WowMsgPost(WORD window, WORD message, WORD wParam, DWORD lParam,
      at a position the pointer had not reached yet -- so the scan stops at the
      newest entry for that window.
    Returns 1 if it folded into an existing entry. */
-static INT WowMsgPostMove(WORD window, WORD message, WORD wParam, DWORD lParam,
+INT WowMsgPostMove(WORD window, WORD message, WORD wParam, DWORD lParam,
                             DWORD time, WORD pointX, WORD pointY)
 {
     INT newest;

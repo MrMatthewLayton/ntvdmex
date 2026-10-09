@@ -1,7 +1,25 @@
 /* wowwin.c -- ★★★★★ A Win16 WINDOW IS A REAL Win32 WINDOW. GH #128, session 42.
  *
- * The code of wowwin.h (#335): its functions and state, in their original order. Part of
- * the host's single translation unit: #included by main.c straight after wowwin.h. */
+ * The code of wowwin.h (#335): its functions and state, in their original order;
+ * its own translation unit, declared in wowwin.h. */
+#include "host_state.h"
+#include "log.h"
+#include "ne.h"
+#include "wow32.h"
+#include "wowanchors.h"
+#include "wowsched.h"
+#include "wowcall.h"
+#include "wowmsg.h"
+#include "wowres.h"
+#include "wowwin.h"
+#include "wowgdi.h"
+#include "wowuser.h"
+#include "wowdlg.h"
+#include "wowenum.h"
+#include "wowshell.h"
+#include "wowcommdlg.h"
+#include "host_dpmi.h"
+
 
 /* Forward declarations for the single translation unit (they were in wowwin.h). */
 WORD  WowWinHwnd16(HWND window);
@@ -108,14 +126,14 @@ UINT g_WowWinDialogMessage;
      before the control can draw. Answering it means running the 16-bit window
      procedure SYNCHRONOUSLY -- the nested run (main.c, wow_call16_sync). main.c
      wires this hook; NULL (or a refusal) leaves Windows' own default. */
-static LRESULT (*g_WowWinCtlColor)(HWND window, WORD window16, UINT message, WPARAM wParam, LPARAM lParam,
+LRESULT (*g_WowWinCtlColor)(HWND window, WORD window16, UINT message, WPARAM wParam, LPARAM lParam,
                                 PINT isHandled);
 /* s89 (#300): any message SENT to a guest window now, through the same nested run
    (main.c: wow_send16_now). 0 = it could not run; the caller then posts. */
-static INT (*g_WowWinSend16)(WORD window16, WORD message, WORD wParam, DWORD lParam, PWORD result);
+INT (*g_WowWinSend16)(WORD window16, WORD message, WORD wParam, DWORD lParam, PWORD result);
 /* s89 (#302): owner-draw (WM_DRAWITEM/MEASUREITEM/DELETEITEM/COMPAREITEM), the
    structures converted and the program asked through the nested run (main.c). */
-static LRESULT (*g_WowWinOwnerDraw)(HWND window, WORD window16, UINT message, WPARAM wParam, LPARAM lParam,
+LRESULT (*g_WowWinOwnerDraw)(HWND window, WORD window16, UINT message, WPARAM wParam, LPARAM lParam,
                                  PINT isHandled);
 
 static UINT g_WowWinMultimediaLogged;   /* s90: first MM notifications logged */
@@ -179,7 +197,7 @@ static WORD WowWinDrop16(HDROP drop, PSTR reason, INT reasonCapacity)
 }
 /* s91 (#305 M9): a message with a STRUCTURE, sent now (main.c: wow_send16_blob) --
    WM_GETMINMAXINFO's 16-bit MINMAXINFO, copied back. 0 = it could not run. */
-static INT (*g_WowWinSend16Blob)(WORD window16, WORD message, WORD wParam, PBYTE blob, INT blobLength,
+INT (*g_WowWinSend16Blob)(WORD window16, WORD message, WORD wParam, PBYTE blob, INT blobLength,
                            const INT *fixups, INT fixupCount, PWORD result);
 
 static WOWWIN_SENDING g_WowWinSending[WOWWIN_MAX_SENDING];
@@ -908,10 +926,10 @@ static LRESULT CALLBACK WowWinProc(HWND window, UINT message, WPARAM wParam, LPA
  */
 /* Ticks spent in here, and how many times it was entered -- the other half of
    the per-BOP cost. See the note in log.h. */
-static LONGLONG g_WowWinPumpTicks = 0;
-static DWORD    g_WowWinPumpCalls = 0;
+LONGLONG g_WowWinPumpTicks = 0;
+DWORD    g_WowWinPumpCalls = 0;
 
-static INT WowWinPump(INT budget)
+INT WowWinPump(INT budget)
 {
     MSG message;
     INT count = 0;
