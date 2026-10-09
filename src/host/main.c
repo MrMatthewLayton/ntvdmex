@@ -6032,7 +6032,7 @@ static VOID StartupLoadQiMode(VOID)
 /* A Win16 launch is latched here, where the answer is known, before the UI thread that decides on a window
    starts. It logs the STAGE0 lines and is refused through WowRefuse -- unless wowtry.flag asks for the
    WOW probe instead. */
-static INT StartupLatchWowLaunch(PSTR *cursorIo, CHAR *report, INT *exitCode)
+static INT StartupLatchWowLaunch(PSTR *cursorIo, CHAR *report, INT *exitCodeOut)
 {
     PSTR cursor = *cursorIo;
     /* ── IS THIS A WIN16 (WOW) LAUNCH? IF SO, HAND IT STRAIGHT BACK. (GH #129) ──
@@ -6068,7 +6068,7 @@ static INT StartupLatchWowLaunch(PSTR *cursorIo, CHAR *report, INT *exitCode)
         cursor = LogPut(cursor, "STAGE0: cmdline=["); cursor = LogPut(cursor, GetCommandLineA()); cursor = LogPut(cursor, "]\r\n");
         LogAppend(LOG_PATH, report, cursor); SerialOut(report, cursor);
         if (GetFileAttributesA(WOWTRY_FLAG) == INVALID_FILE_ATTRIBUTES)
-            { *cursorIo = cursor; *exitCode = WowRefuse(GetCommandLineA()); return HOST_FLOW_RETURN; }
+            { *cursorIo = cursor; *exitCodeOut = WowRefuse(GetCommandLineA()); return HOST_FLOW_RETURN; }
         /* Experiment opted in: load now, then fall through so the selector stage can
            run once the VDM is registered. Still refuses at the end -- nothing here
            executes guest code yet. */
@@ -6079,7 +6079,7 @@ static INT StartupLatchWowLaunch(PSTR *cursorIo, CHAR *report, INT *exitCode)
 
 
 /* Claim an instance slot (#211): the first host writes to debug\out\, the Nth to debug\out\N\; refuse once all are taken. */
-static INT StartupClaimInstance(INT *exitCode)
+static INT StartupClaimInstance(INT *exitCodeOut)
 {
     /* ── ⛔⛔ ONE HOST AT A TIME. ─────────────────────────────────────────────────
          Nothing stopped a second instance, and two of them fight over things that
@@ -6153,14 +6153,14 @@ static INT StartupClaimInstance(INT *exitCode)
         if (!g_OnceMutex) {
             static const CHAR message[] = "REFUSED: 16 NTVDMEX hosts are already running -- this instance is exiting\r\n";
             LogAppend(LOG_PATH, message, message + sizeof(message) - 1);
-            { *exitCode = 0; return HOST_FLOW_RETURN; }
+            { *exitCodeOut = 0; return HOST_FLOW_RETURN; }
         } }
     return HOST_FLOW_NEXT;
 }
 
 
 /* The install verbs (/install, /uninstall, /status), run before anything else exists, and exit. */
-static INT StartupRunInstallVerb(INT *exitCode)
+static INT StartupRunInstallVerb(INT *exitCodeOut)
 {
     /* ── ★ THE INSTALL VERBS, BEFORE ANYTHING ELSE EXISTS. (GH #13) ─────────────
          `ntvdmhost.exe /install`, `/uninstall`, `/status`. They run and exit without
@@ -6204,11 +6204,11 @@ static INT StartupRunInstallVerb(INT *exitCode)
                      wrongly, grepping for text only /install ever prints. */
                 INSTALL_STATE installState = InstallStatusText(installStatus, sizeof installStatus);
                 InstallReport(installStatus, TRUE);
-                { *exitCode = installState == INSTALL_OURS ? INSTALL_STATUS_EXIT_OURS : (installState == INSTALL_OTHER ? INSTALL_STATUS_EXIT_OTHER : INSTALL_STATUS_EXIT_NONE); return HOST_FLOW_RETURN; }
+                { *exitCodeOut = installState == INSTALL_OURS ? INSTALL_STATUS_EXIT_OURS : (installState == INSTALL_OTHER ? INSTALL_STATUS_EXIT_OTHER : INSTALL_STATUS_EXIT_NONE); return HOST_FLOW_RETURN; }
             }
             isOk = InstallPerform(want, CommandLineHasForce(GetCommandLineA()), installStatus, sizeof installStatus);
             InstallReport(installStatus, isOk);
-            { *exitCode = isOk ? INSTALL_EXIT_OK : INSTALL_EXIT_FAILED; return HOST_FLOW_RETURN; }
+            { *exitCodeOut = isOk ? INSTALL_EXIT_OK : INSTALL_EXIT_FAILED; return HOST_FLOW_RETURN; }
         } }
     return HOST_FLOW_NEXT;
 }
@@ -7566,60 +7566,252 @@ static VOID StartupBuildDos(PSTR *cursorIo, const DWORD readCount, DOS_IMAGE *im
     *cursorIo = cursor;
 }
 
-INT WINAPI WinMain(HINSTANCE instance, HINSTANCE previousInstance, LPSTR commandLineText, INT showCommand)
+
+/* Find and load the program: CSRSS's application, cfg\target.txt, the title path, a PIF, XP's COMMAND.COM (#208) or a shell; then count the NTVDM BOP sites an NTVDM-aware shell carries. */
+static VOID StartupLoadProgram(PSTR *cursorIo, DWORD *readCountIo, CHAR *programPathBuffer, CHAR *args, const INT wowCommandFromCsrss)
 {
-    CHAR report[8192]; PSTR cursor = report; PSTR base;
-    PCSTR const reportEnd = report + sizeof report;   /* the guards below keep a line's worth short of it */
-    INT wowCommandFromCsrss = 0;         /* s73: the Win16 program came from CSRSS, not target.txt */
+    PSTR cursor = *cursorIo;
     INT wantShell = 0;                 /* s79: our own launcher stub asked for a SHELL (see LAUNCH_STUB_NAME) */
+    DWORD readCount = *readCountIo;
     INT wasShell  = 0;                 /* s79: we actually loaded a shell, not a named program */
-    volatile BYTE *tib;
-    DWORD readCount = 0, error = 0; LONG vdmStatus;
-    DOS_IMAGE image;
-    DOS_MACHINE machine;
-    CHAR dosOutput[16384];   /* M9 probe dumps run to several KB; 1024 truncated them */
-    CHAR programPathBuffer[768]; CHAR args[256];
-    UINT index; INT guard;
-    g_GuestThreadId = GetCurrentThreadId();
-    OsCompatBind();                    /* the four XP-only imports, or their absence */
-    /* cfg\ and debug\out\ before ANYTHING logs. A missing out\ makes every LogAppend
-       fail silently, and the log is what explains every other failure. Idempotent;
-       debug\ first because CreateDirectoryA does not create intermediate levels. */
-    CreateDirectoryA(NTVDMEX_CFG, NULL);
-    CreateDirectoryA(NTVDMEX_DEBUG, NULL);
-    CreateDirectoryA(NTVDMEX_OUT, NULL);
-    /* s90 (#278): THE WOW32.DLL / NTVDM.EXE STAND-INS GO IN FIRST, before anything in
-         this process can touch winmm. winmm asks "am I under WOW?" ONCE and caches the
-         answer (0x76b616ec), and the host's own audio and timer code loads winmm early:
-         loaded at the WOW branch below, the shims arrived after the question had been
-         answered "no", and NotifyCallbackData kept returning 0 (runs/s90/sr4). */
-    if (LaunchIsWow(GetCommandLineA())) WowShimsLoad();
-
-    {
-        INT exitCode, flow = StartupRunInstallVerb(&exitCode);
-        if (flow == HOST_FLOW_RETURN) return exitCode;
+    UINT index;
+    StartupLoadCsrssApplication(&cursor, &wantShell, &readCount, programPathBuffer, args);
+    StartupLoadTarget(&cursor, &readCount, wowCommandFromCsrss, wantShell, programPathBuffer, args);
+    StartupLoadTitlePath(&cursor, &readCount, programPathBuffer, args);
+    if (!readCount && g_CurrentDirectory[0] && g_Title[0]) {
+        CHAR path[768]; PSTR pathCursor = path; HANDLE fileHandle; int targetLength; PSTR targetArguments = NULL; /* stays int: INT here moves the compiled code */
+        pathCursor = LogPut(pathCursor, g_CurrentDirectory); pathCursor = LogPut(pathCursor, HOST_PATH_SEPARATOR); pathCursor = LogPut(pathCursor, g_Title);
+        for (targetLength = 0; path[targetLength]; ++targetLength) ;              /* same trailing-space trim as above */
+        while (targetLength > 0 && (path[targetLength - 1] == ' ' || path[targetLength - 1] == '\t')) path[--targetLength] = 0;
+        fileHandle = CsrssOpenSplit(path, &targetArguments);        /* a RELATIVE title carries args too */
+        if (fileHandle != INVALID_HANDLE_VALUE) { ReadFile(fileHandle, g_FileBuffer, sizeof(g_FileBuffer), &readCount, NULL); CloseHandle(fileHandle); }
+        LogPut(programPathBuffer, path);                       /* env argv[0] */
+        if (targetArguments)         LogPut(args, targetArguments);
+        else if (g_CommandLine[0]) LogPut(args, g_CommandLine);       /* best-effort: CmdLine if CSRSS populated it */
+        cursor = LogPut(cursor, "STAGE2: loaded 0x"); cursor = LogHex(cursor, readCount);
+        cursor = LogPut(cursor, " from "); cursor = LogPut(cursor, path);
+        if (targetArguments) { cursor = LogPut(cursor, " args=["); cursor = LogPut(cursor, targetArguments); cursor = LogPut(cursor, "]"); }
+        cursor = LogPut(cursor, "\r\n");
+    }
+    /* ── ★★★★★ NOTHING NAMED A PROGRAM ⇒ RUN A SHELL. (s78) ──────────────────────
+         The user's question was *"do you actually need to build a shell, or simply load
+         Windows NT's COMMAND.COM when ntvdmex is loaded with no guest EXE?"* -- and the
+         answer is the second one. `COMMAND.COM` IS the shell; it becomes the guest like
+         any other DOS program, and MS-DOS 6.22's copy already works here: banner,
+         prompt, `ver`, and a real `dir` listing with volume serial and free space
+         (measured on the rig, s78).
+       ⚠ STRICTLY BELOW EVERYTHING ELSE, and that placement is the whole design. CSRSS's
+         AppName, `target.txt`, an absolute title and a relative title have all been
+         tried above and all failed. Put this any higher and the headless harness -- which
+         names its program in `target.txt` -- silently runs a shell instead of the test.
+       ▸ WHICH shell is a configuration question, not a guess:
+           1. `cfg\shell.txt`  -- a path the user chooses. A 6.22 COMMAND.COM goes here.
+           2. `C:\WINDOWS\SYSTEM32\COMMAND.COM` -- present on every XP box.
+         ⚠ (2) is XP's own, which is NTVDM-aware and stops at `BOP 0x54` -- see
+           docs/inventory/bop.md. That is not a reason to leave it out: it fails with a
+           log line naming exactly what is missing, where the old fallback was a 4-byte
+           `mov ah,4Ch / int 21h` that exited cleanly and said nothing at all.
+         ⛔ COMSPEC is deliberately NOT consulted: under a Windows session it names
+           `cmd.exe`, a 32-bit PE that must never be loaded as a DOS guest. */
+    /* ── #208: HAND A DOS PROGRAM TO XP's SHELL INSTEAD OF LOADING IT. See g_Routed. ──
+         Only when all of these hold, and otherwise exactly as before:
+           - a DOS program was found (an MZ/COM image, not NE/PE -- a Win16 or Win32
+             image under COMMAND.COM just says "requires Microsoft Windows")
+           - this is not a WOW launch, and the program is not itself a COMMAND.COM
+           - the shell would be XP's own (no cfg\shell.txt, no Settings choice -- #203): only that shell asks
+             BOP 54 sub 01, so only it can be handed a program
+           - its 8.3 path and arguments fit a DOS command line
+           - cfg\directlaunch.flag is absent (the A/B switch back to direct loading) */
+    /* ── #203: WHICH SHELL, DECIDED ONCE. default (XP's own) < Settings' "DOS prompt"
+         (HKCU DosPrompt) < cfg\shell.txt -- the file wins, as every file knob does, so
+         the harness is never overridden by whatever was last picked in the dialog. The
+         #208 routing below and the shell load after it both read this one answer; they
+         used to test the file separately, which a registry setting would have split. */
+    CHAR shellConfig[512]; PCSTR shellSource = 0;
+    shellConfig[0] = 0;
+    {   HANDLE configHandle = CreateFileA(SHELL_PATH, GENERIC_READ, FILE_SHARE_READ,
+                                NULL, OPEN_EXISTING, 0, NULL);
+        if (configHandle != INVALID_HANDLE_VALUE) {
+            DWORD commandLength = 0; INT shellLength;
+            ReadFile(configHandle, shellConfig, sizeof(shellConfig) - 1, &commandLength, NULL); CloseHandle(configHandle);
+            shellConfig[commandLength < sizeof(shellConfig) ? commandLength : sizeof(shellConfig) - 1] = 0;
+            /* Trim the newline the file almost certainly ends with, and any spaces --
+               the same trap target.txt's reader already documents. */
+            for (shellLength = 0; shellConfig[shellLength]; ++shellLength) ;
+            while (shellLength > 0 && (shellConfig[shellLength-1] == '\r' || shellConfig[shellLength-1] == '\n'
+                              || shellConfig[shellLength-1] == ' ' || shellConfig[shellLength-1] == '\t'))
+                shellConfig[--shellLength] = 0;
+            if (shellLength) {
+                shellSource = "cfg\\shell.txt";
+                if (g_Settings.Strings[SET_STR_SHELL][0]) g_ShellOverride = "cfg\\shell.txt";
+            }
+        }
+        if (!shellConfig[0] && g_Settings.Strings[SET_STR_SHELL][0]) {
+            lstrcpynA(shellConfig, g_Settings.Strings[SET_STR_SHELL], sizeof shellConfig);
+            shellSource = "Settings > General > DOS prompt";
+        }
+    }
+    StartupApplyPif(&cursor, &readCount, programPathBuffer, args);
+    /* #153: File > Open Recent lists every program this host was started with. */
+    if (readCount && !g_WowLaunch && programPathBuffer[0]) MruAdd(programPathBuffer);
+    StartupRouteToCommandCom(&cursor, &readCount, shellConfig, programPathBuffer, args);
+    StartupLoadShell(&cursor, &readCount, shellConfig, shellSource, programPathBuffer, &wasShell);
+    if (!readCount) {
+        static const BYTE stub[] = { X86_OP_MOV_AH_IMM, DOS_FN_EXIT, X86_OP_INT, VECTOR_DOS };   /* mov ah,4Ch; int 21h */
+        for (index = 0; index < sizeof(stub); ++index) g_FileBuffer[index] = stub[index];
+        readCount = sizeof(stub);
+        /* ⚠ SAY WHY, not just that. This printed "embedded fallback" and nothing else,
+             and it is reached when a path was wrong as well as when nothing was named --
+             GH #131 spent a session on a run that looked clean and wrote nothing. */
+        cursor = LogPut(cursor, "STAGE2: embedded fallback -- nothing named a program AND no shell "
+                    "could be opened (cfg\\shell.txt, C:\\WINDOWS\\SYSTEM32\\COMMAND.COM)"
+                    "\r\n");
     }
 
-    /* ── ★★★★★ NOTHING ON THE COMMAND LINE = THE USER OPENED NTVDMEX. (s79) ──────────
-         Sits here for the same reason the verbs do: above every launch guard, and safe
-         because a real VDM launch always has arguments. Before this, a double-click
-         reached STAGE1, was refused VDM privilege (`NtVdmControl` -> 0xC0000022) and
-         vanished without a window or a message -- the worst possible answer to "open it
-         and see". */
-    if (CommandLineBare(GetCommandLineA())) return LaunchShellVdm();
+    /* ── ★★★ IS THIS GUEST NTVDM-AWARE? ASK THE IMAGE, NOT THE PATH. (s79) ───────────
+         XP's own COMMAND.COM needs two things no ordinary DOS guest does: it refuses
+         any DOS version but 5.00, and it reads `INT 21h AH=53h`'s private AL
+         sub-functions to decide whether it is an interactive shell at all. Both were
+         `cfg\` knobs, which is the right shape for an experiment and the wrong one for
+         a product -- "double-click NTVDMEX and get a prompt" cannot require two files.
 
-    {
-        INT exitCode, flow = StartupClaimInstance(&exitCode);
-        if (flow == HOST_FLOW_RETURN) return exitCode;
+       ⇒ The discriminator is a MEASURED PROPERTY OF THE IMAGE, not a filename: an
+         NTVDM-aware guest talks to the 32-bit side through `C4 C4 54 <sub>` BOPs. XP's
+         COMMAND.COM has FIFTEEN of them. A path check would be a guess (a user may put
+         XP's shell in `cfg\shell.txt`, or ours somewhere else); the BOPs are what
+         actually make it NT-aware.
+       ⚠ THE THRESHOLD IS THE GUARD. `C4 C4` is a legal, if odd, instruction pair, so
+         one or two sites prove nothing -- a false positive would silently change the
+         DOS version reported to an innocent guest. Requiring EIGHT distinct sites is
+         far beyond coincidence and still well under XP's fifteen, so a future build of
+         the shell with a few fewer would still be recognised. The count is logged, so
+         a guest that lands near the line says so instead of being decided silently.
+       ⚠ It is only consulted for a program we loaded as THE SHELL. A DOS game that
+         somehow tripped the count must not be told it is running on DOS 5. */
+    g_GuestNtvdmBops = 0;
+    if (readCount > VDM_BOP_SUBFUNCTION_LENGTH) {
+        DWORD item;
+        for (item = 0; item + VDM_BOP_LENGTH < readCount; ++item)
+            if (g_FileBuffer[item] == VDM_BOP0 && g_FileBuffer[item+1] == VDM_BOP1 && g_FileBuffer[item+2] == NTVDM_BOP_CMD)
+                ++g_GuestNtvdmBops;
     }
-    HANDLE uiThread = NULL;
+    g_GuestNtAware = (wasShell && g_GuestNtvdmBops >= NT_AWARE_SHELL_BOPS_MIN);
+    /* #152: Close Program has nothing to close at a shell's own prompt -- whether we
+       chose the shell or something named COMMAND.COM explicitly. */
+    {   INT pathLength = lstrlenA(programPathBuffer);
+        g_TopIsShell = wasShell
+            || (pathLength >= COMMAND_COM_LENGTH && !lstrcmpiA(programPathBuffer + pathLength - COMMAND_COM_LENGTH, HOST_COMMAND_COM)); }
+    /* ── ★ THE NTVDM-AWARE SHELL IS LAUNCHED `/P <its own directory>`, AS STOCK DOES. ──
+         ntvdm.exe carries `%s=%s%s /p %s\system32`; s79 found /P mattered and the bare
+         launch later dropped every argument. Without /P, PERMCOM ([0x2B0]) stays 0, so
+         XP's EXIT takes DOS's ordinary return-to-parent path -- which for a top-level
+         shell is ITSELF, and the prompt just comes back (the sweep's "exit does not
+         work"). The directory argument is COMMAND.COM's own COMSPEC location, which
+         also replaces the C:\COMMAND.COM the environment otherwise names. */
+    if (g_GuestNtAware && !args[0]) {
+        CHAR directory[300], shortDirectory[300]; INT directoryLength = 0, cut = 0;
+        for (directoryLength = 0; programPathBuffer[directoryLength] && directoryLength < (INT)sizeof directory - 1; ++directoryLength) {
+            directory[directoryLength] = programPathBuffer[directoryLength]; if (programPathBuffer[directoryLength] == '\\') cut = directoryLength; }
+        directory[cut ? cut : directoryLength] = 0;
+        if (!GetShortPathNameA(directory, shortDirectory, sizeof shortDirectory)) LogPut(shortDirectory, directory);
+        wsprintfA(args, HOST_SHELL_ARGUMENTS_FORMAT, shortDirectory);
+        if (!GetShortPathNameA(programPathBuffer, g_ShellPath, sizeof g_ShellPath)) LogPut(g_ShellPath, programPathBuffer);
+        cursor = LogPut(cursor, "STAGE2: NTVDM-aware shell -> command tail [");
+        cursor = LogPut(cursor, args); cursor = LogPut(cursor, "] (permanent, as stock launches it)\r\n");
+    }
+    cursor = LogPut(cursor, "STAGE2: guest NTVDM BOP sites (C4 C4 54) = ");
+    cursor = LogDecimal(cursor, g_GuestNtvdmBops);
+    cursor = LogPut(cursor, g_GuestNtAware
+             ? " -> NTVDM-AWARE SHELL: DOS 5.00 and the private AH=53h answers apply\r\n"
+             : (wasShell ? " -> an ordinary DOS shell\r\n" : " (not loaded as a shell)\r\n"));
 
-    (VOID)instance; (VOID)previousInstance; (VOID)commandLineText; (VOID)showCommand;
-    programPathBuffer[0] = 0; args[0] = 0;
+    /* status-bar program name = basename of programPathBuffer (if any) */
+    { PCSTR baseName = programPathBuffer, scan; INT item = 0;
+      for (scan = programPathBuffer; *scan; ++scan) if (*scan == '\\' || *scan == '/') baseName = scan + 1;
+      if (*baseName) { while (baseName[item] && item < PROGRAM_NAME_SIZE - 1) { g_ProgramName[item] = baseName[item]; ++item; } g_ProgramName[item] = 0; } }
+    *cursorIo = cursor; *readCountIo = readCount;
+}
 
-    /* The install verbs ran far above, ahead of the single-instance guard -- see the
-       block after the CreateDirectory calls, and the defect note there. */
 
+/* Become the VDM: set up its memory, register with the kernel's VDM support, give [0x714] a defined value, fetch the command from CSRSS (DOS or Win16), and take the VDM_TIB -- or stop if there is none. */
+static INT StartupRegisterVdm(PSTR *cursorIo, LONG *vdmStatusIo, INT *wowCommandFromCsrssIo, CHAR *args, CHAR *programPathBuffer, DWORD *readCountIo, CHAR *report, volatile BYTE * *tibIo, INT *exitCodeOut)
+{
+    PSTR cursor = *cursorIo;
+    LONG vdmStatus = *vdmStatusIo;
+    DWORD error = 0;
+    INT wowCommandFromCsrss = *wowCommandFromCsrssIo;
+    DWORD readCount = *readCountIo;
+    volatile BYTE * tib = *tibIo;
+    /* V86 address space, then register as a VDM with the kernel (order matters). */
+    VdmSetupMemory();
+    vdmStatus = VdmRegisterWithKernel();
+    cursor = LogPut(cursor, "STAGE1: v86_init NTSTATUS=0x"); cursor = LogHex(cursor, (UINT)vdmStatus); cursor = LogPut(cursor, "\r\n");
+    cursor = StartupCheckInheritedVdmState(cursor);
+    /* ── THE CLEAN 2x2. ─────────────────────────────────────────────────────────────
+         The first differential compared a WOW probe HERE against a DOS probe placed
+         ~500 lines later, after CSRSS and the whole DOS machine were built. That is two
+         variables, not one, so "WOW is refused, DOS succeeds" did not actually follow.
+         Probe BOTH launch types at BOTH points and let the 2x2 say whether it is the
+         launch type or the amount of VDM setup that matters. */
+    if (GetFileAttributesA(WOWTRY_FLAG) != INVALID_FILE_ATTRIBUTES)
+        WowProbeLdtMatrix(g_WowModuleCount ? "wow-early" : "dos-early");
+    StartupWowSelectorStage();
+    /* EMS page frame must be mapped AFTER VdmInitialize (see VdmMapEmsFrame). */
+    g_EmsFrameLinear = VdmMapEmsFrame();
+    if (GetFileAttributesA(WOWTRY_FLAG) != INVALID_FILE_ATTRIBUTES) WowProbeLdtMatrix("B-after-emsframe");
+    cursor = LogPut(cursor, "STAGE1: ems_frame lin=0x"); cursor = LogHex(cursor, g_EmsFrameLinear);
+    cursor = LogPut(cursor, " seg=0x"); cursor = LogHex(cursor, g_EmsFrameLinear >> PARAGRAPH_SHIFT); cursor = LogPut(cursor, "\r\n");
+
+    /* CSRSS: register as the console VDM, then fetch the program to run. */
+    CsrssRegisterConsole();
+    if (GetFileAttributesA(WOWTRY_FLAG) != INVALID_FILE_ATTRIBUTES) WowProbeLdtMatrix("C-after-csrss-register");
+    StartupTakeCsrssCommand(&cursor, &error);
+    /* ── ★★★★★ THE SECOND FETCH: THE COMMAND ITSELF. (s72, the package smoke test) ──
+         The call above is stock ntvdm's `cmdGetStartInfo` shape (VDM_GET_FIRST_COMMAND):
+         it fills Title, CurDirectory and the PIF, and nothing else -- AppName/CmdLine
+         come back as capture-buffer scaffolding (`app=[5??] cmd=[\]`). Explorer puts the
+         program's path in the console TITLE, which is the only reason a double-click has
+         ever run the right program. A launch from cmd.exe or a batch file -- smoke.bat,
+         a prompt, the friend's machine on the 18th -- has a title of "" (start) or the
+         typed command WITH ITS ARGUMENTS (direct), and we ran the embedded four-byte stub
+         and reported a clean exit: the package smoke test passed without running the
+         self-test. Stock ntvdm consumes the real command in its exec-BOP path with a
+         second GetNextVDMCommand, VDM_FLAG_DOS | VDM_FLAG_FIRST_TASK.
+       ► MEASURED on the rig, both launch shapes (STAGE1: fetch2 lines, s72):
+           AppName = C:\DOCUME~1\...\bm\selftest.com   (full short path, AppLen incl. NUL)
+           CmdLine = "hello world\r\n"                     (the tail ONLY; "\r\n" when none)
+           CurDirectory = the launcher's cwd; Env = its Win32 environment block (0x46c);
+           ComingFromBat = 1 from a batch file; TaskId 0 without -i is fine.
+         DONT_WAIT so a protocol misunderstanding is a FALSE with an error, never a hang.
+         Only after a successful first fetch: on a WOW launch the first returns FALSE
+         (err 0x57) and that tell is left exactly as it was. */
+    if (g_CurrentDirectory[0] || g_Title[0]) {
+        cursor = StartupFetchCommandDetails(cursor);
+    } else if (g_WowLaunch) {
+        StartupFetchWowCommand(&cursor, &wowCommandFromCsrss, args, programPathBuffer, &readCount);
+    }
+    LogWrite(LOG_PATH, report, cursor);
+    /* ⚠ AFTER the LogWrite, not before: LogWrite TRUNCATES. The first cut of this
+         ran the probe earlier and its output was silently erased by this very line,
+         which looked exactly like "the probe never ran". Same stale/truncated-artefact
+         trap this project keeps paying for, in a new costume. */
+    if (GetFileAttributesA(WOWTRY_FLAG) != INVALID_FILE_ATTRIBUTES)
+        WowProbeLdtMatrix("D-after-getcommand");   /* before VdmGetTib */
+    tib = VdmGetTib();
+    if (GetFileAttributesA(WOWTRY_FLAG) != INVALID_FILE_ATTRIBUTES) WowProbeLdtMatrix("E-after-get-tib");
+    g_TibDebug = tib;                                    /* let the crash VEH dump guest state */
+    if (!tib) {
+        cursor = LogPut(cursor, "STAGE1: no VDM_TIB -- abort\r\n"); LogAppend(LOG_PATH, report, cursor);
+        { *cursorIo = cursor; *vdmStatusIo = vdmStatus; *wowCommandFromCsrssIo = wowCommandFromCsrss; *readCountIo = readCount; *tibIo = tib; *exitCodeOut = 1; return HOST_FLOW_RETURN; }
+    }
+    *cursorIo = cursor; *vdmStatusIo = vdmStatus; *wowCommandFromCsrssIo = wowCommandFromCsrss; *readCountIo = readCount; *tibIo = tib; return HOST_FLOW_NEXT;
+}
+
+
+/* Start the log and its COM1 mirror, take stdio, run the recovery counter (safe mode after repeated failed starts), read Settings and the cfg\ knobs, install the fault handlers, and log the STAGE0 state. */
+static INT StartupConfigure(PSTR *cursorIo, CHAR *report, INT *exitCodeOut)
+{
+    PSTR cursor = *cursorIo;
     /* ── NO MODAL HARDWARE-ERROR BOXES, EVER, FOR THE WHOLE PROCESS. ───────────────
          Every Win32 call that touches a drive with no media -- A: with the door
          open, an ejected CD -- raises XP's "There is no disk in drive" box unless
@@ -7653,7 +7845,7 @@ INT WINAPI WinMain(HINSTANCE instance, HINSTANCE previousInstance, LPSTR command
 
     {
         INT exitCode, flow = StartupLatchWowLaunch(&cursor, report, &exitCode);
-        if (flow == HOST_FLOW_RETURN) return exitCode;
+        if (flow == HOST_FLOW_RETURN) { *cursorIo = cursor; *exitCodeOut = exitCode; return HOST_FLOW_RETURN; }
     }
     /* Headless test mode = the SMB watcher dropped the AUTOEXIT marker. In that mode the
        host must self-exit on guest exit AND bound any infinite run (a visual demo like
@@ -7952,224 +8144,72 @@ INT WINAPI WinMain(HINSTANCE instance, HINSTANCE previousInstance, LPSTR command
        cursor = LogPut(cursor, " prot=0x");  cursor = LogHex(cursor, g_HmaProtection); }
     cursor = LogPut(cursor, "\r\n");
         cursor = LogPut(cursor, "STAGE0: cmdline=["); cursor = LogPut(cursor, GetCommandLineA()); cursor = LogPut(cursor, "]\r\n");
+    *cursorIo = cursor; return HOST_FLOW_NEXT;
+}
 
-    /* V86 address space, then register as a VDM with the kernel (order matters). */
-    VdmSetupMemory();
-    vdmStatus = VdmRegisterWithKernel();
-    cursor = LogPut(cursor, "STAGE1: v86_init NTSTATUS=0x"); cursor = LogHex(cursor, (UINT)vdmStatus); cursor = LogPut(cursor, "\r\n");
-    cursor = StartupCheckInheritedVdmState(cursor);
-    /* ── THE CLEAN 2x2. ─────────────────────────────────────────────────────────────
-         The first differential compared a WOW probe HERE against a DOS probe placed
-         ~500 lines later, after CSRSS and the whole DOS machine were built. That is two
-         variables, not one, so "WOW is refused, DOS succeeds" did not actually follow.
-         Probe BOTH launch types at BOTH points and let the 2x2 say whether it is the
-         launch type or the amount of VDM setup that matters. */
-    if (GetFileAttributesA(WOWTRY_FLAG) != INVALID_FILE_ATTRIBUTES)
-        WowProbeLdtMatrix(g_WowModuleCount ? "wow-early" : "dos-early");
-    StartupWowSelectorStage();
-    /* EMS page frame must be mapped AFTER VdmInitialize (see VdmMapEmsFrame). */
-    g_EmsFrameLinear = VdmMapEmsFrame();
-    if (GetFileAttributesA(WOWTRY_FLAG) != INVALID_FILE_ATTRIBUTES) WowProbeLdtMatrix("B-after-emsframe");
-    cursor = LogPut(cursor, "STAGE1: ems_frame lin=0x"); cursor = LogHex(cursor, g_EmsFrameLinear);
-    cursor = LogPut(cursor, " seg=0x"); cursor = LogHex(cursor, g_EmsFrameLinear >> PARAGRAPH_SHIFT); cursor = LogPut(cursor, "\r\n");
+INT WINAPI WinMain(HINSTANCE instance, HINSTANCE previousInstance, LPSTR commandLineText, INT showCommand)
+{
+    CHAR report[8192]; PSTR cursor = report; PSTR base;
+    PCSTR const reportEnd = report + sizeof report;   /* the guards below keep a line's worth short of it */
+    INT wowCommandFromCsrss = 0;         /* s73: the Win16 program came from CSRSS, not target.txt */
+    volatile BYTE *tib;
+    DWORD readCount = 0; LONG vdmStatus;
+    DOS_IMAGE image;
+    DOS_MACHINE machine;
+    CHAR dosOutput[16384];   /* M9 probe dumps run to several KB; 1024 truncated them */
+    CHAR programPathBuffer[768]; CHAR args[256];
+    INT guard;
+    g_GuestThreadId = GetCurrentThreadId();
+    OsCompatBind();                    /* the four XP-only imports, or their absence */
+    /* cfg\ and debug\out\ before ANYTHING logs. A missing out\ makes every LogAppend
+       fail silently, and the log is what explains every other failure. Idempotent;
+       debug\ first because CreateDirectoryA does not create intermediate levels. */
+    CreateDirectoryA(NTVDMEX_CFG, NULL);
+    CreateDirectoryA(NTVDMEX_DEBUG, NULL);
+    CreateDirectoryA(NTVDMEX_OUT, NULL);
+    /* s90 (#278): THE WOW32.DLL / NTVDM.EXE STAND-INS GO IN FIRST, before anything in
+         this process can touch winmm. winmm asks "am I under WOW?" ONCE and caches the
+         answer (0x76b616ec), and the host's own audio and timer code loads winmm early:
+         loaded at the WOW branch below, the shims arrived after the question had been
+         answered "no", and NotifyCallbackData kept returning 0 (runs/s90/sr4). */
+    if (LaunchIsWow(GetCommandLineA())) WowShimsLoad();
 
-    /* CSRSS: register as the console VDM, then fetch the program to run. */
-    CsrssRegisterConsole();
-    if (GetFileAttributesA(WOWTRY_FLAG) != INVALID_FILE_ATTRIBUTES) WowProbeLdtMatrix("C-after-csrss-register");
-    StartupTakeCsrssCommand(&cursor, &error);
-    /* ── ★★★★★ THE SECOND FETCH: THE COMMAND ITSELF. (s72, the package smoke test) ──
-         The call above is stock ntvdm's `cmdGetStartInfo` shape (VDM_GET_FIRST_COMMAND):
-         it fills Title, CurDirectory and the PIF, and nothing else -- AppName/CmdLine
-         come back as capture-buffer scaffolding (`app=[5??] cmd=[\]`). Explorer puts the
-         program's path in the console TITLE, which is the only reason a double-click has
-         ever run the right program. A launch from cmd.exe or a batch file -- smoke.bat,
-         a prompt, the friend's machine on the 18th -- has a title of "" (start) or the
-         typed command WITH ITS ARGUMENTS (direct), and we ran the embedded four-byte stub
-         and reported a clean exit: the package smoke test passed without running the
-         self-test. Stock ntvdm consumes the real command in its exec-BOP path with a
-         second GetNextVDMCommand, VDM_FLAG_DOS | VDM_FLAG_FIRST_TASK.
-       ► MEASURED on the rig, both launch shapes (STAGE1: fetch2 lines, s72):
-           AppName = C:\DOCUME~1\...\bm\selftest.com   (full short path, AppLen incl. NUL)
-           CmdLine = "hello world\r\n"                     (the tail ONLY; "\r\n" when none)
-           CurDirectory = the launcher's cwd; Env = its Win32 environment block (0x46c);
-           ComingFromBat = 1 from a batch file; TaskId 0 without -i is fine.
-         DONT_WAIT so a protocol misunderstanding is a FALSE with an error, never a hang.
-         Only after a successful first fetch: on a WOW launch the first returns FALSE
-         (err 0x57) and that tell is left exactly as it was. */
-    if (g_CurrentDirectory[0] || g_Title[0]) {
-        cursor = StartupFetchCommandDetails(cursor);
-    } else if (g_WowLaunch) {
-        StartupFetchWowCommand(&cursor, &wowCommandFromCsrss, args, programPathBuffer, &readCount);
-    }
-    LogWrite(LOG_PATH, report, cursor);
-    /* ⚠ AFTER the LogWrite, not before: LogWrite TRUNCATES. The first cut of this
-         ran the probe earlier and its output was silently erased by this very line,
-         which looked exactly like "the probe never ran". Same stale/truncated-artefact
-         trap this project keeps paying for, in a new costume. */
-    if (GetFileAttributesA(WOWTRY_FLAG) != INVALID_FILE_ATTRIBUTES)
-        WowProbeLdtMatrix("D-after-getcommand");   /* before VdmGetTib */
-    tib = VdmGetTib();
-    if (GetFileAttributesA(WOWTRY_FLAG) != INVALID_FILE_ATTRIBUTES) WowProbeLdtMatrix("E-after-get-tib");
-    g_TibDebug = tib;                                    /* let the crash VEH dump guest state */
-    if (!tib) {
-        cursor = LogPut(cursor, "STAGE1: no VDM_TIB -- abort\r\n"); LogAppend(LOG_PATH, report, cursor);
-        return 1;
+    {
+        INT exitCode, flow = StartupRunInstallVerb(&exitCode);
+        if (flow == HOST_FLOW_RETURN) return exitCode;
     }
 
-    StartupLoadCsrssApplication(&cursor, &wantShell, &readCount, programPathBuffer, args);
-    StartupLoadTarget(&cursor, &readCount, wowCommandFromCsrss, wantShell, programPathBuffer, args);
-    StartupLoadTitlePath(&cursor, &readCount, programPathBuffer, args);
-    if (!readCount && g_CurrentDirectory[0] && g_Title[0]) {
-        CHAR path[768]; PSTR pathCursor = path; HANDLE fileHandle; int targetLength; PSTR targetArguments = NULL; /* stays int: INT here moves the compiled code */
-        pathCursor = LogPut(pathCursor, g_CurrentDirectory); pathCursor = LogPut(pathCursor, HOST_PATH_SEPARATOR); pathCursor = LogPut(pathCursor, g_Title);
-        for (targetLength = 0; path[targetLength]; ++targetLength) ;              /* same trailing-space trim as above */
-        while (targetLength > 0 && (path[targetLength - 1] == ' ' || path[targetLength - 1] == '\t')) path[--targetLength] = 0;
-        fileHandle = CsrssOpenSplit(path, &targetArguments);        /* a RELATIVE title carries args too */
-        if (fileHandle != INVALID_HANDLE_VALUE) { ReadFile(fileHandle, g_FileBuffer, sizeof(g_FileBuffer), &readCount, NULL); CloseHandle(fileHandle); }
-        LogPut(programPathBuffer, path);                       /* env argv[0] */
-        if (targetArguments)         LogPut(args, targetArguments);
-        else if (g_CommandLine[0]) LogPut(args, g_CommandLine);       /* best-effort: CmdLine if CSRSS populated it */
-        cursor = LogPut(cursor, "STAGE2: loaded 0x"); cursor = LogHex(cursor, readCount);
-        cursor = LogPut(cursor, " from "); cursor = LogPut(cursor, path);
-        if (targetArguments) { cursor = LogPut(cursor, " args=["); cursor = LogPut(cursor, targetArguments); cursor = LogPut(cursor, "]"); }
-        cursor = LogPut(cursor, "\r\n");
+    /* ── ★★★★★ NOTHING ON THE COMMAND LINE = THE USER OPENED NTVDMEX. (s79) ──────────
+         Sits here for the same reason the verbs do: above every launch guard, and safe
+         because a real VDM launch always has arguments. Before this, a double-click
+         reached STAGE1, was refused VDM privilege (`NtVdmControl` -> 0xC0000022) and
+         vanished without a window or a message -- the worst possible answer to "open it
+         and see". */
+    if (CommandLineBare(GetCommandLineA())) return LaunchShellVdm();
+
+    {
+        INT exitCode, flow = StartupClaimInstance(&exitCode);
+        if (flow == HOST_FLOW_RETURN) return exitCode;
     }
-    /* ── ★★★★★ NOTHING NAMED A PROGRAM ⇒ RUN A SHELL. (s78) ──────────────────────
-         The user's question was *"do you actually need to build a shell, or simply load
-         Windows NT's COMMAND.COM when ntvdmex is loaded with no guest EXE?"* -- and the
-         answer is the second one. `COMMAND.COM` IS the shell; it becomes the guest like
-         any other DOS program, and MS-DOS 6.22's copy already works here: banner,
-         prompt, `ver`, and a real `dir` listing with volume serial and free space
-         (measured on the rig, s78).
-       ⚠ STRICTLY BELOW EVERYTHING ELSE, and that placement is the whole design. CSRSS's
-         AppName, `target.txt`, an absolute title and a relative title have all been
-         tried above and all failed. Put this any higher and the headless harness -- which
-         names its program in `target.txt` -- silently runs a shell instead of the test.
-       ▸ WHICH shell is a configuration question, not a guess:
-           1. `cfg\shell.txt`  -- a path the user chooses. A 6.22 COMMAND.COM goes here.
-           2. `C:\WINDOWS\SYSTEM32\COMMAND.COM` -- present on every XP box.
-         ⚠ (2) is XP's own, which is NTVDM-aware and stops at `BOP 0x54` -- see
-           docs/inventory/bop.md. That is not a reason to leave it out: it fails with a
-           log line naming exactly what is missing, where the old fallback was a 4-byte
-           `mov ah,4Ch / int 21h` that exited cleanly and said nothing at all.
-         ⛔ COMSPEC is deliberately NOT consulted: under a Windows session it names
-           `cmd.exe`, a 32-bit PE that must never be loaded as a DOS guest. */
-    /* ── #208: HAND A DOS PROGRAM TO XP's SHELL INSTEAD OF LOADING IT. See g_Routed. ──
-         Only when all of these hold, and otherwise exactly as before:
-           - a DOS program was found (an MZ/COM image, not NE/PE -- a Win16 or Win32
-             image under COMMAND.COM just says "requires Microsoft Windows")
-           - this is not a WOW launch, and the program is not itself a COMMAND.COM
-           - the shell would be XP's own (no cfg\shell.txt, no Settings choice -- #203): only that shell asks
-             BOP 54 sub 01, so only it can be handed a program
-           - its 8.3 path and arguments fit a DOS command line
-           - cfg\directlaunch.flag is absent (the A/B switch back to direct loading) */
-    /* ── #203: WHICH SHELL, DECIDED ONCE. default (XP's own) < Settings' "DOS prompt"
-         (HKCU DosPrompt) < cfg\shell.txt -- the file wins, as every file knob does, so
-         the harness is never overridden by whatever was last picked in the dialog. The
-         #208 routing below and the shell load after it both read this one answer; they
-         used to test the file separately, which a registry setting would have split. */
-    CHAR shellConfig[512]; PCSTR shellSource = 0;
-    shellConfig[0] = 0;
-    {   HANDLE configHandle = CreateFileA(SHELL_PATH, GENERIC_READ, FILE_SHARE_READ,
-                                NULL, OPEN_EXISTING, 0, NULL);
-        if (configHandle != INVALID_HANDLE_VALUE) {
-            DWORD commandLength = 0; INT shellLength;
-            ReadFile(configHandle, shellConfig, sizeof(shellConfig) - 1, &commandLength, NULL); CloseHandle(configHandle);
-            shellConfig[commandLength < sizeof(shellConfig) ? commandLength : sizeof(shellConfig) - 1] = 0;
-            /* Trim the newline the file almost certainly ends with, and any spaces --
-               the same trap target.txt's reader already documents. */
-            for (shellLength = 0; shellConfig[shellLength]; ++shellLength) ;
-            while (shellLength > 0 && (shellConfig[shellLength-1] == '\r' || shellConfig[shellLength-1] == '\n'
-                              || shellConfig[shellLength-1] == ' ' || shellConfig[shellLength-1] == '\t'))
-                shellConfig[--shellLength] = 0;
-            if (shellLength) {
-                shellSource = "cfg\\shell.txt";
-                if (g_Settings.Strings[SET_STR_SHELL][0]) g_ShellOverride = "cfg\\shell.txt";
-            }
-        }
-        if (!shellConfig[0] && g_Settings.Strings[SET_STR_SHELL][0]) {
-            lstrcpynA(shellConfig, g_Settings.Strings[SET_STR_SHELL], sizeof shellConfig);
-            shellSource = "Settings > General > DOS prompt";
-        }
-    }
-    StartupApplyPif(&cursor, &readCount, programPathBuffer, args);
-    /* #153: File > Open Recent lists every program this host was started with. */
-    if (readCount && !g_WowLaunch && programPathBuffer[0]) MruAdd(programPathBuffer);
-    StartupRouteToCommandCom(&cursor, &readCount, shellConfig, programPathBuffer, args);
-    StartupLoadShell(&cursor, &readCount, shellConfig, shellSource, programPathBuffer, &wasShell);
-    if (!readCount) {
-        static const BYTE stub[] = { X86_OP_MOV_AH_IMM, DOS_FN_EXIT, X86_OP_INT, VECTOR_DOS };   /* mov ah,4Ch; int 21h */
-        for (index = 0; index < sizeof(stub); ++index) g_FileBuffer[index] = stub[index];
-        readCount = sizeof(stub);
-        /* ⚠ SAY WHY, not just that. This printed "embedded fallback" and nothing else,
-             and it is reached when a path was wrong as well as when nothing was named --
-             GH #131 spent a session on a run that looked clean and wrote nothing. */
-        cursor = LogPut(cursor, "STAGE2: embedded fallback -- nothing named a program AND no shell "
-                    "could be opened (cfg\\shell.txt, C:\\WINDOWS\\SYSTEM32\\COMMAND.COM)"
-                    "\r\n");
+    HANDLE uiThread = NULL;
+
+    (VOID)instance; (VOID)previousInstance; (VOID)commandLineText; (VOID)showCommand;
+    programPathBuffer[0] = 0; args[0] = 0;
+
+    /* The install verbs ran far above, ahead of the single-instance guard -- see the
+       block after the CreateDirectory calls, and the defect note there. */
+
+    {
+        INT exitCode, flow = StartupConfigure(&cursor, report, &exitCode);
+        if (flow == HOST_FLOW_RETURN) return exitCode;
     }
 
-    /* ── ★★★ IS THIS GUEST NTVDM-AWARE? ASK THE IMAGE, NOT THE PATH. (s79) ───────────
-         XP's own COMMAND.COM needs two things no ordinary DOS guest does: it refuses
-         any DOS version but 5.00, and it reads `INT 21h AH=53h`'s private AL
-         sub-functions to decide whether it is an interactive shell at all. Both were
-         `cfg\` knobs, which is the right shape for an experiment and the wrong one for
-         a product -- "double-click NTVDMEX and get a prompt" cannot require two files.
-
-       ⇒ The discriminator is a MEASURED PROPERTY OF THE IMAGE, not a filename: an
-         NTVDM-aware guest talks to the 32-bit side through `C4 C4 54 <sub>` BOPs. XP's
-         COMMAND.COM has FIFTEEN of them. A path check would be a guess (a user may put
-         XP's shell in `cfg\shell.txt`, or ours somewhere else); the BOPs are what
-         actually make it NT-aware.
-       ⚠ THE THRESHOLD IS THE GUARD. `C4 C4` is a legal, if odd, instruction pair, so
-         one or two sites prove nothing -- a false positive would silently change the
-         DOS version reported to an innocent guest. Requiring EIGHT distinct sites is
-         far beyond coincidence and still well under XP's fifteen, so a future build of
-         the shell with a few fewer would still be recognised. The count is logged, so
-         a guest that lands near the line says so instead of being decided silently.
-       ⚠ It is only consulted for a program we loaded as THE SHELL. A DOS game that
-         somehow tripped the count must not be told it is running on DOS 5. */
-    g_GuestNtvdmBops = 0;
-    if (readCount > VDM_BOP_SUBFUNCTION_LENGTH) {
-        DWORD item;
-        for (item = 0; item + VDM_BOP_LENGTH < readCount; ++item)
-            if (g_FileBuffer[item] == VDM_BOP0 && g_FileBuffer[item+1] == VDM_BOP1 && g_FileBuffer[item+2] == NTVDM_BOP_CMD)
-                ++g_GuestNtvdmBops;
+    {
+        INT exitCode, flow = StartupRegisterVdm(&cursor, &vdmStatus, &wowCommandFromCsrss, args, programPathBuffer, &readCount, report, &tib, &exitCode);
+        if (flow == HOST_FLOW_RETURN) return exitCode;
     }
-    g_GuestNtAware = (wasShell && g_GuestNtvdmBops >= NT_AWARE_SHELL_BOPS_MIN);
-    /* #152: Close Program has nothing to close at a shell's own prompt -- whether we
-       chose the shell or something named COMMAND.COM explicitly. */
-    {   INT pathLength = lstrlenA(programPathBuffer);
-        g_TopIsShell = wasShell
-            || (pathLength >= COMMAND_COM_LENGTH && !lstrcmpiA(programPathBuffer + pathLength - COMMAND_COM_LENGTH, HOST_COMMAND_COM)); }
-    /* ── ★ THE NTVDM-AWARE SHELL IS LAUNCHED `/P <its own directory>`, AS STOCK DOES. ──
-         ntvdm.exe carries `%s=%s%s /p %s\system32`; s79 found /P mattered and the bare
-         launch later dropped every argument. Without /P, PERMCOM ([0x2B0]) stays 0, so
-         XP's EXIT takes DOS's ordinary return-to-parent path -- which for a top-level
-         shell is ITSELF, and the prompt just comes back (the sweep's "exit does not
-         work"). The directory argument is COMMAND.COM's own COMSPEC location, which
-         also replaces the C:\COMMAND.COM the environment otherwise names. */
-    if (g_GuestNtAware && !args[0]) {
-        CHAR directory[300], shortDirectory[300]; INT directoryLength = 0, cut = 0;
-        for (directoryLength = 0; programPathBuffer[directoryLength] && directoryLength < (INT)sizeof directory - 1; ++directoryLength) {
-            directory[directoryLength] = programPathBuffer[directoryLength]; if (programPathBuffer[directoryLength] == '\\') cut = directoryLength; }
-        directory[cut ? cut : directoryLength] = 0;
-        if (!GetShortPathNameA(directory, shortDirectory, sizeof shortDirectory)) LogPut(shortDirectory, directory);
-        wsprintfA(args, HOST_SHELL_ARGUMENTS_FORMAT, shortDirectory);
-        if (!GetShortPathNameA(programPathBuffer, g_ShellPath, sizeof g_ShellPath)) LogPut(g_ShellPath, programPathBuffer);
-        cursor = LogPut(cursor, "STAGE2: NTVDM-aware shell -> command tail [");
-        cursor = LogPut(cursor, args); cursor = LogPut(cursor, "] (permanent, as stock launches it)\r\n");
-    }
-    cursor = LogPut(cursor, "STAGE2: guest NTVDM BOP sites (C4 C4 54) = ");
-    cursor = LogDecimal(cursor, g_GuestNtvdmBops);
-    cursor = LogPut(cursor, g_GuestNtAware
-             ? " -> NTVDM-AWARE SHELL: DOS 5.00 and the private AH=53h answers apply\r\n"
-             : (wasShell ? " -> an ordinary DOS shell\r\n" : " (not loaded as a shell)\r\n"));
 
-    /* status-bar program name = basename of programPathBuffer (if any) */
-    { PCSTR baseName = programPathBuffer, scan; INT item = 0;
-      for (scan = programPathBuffer; *scan; ++scan) if (*scan == '\\' || *scan == '/') baseName = scan + 1;
-      if (*baseName) { while (baseName[item] && item < PROGRAM_NAME_SIZE - 1) { g_ProgramName[item] = baseName[item]; ++item; } g_ProgramName[item] = 0; } }
+    StartupLoadProgram(&cursor, &readCount, programPathBuffer, args, wowCommandFromCsrss);
     /* No flag to raise: the UI tick polls g_ProgramName and repaints the strip when it
        changes. See StatusUpdate. */
 
