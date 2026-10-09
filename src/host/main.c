@@ -30,28 +30,43 @@
 #include "pif.h"        /* a .PIF's program, directory and parameters */
 #include "../wow/ne.h"  /* GH #128: 16-bit New Executable loader (WOW bootstrap) */
 #include "../wow/wow32.h" /* GH #128: the 32-bit half -- krnl386's calls out to Win32 */
+#include "../wow/wow32.c"
 #include "../wow/wowanchors.h" /* GH #128: ...and how a thunk module's segment is RECOGNISED */
+#include "../wow/wowanchors.c"
 #include "../wow/wowsched.h" /* GH #128: ...and the Win16 task scheduler, which is also ours */
 #include "../wow/wowcall.h" /* GH #128: ...and the OTHER direction -- calling 16-bit code */
+#include "../wow/wowcall.c"
 #include "../wow/wowmsg.h" /* GH #128: ...and the MESSAGE QUEUE the loop turns on */
+#include "../wow/wowmsg.c"
 #include "../wow/wowres.h" /* GH #128: ...and the guest's OWN menu and icons */
+#include "../wow/wowres.c"
 #include "../wow/wowwin.h" /* GH #128: ...and a Win16 window IS a real Win32 window */
+#include "../wow/wowwin.c"
 /* ⚠ wowgdi.h COMES BEFORE wowuser.h, and the order is load-bearing: USER's
      GetDC/GetWindowDC issue a GDI token, so the object map has to be in scope by
      the time USER's dispatcher is compiled. It used to be last only because it
      borrowed USER's note helpers, and those now live in wow32.h. */
 #include "../wow/wowgdi.h" /* GH #128: GDI.EXE's id space -- where MS Paint begins */
+#include "../wow/wowgdi.c"
 #include "../wow/wowuser.h" /* GH #128: USER.EXE's id space -- a DIFFERENT one; see the file */
+#include "../wow/wowuser.c"
 /* ⚠ AFTER wowuser.h, and that order is load-bearing too: the modal loop reads
      the window table and the procedure rule that file owns. USER's DialogBox and
      EndDialog arms reach it through the three prototypes declared there. */
 #include "../wow/wowdlg.h" /* GH #128: ...and the MODAL loop -- why DialogBox does not return */
+#include "../wow/wowdlg.c"
 #include "../wow/wowenum.h" /* GH #128: ...and one callback per item -- EnumWindows, LineDDA */
+#include "../wow/wowenum.c"
 #include "../wow/wowshell.h" /* GH #128: ...and SHELL.DLL's, which is a THIRD one again */
+#include "../wow/wowshell.c"
 #include "../wow/wowcommdlg.h" /* GH #128: ...and COMMDLG.DLL's -- File > Open */
+#include "../wow/wowcommdlg.c"
 #include "../wow/wowkbd.h" /* GH #128: ...and KEYBOARD.DRV's -- ANSI/OEM conversion */
+#include "../wow/wowkbd.c"
 #include "../wow/wowsound.h" /* GH #299: ...and SOUND.DRV's -- stock answers 0 */
+#include "../wow/wowsound.c"
 #include "../wow/wowmmedia.h" /* GH #278: ...and MMSYSTEM's two -- mmCallProc32 */
+#include "../wow/wowmmedia.c"
 #include "dos_mcb.h"
 #include "bios_bda.h"       /* GH #253: 0040:000E/0010/0013 and the EBDA, from one source */
 #include "dos_loader.h"
