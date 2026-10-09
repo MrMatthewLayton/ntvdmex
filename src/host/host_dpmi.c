@@ -1,7 +1,29 @@
 /* host_dpmi.c -- protected mode: the DPMI host -- descriptors and the LDT, fault trampolines,
  *   code patching and breakpoints, callbacks, PM IRQ injection, client teardown.
  *
- * Part of the host's single translation unit: #included by main.c after host_internal.h. */
+ * Its own translation unit (#335): declared in host_dpmi.h. */
+#include "host_state.h"
+#include "log.h"
+#include "ne.h"
+#include "wow32.h"
+#include "wowanchors.h"
+#include "wowsched.h"
+#include "wowcall.h"
+#include "wowmsg.h"
+#include "wowres.h"
+#include "wowwin.h"
+#include "wowgdi.h"
+#include "wowuser.h"
+#include "host_dpmi.h"
+#include "main.h"
+#include "host_dpmi_int.h"
+#include "host_bios.h"
+#include "host_io.h"
+#include "host_irq.h"
+#include "host_mouse.h"
+#include "host_timing.h"
+#include "host_wow.h"
+
 
 /* Highest linear address XP's LDT descriptor validator will accept for base+limit
    (MmHighestUserAddress on a 2GB-user build). Kernel RE session 7 recovered the rule
@@ -37,16 +59,16 @@
    the real instruction executes and the client runs on undisturbed. A loop therefore
    reports its first pass, not its ten-thousandth. */
 #define PMBP_PATH CFG_("pmbp.txt")
-static UINT g_DpmiCpMaximum = 8;
+UINT g_DpmiCpMaximum = 8;
 static DWORD g_BreakpointLinear[DPMI_BP_MAX];     /* requested linear addresses (from PMBP_PATH) */
-static DWORD g_BreakpointDump[DPMI_BP_MAX];    /* optional 2nd column: linear addr to dump on hit */
+DWORD g_BreakpointDump[DPMI_BP_MAX];    /* optional 2nd column: linear addr to dump on hit */
 /* Optional 3rd column: bytes to SKIP on hit instead of re-executing the instruction.
    This turns a breakpoint into a one-instruction PATCH, which is how you test "would
    the client survive if this instruction simply did not happen?" without a rebuild.
    Session 17 needed exactly that for a `STI`: at CPL 3 with IOPL 0 it raises the one
    #GP XP will not reflect, so it kills the VDM -- and the question "is STI the only
    thing in the way" is answerable in one run by skipping it. */
-static DWORD g_BreakpointSkip[DPMI_BP_MAX];
+DWORD g_BreakpointSkip[DPMI_BP_MAX];
 /* Optional 4th column: 1 = plant a ONE-BYTE INT3 (0xCC) instead of the two-byte BOP.
    This exists to answer one question that forks the whole CLI/STI strategy: does a
    protected-mode TRAP reach our VEH at all? Runs 20-34 had the kernel reflecting PM
@@ -55,8 +77,8 @@ static DWORD g_BreakpointSkip[DPMI_BP_MAX];
    with the GUEST's CS, so it falls to DpmiCrashVeh's fatal arm and prints
    "DPMI FATAL: exception code=0x80000003". Seeing that line instead of a silent death
    is the answer. A one-byte trap is also the only patch that FITS over CLI/STI. */
-static DWORD g_BreakpointMode[DPMI_BP_MAX];
-static BYTE  g_BreakpointPending[DPMI_BP_MAX];  /* skipped -> needs re-arming once EIP moves on */
+DWORD g_BreakpointMode[DPMI_BP_MAX];
+BYTE  g_BreakpointPending[DPMI_BP_MAX];  /* skipped -> needs re-arming once EIP moves on */
 /* Optional 5th column: 1 = REPEATING. One-shot is right for a "how far did it get"
    sweep, and useless for a loop -- the first pass eats every breakpoint and the failing
    iteration is the thousandth. A repeating breakpoint cannot re-plant itself while the
@@ -64,7 +86,7 @@ static BYTE  g_BreakpointPending[DPMI_BP_MAX];  /* skipped -> needs re-arming on
    pending and let the NEXT event (typically the other breakpoint in the same loop) put
    it back. Put at least TWO repeating breakpoints in a loop and they alternate, which
    gives a register dump per iteration. */
-static DWORD g_BreakpointReport[DPMI_BP_MAX];
+DWORD g_BreakpointReport[DPMI_BP_MAX];
 static BYTE  g_BreakpointOriginal[DPMI_BP_MAX][DPMI_PM_BOP_LENGTH]; /* the two bytes we displaced                  */
 static BYTE  g_BreakpointArmed[DPMI_BP_MAX];
 /* ── ⚠⚠ A REFUSAL IS A STANDING CONDITION, NOT AN EVENT. (session 59) ───────────────
@@ -84,11 +106,11 @@ static BYTE  g_BreakpointRefused[DPMI_BP_MAX];
    is simply left unarmed -- it has stopped answering a question by then. */
 #define DPMI_BP_ARM_MAX 512
 static DWORD g_BreakpointArms[DPMI_BP_MAX];
-static INT g_DpmiBlockCount = 0;
-static DWORD g_DpmiOwned[DPMI_OWNED_MAX];  /* live 0501 blocks (VirtualAlloc bases)  */
-static INT   g_DpmiOwnedCount = 0;
+INT g_DpmiBlockCount = 0;
+DWORD g_DpmiOwned[DPMI_OWNED_MAX];  /* live 0501 blocks (VirtualAlloc bases)  */
+INT   g_DpmiOwnedCount = 0;
 #define DPMI_LE_MIN_CODE_SIZE 0x10000u   /* only code objects this big are matched (see g_LeCodeSize) */
-static INT   g_LeCodeCount = 0;
+INT   g_LeCodeCount = 0;
 
 /* How far an injected protected-mode ISR may run before we stop waiting for its IRET.
    See the commentary at the phase loop in DpmiInjectPmIrq(): a phase is one PM entry,
@@ -96,7 +118,7 @@ static INT   g_LeCodeCount = 0;
    against a handler that traps forever without making progress. */
 #define DPMI_IRQ0_PHASE_MAX 65536u
 #define DPMI_IRQ0_MS_MAX    500u
-static WORD  g_PmDefaultSelector  = 0;      /* code selector over the stub block */
+WORD  g_PmDefaultSelector  = 0;      /* code selector over the stub block */
 static DWORD g_PmDefaultBase = 0;      /* its linear base                   */
 static INT   g_PmDefaultIndex  = -1;     /* its LDT slot, so its D/B can follow the client */
 static INT   g_PmDefaultFromDos = 0; /* the block came from the DOS arena, not the host pool */
@@ -105,9 +127,9 @@ static INT   g_PmDefaultFromDos = 0; /* the block came from the DOS arena, not t
      (the guest never touches 0x09..0x2b across three full runs), and the
      client-facing counter starts ABOVE it so the two can never meet. */
 #define DPMI_HOSTPOOL_LO  0x09
-static WORD  g_LdtFree[DPMI_LDT_MAX];   /* recycled indices, LIFO */
-static INT   g_LdtFreeCount = 0;
-static INT   g_PmWatchCount      = 0;
+WORD  g_LdtFree[DPMI_LDT_MAX];   /* recycled indices, LIFO */
+INT   g_LdtFreeCount = 0;
+INT   g_PmWatchCount      = 0;
 static DWORD g_PmIrq0Done   = 0;           /* cooperative injections that reached an IRET */
 /* ── THE OTHER HALF OF THE DELIVERY ACCOUNT. ─────────────────────────────────────────
      `pit budget` reads "raises 144/s ... delivered 56/s" and concludes the guest's clock
@@ -119,7 +141,7 @@ static DWORD g_PmIrq0Done   = 0;           /* cooperative injections that reache
      units error of exactly the kind that has cost this project rig runs before.
      Count the cooperative arm per VECTOR and print both arms against `raises`, so the
      line answers the question it appears to answer. */
-static DWORD g_PmCooperativeLine[PIC_LINES_PER_CHIP];
+DWORD g_PmCooperativeLine[PIC_LINES_PER_CHIP];
 WORD      g_PmTransferParagraphs = 0;
 
 /* True if selector `sel`'s descriptor has the D/B (32-bit default) bit set. The bit
@@ -164,7 +186,7 @@ INT DpmiSelectorIs32(WORD selector)
    ⚠ ON EXHAUSTION IT FALLS BACK to the shared counter and says so, because a
      host that stops minting selectors is worse than one that risks the old bug. */
 static INT g_HostPoolNext = DPMI_HOSTPOOL_LO;
-static INT g_HostPoolSpill = 0;
+INT g_HostPoolSpill = 0;
 
 INT DpmiHostIndex(VOID)
 {
@@ -178,8 +200,8 @@ INT DpmiHostIndex(VOID)
    protected-to-real entry, the 0305 save/restore no-op) have a protected-mode address
    to hand the client. Allocated once, from the host-private pool above, and cached --
    0305 and 0306 both want it and a client may call either more than once. */
-static WORD g_DpmiHandlerSelector = 0;
-static WORD DpmiHandlerCodeSelector(VOID)
+WORD g_DpmiHandlerSelector = 0;
+WORD DpmiHandlerCodeSelector(VOID)
 {
     INT index;
     if (g_DpmiHandlerSelector) return g_DpmiHandlerSelector;
@@ -234,7 +256,7 @@ WORD DpmiSegmentToDescriptor(WORD segment)
     return (WORD)DPMI_LDT_SELECTOR(ldtIndex);
 }
 
-static VOID DpmiSegmentToDescriptorForget(WORD selector)
+VOID DpmiSegmentToDescriptorForget(WORD selector)
 {
     INT index;
     for (index = 0; index < g_SegmentToDescriptorCount; ++index)
@@ -249,7 +271,7 @@ static VOID DpmiSegmentToDescriptorForget(WORD selector)
 enum { DPMI_PMDEF_PARAS = 0x40 };   /* the 256 default PM stubs, DPMI_PMDEF_STRIDE bytes each */
 /* Plant the default PM interrupt handlers and point every vector at them. See the
    note on g_PmDefaultSelector. Called once, at the mode switch, before the client runs. */
-static VOID DpmiInstallDefaultPmHandlers(DOS_MACHINE *machine)
+VOID DpmiInstallDefaultPmHandlers(DOS_MACHINE *machine)
 {
     WORD segment = 0, maximum = 0;
     volatile BYTE *stub;
@@ -414,7 +436,7 @@ VOID DpmiInstall(INT index)
    (g_DpmiFaultCodeSelector, based at DOS_HDLR_SEG<<4) with a BOP at DPMI_FAULT_COFF. The
    handler table g_FaultTable[class]=({code_sel,COFF}) is what the kernel reads via
    [VDM_TIB+8] to set the reflected CS:EIP. Allocated once from the g_Ldt[] pool. */
-static VOID DpmiInstallFaultTrampoline(VOID)
+VOID DpmiInstallFaultTrampoline(VOID)
 {
     INT stackIndex, codeIndex; UINT index;
     volatile BYTE *handlerArea = (volatile BYTE *)(ULONG_PTR)((DWORD)DOS_HDLR_SEG << PARAGRAPH_SHIFT);
@@ -527,7 +549,7 @@ DWORD DpmiSelectorBase(WORD selector)
    CPU just told us it executed is EVIDENCE; taking the first of several would be the
    same kind of guess as the eager scan's length vote, which has broken five guests.
    Returns the linear address, or 0 if absent or ambiguous. *pcand gets the count. */
-static DWORD DpmiRecoverFlatEip(DWORD lo16, BYTE vector, INT *candidateCount)
+DWORD DpmiRecoverFlatEip(DWORD lo16, BYTE vector, INT *candidateCount)
 {
     DWORD found = 0; INT matches = 0, index;
     lo16 &= WORD_MASK_U;
@@ -650,7 +672,7 @@ DWORD DpmiPmEip(volatile BYTE *tib)
    is idempotent and self-healing: a site rejected under the wrong width is not recorded
    in the patch map, so the next pass -- and there is always a next pass, because the
    client declares its regions repeatedly while it loads -- gets another chance at it. */
-static VOID DpmiPatchCodeRegion(DWORD base, DWORD limit, INT is32BitRegion)
+VOID DpmiPatchCodeRegion(DWORD base, DWORD limit, INT is32BitRegion)
 {
     volatile BYTE *memory;
     DWORD end, patched = 0, rejected = 0, jumpTableSkipped = 0;   /* jumpTableSkipped: jump-table entries skipped -- see the guard */
@@ -1044,7 +1066,7 @@ enum { LE_SCAN_FILE_MIN = 0x200, LE_SCAN_HEADER_ROOM = 0x100 };   /* DpmiLeLearn
      and occurs in data by chance. Byte/word order little-endian, format level 0, a 386+
      CPU, a plausible OS and object count: five agreeing fields, which no accident of
      data passed on any binary tried here. */
-static VOID DpmiLeLearn(const BYTE *buffer, DWORD length)
+VOID DpmiLeLearn(const BYTE *buffer, DWORD length)
 {
     DWORD index;
     CHAR lineBuffer[192], *cursor;
@@ -1097,7 +1119,7 @@ static VOID DpmiLeLearn(const BYTE *buffer, DWORD length)
      that means "loaded", so this is idempotent and cheap instead: sites already in the
      patch map are skipped, and the map drops entries whose bytes the guest has since
      overwritten, so a later pass re-patches what a copy undid. */
-static VOID DpmiScanCodeBlocks(VOID)
+VOID DpmiScanCodeBlocks(VOID)
 {
     INT index;
     for (index = 0; index < g_DpmiBlockCount; ++index)
@@ -1133,7 +1155,7 @@ enum { BREAKPOINT_COLUMN_LINEAR = 0, BREAKPOINT_COLUMN_DUMP = 1, BREAKPOINT_COLU
    ⇒ 8 KB, and SAY what was loaded: the count, and a loud line if the file was longer
      than the buffer or if DPMI_BP_MAX was reached. A parser that discards input
      without a word is not an instrument. */
-static VOID DpmiBreakpointLoad(VOID)
+VOID DpmiBreakpointLoad(VOID)
 {
     HANDLE handle = CreateFileA(PMBP_PATH, GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE,
                            NULL, OPEN_EXISTING, 0, NULL);
@@ -1218,7 +1240,7 @@ static VOID DpmiBreakpointLoad(VOID)
      one guest is WOW, the other is an extended DOS program -- but they are checked
      independently so a nonsense combination resolves once and stops, rather than
      resolving twice into a wild address. */
-static VOID DpmiBreakpointResolveCodeBase(DWORD base)
+VOID DpmiBreakpointResolveCodeBase(DWORD base)
 {
     CHAR lineBuffer[200], *cursor;
     INT index;
@@ -1237,7 +1259,7 @@ static VOID DpmiBreakpointResolveCodeBase(DWORD base)
     }
 }
 
-static VOID DpmiBreakpointResolveSegment(UINT segmentNumber, DWORD base)
+VOID DpmiBreakpointResolveSegment(UINT segmentNumber, DWORD base)
 {
     CHAR lineBuffer[200], *cursor;
     INT index;
@@ -1265,7 +1287,7 @@ static VOID DpmiBreakpointResolveSegment(UINT segmentNumber, DWORD base)
 /* Arm any requested breakpoint whose address is now present in guest memory. Called
    after the up-front INT scan and after every code-region patch, because a module the
    client loads at runtime does not exist to be patched before then. */
-static VOID DpmiBreakpointArm(VOID)
+VOID DpmiBreakpointArm(VOID)
 {
     INT index;
     for (index = 0; index < g_BreakpointCount; ++index) {
@@ -1437,7 +1459,7 @@ static VOID DpmiBreakpointArm(VOID)
 
 /* Re-plant any breakpoint that was stepped over, once the guest is no longer standing
    on its footprint. Called at every PM event, which is the first safe moment. */
-static VOID DpmiBreakpointRearmPending(DWORD currentLinear)
+VOID DpmiBreakpointRearmPending(DWORD currentLinear)
 {
     INT index, any = 0;
     for (index = 0; index < g_BreakpointCount; ++index)
@@ -1448,7 +1470,7 @@ static VOID DpmiBreakpointRearmPending(DWORD currentLinear)
 }
 
 /* Disarm the breakpoint at `lin` (restore its bytes). Returns its index, or -1. */
-static INT DpmiBreakpointDisarm(DWORD linear)
+INT DpmiBreakpointDisarm(DWORD linear)
 {
     INT index;
     for (index = 0; index < g_BreakpointCount; ++index)
@@ -1484,7 +1506,7 @@ static INT DpmiBreakpointDisarm(DWORD linear)
    there, the guest has reused that memory, so the site is stale -- drop it and never
    touch those bytes again. That is strictly better than trying to predict which regions
    the guest will reuse, which is not knowable. */
-static VOID DpmiUnpatch(VOID)
+VOID DpmiUnpatch(VOID)
 {
     DWORD slot;
     for (slot = 0; slot < DPMI_PMAP_SLOTS; ++slot) {
@@ -1495,7 +1517,7 @@ static VOID DpmiUnpatch(VOID)
           else g_PatchMapVector[slot] = 0; }                          /* stale: guest reused it */
     }
 }
-static VOID DpmiRepatch(VOID)
+VOID DpmiRepatch(VOID)
 {
     DWORD slot;
     for (slot = 0; slot < DPMI_PMAP_SLOTS; ++slot) {
@@ -1539,7 +1561,7 @@ enum { DPMI_CALLBACK_STACK_TOP = 0xF400, DPMI_CALLBACK_PHASE_MAX = 64 };   /* Dp
    PM handler with the real-mode register state marshalled into its RMCS, then resume
    V86 at the far-call's return address. The inverse of 0301's PM->V86 direction.
    On entry the CONTEXT holds the V86 state at the far-call (segment un-patched). */
-static VOID DpmiInvokeCallback(DOS_MACHINE *machine, volatile BYTE *tib, INT slot)
+VOID DpmiInvokeCallback(DOS_MACHINE *machine, volatile BYTE *tib, INT slot)
 {
     CHAR lineBuffer[256]; PSTR lineCursor = lineBuffer;
     WORD realSs = (WORD)VDM_REG(tib, VTIB_SS), realSp = (WORD)VDM_REG(tib, VTIB_ESP);
@@ -1664,7 +1686,7 @@ static VOID DpmiInvokeCallback(DOS_MACHINE *machine, volatile BYTE *tib, INT slo
  *    again (a chain back to the host). We then service it ourselves, which is the
  *    correct meaning of "chain to the previous handler" when the previous one is us.
  */
-static BYTE g_PmDispatch[IVT_VECTORS];                 /* 1 while inside vec's client handler */
+BYTE g_PmDispatch[IVT_VECTORS];                 /* 1 while inside vec's client handler */
 
 /* ── ★★★★ A REFLECTED INTERRUPT IS THE ONE TRACE THAT CAN OUTRUN THE GUEST. ────────
      Every dispatch below writes two LogAppend lines (~350 bytes) and does two
@@ -1702,10 +1724,10 @@ static BYTE g_PmDispatch[IVT_VECTORS];                 /* 1 while inside vec's c
 #define PM_DISP_LOG_MAX   24        /* always-loud lines per (vec, AH) */
 #define PM_DISP_QUIET_MS  100u      /* ...then at most one more per pair per this */
 static BYTE  g_PmDispatchLogged[IVT_VECTORS][BYTE_VALUES];    /* always-loud lines emitted for (vec, AH) */
-static DWORD g_PmDispatchCount[IVT_VECTORS][BYTE_VALUES];     /* every dispatch, logged or not */
+DWORD g_PmDispatchCount[IVT_VECTORS][BYTE_VALUES];     /* every dispatch, logged or not */
 static DWORD g_PmDispatchMs[IVT_VECTORS][BYTE_VALUES];        /* GetTickCount of the last line for the pair */
 enum { DPMI_DISPATCH_PHASE_MAX = 4096 };   /* DpmiDispatchToPmHandler: the nested run's bound */
-static INT DpmiDispatchToPmHandler(DOS_MACHINE *machine, volatile BYTE *tib,
+INT DpmiDispatchToPmHandler(DOS_MACHINE *machine, volatile BYTE *tib,
                                        DWORD vector, UINT steps)
 {
     /* ── ⚠⚠ 256 WAS NINE BYTES OF HEADROOM, AND ADDING ONE FIELD BLEW IT. ────────────
@@ -1981,12 +2003,12 @@ quietEntry:
    0x2f7:0x045d53xx), and the masked address put our answer at linear 0x53xx --
    the guest read an uninitialised block, concluded "You don't have enough memory
    to run Duke Nukem 3D", and exited 0. */
-static DWORD DpmiCallerOffset(volatile BYTE *tib, DWORD offset)
+DWORD DpmiCallerOffset(volatile BYTE *tib, DWORD offset)
 {
     return DpmiSelectorIs32((WORD)VDM_REG16(tib, VTIB_CS)) ? offset : (offset & WORD_MASK);
 }
 
-static DWORD DpmiRmcsPointer(volatile BYTE *tib, DWORD esBase)
+DWORD DpmiRmcsPointer(volatile BYTE *tib, DWORD esBase)
 {
     return esBase + DpmiCallerOffset(tib, VDM_REG(tib, VTIB_EDI));
 }
@@ -1995,7 +2017,7 @@ static DWORD DpmiRmcsPointer(volatile BYTE *tib, DWORD esBase)
    FLAGS is deliberately NOT moved by RmcsToTib: each caller decides what the live
    EFLAGS are (V86 entry state for the nested call, a carrier word for the host-side
    fast path), and passes the word to report back to TibToRmcs. */
-static VOID RmcsToTib(volatile BYTE *tib, const RMCS_REGS *registers)
+VOID RmcsToTib(volatile BYTE *tib, const RMCS_REGS *registers)
 {
     VDM_REG(tib, VTIB_EDI) = registers->Edi; VDM_REG(tib, VTIB_ESI) = registers->Esi;
     VDM_REG(tib, VTIB_EBP) = registers->Ebp; VDM_REG(tib, VTIB_EBX) = registers->Ebx;
@@ -2004,7 +2026,7 @@ static VOID RmcsToTib(volatile BYTE *tib, const RMCS_REGS *registers)
     VDM_REG(tib, VTIB_ES) = registers->Es; VDM_REG(tib, VTIB_DS) = registers->Ds;
     VDM_REG(tib, VTIB_FS) = registers->Fs; VDM_REG(tib, VTIB_GS) = registers->Gs;
 }
-static VOID TibToRmcs(volatile BYTE *tib, RMCS_REGS *registers, WORD flags)
+VOID TibToRmcs(volatile BYTE *tib, RMCS_REGS *registers, WORD flags)
 {
     registers->Edi = VDM_REG(tib, VTIB_EDI); registers->Esi = VDM_REG(tib, VTIB_ESI);
     registers->Ebp = VDM_REG(tib, VTIB_EBP); registers->Ebx = VDM_REG(tib, VTIB_EBX);
@@ -2015,7 +2037,7 @@ static VOID TibToRmcs(volatile BYTE *tib, RMCS_REGS *registers, WORD flags)
     registers->Fs = (WORD)VDM_REG(tib, VTIB_FS); registers->Gs = (WORD)VDM_REG(tib, VTIB_GS);
 }
 
-static VOID DpmiRmcsProbe(volatile BYTE *tib, DWORD esBase, UINT slot, DWORD interruptNumber)
+VOID DpmiRmcsProbe(volatile BYTE *tib, DWORD esBase, UINT slot, DWORD interruptNumber)
 {
     static BYTE seen[5][256];
     DWORD edi = VDM_REG(tib, VTIB_EDI), es = VDM_REG16(tib, VTIB_ES);
@@ -2052,7 +2074,7 @@ static VOID DpmiRmcsProbe(volatile BYTE *tib, DWORD esBase, UINT slot, DWORD int
 }
 
 /* #248: the index of a live 0501h handle in g_DpmiOwned[], or -1. */
-static INT DpmiOwnedFind(DWORD handle)
+INT DpmiOwnedFind(DWORD handle)
 {
     INT index;
     if (!handle) return -1;
@@ -2062,7 +2084,7 @@ static INT DpmiOwnedFind(DWORD handle)
 
 /* #248: give LDT index `idx` back -- null descriptor installed, index on the free list.
    One body for 0001h and 0101h (0101h used to zero the base and keep the index for ever). */
-static VOID DpmiLdtRelease(INT index)
+VOID DpmiLdtRelease(INT index)
 {
     g_Ldt[index].Base = g_Ldt[index].Limit = 0;
     g_Ldt[index].Access = 0;                          /* not present */
@@ -2074,7 +2096,7 @@ static VOID DpmiLdtRelease(INT index)
 /* ...and take one: the free list first, as 0000h does for a single descriptor, then the
    high-water mark. -1 = the table is full. Without the free list, 0101h giving indices
    back would not stop a 0100h/0101h loop from running the table dry. */
-static INT DpmiLdtTake(VOID)
+INT DpmiLdtTake(VOID)
 {
     if (g_LdtFreeCount > 0) return g_LdtFree[--g_LdtFreeCount];
     if (g_LdtNext >= DPMI_LDT_MAX) return -1;
@@ -2085,7 +2107,7 @@ static INT DpmiLdtTake(VOID)
    exception (under WOW the guest owns the table, so only the range is ours to check) are
    in dpmi_svc.h; this binds it to our table. "Allocated" = a non-zero access byte, which
    is what 0001h's free (access = 0) and 0000h's allocate (0xF2) maintain. */
-static INT DpmiClientSelectorOk(WORD selector)
+INT DpmiClientSelectorOk(WORD selector)
 {
     INT index = DPMI_SELECTOR_INDEX(selector);
     INT alloc = (index >= 1 && index < DPMI_LDT_MAX) && g_Ldt[index].Access != 0;
@@ -2148,7 +2170,7 @@ static DWORD PmTransferStringLength(WORD selector, DWORD offset, DWORD cap)
 
 /* Service one pointer-taking INT 21h call made from protected mode. Returns the log
    cursor. EIP is advanced by the caller, as for every other arm. */
-static PSTR PmInt21Transfer(DOS_MACHINE *machine, volatile BYTE *tib, DWORD ah, PSTR cursor)
+PSTR PmInt21Transfer(DOS_MACHINE *machine, volatile BYTE *tib, DWORD ah, PSTR cursor)
 {
 #define m (*machine)
     WORD  dsValue = (WORD)VDM_REG16(tib, VTIB_DS);
@@ -2266,7 +2288,7 @@ static DWORD PmLfnOutLength(DWORD transferOffset, INT kind, DWORD length)
     while (used < length && transfer[used]) ++used;
     return (used < length) ? used + 1 : length;
 }
-static PSTR PmInt21Lfn(DOS_MACHINE *machine, volatile BYTE *tib, PSTR cursor)
+PSTR PmInt21Lfn(DOS_MACHINE *machine, volatile BYTE *tib, PSTR cursor)
 {
 #define m (*machine)
     DWORD al = VDM_REG(tib, VTIB_EAX) & BYTE_MASK;
@@ -2344,7 +2366,7 @@ static PSTR PmInt21Lfn(DOS_MACHINE *machine, volatile BYTE *tib, PSTR cursor)
     return cursor;
 #undef m
 }
-static INT DpmiReflectIrqToRm(DOS_MACHINE *machine, volatile BYTE *tib, UINT vector)
+INT DpmiReflectIrqToRm(DOS_MACHINE *machine, volatile BYTE *tib, UINT vector)
 {
     CHAR lineBuffer[256], *lineCursor = lineBuffer;
     DWORD savedEax=VDM_REG(tib,VTIB_EAX),savedEbx=VDM_REG(tib,VTIB_EBX),savedEcx=VDM_REG(tib,VTIB_ECX),
@@ -2515,7 +2537,7 @@ INT DpmiServicePmInt(DOS_MACHINE *machine, volatile BYTE *tib, DWORD vector,
 /* Lazily install the PM-return catcher selector (g_PmReturnSelector): a code selector based
    at DOS_HDLR_SEG so a PM handler's IRET lands on the planted DPMI_PMRET BOP. Shared by
    the 0303 real-mode-callback path and the async-IRQ injector (#2b). */
-static VOID DpmiEnsurePmReturnSelector(VOID)
+VOID DpmiEnsurePmReturnSelector(VOID)
 {
     if (g_PmReturnSelector == 0 && g_LdtNext < DPMI_LDT_MAX) {
         INT index = g_LdtNext++;
@@ -2998,7 +3020,7 @@ INT DpmiInjectPmIrq(DOS_MACHINE *machine, volatile BYTE *tib, UINT interruptVect
      the client is), on its own stack, a far-return frame onto the PM-return catcher,
      the same phase loop, the interrupted context restored verbatim. The frame is a
      RETF frame (CS:EIP, no FLAGS) because that is what the handler pops. */
-static INT DpmiInjectPmMouseCallback(DOS_MACHINE *machine, volatile BYTE *tib, UINT steps)
+INT DpmiInjectPmMouseCallback(DOS_MACHINE *machine, volatile BYTE *tib, UINT steps)
 {
     if (g_PmClientExited) return 0;          /* nothing left to call into */
     DWORD sEAX=VDM_REG(tib,VTIB_EAX), sEBX=VDM_REG(tib,VTIB_EBX), sECX=VDM_REG(tib,VTIB_ECX);
@@ -3117,7 +3139,7 @@ static INT DpmiInjectPmMouseCallback(DOS_MACHINE *machine, volatile BYTE *tib, U
      rewrote in the client's code, and that code lives in the 0501 blocks released
      below. DpmiUnpatch/DpmiRepatch dereference every entry: left in place, the next
      client's first 0301 would read freed memory and fault the host. */
-static VOID DpmiClientTeardown(VOID)
+VOID DpmiClientTeardown(VOID)
 {
     INT index, keepHigh = g_LdtClientMark, freedLdt = 0, freedMemory = 0, freedDos = 0;
     INT hostIndex[DPMI_HOST_SELECTORS];

@@ -29,7 +29,7 @@ static DWORD g_WowIdleWaits = 0;              /* #306: krnl386 idle waits that b
      to exactly that. This is filled in when the selector is committed, and mode bit 1
      in pmbp.txt means "the address column is an OFFSET IN THIS SEGMENT". */
 static DWORD g_WowPmSegment1Base = 0;
-static DWORD g_WowPmBase[WOW_PMBASE_MAX];
+DWORD g_WowPmBase[WOW_PMBASE_MAX];
 /* ── ★ THE CHANGE DETECTOR (pmchg.txt). One line: `<hex offset> [segment]`, the
      segment defaulting to 4 (krnl386's DGROUP), because the addresses worth watching
      are data whose base moves every run. Resolved lazily, the first PM event after
@@ -52,22 +52,22 @@ static BYTE  g_PmWatchHave = 0;
    ⇒ Retire it explicitly. `pending` now means "the guest is standing on this
      footprint" for EVERY kind of hit, and `done` means "this one-shot has fired".
      The two were conflated, and the conflation is what let a one-shot loop. */
-static BYTE  g_BreakpointDone[DPMI_BP_MAX];
+BYTE  g_BreakpointDone[DPMI_BP_MAX];
 static DWORD          g_PmIrqReflects = 0;      /* PM default IRQ stub -> BIOS action (s80) */
 static DWORD          g_PmIrqReflectLogged = 0; /* bounded log budget for the above       */
-static WORD  g_DpmiDosBlock[DPMI_DOSBLK_MAX]; /* live 0100 DOS blocks (segments)        */
-static INT   g_DpmiDosBlockCount = 0;
+WORD  g_DpmiDosBlock[DPMI_DOSBLK_MAX]; /* live 0100 DOS blocks (segments)        */
+INT   g_DpmiDosBlockCount = 0;
 static INT   g_PmExitCode = 0;             /* AL of the client's PM AH=4Ch           */
-static DWORD g_LeCodeSize[DPMI_LE_MAX];   /* page-rounded sizes of the EXEC objects */
+DWORD g_LeCodeSize[DPMI_LE_MAX];   /* page-rounded sizes of the EXEC objects */
 /* ...and WHERE it is. Kept apart from g_PmInt[8] on purpose: that table is what INT 31h
    0204 reports back, and it must keep saying exactly what the client installed through
    0205. Answering 0204 with a handler DOS/4GW never set is how the first attempt at this
    produced "fatal error (1001): error in interrupt chain" -- the extender queried the
    vector during shutdown, did not recognise it, and concluded its chain was corrupt.
    Where we DELIVER and what the vector table REPORTS are two different questions. */
-static WORD  g_PmAppTimerSelector = 0;
-static DWORD g_PmAppTimerOffset = 0;
-static INT g_PmDispatchTop;   /* ...as captured by the dispatch it applies to    */
+WORD  g_PmAppTimerSelector = 0;
+DWORD g_PmAppTimerOffset = 0;
+INT g_PmDispatchTop;   /* ...as captured by the dispatch it applies to    */
 #define I33_SRC_SIM  3                      /* DPMI 0300 simulate-real-mode-interrupt */
 static INT g_SimIntReflect = 0;
 /* ── ★★ WHICH SELECTOR IS USER'S CODE SEGMENT? LEARN IT FROM A STUB. ──────────
@@ -5640,7 +5640,7 @@ static INT WowFinishCallback(PSTR *cursorIo, PSTR const base, volatile BYTE * co
     *cursorIo = cursor; return HOST_FLOW_NEXT;
 }
 
-static INT DpmiServicePmIntBody(DOS_MACHINE *machine, volatile BYTE *tib, DWORD vector,
+INT DpmiServicePmIntBody(DOS_MACHINE *machine, volatile BYTE *tib, DWORD vector,
                                     UINT steps)
 {
     CHAR report[2048]; PSTR base = report; PSTR cursor = report;

@@ -72,4 +72,9 @@ extern WORD g_DsProbe[DSPROBE_MAX];
 extern INT g_DsProbeCount;
 extern WORD g_CsProbe[DSPROBE_MAX];
 extern INT g_CsProbeCount;
+extern INT g_PmIrq0Latch;
+extern INT g_NoPmPatch;
+extern DWORD g_NoPmPatchMinimum;
+extern INT g_LdtClientMark;
+extern INT g_PmTopDispatch;
 #endif

@@ -106,7 +106,6 @@ CHAR             g_TextFontLive[NTVDMEX_PATH_MAX];
 #include "present_ddraw.h"
 
 #include "host_internal.h"
-#include "host_dpmi.c"
 #include "host_dpmi_int.c"
 
 
@@ -366,7 +365,7 @@ PCSTR g_DosVersionWhy = 0;
 static INT          g_DosVersionShell = 0;      /* #208: an XP shell is present, told 5.00 itself */
 UINT32 g_PitAsyncAttempts;
 static DWORD g_KeyPmLogged  = 0;           /* bounded KEYPM account; see the PM exec loop */
-static INT g_PmIrq0Latch = 0;             /* #2b: a virtual IRQ0 awaiting injection into the PM hook */
+INT g_PmIrq0Latch = 0;             /* #2b: a virtual IRQ0 awaiting injection into the PM hook */
 /* Suppress the asynchronous IRQ0 -> PM INT 08h injection. A knob, not a feature: when a
    client dies the instant we deliver a timer tick, the first question is whether the
    DELIVERY is wrong or merely BADLY TIMED, and the cheapest way to ask it is to stop
@@ -491,9 +490,9 @@ static DWORD g_IoViaDirect = 0, g_IoViaRetro = 0;
 static LONGLONG g_HostTimeLast;           /* QPC of the last VdmRunGuest return; 0 = none */
 static INT  g_HostEventLast;
 INT            g_NoA000       = 0;  /* NOA000_FLAG present: leave A0000 mapped (diagnostic) */
-static INT            g_NoPmPatch    = 0;  /* NOPMPATCH_FLAG present: scan no code regions (diagnostic) */
+INT            g_NoPmPatch    = 0;  /* NOPMPATCH_FLAG present: scan no code regions (diagnostic) */
 static INT            g_Fault32Warned  = 0;  /* said once: NT's 16-bit frame cannot locate a flat client's INT */
-static DWORD          g_NoPmPatchMinimum = 0; /* ...or only regions >= this many bytes */
+DWORD          g_NoPmPatchMinimum = 0; /* ...or only regions >= this many bytes */
 DWORD          g_MemoryDumpLinear = 0, g_MemoryDumpLength = 0;   /* MEMDUMP_FLAG */
 static INT            g_Interp12      = 0;  /* INTERP12_FLAG: interpret mode 12h, no page trap */
 static DWORD          g_RunStartTick= 0;  /* exec-loop start, so STAGE2 can report a RATE    */
@@ -515,7 +514,7 @@ static DWORD          g_P12Bails     = 0;
 static struct { DWORD Cs, Ip, Count; BYTE Bytes[8]; } g_P12Site[P12_SITE_MAX];
 static UINT g_P12SiteCount = 0, g_P12SiteLost = 0;
 DWORD g_HeadlessMs = PM_HEADLESS_MS_DEFAULT;   /* overridable via HEADLESS_MS_PATH */
-static INT   g_LdtClientMark = 0;          /* g_LdtNext when the client switched in */
+INT   g_LdtClientMark = 0;          /* g_LdtNext when the client switched in */
 /* Ticks run per asynchronous entry -- see the drain in the main loop. */
 /* ► A BATCH IS CATCH-UP, NOT A LICENCE TO COMPRESS TIME. At Doom's 140 Hz, draining
      64 ticks back to back hands the guest 0.45 SECONDS of game time in microseconds --
@@ -671,7 +670,7 @@ typedef MMRESULT (WINAPI *PFN_TIME_BEGIN_PERIOD)(UINT);
 static HANDLE g_PitPaceThread;
 /* #256: 1 while the TOP-LEVEL PM loop is dispatching -- the one place a PM BIOS wait may
    re-execute its BOP (every nested loop counts its passes). See the PM INT 15h 86h arm. */
-static INT g_PmTopDispatch;   /* set by the top-level loop before it dispatches  */
+INT g_PmTopDispatch;   /* set by the top-level loop before it dispatches  */
 static HANDLE g_CourierThread;
 UINT g_CpuSpeedReferenceMhz = CPUSPEED_REF_MHZ_DEFAULT;  /* cpuref.txt       */
 static HANDLE g_CpuSpeedThread;
