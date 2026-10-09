@@ -3023,6 +3023,831 @@ static INT Wow32ServiceBop(PSTR *cursorIo, PSTR const base, const BYTE bopCode, 
     *cursorIo = cursor; *wowStaleIo = wowStale; *wowStaleOkIo = wowStaleOk; *wowAnswerIo = wowAnswer; return HOST_FLOW_NEXT;
 }
 
+
+/* PM INT 21h AH=55h/26h: create a (child) PSP for a PM client. */
+static INT DpmiInt21CreatePsp(PSTR *cursorIo, PSTR const base, const DWORD ah, volatile BYTE * const tib, INT *exitCodeOut)
+{
+    PSTR cursor = *cursorIo;
+    /* ── ★★★★ AH=55h / 26h: CREATE A PSP, IN PROTECTED MODE. ────────
+         krnl386 builds one of these per Win16 task -- measured, two
+         per run: DX=0x03bf for WOWEXEC and DX=0x0ad7 for SYSEDIT --
+         and BOTH were landing in the TODO arm, so neither task ever
+         got a PSP at all.
+
+       ★ AND THAT IS THE NULL-ES FAULT, TRACED END TO END. SYSEDIT
+         reads the ENVIRONMENT segment from its own PSP+0x2c; it treats
+         0 as "none", and loads anything else into ES and reads through
+         it (observed at the fault: ES loaded with 1, #GP on the null
+         descriptor). With no PSP built, +0x2c held whatever was in that
+         memory: 0 for WOWEXEC (whose launcher then read
+         lstrlen(0000:0000) and took a reflected #GP inside krnl386) and
+         1 for SYSEDIT, which gets past the "none" check and loads the
+         null descriptor. Same field, same cause, two different symptoms.
+
+       ⚠ DX IS A SELECTOR HERE, NOT A PARAGRAPH. The V86 arm in
+         dos_int21.c writes to `(DX & 0xFFFF) << 4`, which is right
+         there and meaningless here -- it would build the PSP a
+         megabyte away from where krnl386 is about to read it.
+
+       ⚠⚠ AND +0x2c MUST BE A SELECTOR TOO. DosPspBuild stores the
+         environment as a PARAGRAPH, which is correct for a DOS program
+         and wrong for this one: the guest loads that word straight
+         into ES. So the copied PSP gets a descriptor over
+         the same environment instead -- the same treatment AH=34h and
+         AH=52h already get, for the same reason. */
+    if (ah == DOS_FN_CREATE_CHILD_PSP || ah == DOS_FN_CREATE_PSP) {
+        WORD  dxSelector = (WORD)VDM_REG16(tib, VTIB_EDX);
+        DWORD dxLinear = DpmiSelectorBase(dxSelector);
+        const volatile BYTE *source =
+            (const volatile BYTE *)(ULONG_PTR)((DWORD)DOS_PSP_SEG << PARAGRAPH_SHIFT);
+        WORD environmentSelector = DpmiSegmentToDescriptor((WORD)DOS_ENV_SEG);
+        cursor = LogPut(cursor, "INT21h AH=0x"); cursor = LogHex(cursor, ah);
+        cursor = LogPut(cursor, " (PM) create PSP at sel 0x"); cursor = LogHex(cursor, dxSelector);
+        if (!dxLinear || !HostWritable((VOID *)(ULONG_PTR)dxLinear, DOS_PSP_SIZE)) {
+            cursor = LogPut(cursor, " -- NO/UNWRITABLE BASE, refusing");
+            VDM_REG(tib, VTIB_EFLAGS) |= EFLAGS_CF_U;          /* CF = failure */
+        } else {
+            volatile BYTE *destination = (volatile BYTE *)(ULONG_PTR)dxLinear;
+            INT item;
+            for (item = 0; item < DOS_PSP_SIZE; ++item) destination[item] = source[item];
+            destination[DOS_PSP_PARENT] = (BYTE)(DOS_PSP_SEG & BYTE_MASK);   /* parent PSP   */
+            destination[DOS_PSP_PARENT + 1] = (BYTE)(DOS_PSP_SEG >> BYTE_SHIFT);
+            if (ah == DOS_FN_CREATE_CHILD_PSP) {                          /* memory top   */
+                WORD si = (WORD)VDM_REG16(tib, VTIB_ESI);
+                destination[DOS_PSP_MEMORY_TOP] = (BYTE)(si & BYTE_MASK);
+                destination[DOS_PSP_MEMORY_TOP + 1] = (BYTE)(si >> BYTE_SHIFT);
+            }
+            /* What was there BEFORE we wrote -- if krnl386 had
+               already filled the field, overwriting it would be
+               the defect rather than the fix. */
+            cursor = LogPut(cursor, " (+0x2c was 0x");
+            cursor = LogHex(cursor, (DWORD)(destination[DOS_PSP_ENVIRONMENT] | (destination[DOS_PSP_ENVIRONMENT + 1] << BYTE_SHIFT)));
+            cursor = LogPut(cursor, ")");
+            destination[DOS_PSP_ENVIRONMENT] = (BYTE)(environmentSelector & BYTE_MASK);           /* env SELECTOR */
+            destination[DOS_PSP_ENVIRONMENT + 1] = (BYTE)(environmentSelector >> BYTE_SHIFT);
+            if (g_WowPspCount < WOW_PSP_TRACK) {
+                g_WowPspSelector[g_WowPspCount] = dxSelector;
+                g_WowPspLinear[g_WowPspCount] = dxLinear;
+                g_WowPspEnvironment[g_WowPspCount] = environmentSelector;
+                ++g_WowPspCount;
+            }
+            VDM_REG(tib, VTIB_EFLAGS) &= ~EFLAGS_CF_U;          /* CF = ok      */
+            cursor = LogPut(cursor, " lin=0x"); cursor = LogHex(cursor, dxLinear);
+            cursor = LogPut(cursor, " env sel=0x"); cursor = LogHex(cursor, environmentSelector);
+            if (!environmentSelector) cursor = LogPut(cursor, " (NO DESCRIPTOR -- env unusable)");
+        }
+        cursor = LogPut(cursor, "\r\n");
+        LogAppend(LOG_PATH, base, cursor); SerialOut(base, cursor); cursor = base;
+        VDM_REG(tib, VTIB_EIP) += DPMI_PM_BOP_LENGTH;
+        { *cursorIo = cursor; *exitCodeOut = 1; return HOST_FLOW_RETURN; }
+    }
+    *cursorIo = cursor; return HOST_FLOW_NEXT;
+}
+
+
+/* PM INT 21h AH=4Ah: resize a memory block for a PM client. */
+static INT DpmiInt21Resize(PSTR *cursorIo, PSTR const base, const DWORD ah, volatile BYTE * const tib, INT *exitCodeOut)
+{
+    PSTR cursor = *cursorIo;
+    if (ah == DOS_FN_RESIZE) {
+        /* ── DOS RESIZE, FROM PROTECTED MODE ────────────────────────────
+           ES is a selector, exactly as for 49h, and the evidence arrived
+           the same way: session 16 left 4Ah loud pending a client that
+           actually calls it, and DOS/4GW does -- immediately after the
+           48h whose block it is shrinking (ES=0xcf, BX=0x40 paras).
+           Resolve ES through the LDT, resize the real block, and then
+           UPDATE THE DESCRIPTOR: the client goes on using the selector it
+           already holds, so a limit left describing the old size is either
+           a spurious #GP (grown block) or a licence to run off the end of
+           the heap (shrunk one).
+           Register footprint is DOS's: nothing on success; AX = error and
+           BX = largest available on failure. See the AH=48h note above for
+           what happens when we improvise extra return values. */
+        WORD selector = (WORD)VDM_REG16(tib, VTIB_ES);
+        INT ldtIndex = DPMI_SELECTOR_INDEX(selector);
+        DWORD segmentBase = DpmiSelectorBase(selector);
+        DWORD want = VDM_REG16(tib, VTIB_EBX);
+        WORD maximum = 0;
+        cursor = LogPut(cursor, "INT21h AH=4A (PM) resize sel 0x"); cursor = LogHex(cursor, selector);
+        cursor = LogPut(cursor, " base 0x"); cursor = LogHex(cursor, segmentBase);
+        cursor = LogPut(cursor, " to 0x"); cursor = LogHex(cursor, want); cursor = LogPut(cursor, " paras");
+        if ((segmentBase & PARAGRAPH_LAST_BYTE) || segmentBase > X86_REAL_MODE_LAST_U) {
+            VDM_REG(tib, VTIB_EFLAGS) |= EFLAGS_CF_U;
+            VDM_SET16(tib, VTIB_EAX, DOS_ERR_INVALID_BLOCK);   /* invalid memory block address */
+            cursor = LogPut(cursor, " -> REFUSED (not a DOS paragraph)");
+        } else {
+            INT error = DosMcbResize(NULL, (WORD)(segmentBase >> PARAGRAPH_SHIFT),
+                                 (WORD)want, &maximum);
+            if (error) {
+                VDM_REG(tib, VTIB_EFLAGS) |= EFLAGS_CF_U;
+                VDM_SET16(tib, VTIB_EAX, error);
+                if (error == DOS_ERR_INSUFFICIENT_MEMORY) VDM_SET16(tib, VTIB_EBX, maximum);
+                cursor = LogPut(cursor, " -> err 0x"); cursor = LogHex(cursor, error);
+                cursor = LogPut(cursor, " max 0x"); cursor = LogHex(cursor, maximum);
+            } else {
+                VDM_REG(tib, VTIB_EFLAGS) &= ~EFLAGS_CF_U;
+                if (ldtIndex >= 1 && ldtIndex < DPMI_LDT_MAX) {
+                    g_Ldt[ldtIndex].Limit = want ? (want * PARAGRAPH_SIZE_U - 1u) : 0;
+                    DpmiInstall(ldtIndex);
+                    cursor = LogPut(cursor, " -> ok, sel limit now 0x");
+                    cursor = LogHex(cursor, g_Ldt[ldtIndex].Limit);
+                } else cursor = LogPut(cursor, " -> ok (no descriptor to update)");
+            }
+        }
+        cursor = LogPut(cursor, "\r\n");
+        LogAppend(LOG_PATH, base, cursor); SerialOut(base, cursor); cursor = base;
+        VDM_REG(tib, VTIB_EIP) += DPMI_PM_BOP_LENGTH;
+        { *cursorIo = cursor; *exitCodeOut = 1; return HOST_FLOW_RETURN; }
+    }
+    *cursorIo = cursor; return HOST_FLOW_NEXT;
+}
+
+
+/* PM INT 21h AH=25h/35h: set or get an interrupt vector for a PM client. */
+static INT DpmiInt21SetGetVector(PSTR *cursorIo, PSTR const base, const DWORD ah, const DWORD ax, volatile BYTE * const tib, INT *exitCodeOut)
+{
+    PSTR cursor = *cursorIo;
+    if (ah == DOS_FN_SET_VECTOR || ah == DOS_FN_GET_VECTOR) {
+        /* ── SET/GET INTERRUPT VECTOR FROM PROTECTED MODE ───────────────
+           These operate on the PROTECTED-MODE vector, i.e. they are
+           INT 31h 0205/0204 wearing a DOS hat, and must never reach
+           DosInt21() -- which writes DS:DX straight into the real-mode
+           IVT at linear (AL*4). In PM that would store a SELECTOR where
+           a segment belongs, in the first kilobyte of guest memory.
+
+           ► THE SPEC IS SILENT HERE. DPMI 0.9 defines INT 31h 0200-0206
+             for vectors and says only that "DPMI defines a specific
+             subset of DOS and BIOS calls that can be made by protected
+             mode DOS programs" -- it does not say which side 25h/35h act
+             on. Checked, not remembered.
+           ► WHAT SETTLES IT IS THE CLIENT, as usual. DOS/4GW does
+                 mov ax,0x3500 / int 21h        ; save the old vector
+                 mov ax,0x2500 / mov dx,0x2cf3 / int 21h
+             with DS = 0x9F -- its own CODE SELECTOR -- and 0x2cf3 is a
+             handler inside that selector. A selector:offset pair cannot
+             be installed in the real-mode IVT, and a chain built from a
+             35h that read the real vector and a 25h that wrote the PM one
+             would be incoherent. So both act on the PM table.
+           ► OUTSTANDING VERIFICATION: confirm against stock ntvdm's own
+             DPMI host with a text-mode probe (`stock <target>`). Until
+             then this is forced-by-the-data, not oracle-confirmed. */
+        DWORD al = ax & BYTE_MASK;
+        if (ah == DOS_FN_SET_VECTOR) {
+            WORD handlerSelector = (WORD)VDM_REG16(tib, VTIB_DS);
+            g_PmInt[al].Selector = handlerSelector;
+            g_PmInt[al].Offset = DpmiSelectorIs32(handlerSelector) ? VDM_REG(tib, VTIB_EDX)
+                                                   : VDM_REG16(tib, VTIB_EDX);
+            g_PmInt[al].Client = 1;
+            cursor = LogPut(cursor, "INT21h AH=25 (PM) set PM vector 0x"); cursor = LogHex(cursor, al);
+            cursor = LogPut(cursor, " = 0x"); cursor = LogHex(cursor, g_PmInt[al].Selector);
+            cursor = LogPut(cursor, ":0x"); cursor = LogHex(cursor, g_PmInt[al].Offset);
+        } else {
+            VDM_SET16(tib, VTIB_ES, g_PmInt[al].Selector);
+            if (DpmiSelectorIs32(g_PmInt[al].Selector)) VDM_REG(tib, VTIB_EBX) = g_PmInt[al].Offset;
+            else VDM_SET16(tib, VTIB_EBX, g_PmInt[al].Offset & WORD_MASK);
+            cursor = LogPut(cursor, "INT21h AH=35 (PM) get PM vector 0x"); cursor = LogHex(cursor, al);
+            cursor = LogPut(cursor, " -> 0x"); cursor = LogHex(cursor, g_PmInt[al].Selector);
+            cursor = LogPut(cursor, ":0x"); cursor = LogHex(cursor, g_PmInt[al].Offset);
+        }
+        VDM_REG(tib, VTIB_EFLAGS) &= ~EFLAGS_CF_U;
+        cursor = LogPut(cursor, "\r\n");
+        LogAppend(LOG_PATH, base, cursor); SerialOut(base, cursor); cursor = base;
+        VDM_REG(tib, VTIB_EIP) += DPMI_PM_BOP_LENGTH;
+        { *cursorIo = cursor; *exitCodeOut = 1; return HOST_FLOW_RETURN; }
+    }
+    *cursorIo = cursor; return HOST_FLOW_NEXT;
+}
+
+
+/* PM INT 21h AH=49h: free a memory block for a PM client. */
+static INT DpmiInt21Free(PSTR *cursorIo, PSTR const base, const DWORD ah, volatile BYTE * const tib, INT *exitCodeOut)
+{
+    PSTR cursor = *cursorIo;
+    if (ah == DOS_FN_FREE) {
+        /* ── DOS FREE, FROM PROTECTED MODE: ES IS A SELECTOR ────────────
+           The mirror image of 48h above, and the convention is forced by
+           it rather than chosen: 48h handed the client a SELECTOR in AX,
+           the client did `mov es,ax`, and the only thing it can pass back
+           to 49h is that selector. So resolve ES through the LDT and free
+           the paragraph its base names. Treating ES as a raw segment here
+           would free whatever MCB happens to live at the selector VALUE --
+           a silent heap corruption, which is precisely the hazard the
+           whitelist comment below exists to prevent.
+           The LDT slot is zeroed rather than reused: g_LdtNext is a bump
+           allocator, so a freed slot is left reclaimable (same treatment
+           as INT 31h 0101) instead of pretending to a free list we do not
+           have. */
+        WORD selector = (WORD)VDM_REG16(tib, VTIB_ES);
+        INT ldtIndex = DPMI_SELECTOR_INDEX(selector);
+        DWORD segmentBase = DpmiSelectorBase(selector);
+        INT error;
+        cursor = LogPut(cursor, "INT21h AH=49 (PM) free sel 0x"); cursor = LogHex(cursor, selector);
+        cursor = LogPut(cursor, " base 0x"); cursor = LogHex(cursor, segmentBase);
+        if ((segmentBase & PARAGRAPH_LAST_BYTE) || segmentBase > X86_REAL_MODE_LAST_U) {
+            /* Not a paragraph-aligned conventional-memory base: this is not
+               a block DOS ever handed out, so refuse LOUDLY rather than
+               corrupt the MCB chain guessing. */
+            VDM_REG(tib, VTIB_EFLAGS) |= EFLAGS_CF_U;
+            VDM_SET16(tib, VTIB_EAX, DOS_ERR_INVALID_BLOCK);       /* invalid memory block address */
+            cursor = LogPut(cursor, " -> REFUSED (not a DOS paragraph)");
+        } else {
+            error = DosMcbFree(NULL, (WORD)(segmentBase >> PARAGRAPH_SHIFT));
+            if (error) { VDM_REG(tib, VTIB_EFLAGS) |= EFLAGS_CF_U; VDM_SET16(tib, VTIB_EAX, error);
+                       cursor = LogPut(cursor, " -> err 0x"); cursor = LogHex(cursor, error); }
+            else { VDM_REG(tib, VTIB_EFLAGS) &= ~EFLAGS_CF_U;
+                   if (ldtIndex >= 3 && ldtIndex < DPMI_LDT_MAX) { g_Ldt[ldtIndex].Base = g_Ldt[ldtIndex].Limit = 0; }
+                   cursor = LogPut(cursor, " -> freed seg 0x"); cursor = LogHex(cursor, segmentBase >> PARAGRAPH_SHIFT); }
+        }
+        cursor = LogPut(cursor, "\r\n");
+        LogAppend(LOG_PATH, base, cursor); SerialOut(base, cursor); cursor = base;
+        VDM_REG(tib, VTIB_EIP) += DPMI_PM_BOP_LENGTH;
+        { *cursorIo = cursor; *exitCodeOut = 1; return HOST_FLOW_RETURN; }
+    }
+    *cursorIo = cursor; return HOST_FLOW_NEXT;
+}
+
+
+/* PM INT 21h AH=48h: allocate a memory block for a PM client. */
+static INT DpmiInt21Allocate(PSTR *cursorIo, PSTR const base, const DWORD ah, volatile BYTE * const tib, DOS_MACHINE * const machine, INT *exitCodeOut)
+{
+    PSTR cursor = *cursorIo;
+    /* ── REGISTER-ONLY INT 21h: DELEGATE TO THE V86 DOS IMPLEMENTATION ──
+       DosInt21() reads and writes the same VDM_TIB register fields the PM
+       client left behind, so a service that takes NO pointer argument needs
+       no thunking at all -- there is nothing to translate.
+       ► THE WHITELIST IS DELIBERATE, NOT LAZINESS. A service that takes a
+         DS:DX / ES:BX pointer must NOT come through here: in protected mode
+         those registers hold SELECTORS, and handing a selector to code that
+         treats it as a real-mode segment reads or writes whatever happens to
+         live at selector<<4. That is a silent wrong-memory bug of exactly the
+         kind that cost this session a day (see the D/B fix). Pointer-taking
+         services are hand-rolled above with DpmiSelectorBase(), or stay loud.
+       ► ES-as-SEGMENT services (49h free, 4Ah resize) are ALSO excluded from
+         the whitelist: the block address they want is a real-mode paragraph,
+         but in PM ES holds a selector. Session 16 said "if Doom calls 49h the
+         log will say so and we can settle the convention on evidence" -- IT
+         DID (twice), so 49h is hand-rolled below, resolving ES through the
+         LDT. 4Ah is still unevidenced and still stays loud.
+       ► 33h (Ctrl-Break / true version) joined the whitelist on the same
+         evidence: Doom calls it twice, and every subfunction DosInt21
+         implements (AL=00/01/05/06) reads and writes GPRs only. Leaving it
+         unhandled was NOT neutral -- the TODO arm returned with AX still
+         0x33xx and CF untouched, and the caller's very next instructions are
+         `xchg ax,cx / cbw / retn`, i.e. it propagates whatever we left.
+       Doom (DOS/4GW) needs 48h to allocate the memory it loads its LE image
+       into -- it is the first DOS call it makes from protected mode. */
+    if (ah == DOS_FN_ALLOCATE) {
+        /* ── DOS ALLOCATE, FROM PROTECTED MODE, RETURNS A SELECTOR ──────
+           A raw real-mode segment is useless to a PM client, and Doom
+           proves the convention by what it does: on success it loads the
+           AX it got back straight into ES (observed at the fault). That
+           only makes sense if AX is a SELECTOR -- with the raw segment
+           0x151c it is GDT index 0x2A3, which #GPs and silently kills the
+           VDM. That segment load IS the specification here, the same way
+           DOS/4GW clearing D/B itself settled the
+           initial-selector width.
+           So: do the real DOS allocation (DosInt21 owns the MCB chain),
+           then hand back a descriptor covering it, IN AX ONLY.
+
+           ► DO NOT ALSO PUT IT IN DX. Session 16 did, reasoning that it
+             "matches INT 31h 0100's shape, which costs nothing and is
+             what a client written against 0100 would expect". It cost
+             Doom. Real DOS's AH=48h returns AX (and BX on failure) and
+             PRESERVES EVERYTHING ELSE, so callers keep live values in
+             the other registers across it -- and DOS/4GW keeps the
+             request's BYTE SIZE in DX:
+                 mov dx,cx / add dx,0x27 / and dl,0xf0   ; DX = bytes
+                 mov bx,dx / ...shift...                 ; BX = paragraphs
+                 mov ah,48h / int 21h
+                 ...
+                 mov ax,dx                               ; DX still = bytes
+                 mov di,ax / add di,bx / dec di / dec di
+                 movw [di],0xfffe                        ; last word of block
+             With DX clobbered to the selector (0xcf) instead of the size
+             (0x40), DI became 0xcd against a 0x4f limit: a write past the
+             segment end, #GP, and XP terminated the VDM with nothing in
+             the log. Bisected to the instruction with the pmbp.txt
+             breakpoints.
+           ► THE GENERAL RULE THIS EARNS: a service's register footprint
+             is part of its contract. Writing a register the real service
+             leaves alone is not a harmless bonus, it is a silent
+             corruption of the caller's state. Return what DOS returns. */
+        DWORD want = VDM_REG16(tib, VTIB_EBX);
+        machine->TraceCursor = cursor; DosInt21SetProtectedMode(TRUE); DosInt21(machine); DosInt21SetProtectedMode(FALSE); cursor = machine->TraceCursor;
+        cursor = LogPut(cursor, "INT21h AH=48 (PM) alloc 0x"); cursor = LogHex(cursor, want);
+        if (VDM_REG(tib, VTIB_EFLAGS) & EFLAGS_CF_U) {
+            cursor = LogPut(cursor, " -> FAILED, largest 0x");
+            cursor = LogHex(cursor, VDM_REG16(tib, VTIB_EBX));
+        } else if (g_LdtNext >= DPMI_LDT_MAX) {
+            VDM_REG(tib, VTIB_EFLAGS) |= EFLAGS_CF_U;
+            VDM_SET16(tib, VTIB_EAX, DOS_ERR_INSUFFICIENT_MEMORY);       /* insufficient memory */
+            cursor = LogPut(cursor, " -> no free LDT slot");
+        } else {
+            DWORD segment = VDM_REG16(tib, VTIB_EAX);
+            INT ldtIndex = g_LdtNext++;
+            WORD selector;
+            g_Ldt[ldtIndex].Base   = segment << PARAGRAPH_SHIFT;
+            g_Ldt[ldtIndex].Limit  = want ? (want * PARAGRAPH_SIZE_U - 1u) : X86_SEGMENT_LIMIT_64K;
+            g_Ldt[ldtIndex].Access = DPMI_ACCESS_DATA;          /* present, DPL3, data R/W */
+            g_Ldt[ldtIndex].Flags  = 0;             /* 16-bit, byte granular   */
+            DpmiInstall(ldtIndex);
+            selector = (WORD)DPMI_LDT_SELECTOR(ldtIndex);
+            VDM_SET16(tib, VTIB_EAX, selector);   /* AX only -- see above */
+            cursor = LogPut(cursor, " -> seg 0x"); cursor = LogHex(cursor, segment);
+            cursor = LogPut(cursor, " as sel 0x"); cursor = LogHex(cursor, selector);
+            cursor = LogPut(cursor, " limit 0x"); cursor = LogHex(cursor, g_Ldt[ldtIndex].Limit);
+        }
+        cursor = LogPut(cursor, "\r\n");
+        LogAppend(LOG_PATH, base, cursor); SerialOut(base, cursor); cursor = base;
+        VDM_REG(tib, VTIB_EIP) += DPMI_PM_BOP_LENGTH;
+        { *cursorIo = cursor; *exitCodeOut = 1; return HOST_FLOW_RETURN; }
+    }
+    *cursorIo = cursor; return HOST_FLOW_NEXT;
+}
+
+
+/* PM INT 21h AH=3Fh: read from a handle into a PM client buffer (DS:DX). */
+static INT DpmiInt21Read(PSTR *cursorIo, PSTR const base, const DWORD ah, volatile BYTE * const tib, DOS_MACHINE * const machine, INT *exitCodeOut)
+{
+    PSTR cursor = *cursorIo;
+    if (ah == DOS_FN_READ) {                          /* read: BX=handle CX=cnt -> DS:DX */
+        DWORD handle = VDM_REG16(tib, VTIB_EBX), count = VDM_REG16(tib, VTIB_ECX), bytesRead = 0;
+        DWORD dsBase = DpmiSelectorBase((WORD)VDM_REG(tib, VTIB_DS));
+        PVOID buffer = (VOID *)(ULONG_PTR)(dsBase + VDM_REG16(tib, VTIB_EDX));
+        VDM_REG(tib, VTIB_EFLAGS) &= ~EFLAGS_CF_U;
+        if (handle < DOS_MAX_FILES && machine->FileHandles[handle]) {
+            DWORD writeError = 0;
+            if (!ReadFile(machine->FileHandles[handle], buffer, count, &bytesRead, NULL)) writeError = GetLastError();
+            if (!PmRwHardwareFail(machine, tib, DOS_FN_READ, writeError, &cursor))   /* #275 */
+                VDM_SET16(tib, VTIB_EAX, bytesRead);
+        }
+        else { VDM_REG(tib, VTIB_EFLAGS) |= EFLAGS_CF_U; VDM_SET16(tib, VTIB_EAX, DOS_ERR_INVALID_HANDLE); }
+        /* ── WHERE IT LANDED, NOT JUST HOW MUCH. ─────────────────────
+             "read 0x40b" cannot distinguish a read that filled the
+             buffer the guest meant from one that filled a different
+             one, and session 34 needed exactly that distinction: the
+             selector krnl386 later parsed as an NE header held
+             ne_modtab = 0x38a instead of 0x78, and the only way to
+             tell a mis-delivered read from a mis-parsed one is to
+             print the destination and the bytes. */
+        /* ⚠ AND WHAT THE GUEST WILL SEE. This printed the byte
+             count and not the ANSWER -- half an instrument, by
+             this project's own rule -- and it cost a reading:
+             SYSEDIT reports "Cannot read this file" about a
+             0-byte file, which the stock-ntvdm oracle shows it
+             does NOT do, and the whole question is what `_lread`
+             came back with. `rd` and `AX` are the same number
+             today and printing only one of them is a claim that
+             they always will be. */
+        cursor = LogPut(cursor, "INT21h AH=3F read "); cursor = LogHex(cursor, bytesRead);
+        cursor = LogPut(cursor, "b of "); cursor = LogHex(cursor, count);
+        cursor = LogPut(cursor, " -> AX=0x");
+        cursor = LogHex(cursor, VDM_REG16(tib, VTIB_EAX));
+        cursor = LogPut(cursor, " CF="); cursor = LogHex(cursor, VDM_REG(tib, VTIB_EFLAGS) & EFLAGS_CF_U);
+        cursor = LogPut(cursor, " h="); cursor = LogHex(cursor, handle);
+        cursor = LogPut(cursor, " -> 0x"); cursor = LogHex(cursor, VDM_REG16(tib, VTIB_DS));
+        cursor = LogPut(cursor, ":0x"); cursor = LogHex(cursor, VDM_REG16(tib, VTIB_EDX));
+        cursor = LogPut(cursor, " lin=0x"); cursor = LogHex(cursor, (DWORD)(ULONG_PTR)buffer);
+        cursor = LogPut(cursor, " pos=0x");
+        cursor = LogHex(cursor, (handle < DOS_MAX_FILES && machine->FileHandles[handle])
+                    ? SetFilePointer(machine->FileHandles[handle], 0, NULL, FILE_CURRENT) : 0);
+        cursor = LogPut(cursor, " first=");
+        if (bytesRead && HostReadable(buffer, 8)) cursor = LogDump(cursor, buffer, 8);
+        else                           cursor = LogPut(cursor, "-");
+        cursor = LogPut(cursor, "\r\n");
+        LogAppend(LOG_PATH, base, cursor); SerialOut(base, cursor); cursor = base;
+        VDM_REG(tib, VTIB_EIP) += DPMI_PM_BOP_LENGTH; { *cursorIo = cursor; *exitCodeOut = 1; return HOST_FLOW_RETURN; }
+    }
+    *cursorIo = cursor; return HOST_FLOW_NEXT;
+}
+
+
+/* PM INT 21h AH=3Ch/3Dh/5Bh: create or open a file named by an ASCIIZ path at DS:DX. */
+static INT DpmiInt21CreateOpen(PSTR *cursorIo, PSTR const base, const DWORD ah, volatile BYTE * const tib, const DWORD ax, DOS_MACHINE * const machine, INT *exitCodeOut)
+{
+    PSTR cursor = *cursorIo;
+    /* ── ★★★ AND 5Bh, "CREATE NEW", WHICH IS HOW A GUEST MAKES A
+         TEMPORARY FILE. (session 56) ─────────────────────────────
+         It is 3Ch with one difference -- it FAILS if the name
+         already exists -- and that difference is the whole point:
+         the caller invents a name, tries to create it, and retries
+         with another on error 50h. Landing in "PM thunk TODO"
+         therefore does not look like an unimplemented call, it
+         looks like a full disk.
+       ★ MEASURED. CARDFILE calls AH=2Ch for the time, builds a name
+         from it, calls 5Bh, and puts up
+             "Cannot create temporary file. Delete one or more files
+              to increase available disk space, and then try again."
+         on a 243 GB volume -- which is the recorded WRITE defect
+         too, and the reason both were filed under "runs but lies"
+         rather than as a missing DOS call. */
+    if (ah == DOS_FN_CREATE || ah == DOS_FN_OPEN || ah == DOS_FN_CREATE_NEW) {  /* create / open: DS:DX = ASCIIZ name */
+        DWORD dsBase = DpmiSelectorBase((WORD)VDM_REG(tib, VTIB_DS));
+        PCSTR fileName = (PCSTR)(ULONG_PTR)(dsBase + VDM_REG16(tib, VTIB_EDX));
+        /* ── ★★ AL IS A BIT FIELD, NOT A NUMBER. (#128, session 37) ──
+             DOS open mode: bits 0-2 = access (0 read, 1 write, 2 r/w),
+             bits 4-6 = the SHARE.EXE sharing mode, bit 7 = no-inherit.
+             This compared the WHOLE byte against 0 and 1, so krnl386's
+             `al = 0x80` -- read access with the inheritance bit, the
+             most ordinary open there is -- fell through to "anything
+             else" and asked Windows for GENERIC_READ | GENERIC_WRITE.
+             That is what cost GDI.EXE: USER.EXE imports GDI, so the
+             file was ALREADY open (handle 7, never closed) when the
+             boot list loaded it by name, and a second open asking for
+             WRITE against a FILE_SHARE_READ handle is
+             ERROR_SHARING_VIOLATION. It came back as DOS error 2, which
+             krnl386 read as a short header read and reported as 0x0B
+             ERROR_BAD_FORMAT -- so the module it could not open looked
+             like a module it had rejected. Access now comes from AL & 7.
+           ⚠ AND WE DO NOT EMULATE SHARE.EXE. Bare DOS enforces no
+             locking at all, so imposing FILE_SHARE_READ invented a
+             restriction the guest's DOS does not have. Share everything
+             and let the guest be as reckless as DOS lets it be. */
+        DWORD mode = ax & DOS_INT21_OPEN_ACCESS_MASK;
+        DWORD desiredAccess = (mode == DOS_INT21_OPEN_WRITE) ? GENERIC_WRITE
+                  : (mode == DOS_INT21_OPEN_READ_WRITE) ? (GENERIC_READ | GENERIC_WRITE) : GENERIC_READ;
+        DWORD shareMode = FILE_SHARE_READ | FILE_SHARE_WRITE;
+        HANDLE file = (ah == DOS_FN_CREATE || ah == DOS_FN_CREATE_NEW)
+            ? CreateFileA(fileName, GENERIC_READ | GENERIC_WRITE, shareMode, NULL,
+                          (ah == DOS_FN_CREATE_NEW) ? CREATE_NEW : CREATE_ALWAYS,
+                          FILE_ATTRIBUTE_NORMAL, NULL)
+            : CreateFileA(fileName, desiredAccess, shareMode, NULL, OPEN_EXISTING,
+                          FILE_ATTRIBUTE_NORMAL, NULL);
+        DWORD lastError = (file == INVALID_HANDLE_VALUE) ? GetLastError() : 0;
+        VDM_REG(tib, VTIB_EFLAGS) &= ~EFLAGS_CF_U;
+        /* Report the failure the guest actually suffered. Answering 2
+           "file not found" to an access or sharing failure is the
+           "runs but lies" class: the caller retries a path that is
+           right and concludes the file is missing. */
+        if (file == INVALID_HANDLE_VALUE) { VDM_REG(tib, VTIB_EFLAGS) |= EFLAGS_CF_U;
+               VDM_SET16(tib, VTIB_EAX,
+                   (lastError == ERROR_PATH_NOT_FOUND)     ? DOS_ERR_PATH_NOT_FOUND :
+                   (lastError == ERROR_ACCESS_DENIED)      ? DOS_ERR_ACCESS_DENIED :
+                   (lastError == ERROR_SHARING_VIOLATION)  ? DOS_ERR_SHARING_VIOLATION :
+                   /* 50h is the ANSWER 5Bh exists to give: the name
+                      is taken, try another. Mapping it to 2 would
+                      tell the caller its own file is missing. */
+                   (lastError == ERROR_FILE_EXISTS ||
+                    lastError == ERROR_ALREADY_EXISTS)     ? DOS_ERR_FILE_EXISTS :
+                   (lastError == ERROR_TOO_MANY_OPEN_FILES)? DOS_ERR_TOO_MANY_OPEN_FILES : DOS_ERR_FILE_NOT_FOUND); }
+        else { INT slot; for (slot = DOS_STD_HANDLES; slot < DOS_MAX_FILES && machine->FileHandles[slot]; ++slot) {}
+               if (slot < PM_INT21_HANDLE_LIMIT) { machine->FileHandles[slot] = file; VDM_SET16(tib, VTIB_EAX, slot);
+                                if (ah == DOS_FN_CREATE || ah == DOS_FN_CREATE_NEW) DosStampVdmNow(file); /* #263 */ }
+               else { CloseHandle(file); VDM_REG(tib, VTIB_EFLAGS) |= EFLAGS_CF_U; VDM_SET16(tib, VTIB_EAX, DOS_ERR_TOO_MANY_OPEN_FILES); } }
+        /* ── ⚠ "-> AX=0x2" MEANT TWO OPPOSITE THINGS. (session 37) ──
+             This printed AX and nothing else, so a failed open reading
+             "AX=0x0002" (error 2, file not found) was indistinguishable
+             from a successful open that returned handle 2 -- and the
+             whole GDI.EXE wall was read the wrong way round off this one
+             line. Print the REQUEST (AL carries the access mode AND the
+             DOS sharing mode), the VERDICT (CF), and, when it failed,
+             the Win32 error, which is the only thing that says WHY. */
+        cursor = LogPut(cursor, "INT21h AH="); cursor = LogHex(cursor, ah); cursor = LogPut(cursor, " open \"");
+        cursor = LogPut(cursor, fileName); cursor = LogPut(cursor, "\" al=0x"); cursor = LogHexByte(cursor, (BYTE)(ax & BYTE_MASK));
+        cursor = LogPut(cursor, " -> AX=0x"); cursor = LogHex(cursor, VDM_REG16(tib, VTIB_EAX));
+        cursor = LogPut(cursor, " CF="); cursor = LogHex(cursor, VDM_REG(tib, VTIB_EFLAGS) & EFLAGS_CF_U);
+        if (lastError) { cursor = LogPut(cursor, " FAILED gle="); cursor = LogHex(cursor, lastError); }
+        cursor = LogPut(cursor, "\r\n"); LogAppend(LOG_PATH, base, cursor); SerialOut(base, cursor); cursor = base;
+        VDM_REG(tib, VTIB_EIP) += DPMI_PM_BOP_LENGTH; { *cursorIo = cursor; *exitCodeOut = 1; return HOST_FLOW_RETURN; }
+    }
+    *cursorIo = cursor; return HOST_FLOW_NEXT;
+}
+
+
+/* PM INT 21h AH=40h: write BX=handle CX=count from a PM client buffer (DS:DX). */
+static INT DpmiInt21Write(PSTR *cursorIo, PSTR const base, const DWORD ah, volatile BYTE * const tib, DOS_MACHINE * const machine, INT *exitCodeOut)
+{
+    PSTR cursor = *cursorIo;
+    if (ah == DOS_FN_WRITE) {                          /* write BX=handle CX=cnt DS:DX=buf */
+        DWORD bh = VDM_REG16(tib, VTIB_EBX), count = VDM_REG16(tib, VTIB_ECX);
+        DWORD dsBase = DpmiSelectorBase((WORD)VDM_REG(tib, VTIB_DS));
+        const volatile BYTE *bytes = (const volatile BYTE *)(ULONG_PTR)
+            (dsBase + VDM_REG16(tib, VTIB_EDX));
+        /* ── #256: A BOUND HANDLE IS A FILE, WHATEVER ITS NUMBER. ──────
+             This tested `bh == 1 || bh == 2` FIRST, so a DPMI program run
+             as `prog > out.txt` printed to the screen and left out.txt
+             empty -- the defect #133 fixed for real mode (see the V86
+             AH=40h). The same two rules as there: a bound slot is a file;
+             an unbound open device slot is the console, except 3/4,
+             which are AUX and PRN (#251). */
+        INT bound = (bh < DOS_MAX_FILES && machine->FileHandles[bh] != 0);
+        INT device   = (!bound && bh < BITS_PER_DWORD && ((machine->StdOpen >> bh) & 1u));
+        VDM_REG(tib, VTIB_EFLAGS) &= ~EFLAGS_CF_U;
+        if (device && (bh == DOS_HANDLE_AUX || bh == DOS_HANDLE_PRN)) {     /* AUX / PRN */
+            DWORD item;
+            for (item = 0; item < count; ++item) {
+                if (bh == DOS_HANDLE_PRN) (VOID)DosPrnOut(NULL, bytes[item]);
+                else DosAuxOut(NULL, bytes[item]);
+            }
+            VDM_SET16(tib, VTIB_EAX, count);
+        } else if (device) {                      /* the console */
+            CHAR outputLine[300]; PSTR outputCursor = outputLine; DWORD item;
+            outputCursor = LogPut(outputCursor, "INT21h AH=40 write: \"");
+            for (item = 0; item < count && item < 250; ++item) {
+                if (bytes[item] >= ASCII_SPACE && outputCursor < outputLine + 270) *outputCursor++ = (CHAR)bytes[item];
+                if (machine->ConsoleOut) machine->ConsoleOut(machine->ConsoleOutContext, bytes[item]);
+                if (machine->OutputLength < machine->OutputCapacity - 1) machine->Output[machine->OutputLength++] = (CHAR)bytes[item];
+                else machine->IsOutputTruncated = 1;
+            }
+            outputCursor = LogPut(outputCursor, "\"\r\n");
+            LogAppend(LOG_PATH, outputLine, outputCursor); SerialOut(outputLine, outputCursor);
+            VDM_SET16(tib, VTIB_EAX, count);     /* AX = bytes written */
+        } else if (bound) {                     /* file handle */
+            DWORD bytesWritten = 0, writeError = 0;
+            if (!WriteFile(machine->FileHandles[bh], (const VOID *)bytes, count, &bytesWritten, NULL)) writeError = GetLastError();
+            if (!PmRwHardwareFail(machine, tib, DOS_FN_WRITE, writeError, &cursor)) {   /* #275 */
+                VDM_SET16(tib, VTIB_EAX, bytesWritten);
+                DosStampVdmNow(machine->FileHandles[bh]);   /* #263, as the V86 AH=40h */
+            }
+            cursor = LogPut(cursor, "INT21h AH=40 file write "); cursor = LogHex(cursor, bytesWritten); cursor = LogPut(cursor, "b\r\n");
+            LogAppend(LOG_PATH, base, cursor); SerialOut(base, cursor); cursor = base;
+        } else { VDM_REG(tib, VTIB_EFLAGS) |= EFLAGS_CF_U; VDM_SET16(tib, VTIB_EAX, DOS_ERR_INVALID_HANDLE); }
+        VDM_REG(tib, VTIB_EIP) += DPMI_PM_BOP_LENGTH;
+        { *cursorIo = cursor; *exitCodeOut = 1; return HOST_FLOW_RETURN; }
+    }
+    *cursorIo = cursor; return HOST_FLOW_NEXT;
+}
+
+
+/* A dialog procedure returned inside a modal DialogBox: if it said FALSE to WM_CLOSE, WM_PAINT or
+   WM_ERASEBKGND, apply DefDlgProc's default; then step the modal loop (WowDlgStep) -- DialogBox does
+   not return until the dialog ends. */
+static PSTR WowCallbackModalPump(PSTR cursor, PSTR const base, const INT callAction, volatile BYTE * const tib, const DWORD result, const WORD actionArgument)
+{
+    if (callAction == WOWCALL_ACT_MODALPUMP) {
+        CHAR modalNote[512];
+        WORD  modalCallbackSelector = WowCallbackSelector();
+        DWORD modalStackBase  = DpmiSelectorBase(
+            (WORD)VDM_REG16(tib, VTIB_SS));
+        /* s88: the modal loop calls a #32770 dialog's DLGPROC directly, so a
+           FALSE answer to WM_CLOSE got no DefDlgProc default -- Task List's X
+           did nothing. Same default as DefDlgProc's (IDCANCEL posted, which
+           the loop delivers next). WM_CLOSE, and (s92) WM_PAINT / WM_ERASEBKGND:
+           TASKMAN's DLGPROC answers FALSE to WM_PAINT and nothing ever erased
+           the dialog, so the Task List showed the desktop behind it
+           (runs/s92/untitled2.bmp). DefDlgProc's paint is the dialog colour. */
+        if (g_WowDlgIsDialogCall[g_WowCallDepth] && (WORD)result == 0
+            && (g_WowDlgMessage[g_WowCallDepth] == WM_CLOSE
+                || g_WowDlgMessage[g_WowCallDepth] == WM_PAINT
+                || g_WowDlgMessage[g_WowCallDepth] == WM_ERASEBKGND)) {
+            CHAR defaultName[200]; INT defaultLength = 0;
+            WowUserDlgDefault(WowUserFindWindow(actionArgument), actionArgument,
+                                g_WowDlgMessage[g_WowCallDepth],
+                                g_WowUserDlgDefaults[g_WowCallDepth].WParam,
+                                g_WowUserDlgDefaults[g_WowCallDepth].LParam,
+                                defaultName, (INT)sizeof defaultName, &defaultLength);
+            defaultName[defaultLength < (INT)sizeof defaultName ? defaultLength : (INT)sizeof defaultName - 1] = 0;
+            cursor = LogPut(cursor, " -- DLGPROC said FALSE; DefDlgProc default:");
+            cursor = LogPut(cursor, defaultName);
+        }
+        g_WowDlgIsDialogCall[g_WowCallDepth] = 0;
+        modalNote[0] = 0;
+        cursor = LogPut(cursor, "\r\n");
+        LogAppend(LOG_PATH, base, cursor); SerialOut(base, cursor); cursor = base;
+        WowDlgStep(tib, modalStackBase, modalCallbackSelector, &g_Running, modalNote, sizeof modalNote);
+        cursor = LogPut(cursor, "WOWDLG: "); cursor = LogPut(cursor, modalNote);
+    }
+    return cursor;
+}
+
+
+/* The clipboard bridge (#160): each step runs with the parked caller restored, as the EDIT chain does, so a follow-up call re-parks it at the same SS:SP. */
+static PSTR WowCallbackClipboard(PSTR cursor, const INT callAction, volatile BYTE * const tib, const DWORD result, const WORD actionArgument)
+{
+    /* ── THE CLIPBOARD BRIDGE (#160). See WOWCALL_ACT_CLIP* in wowcall.h.
+         Each step runs with the parked caller restored, exactly like the EDIT
+         chain above, so a follow-up call re-parks it at the same SS:SP. */
+    if (callAction == WOWCALL_ACT_CLIPLOCK || callAction == WOWCALL_ACT_CLIPFILL
+        || callAction == WOWCALL_ACT_CLIPPUT) {
+        WORD  clipCallbackSelector = WowCallbackSelector();
+        DWORD clipStackBase  = DpmiSelectorBase((WORD)VDM_REG16(tib, VTIB_SS));
+        WORD  clipDs   = (WORD)VDM_REG16(tib, VTIB_DS);
+        WORD  handleArgument  = (callAction == WOWCALL_ACT_CLIPLOCK) ? (WORD)result : actionArgument;
+        DWORD farPointerLinear = 0;
+        if (callAction != WOWCALL_ACT_CLIPLOCK && (result >> WORD_SHIFT))
+            farPointerLinear = DpmiSelectorBase((WORD)(result >> WORD_SHIFT)) + (result & WORD_MASK);
+        if (callAction == WOWCALL_ACT_CLIPLOCK) {
+            cursor = LogPut(cursor, " -- CLIP GlobalAlloc -> 0x"); cursor = LogHex(cursor, handleArgument);
+        } else if (callAction == WOWCALL_ACT_CLIPFILL) {
+            /* GlobalAlloc was sized n+1, so the copy is bounded by what was
+               asked for; the NUL goes in with it. */
+            INT index;
+            cursor = LogPut(cursor, " -- CLIP fill 0x"); cursor = LogHex(cursor, (DWORD)g_WowUserClipboardLength);
+            cursor = LogPut(cursor, " byte(s) at 0x"); cursor = LogHex(cursor, result);
+            if (farPointerLinear && MemoryReadable((ULONG_PTR)farPointerLinear, (DWORD)g_WowUserClipboardLength + 1)) {
+                volatile BYTE *destinationBytes = (volatile BYTE *)(ULONG_PTR)farPointerLinear;
+                for (index = 0; index <= g_WowUserClipboardLength; ++index) destinationBytes[index] = (BYTE)g_WowUserClipboard[index];
+            } else cursor = LogPut(cursor, " -- ★ GlobalLock gave no usable pointer; the"
+                               " block stays EMPTY");
+        } else {
+            /* The guest's text, to a block the HOST clipboard will own. */
+            INT length = 0;
+            cursor = LogPut(cursor, " -- CLIP put from 0x"); cursor = LogHex(cursor, result);
+            if (farPointerLinear) {
+                const volatile BYTE *sourceBytes = (const volatile BYTE *)(ULONG_PTR)farPointerLinear;
+                while (length < (INT)sizeof g_WowUserClipboard - 1
+                       && MemoryReadable((ULONG_PTR)(sourceBytes + length), 1) && sourceBytes[length])
+                    { g_WowUserClipboard[length] = (CHAR)sourceBytes[length]; ++length; }
+            }
+            g_WowUserClipboard[length] = 0;
+            if (farPointerLinear) {
+                HGLOBAL clipboardMemory = GlobalAlloc(GMEM_MOVEABLE, (SIZE_T)length + 1);
+                PSTR clipboardText = clipboardMemory ? (PSTR)GlobalLock(clipboardMemory) : NULL;
+                INT index;
+                if (clipboardText) {
+                    for (index = 0; index <= length; ++index) clipboardText[index] = g_WowUserClipboard[index];
+                    GlobalUnlock(clipboardMemory);
+                }
+                if (clipboardText && SetClipboardData(g_WowUserClipboardFormat, clipboardMemory)) {
+                    cursor = LogPut(cursor, " -> 0x"); cursor = LogHex(cursor, (DWORD)length);
+                    cursor = LogPut(cursor, " byte(s) on the host's clipboard");
+                } else {
+                    if (clipboardMemory) GlobalFree(clipboardMemory);
+                    cursor = LogPut(cursor, " -- ★ the host clipboard REFUSED it (not open?)");
+                }
+            } else cursor = LogPut(cursor, " -- ★ GlobalLock gave no usable pointer; nothing"
+                               " was copied");
+        }
+        /* Next link: Alloc -> Lock, and Lock -> Unlock once the bytes moved. */
+        if (handleArgument && g_WowUserKernelSegment && clipCallbackSelector && clipStackBase) {
+            WORD firstArgument = handleArgument;
+            DWORD proc = ((DWORD)g_WowUserKernelSegment << WORD_SHIFT)
+                       | (callAction == WOWCALL_ACT_CLIPLOCK ? WOWUSER_KRNL_GLOBALLOCK_OFF
+                                                      : WOWUSER_KRNL_GLOBALUNLOCK_OFF);
+            if (WowCallEnter(tib, clipStackBase, clipCallbackSelector, proc, clipDs, &firstArgument, 1, 0,
+                              WOWCALL_RET_KEEP, NULL, 0, 0, NULL, 0, -1, WOWCALL_PROCEDURE_PRESENT)) {
+                if (callAction == WOWCALL_ACT_CLIPLOCK && g_WowCallDepth > 0) {
+                    g_WowCallFrames[g_WowCallDepth - 1].Action = WOWCALL_ACT_CLIPFILL;
+                    g_WowCallFrames[g_WowCallDepth - 1].ActionArgument = handleArgument;
+                }
+                cursor = LogPut(cursor, callAction == WOWCALL_ACT_CLIPLOCK ? "; GlobalLock in flight"
+                                                        : "; GlobalUnlock in flight");
+            } else cursor = LogPut(cursor, "; ★ the next KERNEL call was REFUSED");
+        }
+    }
+    return cursor;
+}
+
+
+/* The save direction, step 3: write the EDIT control's text into the block the guest locked -- the mirror of WOWCALL_ACT_EDITTEXT. */
+static PSTR WowCallbackEditFill(PSTR cursor, const INT callAction, const WORD actionArgument, const DWORD result, volatile BYTE * const tib)
+{
+    /* ── ★★★★★ STEP 3: WRITE THE CONTROL'S TEXT INTO THE GUEST'S BLOCK.
+         This is the exact mirror of ACT_EDITTEXT. There the block was
+         read and handed to the control; here the control is read and the
+         bytes are handed to the block, which is what the application is
+         about to `_lwrite` to its file.
+       ⚠ BOUNDED BY WHAT WAS ALLOCATED. The block was sized from
+         GetWindowTextLength at EM_GETHANDLE time and the text is fetched
+         again here, so a keystroke landing between the two would
+         overflow -- GetWindowTextA is therefore given the SAME bound the
+         allocation used, and the log says if it had to truncate.
+       ⚠ AND UNLOCK. We took the lock, we owe the release. */
+    if (callAction == WOWCALL_ACT_EDITFILL) {
+        WOWUSER_WINDOW *editWindow = WowUserFindWindow(actionArgument);
+        DWORD offset = result & WORD_MASK;
+        DWORD instanceBase = editWindow ? DpmiSelectorBase(editWindow->Instance) : 0;
+        cursor = LogPut(cursor, " -- EDIT block at 0x"); cursor = LogHex(cursor, editWindow ? editWindow->Instance : 0);
+        cursor = LogPut(cursor, ":0x"); cursor = LogHex(cursor, offset);
+        if (!editWindow || !editWindow->Window32 || !instanceBase || !offset) {
+            cursor = LogPut(cursor, " -- ★ UNWRITABLE; the control's text is NOT saved");
+        } else {
+            static CHAR savedEditText[16384];
+            volatile BYTE *destinationBytes = (volatile BYTE *)(ULONG_PTR)(instanceBase + offset);
+            INT cap = GetWindowTextLengthA(editWindow->Window32) + 1;
+            INT length, index;
+            if (cap > (INT)sizeof savedEditText) cap = (INT)sizeof savedEditText;
+            length = GetWindowTextA(editWindow->Window32, savedEditText, cap);
+            for (index = 0; index <= length; ++index) destinationBytes[index] = (BYTE)savedEditText[index];
+            cursor = LogPut(cursor, " <- 0x"); cursor = LogHex(cursor, (DWORD)length);
+            cursor = LogPut(cursor, " byte(s) from the real control");
+            if (length == cap - 1 && cap == (INT)sizeof savedEditText)
+                cursor = LogPut(cursor, " (★ TRUNCATED at the host's buffer)");
+        }
+        if (editWindow && editWindow->Memory16 && g_WowUserKernelSegment) {
+            WORD  editCallbackSelector = WowCallbackSelector();
+            DWORD editStackBase  = DpmiSelectorBase(
+                            (WORD)VDM_REG16(tib, VTIB_SS));
+            WORD  unlockArgument  = editWindow->Memory16;
+            if (editCallbackSelector && editStackBase
+                && WowCallEnter(tib, editStackBase, editCallbackSelector,
+                                 ((DWORD)g_WowUserKernelSegment << WORD_SHIFT)
+                                     | WOWUSER_KRNL_LOCALUNLOCK_OFF,
+                                 editWindow->Instance, &unlockArgument, 1, 0,
+                                 WOWCALL_RET_KEEP, NULL, editWindow->Window16, 0,
+                                 NULL, 0, -1, WOWCALL_PROCEDURE_PRESENT))
+                cursor = LogPut(cursor, "; LocalUnlock in flight");
+            else
+                cursor = LogPut(cursor, "; ★ LocalUnlock REFUSED -- the block stays"
+                            " locked");
+        }
+    }
+    return cursor;
+}
+
+
+/* The save direction, step 2: lock the local handle the allocator just answered with, to get a pointer to its block. */
+static PSTR WowCallbackEditLock(PSTR cursor, const INT callAction, const WORD actionArgument, volatile BYTE * const tib)
+{
+    /* ── ★★★★★ THE SAVE DIRECTION, STEP 2: LOCK WHAT WE JUST GOT. ─────
+         The allocator has answered with a local handle (already stored
+         through the sink, so `ew->hmem` is the NEW one even if
+         LocalReAlloc moved the block). Locking it is the only way to get
+         an address to write the text at, and only the guest's KERNEL can
+         do it -- the same call, in the same DGROUP, as the load path. */
+    if (callAction == WOWCALL_ACT_EDITLOCK) {
+        WOWUSER_WINDOW *editWindow = WowUserFindWindow(actionArgument);
+        cursor = LogPut(cursor, " -- EDIT block 0x"); cursor = LogHex(cursor, editWindow ? editWindow->Memory16 : 0);
+        if (!editWindow || !editWindow->Memory16 || !editWindow->Window32 || !g_WowUserKernelSegment) {
+            cursor = LogPut(cursor, " -- ★ NOT USABLE; the control's text is NOT saved");
+        } else {
+            WORD  editCallbackSelector = WowCallbackSelector();
+            DWORD editStackBase  = DpmiSelectorBase(
+                            (WORD)VDM_REG16(tib, VTIB_SS));
+            WORD  lockArgument  = editWindow->Memory16;
+            if (editCallbackSelector && editStackBase
+                && WowCallEnter(tib, editStackBase, editCallbackSelector,
+                                 ((DWORD)g_WowUserKernelSegment << WORD_SHIFT)
+                                     | WOWUSER_KRNL_LOCALLOCK_OFF,
+                                 editWindow->Instance, &lockArgument, 1, 0,
+                                 WOWCALL_RET_KEEP, NULL, editWindow->Window16, 0,
+                                 NULL, 0, -1, WOWCALL_PROCEDURE_PRESENT)) {
+                if (g_WowCallDepth > 0) {
+                    g_WowCallFrames[g_WowCallDepth - 1].Action = WOWCALL_ACT_EDITFILL;
+                    g_WowCallFrames[g_WowCallDepth - 1].ActionArgument = editWindow->Window16;
+                }
+                cursor = LogPut(cursor, "; LocalLock in flight, then fill");
+            } else {
+                cursor = LogPut(cursor, "; ★ LocalLock REFUSED -- text NOT saved");
+            }
+        }
+    }
+    return cursor;
+}
+
+
+/* LocalLock answered with a near offset into the application's data segment: read the text there and hand it to the EDIT control. */
+static PSTR WowCallbackEditText(PSTR cursor, const INT callAction, const WORD actionArgument, const DWORD result, volatile BYTE * const tib)
+{
+    /* ── ★★★★★ FOLLOW THE POINTER THE GUEST JUST HANDED BACK. ─────────
+         `LocalLock` answered with a near offset into the application's own
+         data segment, and the text an EDIT control is supposed to show is
+         there. This is the moment it can be read -- the guest has
+         returned, its DGROUP is still what it was, and the block is
+         locked, which is the whole reason for having locked it.
+       ⚠ THE SELECTOR IS THE CONTROL'S OWN hInstance, which in Win16 IS
+         the instance's DGROUP selector -- the same one the call was
+         entered with, so the offset and the segment come from one place.
+       ⚠ AND UNLOCK IT AGAIN. We took the lock, so we owe the release, and
+         leaving a moveable block permanently locked would quietly pin the
+         application's heap. The unlock is a second call made from here,
+         which is sound for exactly the reason the first one was: the guest
+         is parked at our stub with its own stack under it. */
+    if (callAction == WOWCALL_ACT_EDITTEXT) {
+        WOWUSER_WINDOW *editWindow = WowUserFindWindow(actionArgument);
+        DWORD offset = result & WORD_MASK;
+        DWORD instanceBase = editWindow ? DpmiSelectorBase(editWindow->Instance) : 0;
+        cursor = LogPut(cursor, " -- EDIT text at 0x"); cursor = LogHex(cursor, editWindow ? editWindow->Instance : 0);
+        cursor = LogPut(cursor, ":0x"); cursor = LogHex(cursor, offset);
+        if (!editWindow || !editWindow->Window32 || !instanceBase || !offset) {
+            cursor = LogPut(cursor, " -- ★ UNREADABLE, the control keeps no text");
+        } else {
+            static CHAR editText[16384];
+            const volatile BYTE *sourceBytes =
+                (const volatile BYTE *)(ULONG_PTR)(instanceBase + offset);
+            INT length = 0;
+            while (length < (INT)sizeof editText - 1
+                   && MemoryReadable((ULONG_PTR)(sourceBytes + length), 1) && sourceBytes[length])
+                { editText[length] = (CHAR)sourceBytes[length]; ++length; }
+            editText[length] = 0;
+            SetWindowTextA(editWindow->Window32, editText);
+            cursor = LogPut(cursor, " -> 0x"); cursor = LogHex(cursor, (DWORD)length);
+            cursor = LogPut(cursor, " bytes into the real control");
+            if (length == (INT)sizeof editText - 1)
+                cursor = LogPut(cursor, " (★ TRUNCATED at the host's buffer)");
+        }
+        /* Release the lock we took, whatever came of the read. */
+        if (editWindow && editWindow->Memory16 && g_WowUserKernelSegment) {
+            WORD  editCallbackSelector = WowCallbackSelector();
+            DWORD editStackBase  = DpmiSelectorBase(
+                            (WORD)VDM_REG16(tib, VTIB_SS));
+            WORD  unlockArgument  = editWindow->Memory16;
+            if (editCallbackSelector && editStackBase
+                && WowCallEnter(tib, editStackBase, editCallbackSelector,
+                                 ((DWORD)g_WowUserKernelSegment << WORD_SHIFT)
+                                     | WOWUSER_KRNL_LOCALUNLOCK_OFF,
+                                 editWindow->Instance, &unlockArgument, 1, 0,
+                                 WOWCALL_RET_KEEP, NULL, editWindow->Window16, 0,
+                                 NULL, 0, -1, WOWCALL_PROCEDURE_PRESENT))
+                cursor = LogPut(cursor, "; LocalUnlock in flight");
+            else
+                cursor = LogPut(cursor, "; ★ LocalUnlock REFUSED -- the block stays"
+                            " locked");
+        }
+    }
+    return cursor;
+}
+
 static INT DpmiServicePmIntBody(DOS_MACHINE *machine, volatile BYTE *tib, DWORD vector,
                                     UINT steps)
 {
@@ -3191,216 +4016,10 @@ static INT DpmiServicePmIntBody(DOS_MACHINE *machine, volatile BYTE *tib, DWORD 
             else if (callFrame->ReturnLinear && callFrame->Message == WM_CREATE16 && (WORD)result == WOWUSER_MINUS_ONE16)
                 cursor = LogPut(cursor, " -- ★ WM_CREATE REFUSED: the call that made the window"
                             " now returns 0");
-            /* ── ★★★★★ FOLLOW THE POINTER THE GUEST JUST HANDED BACK. ─────────
-                 `LocalLock` answered with a near offset into the application's own
-                 data segment, and the text an EDIT control is supposed to show is
-                 there. This is the moment it can be read -- the guest has
-                 returned, its DGROUP is still what it was, and the block is
-                 locked, which is the whole reason for having locked it.
-               ⚠ THE SELECTOR IS THE CONTROL'S OWN hInstance, which in Win16 IS
-                 the instance's DGROUP selector -- the same one the call was
-                 entered with, so the offset and the segment come from one place.
-               ⚠ AND UNLOCK IT AGAIN. We took the lock, so we owe the release, and
-                 leaving a moveable block permanently locked would quietly pin the
-                 application's heap. The unlock is a second call made from here,
-                 which is sound for exactly the reason the first one was: the guest
-                 is parked at our stub with its own stack under it. */
-            if (callAction == WOWCALL_ACT_EDITTEXT) {
-                WOWUSER_WINDOW *editWindow = WowUserFindWindow(actionArgument);
-                DWORD offset = result & WORD_MASK;
-                DWORD instanceBase = editWindow ? DpmiSelectorBase(editWindow->Instance) : 0;
-                cursor = LogPut(cursor, " -- EDIT text at 0x"); cursor = LogHex(cursor, editWindow ? editWindow->Instance : 0);
-                cursor = LogPut(cursor, ":0x"); cursor = LogHex(cursor, offset);
-                if (!editWindow || !editWindow->Window32 || !instanceBase || !offset) {
-                    cursor = LogPut(cursor, " -- ★ UNREADABLE, the control keeps no text");
-                } else {
-                    static CHAR editText[16384];
-                    const volatile BYTE *sourceBytes =
-                        (const volatile BYTE *)(ULONG_PTR)(instanceBase + offset);
-                    INT length = 0;
-                    while (length < (INT)sizeof editText - 1
-                           && MemoryReadable((ULONG_PTR)(sourceBytes + length), 1) && sourceBytes[length])
-                        { editText[length] = (CHAR)sourceBytes[length]; ++length; }
-                    editText[length] = 0;
-                    SetWindowTextA(editWindow->Window32, editText);
-                    cursor = LogPut(cursor, " -> 0x"); cursor = LogHex(cursor, (DWORD)length);
-                    cursor = LogPut(cursor, " bytes into the real control");
-                    if (length == (INT)sizeof editText - 1)
-                        cursor = LogPut(cursor, " (★ TRUNCATED at the host's buffer)");
-                }
-                /* Release the lock we took, whatever came of the read. */
-                if (editWindow && editWindow->Memory16 && g_WowUserKernelSegment) {
-                    WORD  editCallbackSelector = WowCallbackSelector();
-                    DWORD editStackBase  = DpmiSelectorBase(
-                                    (WORD)VDM_REG16(tib, VTIB_SS));
-                    WORD  unlockArgument  = editWindow->Memory16;
-                    if (editCallbackSelector && editStackBase
-                        && WowCallEnter(tib, editStackBase, editCallbackSelector,
-                                         ((DWORD)g_WowUserKernelSegment << WORD_SHIFT)
-                                             | WOWUSER_KRNL_LOCALUNLOCK_OFF,
-                                         editWindow->Instance, &unlockArgument, 1, 0,
-                                         WOWCALL_RET_KEEP, NULL, editWindow->Window16, 0,
-                                         NULL, 0, -1, WOWCALL_PROCEDURE_PRESENT))
-                        cursor = LogPut(cursor, "; LocalUnlock in flight");
-                    else
-                        cursor = LogPut(cursor, "; ★ LocalUnlock REFUSED -- the block stays"
-                                    " locked");
-                }
-            }
-            /* ── ★★★★★ THE SAVE DIRECTION, STEP 2: LOCK WHAT WE JUST GOT. ─────
-                 The allocator has answered with a local handle (already stored
-                 through the sink, so `ew->hmem` is the NEW one even if
-                 LocalReAlloc moved the block). Locking it is the only way to get
-                 an address to write the text at, and only the guest's KERNEL can
-                 do it -- the same call, in the same DGROUP, as the load path. */
-            if (callAction == WOWCALL_ACT_EDITLOCK) {
-                WOWUSER_WINDOW *editWindow = WowUserFindWindow(actionArgument);
-                cursor = LogPut(cursor, " -- EDIT block 0x"); cursor = LogHex(cursor, editWindow ? editWindow->Memory16 : 0);
-                if (!editWindow || !editWindow->Memory16 || !editWindow->Window32 || !g_WowUserKernelSegment) {
-                    cursor = LogPut(cursor, " -- ★ NOT USABLE; the control's text is NOT saved");
-                } else {
-                    WORD  editCallbackSelector = WowCallbackSelector();
-                    DWORD editStackBase  = DpmiSelectorBase(
-                                    (WORD)VDM_REG16(tib, VTIB_SS));
-                    WORD  lockArgument  = editWindow->Memory16;
-                    if (editCallbackSelector && editStackBase
-                        && WowCallEnter(tib, editStackBase, editCallbackSelector,
-                                         ((DWORD)g_WowUserKernelSegment << WORD_SHIFT)
-                                             | WOWUSER_KRNL_LOCALLOCK_OFF,
-                                         editWindow->Instance, &lockArgument, 1, 0,
-                                         WOWCALL_RET_KEEP, NULL, editWindow->Window16, 0,
-                                         NULL, 0, -1, WOWCALL_PROCEDURE_PRESENT)) {
-                        if (g_WowCallDepth > 0) {
-                            g_WowCallFrames[g_WowCallDepth - 1].Action = WOWCALL_ACT_EDITFILL;
-                            g_WowCallFrames[g_WowCallDepth - 1].ActionArgument = editWindow->Window16;
-                        }
-                        cursor = LogPut(cursor, "; LocalLock in flight, then fill");
-                    } else {
-                        cursor = LogPut(cursor, "; ★ LocalLock REFUSED -- text NOT saved");
-                    }
-                }
-            }
-            /* ── ★★★★★ STEP 3: WRITE THE CONTROL'S TEXT INTO THE GUEST'S BLOCK.
-                 This is the exact mirror of ACT_EDITTEXT. There the block was
-                 read and handed to the control; here the control is read and the
-                 bytes are handed to the block, which is what the application is
-                 about to `_lwrite` to its file.
-               ⚠ BOUNDED BY WHAT WAS ALLOCATED. The block was sized from
-                 GetWindowTextLength at EM_GETHANDLE time and the text is fetched
-                 again here, so a keystroke landing between the two would
-                 overflow -- GetWindowTextA is therefore given the SAME bound the
-                 allocation used, and the log says if it had to truncate.
-               ⚠ AND UNLOCK. We took the lock, we owe the release. */
-            if (callAction == WOWCALL_ACT_EDITFILL) {
-                WOWUSER_WINDOW *editWindow = WowUserFindWindow(actionArgument);
-                DWORD offset = result & WORD_MASK;
-                DWORD instanceBase = editWindow ? DpmiSelectorBase(editWindow->Instance) : 0;
-                cursor = LogPut(cursor, " -- EDIT block at 0x"); cursor = LogHex(cursor, editWindow ? editWindow->Instance : 0);
-                cursor = LogPut(cursor, ":0x"); cursor = LogHex(cursor, offset);
-                if (!editWindow || !editWindow->Window32 || !instanceBase || !offset) {
-                    cursor = LogPut(cursor, " -- ★ UNWRITABLE; the control's text is NOT saved");
-                } else {
-                    static CHAR savedEditText[16384];
-                    volatile BYTE *destinationBytes = (volatile BYTE *)(ULONG_PTR)(instanceBase + offset);
-                    INT cap = GetWindowTextLengthA(editWindow->Window32) + 1;
-                    INT length, index;
-                    if (cap > (INT)sizeof savedEditText) cap = (INT)sizeof savedEditText;
-                    length = GetWindowTextA(editWindow->Window32, savedEditText, cap);
-                    for (index = 0; index <= length; ++index) destinationBytes[index] = (BYTE)savedEditText[index];
-                    cursor = LogPut(cursor, " <- 0x"); cursor = LogHex(cursor, (DWORD)length);
-                    cursor = LogPut(cursor, " byte(s) from the real control");
-                    if (length == cap - 1 && cap == (INT)sizeof savedEditText)
-                        cursor = LogPut(cursor, " (★ TRUNCATED at the host's buffer)");
-                }
-                if (editWindow && editWindow->Memory16 && g_WowUserKernelSegment) {
-                    WORD  editCallbackSelector = WowCallbackSelector();
-                    DWORD editStackBase  = DpmiSelectorBase(
-                                    (WORD)VDM_REG16(tib, VTIB_SS));
-                    WORD  unlockArgument  = editWindow->Memory16;
-                    if (editCallbackSelector && editStackBase
-                        && WowCallEnter(tib, editStackBase, editCallbackSelector,
-                                         ((DWORD)g_WowUserKernelSegment << WORD_SHIFT)
-                                             | WOWUSER_KRNL_LOCALUNLOCK_OFF,
-                                         editWindow->Instance, &unlockArgument, 1, 0,
-                                         WOWCALL_RET_KEEP, NULL, editWindow->Window16, 0,
-                                         NULL, 0, -1, WOWCALL_PROCEDURE_PRESENT))
-                        cursor = LogPut(cursor, "; LocalUnlock in flight");
-                    else
-                        cursor = LogPut(cursor, "; ★ LocalUnlock REFUSED -- the block stays"
-                                    " locked");
-                }
-            }
-            /* ── THE CLIPBOARD BRIDGE (#160). See WOWCALL_ACT_CLIP* in wowcall.h.
-                 Each step runs with the parked caller restored, exactly like the EDIT
-                 chain above, so a follow-up call re-parks it at the same SS:SP. */
-            if (callAction == WOWCALL_ACT_CLIPLOCK || callAction == WOWCALL_ACT_CLIPFILL
-                || callAction == WOWCALL_ACT_CLIPPUT) {
-                WORD  clipCallbackSelector = WowCallbackSelector();
-                DWORD clipStackBase  = DpmiSelectorBase((WORD)VDM_REG16(tib, VTIB_SS));
-                WORD  clipDs   = (WORD)VDM_REG16(tib, VTIB_DS);
-                WORD  handleArgument  = (callAction == WOWCALL_ACT_CLIPLOCK) ? (WORD)result : actionArgument;
-                DWORD farPointerLinear = 0;
-                if (callAction != WOWCALL_ACT_CLIPLOCK && (result >> WORD_SHIFT))
-                    farPointerLinear = DpmiSelectorBase((WORD)(result >> WORD_SHIFT)) + (result & WORD_MASK);
-                if (callAction == WOWCALL_ACT_CLIPLOCK) {
-                    cursor = LogPut(cursor, " -- CLIP GlobalAlloc -> 0x"); cursor = LogHex(cursor, handleArgument);
-                } else if (callAction == WOWCALL_ACT_CLIPFILL) {
-                    /* GlobalAlloc was sized n+1, so the copy is bounded by what was
-                       asked for; the NUL goes in with it. */
-                    INT index;
-                    cursor = LogPut(cursor, " -- CLIP fill 0x"); cursor = LogHex(cursor, (DWORD)g_WowUserClipboardLength);
-                    cursor = LogPut(cursor, " byte(s) at 0x"); cursor = LogHex(cursor, result);
-                    if (farPointerLinear && MemoryReadable((ULONG_PTR)farPointerLinear, (DWORD)g_WowUserClipboardLength + 1)) {
-                        volatile BYTE *destinationBytes = (volatile BYTE *)(ULONG_PTR)farPointerLinear;
-                        for (index = 0; index <= g_WowUserClipboardLength; ++index) destinationBytes[index] = (BYTE)g_WowUserClipboard[index];
-                    } else cursor = LogPut(cursor, " -- ★ GlobalLock gave no usable pointer; the"
-                                       " block stays EMPTY");
-                } else {
-                    /* The guest's text, to a block the HOST clipboard will own. */
-                    INT length = 0;
-                    cursor = LogPut(cursor, " -- CLIP put from 0x"); cursor = LogHex(cursor, result);
-                    if (farPointerLinear) {
-                        const volatile BYTE *sourceBytes = (const volatile BYTE *)(ULONG_PTR)farPointerLinear;
-                        while (length < (INT)sizeof g_WowUserClipboard - 1
-                               && MemoryReadable((ULONG_PTR)(sourceBytes + length), 1) && sourceBytes[length])
-                            { g_WowUserClipboard[length] = (CHAR)sourceBytes[length]; ++length; }
-                    }
-                    g_WowUserClipboard[length] = 0;
-                    if (farPointerLinear) {
-                        HGLOBAL clipboardMemory = GlobalAlloc(GMEM_MOVEABLE, (SIZE_T)length + 1);
-                        PSTR clipboardText = clipboardMemory ? (PSTR)GlobalLock(clipboardMemory) : NULL;
-                        INT index;
-                        if (clipboardText) {
-                            for (index = 0; index <= length; ++index) clipboardText[index] = g_WowUserClipboard[index];
-                            GlobalUnlock(clipboardMemory);
-                        }
-                        if (clipboardText && SetClipboardData(g_WowUserClipboardFormat, clipboardMemory)) {
-                            cursor = LogPut(cursor, " -> 0x"); cursor = LogHex(cursor, (DWORD)length);
-                            cursor = LogPut(cursor, " byte(s) on the host's clipboard");
-                        } else {
-                            if (clipboardMemory) GlobalFree(clipboardMemory);
-                            cursor = LogPut(cursor, " -- ★ the host clipboard REFUSED it (not open?)");
-                        }
-                    } else cursor = LogPut(cursor, " -- ★ GlobalLock gave no usable pointer; nothing"
-                                       " was copied");
-                }
-                /* Next link: Alloc -> Lock, and Lock -> Unlock once the bytes moved. */
-                if (handleArgument && g_WowUserKernelSegment && clipCallbackSelector && clipStackBase) {
-                    WORD firstArgument = handleArgument;
-                    DWORD proc = ((DWORD)g_WowUserKernelSegment << WORD_SHIFT)
-                               | (callAction == WOWCALL_ACT_CLIPLOCK ? WOWUSER_KRNL_GLOBALLOCK_OFF
-                                                              : WOWUSER_KRNL_GLOBALUNLOCK_OFF);
-                    if (WowCallEnter(tib, clipStackBase, clipCallbackSelector, proc, clipDs, &firstArgument, 1, 0,
-                                      WOWCALL_RET_KEEP, NULL, 0, 0, NULL, 0, -1, WOWCALL_PROCEDURE_PRESENT)) {
-                        if (callAction == WOWCALL_ACT_CLIPLOCK && g_WowCallDepth > 0) {
-                            g_WowCallFrames[g_WowCallDepth - 1].Action = WOWCALL_ACT_CLIPFILL;
-                            g_WowCallFrames[g_WowCallDepth - 1].ActionArgument = handleArgument;
-                        }
-                        cursor = LogPut(cursor, callAction == WOWCALL_ACT_CLIPLOCK ? "; GlobalLock in flight"
-                                                                : "; GlobalUnlock in flight");
-                    } else cursor = LogPut(cursor, "; ★ the next KERNEL call was REFUSED");
-                }
-            }
+            cursor = WowCallbackEditText(cursor, callAction, actionArgument, result, tib);
+            cursor = WowCallbackEditLock(cursor, callAction, actionArgument, tib);
+            cursor = WowCallbackEditFill(cursor, callAction, actionArgument, result, tib);
+            cursor = WowCallbackClipboard(cursor, callAction, tib, result, actionArgument);
             /* ── ★★★★★ THE MODAL LOOP'S NEXT TURN. (session 57) ───────────────
                  A dialog procedure has just returned, so the question the loop
                  exists to ask can be asked again: has EndDialog been called? If
@@ -3427,39 +4046,7 @@ static INT DpmiServicePmIntBody(DOS_MACHINE *machine, volatile BYTE *tib, DWORD 
                 WowEnumStep(tib, enumStackBase, enumCallbackSelector, WOWENUM_NEXT, result, enumNote, sizeof enumNote);
                 cursor = LogPut(cursor, " -- "); cursor = LogPut(cursor, enumNote);
             }
-            if (callAction == WOWCALL_ACT_MODALPUMP) {
-                CHAR modalNote[512];
-                WORD  modalCallbackSelector = WowCallbackSelector();
-                DWORD modalStackBase  = DpmiSelectorBase(
-                    (WORD)VDM_REG16(tib, VTIB_SS));
-                /* s88: the modal loop calls a #32770 dialog's DLGPROC directly, so a
-                   FALSE answer to WM_CLOSE got no DefDlgProc default -- Task List's X
-                   did nothing. Same default as DefDlgProc's (IDCANCEL posted, which
-                   the loop delivers next). WM_CLOSE, and (s92) WM_PAINT / WM_ERASEBKGND:
-                   TASKMAN's DLGPROC answers FALSE to WM_PAINT and nothing ever erased
-                   the dialog, so the Task List showed the desktop behind it
-                   (runs/s92/untitled2.bmp). DefDlgProc's paint is the dialog colour. */
-                if (g_WowDlgIsDialogCall[g_WowCallDepth] && (WORD)result == 0
-                    && (g_WowDlgMessage[g_WowCallDepth] == WM_CLOSE
-                        || g_WowDlgMessage[g_WowCallDepth] == WM_PAINT
-                        || g_WowDlgMessage[g_WowCallDepth] == WM_ERASEBKGND)) {
-                    CHAR defaultName[200]; INT defaultLength = 0;
-                    WowUserDlgDefault(WowUserFindWindow(actionArgument), actionArgument,
-                                        g_WowDlgMessage[g_WowCallDepth],
-                                        g_WowUserDlgDefaults[g_WowCallDepth].WParam,
-                                        g_WowUserDlgDefaults[g_WowCallDepth].LParam,
-                                        defaultName, (INT)sizeof defaultName, &defaultLength);
-                    defaultName[defaultLength < (INT)sizeof defaultName ? defaultLength : (INT)sizeof defaultName - 1] = 0;
-                    cursor = LogPut(cursor, " -- DLGPROC said FALSE; DefDlgProc default:");
-                    cursor = LogPut(cursor, defaultName);
-                }
-                g_WowDlgIsDialogCall[g_WowCallDepth] = 0;
-                modalNote[0] = 0;
-                cursor = LogPut(cursor, "\r\n");
-                LogAppend(LOG_PATH, base, cursor); SerialOut(base, cursor); cursor = base;
-                WowDlgStep(tib, modalStackBase, modalCallbackSelector, &g_Running, modalNote, sizeof modalNote);
-                cursor = LogPut(cursor, "WOWDLG: "); cursor = LogPut(cursor, modalNote);
-            }
+            cursor = WowCallbackModalPump(cursor, base, callAction, tib, result, actionArgument);
             cursor = LogPut(cursor, "\r\n");
             LogAppend(LOG_PATH, base, cursor); SerialOut(base, cursor); cursor = base;
             return 1;
@@ -5041,136 +5628,13 @@ static INT DpmiServicePmIntBody(DOS_MACHINE *machine, volatile BYTE *tib, DWORD 
                             VDM_REG(tib, VTIB_EIP) += DPMI_PM_BOP_LENGTH;
                             return 1;
                         }
-                        if (ah == DOS_FN_WRITE) {                          /* write BX=handle CX=cnt DS:DX=buf */
-                            DWORD bh = VDM_REG16(tib, VTIB_EBX), count = VDM_REG16(tib, VTIB_ECX);
-                            DWORD dsBase = DpmiSelectorBase((WORD)VDM_REG(tib, VTIB_DS));
-                            const volatile BYTE *bytes = (const volatile BYTE *)(ULONG_PTR)
-                                (dsBase + VDM_REG16(tib, VTIB_EDX));
-                            /* ── #256: A BOUND HANDLE IS A FILE, WHATEVER ITS NUMBER. ──────
-                                 This tested `bh == 1 || bh == 2` FIRST, so a DPMI program run
-                                 as `prog > out.txt` printed to the screen and left out.txt
-                                 empty -- the defect #133 fixed for real mode (see the V86
-                                 AH=40h). The same two rules as there: a bound slot is a file;
-                                 an unbound open device slot is the console, except 3/4,
-                                 which are AUX and PRN (#251). */
-                            INT bound = (bh < DOS_MAX_FILES && machine->FileHandles[bh] != 0);
-                            INT device   = (!bound && bh < BITS_PER_DWORD && ((machine->StdOpen >> bh) & 1u));
-                            VDM_REG(tib, VTIB_EFLAGS) &= ~EFLAGS_CF_U;
-                            if (device && (bh == DOS_HANDLE_AUX || bh == DOS_HANDLE_PRN)) {     /* AUX / PRN */
-                                DWORD item;
-                                for (item = 0; item < count; ++item) {
-                                    if (bh == DOS_HANDLE_PRN) (VOID)DosPrnOut(NULL, bytes[item]);
-                                    else DosAuxOut(NULL, bytes[item]);
-                                }
-                                VDM_SET16(tib, VTIB_EAX, count);
-                            } else if (device) {                      /* the console */
-                                CHAR outputLine[300]; PSTR outputCursor = outputLine; DWORD item;
-                                outputCursor = LogPut(outputCursor, "INT21h AH=40 write: \"");
-                                for (item = 0; item < count && item < 250; ++item) {
-                                    if (bytes[item] >= ASCII_SPACE && outputCursor < outputLine + 270) *outputCursor++ = (CHAR)bytes[item];
-                                    if (machine->ConsoleOut) machine->ConsoleOut(machine->ConsoleOutContext, bytes[item]);
-                                    if (machine->OutputLength < machine->OutputCapacity - 1) machine->Output[machine->OutputLength++] = (CHAR)bytes[item];
-                                    else machine->IsOutputTruncated = 1;
-                                }
-                                outputCursor = LogPut(outputCursor, "\"\r\n");
-                                LogAppend(LOG_PATH, outputLine, outputCursor); SerialOut(outputLine, outputCursor);
-                                VDM_SET16(tib, VTIB_EAX, count);     /* AX = bytes written */
-                            } else if (bound) {                     /* file handle */
-                                DWORD bytesWritten = 0, writeError = 0;
-                                if (!WriteFile(machine->FileHandles[bh], (const VOID *)bytes, count, &bytesWritten, NULL)) writeError = GetLastError();
-                                if (!PmRwHardwareFail(machine, tib, DOS_FN_WRITE, writeError, &cursor)) {   /* #275 */
-                                    VDM_SET16(tib, VTIB_EAX, bytesWritten);
-                                    DosStampVdmNow(machine->FileHandles[bh]);   /* #263, as the V86 AH=40h */
-                                }
-                                cursor = LogPut(cursor, "INT21h AH=40 file write "); cursor = LogHex(cursor, bytesWritten); cursor = LogPut(cursor, "b\r\n");
-                                LogAppend(LOG_PATH, base, cursor); SerialOut(base, cursor); cursor = base;
-                            } else { VDM_REG(tib, VTIB_EFLAGS) |= EFLAGS_CF_U; VDM_SET16(tib, VTIB_EAX, DOS_ERR_INVALID_HANDLE); }
-                            VDM_REG(tib, VTIB_EIP) += DPMI_PM_BOP_LENGTH;
-                            return 1;
+                        {
+                            INT exitCode, flow = DpmiInt21Write(&cursor, base, ah, tib, machine, &exitCode);
+                            if (flow == HOST_FLOW_RETURN) return exitCode;
                         }
-                        /* ── ★★★ AND 5Bh, "CREATE NEW", WHICH IS HOW A GUEST MAKES A
-                             TEMPORARY FILE. (session 56) ─────────────────────────────
-                             It is 3Ch with one difference -- it FAILS if the name
-                             already exists -- and that difference is the whole point:
-                             the caller invents a name, tries to create it, and retries
-                             with another on error 50h. Landing in "PM thunk TODO"
-                             therefore does not look like an unimplemented call, it
-                             looks like a full disk.
-                           ★ MEASURED. CARDFILE calls AH=2Ch for the time, builds a name
-                             from it, calls 5Bh, and puts up
-                                 "Cannot create temporary file. Delete one or more files
-                                  to increase available disk space, and then try again."
-                             on a 243 GB volume -- which is the recorded WRITE defect
-                             too, and the reason both were filed under "runs but lies"
-                             rather than as a missing DOS call. */
-                        if (ah == DOS_FN_CREATE || ah == DOS_FN_OPEN || ah == DOS_FN_CREATE_NEW) {  /* create / open: DS:DX = ASCIIZ name */
-                            DWORD dsBase = DpmiSelectorBase((WORD)VDM_REG(tib, VTIB_DS));
-                            PCSTR fileName = (PCSTR)(ULONG_PTR)(dsBase + VDM_REG16(tib, VTIB_EDX));
-                            /* ── ★★ AL IS A BIT FIELD, NOT A NUMBER. (#128, session 37) ──
-                                 DOS open mode: bits 0-2 = access (0 read, 1 write, 2 r/w),
-                                 bits 4-6 = the SHARE.EXE sharing mode, bit 7 = no-inherit.
-                                 This compared the WHOLE byte against 0 and 1, so krnl386's
-                                 `al = 0x80` -- read access with the inheritance bit, the
-                                 most ordinary open there is -- fell through to "anything
-                                 else" and asked Windows for GENERIC_READ | GENERIC_WRITE.
-                                 That is what cost GDI.EXE: USER.EXE imports GDI, so the
-                                 file was ALREADY open (handle 7, never closed) when the
-                                 boot list loaded it by name, and a second open asking for
-                                 WRITE against a FILE_SHARE_READ handle is
-                                 ERROR_SHARING_VIOLATION. It came back as DOS error 2, which
-                                 krnl386 read as a short header read and reported as 0x0B
-                                 ERROR_BAD_FORMAT -- so the module it could not open looked
-                                 like a module it had rejected. Access now comes from AL & 7.
-                               ⚠ AND WE DO NOT EMULATE SHARE.EXE. Bare DOS enforces no
-                                 locking at all, so imposing FILE_SHARE_READ invented a
-                                 restriction the guest's DOS does not have. Share everything
-                                 and let the guest be as reckless as DOS lets it be. */
-                            DWORD mode = ax & DOS_INT21_OPEN_ACCESS_MASK;
-                            DWORD desiredAccess = (mode == DOS_INT21_OPEN_WRITE) ? GENERIC_WRITE
-                                      : (mode == DOS_INT21_OPEN_READ_WRITE) ? (GENERIC_READ | GENERIC_WRITE) : GENERIC_READ;
-                            DWORD shareMode = FILE_SHARE_READ | FILE_SHARE_WRITE;
-                            HANDLE file = (ah == DOS_FN_CREATE || ah == DOS_FN_CREATE_NEW)
-                                ? CreateFileA(fileName, GENERIC_READ | GENERIC_WRITE, shareMode, NULL,
-                                              (ah == DOS_FN_CREATE_NEW) ? CREATE_NEW : CREATE_ALWAYS,
-                                              FILE_ATTRIBUTE_NORMAL, NULL)
-                                : CreateFileA(fileName, desiredAccess, shareMode, NULL, OPEN_EXISTING,
-                                              FILE_ATTRIBUTE_NORMAL, NULL);
-                            DWORD lastError = (file == INVALID_HANDLE_VALUE) ? GetLastError() : 0;
-                            VDM_REG(tib, VTIB_EFLAGS) &= ~EFLAGS_CF_U;
-                            /* Report the failure the guest actually suffered. Answering 2
-                               "file not found" to an access or sharing failure is the
-                               "runs but lies" class: the caller retries a path that is
-                               right and concludes the file is missing. */
-                            if (file == INVALID_HANDLE_VALUE) { VDM_REG(tib, VTIB_EFLAGS) |= EFLAGS_CF_U;
-                                   VDM_SET16(tib, VTIB_EAX,
-                                       (lastError == ERROR_PATH_NOT_FOUND)     ? DOS_ERR_PATH_NOT_FOUND :
-                                       (lastError == ERROR_ACCESS_DENIED)      ? DOS_ERR_ACCESS_DENIED :
-                                       (lastError == ERROR_SHARING_VIOLATION)  ? DOS_ERR_SHARING_VIOLATION :
-                                       /* 50h is the ANSWER 5Bh exists to give: the name
-                                          is taken, try another. Mapping it to 2 would
-                                          tell the caller its own file is missing. */
-                                       (lastError == ERROR_FILE_EXISTS ||
-                                        lastError == ERROR_ALREADY_EXISTS)     ? DOS_ERR_FILE_EXISTS :
-                                       (lastError == ERROR_TOO_MANY_OPEN_FILES)? DOS_ERR_TOO_MANY_OPEN_FILES : DOS_ERR_FILE_NOT_FOUND); }
-                            else { INT slot; for (slot = DOS_STD_HANDLES; slot < DOS_MAX_FILES && machine->FileHandles[slot]; ++slot) {}
-                                   if (slot < PM_INT21_HANDLE_LIMIT) { machine->FileHandles[slot] = file; VDM_SET16(tib, VTIB_EAX, slot);
-                                                    if (ah == DOS_FN_CREATE || ah == DOS_FN_CREATE_NEW) DosStampVdmNow(file); /* #263 */ }
-                                   else { CloseHandle(file); VDM_REG(tib, VTIB_EFLAGS) |= EFLAGS_CF_U; VDM_SET16(tib, VTIB_EAX, DOS_ERR_TOO_MANY_OPEN_FILES); } }
-                            /* ── ⚠ "-> AX=0x2" MEANT TWO OPPOSITE THINGS. (session 37) ──
-                                 This printed AX and nothing else, so a failed open reading
-                                 "AX=0x0002" (error 2, file not found) was indistinguishable
-                                 from a successful open that returned handle 2 -- and the
-                                 whole GDI.EXE wall was read the wrong way round off this one
-                                 line. Print the REQUEST (AL carries the access mode AND the
-                                 DOS sharing mode), the VERDICT (CF), and, when it failed,
-                                 the Win32 error, which is the only thing that says WHY. */
-                            cursor = LogPut(cursor, "INT21h AH="); cursor = LogHex(cursor, ah); cursor = LogPut(cursor, " open \"");
-                            cursor = LogPut(cursor, fileName); cursor = LogPut(cursor, "\" al=0x"); cursor = LogHexByte(cursor, (BYTE)(ax & BYTE_MASK));
-                            cursor = LogPut(cursor, " -> AX=0x"); cursor = LogHex(cursor, VDM_REG16(tib, VTIB_EAX));
-                            cursor = LogPut(cursor, " CF="); cursor = LogHex(cursor, VDM_REG(tib, VTIB_EFLAGS) & EFLAGS_CF_U);
-                            if (lastError) { cursor = LogPut(cursor, " FAILED gle="); cursor = LogHex(cursor, lastError); }
-                            cursor = LogPut(cursor, "\r\n"); LogAppend(LOG_PATH, base, cursor); SerialOut(base, cursor); cursor = base;
-                            VDM_REG(tib, VTIB_EIP) += DPMI_PM_BOP_LENGTH; return 1;
+                        {
+                            INT exitCode, flow = DpmiInt21CreateOpen(&cursor, base, ah, tib, ax, machine, &exitCode);
+                            if (flow == HOST_FLOW_RETURN) return exitCode;
                         }
                         if (ah == DOS_FN_CLOSE) {                          /* close: BX=handle */
                             DWORD handle = VDM_REG16(tib, VTIB_EBX);
@@ -5186,53 +5650,9 @@ static INT DpmiServicePmIntBody(DOS_MACHINE *machine, volatile BYTE *tib, DWORD 
                             LogAppend(LOG_PATH, base, cursor); SerialOut(base, cursor); cursor = base;
                             VDM_REG(tib, VTIB_EIP) += DPMI_PM_BOP_LENGTH; return 1;
                         }
-                        if (ah == DOS_FN_READ) {                          /* read: BX=handle CX=cnt -> DS:DX */
-                            DWORD handle = VDM_REG16(tib, VTIB_EBX), count = VDM_REG16(tib, VTIB_ECX), bytesRead = 0;
-                            DWORD dsBase = DpmiSelectorBase((WORD)VDM_REG(tib, VTIB_DS));
-                            PVOID buffer = (VOID *)(ULONG_PTR)(dsBase + VDM_REG16(tib, VTIB_EDX));
-                            VDM_REG(tib, VTIB_EFLAGS) &= ~EFLAGS_CF_U;
-                            if (handle < DOS_MAX_FILES && machine->FileHandles[handle]) {
-                                DWORD writeError = 0;
-                                if (!ReadFile(machine->FileHandles[handle], buffer, count, &bytesRead, NULL)) writeError = GetLastError();
-                                if (!PmRwHardwareFail(machine, tib, DOS_FN_READ, writeError, &cursor))   /* #275 */
-                                    VDM_SET16(tib, VTIB_EAX, bytesRead);
-                            }
-                            else { VDM_REG(tib, VTIB_EFLAGS) |= EFLAGS_CF_U; VDM_SET16(tib, VTIB_EAX, DOS_ERR_INVALID_HANDLE); }
-                            /* ── WHERE IT LANDED, NOT JUST HOW MUCH. ─────────────────────
-                                 "read 0x40b" cannot distinguish a read that filled the
-                                 buffer the guest meant from one that filled a different
-                                 one, and session 34 needed exactly that distinction: the
-                                 selector krnl386 later parsed as an NE header held
-                                 ne_modtab = 0x38a instead of 0x78, and the only way to
-                                 tell a mis-delivered read from a mis-parsed one is to
-                                 print the destination and the bytes. */
-                            /* ⚠ AND WHAT THE GUEST WILL SEE. This printed the byte
-                                 count and not the ANSWER -- half an instrument, by
-                                 this project's own rule -- and it cost a reading:
-                                 SYSEDIT reports "Cannot read this file" about a
-                                 0-byte file, which the stock-ntvdm oracle shows it
-                                 does NOT do, and the whole question is what `_lread`
-                                 came back with. `rd` and `AX` are the same number
-                                 today and printing only one of them is a claim that
-                                 they always will be. */
-                            cursor = LogPut(cursor, "INT21h AH=3F read "); cursor = LogHex(cursor, bytesRead);
-                            cursor = LogPut(cursor, "b of "); cursor = LogHex(cursor, count);
-                            cursor = LogPut(cursor, " -> AX=0x");
-                            cursor = LogHex(cursor, VDM_REG16(tib, VTIB_EAX));
-                            cursor = LogPut(cursor, " CF="); cursor = LogHex(cursor, VDM_REG(tib, VTIB_EFLAGS) & EFLAGS_CF_U);
-                            cursor = LogPut(cursor, " h="); cursor = LogHex(cursor, handle);
-                            cursor = LogPut(cursor, " -> 0x"); cursor = LogHex(cursor, VDM_REG16(tib, VTIB_DS));
-                            cursor = LogPut(cursor, ":0x"); cursor = LogHex(cursor, VDM_REG16(tib, VTIB_EDX));
-                            cursor = LogPut(cursor, " lin=0x"); cursor = LogHex(cursor, (DWORD)(ULONG_PTR)buffer);
-                            cursor = LogPut(cursor, " pos=0x");
-                            cursor = LogHex(cursor, (handle < DOS_MAX_FILES && machine->FileHandles[handle])
-                                        ? SetFilePointer(machine->FileHandles[handle], 0, NULL, FILE_CURRENT) : 0);
-                            cursor = LogPut(cursor, " first=");
-                            if (bytesRead && HostReadable(buffer, 8)) cursor = LogDump(cursor, buffer, 8);
-                            else                           cursor = LogPut(cursor, "-");
-                            cursor = LogPut(cursor, "\r\n");
-                            LogAppend(LOG_PATH, base, cursor); SerialOut(base, cursor); cursor = base;
-                            VDM_REG(tib, VTIB_EIP) += DPMI_PM_BOP_LENGTH; return 1;
+                        {
+                            INT exitCode, flow = DpmiInt21Read(&cursor, base, ah, tib, machine, &exitCode);
+                            if (flow == HOST_FLOW_RETURN) return exitCode;
                         }
                         if (ah == DOS_FN_SEEK) {                          /* lseek: AL=org BX=h CX:DX=off */
                             DWORD handle = VDM_REG16(tib, VTIB_EBX), seekMethod = ax & BYTE_MASK;
@@ -5256,234 +5676,21 @@ static INT DpmiServicePmIntBody(DOS_MACHINE *machine, volatile BYTE *tib, DWORD 
                             LogAppend(LOG_PATH, base, cursor); SerialOut(base, cursor); cursor = base;
                             VDM_REG(tib, VTIB_EIP) += DPMI_PM_BOP_LENGTH; return 1;
                         }
-                        /* ── REGISTER-ONLY INT 21h: DELEGATE TO THE V86 DOS IMPLEMENTATION ──
-                           DosInt21() reads and writes the same VDM_TIB register fields the PM
-                           client left behind, so a service that takes NO pointer argument needs
-                           no thunking at all -- there is nothing to translate.
-                           ► THE WHITELIST IS DELIBERATE, NOT LAZINESS. A service that takes a
-                             DS:DX / ES:BX pointer must NOT come through here: in protected mode
-                             those registers hold SELECTORS, and handing a selector to code that
-                             treats it as a real-mode segment reads or writes whatever happens to
-                             live at selector<<4. That is a silent wrong-memory bug of exactly the
-                             kind that cost this session a day (see the D/B fix). Pointer-taking
-                             services are hand-rolled above with DpmiSelectorBase(), or stay loud.
-                           ► ES-as-SEGMENT services (49h free, 4Ah resize) are ALSO excluded from
-                             the whitelist: the block address they want is a real-mode paragraph,
-                             but in PM ES holds a selector. Session 16 said "if Doom calls 49h the
-                             log will say so and we can settle the convention on evidence" -- IT
-                             DID (twice), so 49h is hand-rolled below, resolving ES through the
-                             LDT. 4Ah is still unevidenced and still stays loud.
-                           ► 33h (Ctrl-Break / true version) joined the whitelist on the same
-                             evidence: Doom calls it twice, and every subfunction DosInt21
-                             implements (AL=00/01/05/06) reads and writes GPRs only. Leaving it
-                             unhandled was NOT neutral -- the TODO arm returned with AX still
-                             0x33xx and CF untouched, and the caller's very next instructions are
-                             `xchg ax,cx / cbw / retn`, i.e. it propagates whatever we left.
-                           Doom (DOS/4GW) needs 48h to allocate the memory it loads its LE image
-                           into -- it is the first DOS call it makes from protected mode. */
-                        if (ah == DOS_FN_ALLOCATE) {
-                            /* ── DOS ALLOCATE, FROM PROTECTED MODE, RETURNS A SELECTOR ──────
-                               A raw real-mode segment is useless to a PM client, and Doom
-                               proves the convention by what it does: on success it loads the
-                               AX it got back straight into ES (observed at the fault). That
-                               only makes sense if AX is a SELECTOR -- with the raw segment
-                               0x151c it is GDT index 0x2A3, which #GPs and silently kills the
-                               VDM. That segment load IS the specification here, the same way
-                               DOS/4GW clearing D/B itself settled the
-                               initial-selector width.
-                               So: do the real DOS allocation (DosInt21 owns the MCB chain),
-                               then hand back a descriptor covering it, IN AX ONLY.
-
-                               ► DO NOT ALSO PUT IT IN DX. Session 16 did, reasoning that it
-                                 "matches INT 31h 0100's shape, which costs nothing and is
-                                 what a client written against 0100 would expect". It cost
-                                 Doom. Real DOS's AH=48h returns AX (and BX on failure) and
-                                 PRESERVES EVERYTHING ELSE, so callers keep live values in
-                                 the other registers across it -- and DOS/4GW keeps the
-                                 request's BYTE SIZE in DX:
-                                     mov dx,cx / add dx,0x27 / and dl,0xf0   ; DX = bytes
-                                     mov bx,dx / ...shift...                 ; BX = paragraphs
-                                     mov ah,48h / int 21h
-                                     ...
-                                     mov ax,dx                               ; DX still = bytes
-                                     mov di,ax / add di,bx / dec di / dec di
-                                     movw [di],0xfffe                        ; last word of block
-                                 With DX clobbered to the selector (0xcf) instead of the size
-                                 (0x40), DI became 0xcd against a 0x4f limit: a write past the
-                                 segment end, #GP, and XP terminated the VDM with nothing in
-                                 the log. Bisected to the instruction with the pmbp.txt
-                                 breakpoints.
-                               ► THE GENERAL RULE THIS EARNS: a service's register footprint
-                                 is part of its contract. Writing a register the real service
-                                 leaves alone is not a harmless bonus, it is a silent
-                                 corruption of the caller's state. Return what DOS returns. */
-                            DWORD want = VDM_REG16(tib, VTIB_EBX);
-                            machine->TraceCursor = cursor; DosInt21SetProtectedMode(TRUE); DosInt21(machine); DosInt21SetProtectedMode(FALSE); cursor = machine->TraceCursor;
-                            cursor = LogPut(cursor, "INT21h AH=48 (PM) alloc 0x"); cursor = LogHex(cursor, want);
-                            if (VDM_REG(tib, VTIB_EFLAGS) & EFLAGS_CF_U) {
-                                cursor = LogPut(cursor, " -> FAILED, largest 0x");
-                                cursor = LogHex(cursor, VDM_REG16(tib, VTIB_EBX));
-                            } else if (g_LdtNext >= DPMI_LDT_MAX) {
-                                VDM_REG(tib, VTIB_EFLAGS) |= EFLAGS_CF_U;
-                                VDM_SET16(tib, VTIB_EAX, DOS_ERR_INSUFFICIENT_MEMORY);       /* insufficient memory */
-                                cursor = LogPut(cursor, " -> no free LDT slot");
-                            } else {
-                                DWORD segment = VDM_REG16(tib, VTIB_EAX);
-                                INT ldtIndex = g_LdtNext++;
-                                WORD selector;
-                                g_Ldt[ldtIndex].Base   = segment << PARAGRAPH_SHIFT;
-                                g_Ldt[ldtIndex].Limit  = want ? (want * PARAGRAPH_SIZE_U - 1u) : X86_SEGMENT_LIMIT_64K;
-                                g_Ldt[ldtIndex].Access = DPMI_ACCESS_DATA;          /* present, DPL3, data R/W */
-                                g_Ldt[ldtIndex].Flags  = 0;             /* 16-bit, byte granular   */
-                                DpmiInstall(ldtIndex);
-                                selector = (WORD)DPMI_LDT_SELECTOR(ldtIndex);
-                                VDM_SET16(tib, VTIB_EAX, selector);   /* AX only -- see above */
-                                cursor = LogPut(cursor, " -> seg 0x"); cursor = LogHex(cursor, segment);
-                                cursor = LogPut(cursor, " as sel 0x"); cursor = LogHex(cursor, selector);
-                                cursor = LogPut(cursor, " limit 0x"); cursor = LogHex(cursor, g_Ldt[ldtIndex].Limit);
-                            }
-                            cursor = LogPut(cursor, "\r\n");
-                            LogAppend(LOG_PATH, base, cursor); SerialOut(base, cursor); cursor = base;
-                            VDM_REG(tib, VTIB_EIP) += DPMI_PM_BOP_LENGTH;
-                            return 1;
+                        {
+                            INT exitCode, flow = DpmiInt21Allocate(&cursor, base, ah, tib, machine, &exitCode);
+                            if (flow == HOST_FLOW_RETURN) return exitCode;
                         }
-                        if (ah == DOS_FN_FREE) {
-                            /* ── DOS FREE, FROM PROTECTED MODE: ES IS A SELECTOR ────────────
-                               The mirror image of 48h above, and the convention is forced by
-                               it rather than chosen: 48h handed the client a SELECTOR in AX,
-                               the client did `mov es,ax`, and the only thing it can pass back
-                               to 49h is that selector. So resolve ES through the LDT and free
-                               the paragraph its base names. Treating ES as a raw segment here
-                               would free whatever MCB happens to live at the selector VALUE --
-                               a silent heap corruption, which is precisely the hazard the
-                               whitelist comment below exists to prevent.
-                               The LDT slot is zeroed rather than reused: g_LdtNext is a bump
-                               allocator, so a freed slot is left reclaimable (same treatment
-                               as INT 31h 0101) instead of pretending to a free list we do not
-                               have. */
-                            WORD selector = (WORD)VDM_REG16(tib, VTIB_ES);
-                            INT ldtIndex = DPMI_SELECTOR_INDEX(selector);
-                            DWORD segmentBase = DpmiSelectorBase(selector);
-                            INT error;
-                            cursor = LogPut(cursor, "INT21h AH=49 (PM) free sel 0x"); cursor = LogHex(cursor, selector);
-                            cursor = LogPut(cursor, " base 0x"); cursor = LogHex(cursor, segmentBase);
-                            if ((segmentBase & PARAGRAPH_LAST_BYTE) || segmentBase > X86_REAL_MODE_LAST_U) {
-                                /* Not a paragraph-aligned conventional-memory base: this is not
-                                   a block DOS ever handed out, so refuse LOUDLY rather than
-                                   corrupt the MCB chain guessing. */
-                                VDM_REG(tib, VTIB_EFLAGS) |= EFLAGS_CF_U;
-                                VDM_SET16(tib, VTIB_EAX, DOS_ERR_INVALID_BLOCK);       /* invalid memory block address */
-                                cursor = LogPut(cursor, " -> REFUSED (not a DOS paragraph)");
-                            } else {
-                                error = DosMcbFree(NULL, (WORD)(segmentBase >> PARAGRAPH_SHIFT));
-                                if (error) { VDM_REG(tib, VTIB_EFLAGS) |= EFLAGS_CF_U; VDM_SET16(tib, VTIB_EAX, error);
-                                           cursor = LogPut(cursor, " -> err 0x"); cursor = LogHex(cursor, error); }
-                                else { VDM_REG(tib, VTIB_EFLAGS) &= ~EFLAGS_CF_U;
-                                       if (ldtIndex >= 3 && ldtIndex < DPMI_LDT_MAX) { g_Ldt[ldtIndex].Base = g_Ldt[ldtIndex].Limit = 0; }
-                                       cursor = LogPut(cursor, " -> freed seg 0x"); cursor = LogHex(cursor, segmentBase >> PARAGRAPH_SHIFT); }
-                            }
-                            cursor = LogPut(cursor, "\r\n");
-                            LogAppend(LOG_PATH, base, cursor); SerialOut(base, cursor); cursor = base;
-                            VDM_REG(tib, VTIB_EIP) += DPMI_PM_BOP_LENGTH;
-                            return 1;
+                        {
+                            INT exitCode, flow = DpmiInt21Free(&cursor, base, ah, tib, &exitCode);
+                            if (flow == HOST_FLOW_RETURN) return exitCode;
                         }
-                        if (ah == DOS_FN_SET_VECTOR || ah == DOS_FN_GET_VECTOR) {
-                            /* ── SET/GET INTERRUPT VECTOR FROM PROTECTED MODE ───────────────
-                               These operate on the PROTECTED-MODE vector, i.e. they are
-                               INT 31h 0205/0204 wearing a DOS hat, and must never reach
-                               DosInt21() -- which writes DS:DX straight into the real-mode
-                               IVT at linear (AL*4). In PM that would store a SELECTOR where
-                               a segment belongs, in the first kilobyte of guest memory.
-
-                               ► THE SPEC IS SILENT HERE. DPMI 0.9 defines INT 31h 0200-0206
-                                 for vectors and says only that "DPMI defines a specific
-                                 subset of DOS and BIOS calls that can be made by protected
-                                 mode DOS programs" -- it does not say which side 25h/35h act
-                                 on. Checked, not remembered.
-                               ► WHAT SETTLES IT IS THE CLIENT, as usual. DOS/4GW does
-                                     mov ax,0x3500 / int 21h        ; save the old vector
-                                     mov ax,0x2500 / mov dx,0x2cf3 / int 21h
-                                 with DS = 0x9F -- its own CODE SELECTOR -- and 0x2cf3 is a
-                                 handler inside that selector. A selector:offset pair cannot
-                                 be installed in the real-mode IVT, and a chain built from a
-                                 35h that read the real vector and a 25h that wrote the PM one
-                                 would be incoherent. So both act on the PM table.
-                               ► OUTSTANDING VERIFICATION: confirm against stock ntvdm's own
-                                 DPMI host with a text-mode probe (`stock <target>`). Until
-                                 then this is forced-by-the-data, not oracle-confirmed. */
-                            DWORD al = ax & BYTE_MASK;
-                            if (ah == DOS_FN_SET_VECTOR) {
-                                WORD handlerSelector = (WORD)VDM_REG16(tib, VTIB_DS);
-                                g_PmInt[al].Selector = handlerSelector;
-                                g_PmInt[al].Offset = DpmiSelectorIs32(handlerSelector) ? VDM_REG(tib, VTIB_EDX)
-                                                                       : VDM_REG16(tib, VTIB_EDX);
-                                g_PmInt[al].Client = 1;
-                                cursor = LogPut(cursor, "INT21h AH=25 (PM) set PM vector 0x"); cursor = LogHex(cursor, al);
-                                cursor = LogPut(cursor, " = 0x"); cursor = LogHex(cursor, g_PmInt[al].Selector);
-                                cursor = LogPut(cursor, ":0x"); cursor = LogHex(cursor, g_PmInt[al].Offset);
-                            } else {
-                                VDM_SET16(tib, VTIB_ES, g_PmInt[al].Selector);
-                                if (DpmiSelectorIs32(g_PmInt[al].Selector)) VDM_REG(tib, VTIB_EBX) = g_PmInt[al].Offset;
-                                else VDM_SET16(tib, VTIB_EBX, g_PmInt[al].Offset & WORD_MASK);
-                                cursor = LogPut(cursor, "INT21h AH=35 (PM) get PM vector 0x"); cursor = LogHex(cursor, al);
-                                cursor = LogPut(cursor, " -> 0x"); cursor = LogHex(cursor, g_PmInt[al].Selector);
-                                cursor = LogPut(cursor, ":0x"); cursor = LogHex(cursor, g_PmInt[al].Offset);
-                            }
-                            VDM_REG(tib, VTIB_EFLAGS) &= ~EFLAGS_CF_U;
-                            cursor = LogPut(cursor, "\r\n");
-                            LogAppend(LOG_PATH, base, cursor); SerialOut(base, cursor); cursor = base;
-                            VDM_REG(tib, VTIB_EIP) += DPMI_PM_BOP_LENGTH;
-                            return 1;
+                        {
+                            INT exitCode, flow = DpmiInt21SetGetVector(&cursor, base, ah, ax, tib, &exitCode);
+                            if (flow == HOST_FLOW_RETURN) return exitCode;
                         }
-                        if (ah == DOS_FN_RESIZE) {
-                            /* ── DOS RESIZE, FROM PROTECTED MODE ────────────────────────────
-                               ES is a selector, exactly as for 49h, and the evidence arrived
-                               the same way: session 16 left 4Ah loud pending a client that
-                               actually calls it, and DOS/4GW does -- immediately after the
-                               48h whose block it is shrinking (ES=0xcf, BX=0x40 paras).
-                               Resolve ES through the LDT, resize the real block, and then
-                               UPDATE THE DESCRIPTOR: the client goes on using the selector it
-                               already holds, so a limit left describing the old size is either
-                               a spurious #GP (grown block) or a licence to run off the end of
-                               the heap (shrunk one).
-                               Register footprint is DOS's: nothing on success; AX = error and
-                               BX = largest available on failure. See the AH=48h note above for
-                               what happens when we improvise extra return values. */
-                            WORD selector = (WORD)VDM_REG16(tib, VTIB_ES);
-                            INT ldtIndex = DPMI_SELECTOR_INDEX(selector);
-                            DWORD segmentBase = DpmiSelectorBase(selector);
-                            DWORD want = VDM_REG16(tib, VTIB_EBX);
-                            WORD maximum = 0;
-                            cursor = LogPut(cursor, "INT21h AH=4A (PM) resize sel 0x"); cursor = LogHex(cursor, selector);
-                            cursor = LogPut(cursor, " base 0x"); cursor = LogHex(cursor, segmentBase);
-                            cursor = LogPut(cursor, " to 0x"); cursor = LogHex(cursor, want); cursor = LogPut(cursor, " paras");
-                            if ((segmentBase & PARAGRAPH_LAST_BYTE) || segmentBase > X86_REAL_MODE_LAST_U) {
-                                VDM_REG(tib, VTIB_EFLAGS) |= EFLAGS_CF_U;
-                                VDM_SET16(tib, VTIB_EAX, DOS_ERR_INVALID_BLOCK);   /* invalid memory block address */
-                                cursor = LogPut(cursor, " -> REFUSED (not a DOS paragraph)");
-                            } else {
-                                INT error = DosMcbResize(NULL, (WORD)(segmentBase >> PARAGRAPH_SHIFT),
-                                                     (WORD)want, &maximum);
-                                if (error) {
-                                    VDM_REG(tib, VTIB_EFLAGS) |= EFLAGS_CF_U;
-                                    VDM_SET16(tib, VTIB_EAX, error);
-                                    if (error == DOS_ERR_INSUFFICIENT_MEMORY) VDM_SET16(tib, VTIB_EBX, maximum);
-                                    cursor = LogPut(cursor, " -> err 0x"); cursor = LogHex(cursor, error);
-                                    cursor = LogPut(cursor, " max 0x"); cursor = LogHex(cursor, maximum);
-                                } else {
-                                    VDM_REG(tib, VTIB_EFLAGS) &= ~EFLAGS_CF_U;
-                                    if (ldtIndex >= 1 && ldtIndex < DPMI_LDT_MAX) {
-                                        g_Ldt[ldtIndex].Limit = want ? (want * PARAGRAPH_SIZE_U - 1u) : 0;
-                                        DpmiInstall(ldtIndex);
-                                        cursor = LogPut(cursor, " -> ok, sel limit now 0x");
-                                        cursor = LogHex(cursor, g_Ldt[ldtIndex].Limit);
-                                    } else cursor = LogPut(cursor, " -> ok (no descriptor to update)");
-                                }
-                            }
-                            cursor = LogPut(cursor, "\r\n");
-                            LogAppend(LOG_PATH, base, cursor); SerialOut(base, cursor); cursor = base;
-                            VDM_REG(tib, VTIB_EIP) += DPMI_PM_BOP_LENGTH;
-                            return 1;
+                        {
+                            INT exitCode, flow = DpmiInt21Resize(&cursor, base, ah, tib, &exitCode);
+                            if (flow == HOST_FLOW_RETURN) return exitCode;
                         }
                         /* AH=44h IOCTL: only the register-only subfunctions. AL=00 (get
                            device info, BX in / DX out) is what a C runtime's isatty() uses
@@ -5614,78 +5821,9 @@ static INT DpmiServicePmIntBody(DOS_MACHINE *machine, volatile BYTE *tib, DWORD 
                             VDM_REG(tib, VTIB_EIP) += DPMI_PM_BOP_LENGTH;
                             return 1;
                         }
-                        /* ── ★★★★ AH=55h / 26h: CREATE A PSP, IN PROTECTED MODE. ────────
-                             krnl386 builds one of these per Win16 task -- measured, two
-                             per run: DX=0x03bf for WOWEXEC and DX=0x0ad7 for SYSEDIT --
-                             and BOTH were landing in the TODO arm, so neither task ever
-                             got a PSP at all.
-
-                           ★ AND THAT IS THE NULL-ES FAULT, TRACED END TO END. SYSEDIT
-                             reads the ENVIRONMENT segment from its own PSP+0x2c; it treats
-                             0 as "none", and loads anything else into ES and reads through
-                             it (observed at the fault: ES loaded with 1, #GP on the null
-                             descriptor). With no PSP built, +0x2c held whatever was in that
-                             memory: 0 for WOWEXEC (whose launcher then read
-                             lstrlen(0000:0000) and took a reflected #GP inside krnl386) and
-                             1 for SYSEDIT, which gets past the "none" check and loads the
-                             null descriptor. Same field, same cause, two different symptoms.
-
-                           ⚠ DX IS A SELECTOR HERE, NOT A PARAGRAPH. The V86 arm in
-                             dos_int21.c writes to `(DX & 0xFFFF) << 4`, which is right
-                             there and meaningless here -- it would build the PSP a
-                             megabyte away from where krnl386 is about to read it.
-
-                           ⚠⚠ AND +0x2c MUST BE A SELECTOR TOO. DosPspBuild stores the
-                             environment as a PARAGRAPH, which is correct for a DOS program
-                             and wrong for this one: the guest loads that word straight
-                             into ES. So the copied PSP gets a descriptor over
-                             the same environment instead -- the same treatment AH=34h and
-                             AH=52h already get, for the same reason. */
-                        if (ah == DOS_FN_CREATE_CHILD_PSP || ah == DOS_FN_CREATE_PSP) {
-                            WORD  dxSelector = (WORD)VDM_REG16(tib, VTIB_EDX);
-                            DWORD dxLinear = DpmiSelectorBase(dxSelector);
-                            const volatile BYTE *source =
-                                (const volatile BYTE *)(ULONG_PTR)((DWORD)DOS_PSP_SEG << PARAGRAPH_SHIFT);
-                            WORD environmentSelector = DpmiSegmentToDescriptor((WORD)DOS_ENV_SEG);
-                            cursor = LogPut(cursor, "INT21h AH=0x"); cursor = LogHex(cursor, ah);
-                            cursor = LogPut(cursor, " (PM) create PSP at sel 0x"); cursor = LogHex(cursor, dxSelector);
-                            if (!dxLinear || !HostWritable((VOID *)(ULONG_PTR)dxLinear, DOS_PSP_SIZE)) {
-                                cursor = LogPut(cursor, " -- NO/UNWRITABLE BASE, refusing");
-                                VDM_REG(tib, VTIB_EFLAGS) |= EFLAGS_CF_U;          /* CF = failure */
-                            } else {
-                                volatile BYTE *destination = (volatile BYTE *)(ULONG_PTR)dxLinear;
-                                INT item;
-                                for (item = 0; item < DOS_PSP_SIZE; ++item) destination[item] = source[item];
-                                destination[DOS_PSP_PARENT] = (BYTE)(DOS_PSP_SEG & BYTE_MASK);   /* parent PSP   */
-                                destination[DOS_PSP_PARENT + 1] = (BYTE)(DOS_PSP_SEG >> BYTE_SHIFT);
-                                if (ah == DOS_FN_CREATE_CHILD_PSP) {                          /* memory top   */
-                                    WORD si = (WORD)VDM_REG16(tib, VTIB_ESI);
-                                    destination[DOS_PSP_MEMORY_TOP] = (BYTE)(si & BYTE_MASK);
-                                    destination[DOS_PSP_MEMORY_TOP + 1] = (BYTE)(si >> BYTE_SHIFT);
-                                }
-                                /* What was there BEFORE we wrote -- if krnl386 had
-                                   already filled the field, overwriting it would be
-                                   the defect rather than the fix. */
-                                cursor = LogPut(cursor, " (+0x2c was 0x");
-                                cursor = LogHex(cursor, (DWORD)(destination[DOS_PSP_ENVIRONMENT] | (destination[DOS_PSP_ENVIRONMENT + 1] << BYTE_SHIFT)));
-                                cursor = LogPut(cursor, ")");
-                                destination[DOS_PSP_ENVIRONMENT] = (BYTE)(environmentSelector & BYTE_MASK);           /* env SELECTOR */
-                                destination[DOS_PSP_ENVIRONMENT + 1] = (BYTE)(environmentSelector >> BYTE_SHIFT);
-                                if (g_WowPspCount < WOW_PSP_TRACK) {
-                                    g_WowPspSelector[g_WowPspCount] = dxSelector;
-                                    g_WowPspLinear[g_WowPspCount] = dxLinear;
-                                    g_WowPspEnvironment[g_WowPspCount] = environmentSelector;
-                                    ++g_WowPspCount;
-                                }
-                                VDM_REG(tib, VTIB_EFLAGS) &= ~EFLAGS_CF_U;          /* CF = ok      */
-                                cursor = LogPut(cursor, " lin=0x"); cursor = LogHex(cursor, dxLinear);
-                                cursor = LogPut(cursor, " env sel=0x"); cursor = LogHex(cursor, environmentSelector);
-                                if (!environmentSelector) cursor = LogPut(cursor, " (NO DESCRIPTOR -- env unusable)");
-                            }
-                            cursor = LogPut(cursor, "\r\n");
-                            LogAppend(LOG_PATH, base, cursor); SerialOut(base, cursor); cursor = base;
-                            VDM_REG(tib, VTIB_EIP) += DPMI_PM_BOP_LENGTH;
-                            return 1;
+                        {
+                            INT exitCode, flow = DpmiInt21CreatePsp(&cursor, base, ah, tib, &exitCode);
+                            if (flow == HOST_FLOW_RETURN) return exitCode;
                         }
                     pmInt21Unhandled:
                         /* ── ★★★★ INT 21h AX=FF80h -- "LOCK THIS MEMORY", AND THE ANSWER
