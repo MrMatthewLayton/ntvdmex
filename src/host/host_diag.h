@@ -9,4 +9,6 @@ extern LONG g_IfvTraceCount;
 extern DWORD g_IfvReenter[PIC_LINES];
 extern DWORD g_AsyncEarlyBailLogged;
 
+VOID AsyncWhyReport(VOID);
+VOID IfvReport(VOID);
 #endif

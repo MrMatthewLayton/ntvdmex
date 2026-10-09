@@ -322,7 +322,7 @@ static UINT      g_DiskStatus;      /* AH=01h's last-status byte           */
    ► AH=83h is posted from the pacer thread (1 kHz), because the caller polls MEMORY and
      need not trap at all while it does. */
 static volatile LONGLONG g_Int15WaitEnd;    /* QPC of the AH=86h deadline; 0 = none     */
-static volatile DWORD    g_Int15EventLinear;     /* linear address of its flag byte          */
+volatile DWORD    g_Int15EventLinear;     /* linear address of its flag byte          */
 /* ── FILE > CLOSE PROGRAM, THE EXEC-THREAD HALF. (GH #152) ─────────────────────────
      See g_ExecMachine. The UI only raises g_CloseRequest; the exec thread takes it at the
      top of its loop (V86) or of the PM loop, where the guest is stopped and no BOP is

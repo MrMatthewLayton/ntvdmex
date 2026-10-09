@@ -7,4 +7,8 @@
 
 extern HHOOK g_LowLevelKeyboard;
 
+extern DWORD g_PitDeliverSkipped;
+extern DWORD g_Irq1AsyncRetry;
+VOID HostRecordFinish(VOID);
+INT OtherHostsRunning(VOID);
 #endif

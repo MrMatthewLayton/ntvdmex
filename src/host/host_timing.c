@@ -1,10 +1,23 @@
 /* host_timing.c -- time: the PIT and its pacer, BIOS ticks, IRQ0 delivery, the CPU-speed governor,
  *   the RTC and vertical retrace.
  *
- * Part of the host's single translation unit: #included by main.c after host_internal.h. */
+ * Its own translation unit (#335): declared in host_timing.h. */
+#include "host_state.h"
+#include "log.h"
+#include "host_timing.h"
+#include "main.h"
+#include "host_video.h"
+#include "host_bios.h"
+#include "host_window.h"
+#include "host_diag.h"
+#include "host_audio.h"
+#include "host_irq.h"
+/* Used before their definitions below. */
+static VOID HostPitDeliver(VOID);
+
 
 #define MEMDUMP_PATH   OUT_("memdump.bin")
-static CMOS_STATE   g_Cmos;      static NTVDD_DEVICE g_CmosDevice;
+CMOS_STATE   g_Cmos;      NTVDD_DEVICE g_CmosDevice;
 /* PENDING TIMER TICKS, as a saturating COUNT rather than a flag. A boolean coalesces: every
    tick that falls while the guest has interrupts off -- and Skyroads spends most of its time
    in exactly that state, CLI'd around its 256-colour palette writes -- was silently thrown
@@ -40,8 +53,8 @@ static CMOS_STATE   g_Cmos;      static NTVDD_DEVICE g_CmosDevice;
        ~43,000 port writes a second (1.95M mask changes a run), every one of which also
        takes it. If syncs come in well under the UI thread's 5 ms tick, the video path
        is starving the timer, which is starving the audio. */
-static UINT32 g_PitSyncs;
-static LONG     g_PmTickOwedMaximum;
+UINT32 g_PitSyncs;
+LONG     g_PmTickOwedMaximum;
 /* ── ...AND owed_max IS A HIGH-WATER MARK, NOT AN OCCUPANCY. ─────────────────────────
      "owed_max = 0x40 = PM_TICK_OWED_MAX, the backlog is PERMANENTLY SATURATED" reads a
      maximum as a steady state: ONE stall anywhere in 45 s pins it at the cap for the
@@ -49,7 +62,7 @@ static LONG     g_PmTickOwedMaximum;
      that touched the cap once look identical in that number, and they mean opposite
      things about whether delivery is keeping up.
      So sample the DEPTH at every sync. Nine buckets, one increment, no lock. */
-static UINT32 g_PmOwedHistogram[9];
+UINT32 g_PmOwedHistogram[9];
 static VOID PmOwedSample(LONG owed)
 {
     UINT bucket = 0;
@@ -87,7 +100,7 @@ static INT   g_AsyncTriedThisSync = 0;   /* see HostIrqSink: one attempt per PIT
      available tick (the guest's). The RATE cannot tell those apart -- 135/s is 135/s
      either way -- so bucket the interval. QPC, because a tick period is smaller than
      GetTickCount's granularity. */
-static DWORD g_TickGap[12], g_TickGapMaximumMicroseconds, g_TickGapOver;   /* >11.6ms = a block */
+DWORD g_TickGap[12], g_TickGapMaximumMicroseconds, g_TickGapOver;   /* >11.6ms = a block */
 VOID TickDeliveredNote(VOID)
 {
     static LARGE_INTEGER frequency, prev;
@@ -122,16 +135,16 @@ static INT      g_Irq0Yielded;
        - ordering is strictly g_Lock -> g_PitCs (the exec thread reaches the PIT's
          port handlers with g_Lock held). Nothing may take g_Lock while holding this;
          delivery attempts run AFTER release, and only via HOST_LOCK_TRY. */
-static CRITICAL_SECTION g_PitCs;
+CRITICAL_SECTION g_PitCs;
 /* Exec-loop instrumentation, reported once at wind-down (cheap counters, no I/O in
    the hot path). These separate the two costs that look identical from outside: how
    many times we round-tripped to service port I/O, how many accesses the burst fast
    path absorbed without a round trip, and how many timer IRQs actually reached the
    guest -- the last one being how we caught the BIOS tick starving during an I/O
    storm (iobench case 1 could not accumulate 5 ticks in 30 s). */
-static DWORD          g_EventIo         = 0;  /* port-I/O events serviced            */
+DWORD          g_EventIo         = 0;  /* port-I/O events serviced            */
 LONGLONG       g_Irq0Start, g_Irq0TimePrevious;
-static DWORD          g_Irq0NoteCs, g_Irq0NoteIp;      /* set by the caller      */
+DWORD          g_Irq0NoteCs, g_Irq0NoteIp;      /* set by the caller      */
 /* ── ★★ WHICH OF THREE MECHANISMS MAKES A LONG GAP? (Skyroads wobble, s61) ────────
      The s60 root-cause note reads the 8-20 ms gaps as ASYNC DELIVERY starving, and
      the fix that follows from that is a lock-free courier thread. But two other
@@ -170,7 +183,7 @@ static DWORD          g_Irq0NoteCs, g_Irq0NoteIp;      /* set by the caller     
      "the guest missed a tick" test, expressed in the guest's own units. */
 DWORD          g_Irq0RaiseCount, g_Irq0AttemptsCount, g_Irq0NieCount, g_Irq0YieldCount;
 static DWORD          g_Irq0PrRaise, g_Irq0PrAttempts, g_Irq0PrNie, g_Irq0PrYield;
-static VOID Irq0DeliveredNote(VOID)
+VOID Irq0DeliveredNote(VOID)
 {
     LARGE_INTEGER now;
     QueryPerformanceCounter(&now);
@@ -222,30 +235,30 @@ static VOID Irq0DeliveredNote(VOID)
         g_Irq0PrNie   = g_Irq0NieCount;   g_Irq0PrYield = g_Irq0YieldCount;
     }
 }
-static DWORD          g_Irq0Skip     = 0;  /* IRQ0 delivery gated off (IF=0 etc.) */
-static DWORD          g_Irq0SkipIf  = 0;  /* ...because the guest had interrupts off  */
-static DWORD          g_Irq0SkipStub= 0;  /* ...because we were inside our INT 08h stub */
+DWORD          g_Irq0Skip     = 0;  /* IRQ0 delivery gated off (IF=0 etc.) */
+DWORD          g_Irq0SkipIf  = 0;  /* ...because the guest had interrupts off  */
+DWORD          g_Irq0SkipStub= 0;  /* ...because we were inside our INT 08h stub */
 static DWORD          g_PitLatchDumps = 0;   /* PIT-LATCH poll-ring dumps printed (max 2) */
-static DWORD          g_EventIntPending    = 0;  /* event-3 interrupt-pending notifications */
+DWORD          g_EventIntPending    = 0;  /* event-3 interrupt-pending notifications */
 DWORD          g_IrqNInjected      = 0;  /* device IRQs (2-7) injected into the guest */
 DWORD          g_IrqNRefuseTotal = 0;
-static DWORD g_EventHistogram[EV_HIST_MAX];
+DWORD g_EventHistogram[EV_HIST_MAX];
 /* ── #238: WHERE THE CPU THREAD IS WHEN IT IS NOT IN THE GUEST. (s85) ─────────────────
      3DBench's 1 kHz timer: 84% of async attempts bailed `not_in_exec`, with only ~410
      traps a second -- so the thread was somewhere in the host between v86_runs most of
      the time. Split the wall clock: microseconds inside VdmRunGuest, and the host time
      between one VdmRunGuest's return and the next's entry, charged to the event that
      returned (whatever the loop did to service it, interpreter slices included). */
-static DWORD g_V86MicrosecondsTotal, g_HostMicrosecondsEvent[EV_HIST_MAX];
-static DWORD g_BopHistogram[BYTE_VALUES];            /* V86 BOP events by number (the busiest are printed) */
-static DWORD g_PitPaceCalls;              /* PitPacerThread wakes (declared here for g_XsSnapshot) */
-static DWORD g_XsStart, g_XsSeconds, g_XsSnapshot[XS_SECS][XS_N];
+DWORD g_V86MicrosecondsTotal, g_HostMicrosecondsEvent[EV_HIST_MAX];
+DWORD g_BopHistogram[BYTE_VALUES];            /* V86 BOP events by number (the busiest are printed) */
+DWORD g_PitPaceCalls;              /* PitPacerThread wakes (declared here for g_XsSnapshot) */
+DWORD g_XsStart, g_XsSeconds, g_XsSnapshot[XS_SECS][XS_N];
 #define PM_HEADLESS_GRACE_MS 3000                /* grace for a clean wind-down before the hard backstop forces exit */
 /* Retry accounting for the one-attempt-per-sync device-IRQ offer in HostPitSync.
    `try` counts syncs where something was pending and we spent a round trip on it;
    `ok` counts the ones that landed. try==ok==0 is the healthy steady state -- it
    means every device IRQ was placed at its raise instant and this cost nothing. */
-static DWORD g_IrqNRetryTry = 0, g_IrqNRetryOk = 0, g_IrqNRetryWhy = 0;
+DWORD g_IrqNRetryTry = 0, g_IrqNRetryOk = 0, g_IrqNRetryWhy = 0;
 /* True when a line's vector still points at one of our own do-nothing stubs (the shared
    device IRET at DOS_HDLR_SEG:0x66, or the default INT 09h at 0x4C). Those never send an
    EOI, so anything delivered through them must be auto-EOI'd or the line latches. */
@@ -278,12 +291,12 @@ static DWORD g_IrqNRetryTry = 0, g_IrqNRetryOk = 0, g_IrqNRetryWhy = 0;
           the backlog compensates for. */
 #define IRQ0_ISR_TIMEOUT_MS   250u
 #define IRQ0_ISR_TIMEOUTS_MAX 3u
-static DWORD g_Irq0IsrSince    = 0;   /* GetTickCount()|1 when IRQ0 went in service; 0 = not */
-static DWORD g_Irq0IsrBlocks   = 0;   /* deliveries refused because IRQ0 was in service    */
-static DWORD g_Irq0IsrTimeouts = 0;   /* in-service bits released by the timeout           */
-static DWORD g_Irq0IsrStrict   = 0;   /* acknowledges that HELD the line (guest EOIs)      */
-static DWORD g_Irq0IsrAuto     = 0;   /* acknowledges that auto-EOI'd (stub or fallback)   */
-static INT   g_Irq0AutoEoi      = 0;   /* fallback engaged: this guest does not EOI IRQ0    */
+DWORD g_Irq0IsrSince    = 0;   /* GetTickCount()|1 when IRQ0 went in service; 0 = not */
+DWORD g_Irq0IsrBlocks   = 0;   /* deliveries refused because IRQ0 was in service    */
+DWORD g_Irq0IsrTimeouts = 0;   /* in-service bits released by the timeout           */
+DWORD g_Irq0IsrStrict   = 0;   /* acknowledges that HELD the line (guest EOIs)      */
+DWORD g_Irq0IsrAuto     = 0;   /* acknowledges that auto-EOI'd (stub or fallback)   */
+INT   g_Irq0AutoEoi      = 0;   /* fallback engaged: this guest does not EOI IRQ0    */
 
 static UINT32 g_PitRestartsSeen = 0;
 VOID HostPitResyncCheck(VOID)
@@ -380,13 +393,13 @@ VOID Irq0Ack(VOID)
      declined, since then no handler ran to EOI it. A handler that chains to our default
      PM INT 08h gets the BIOS's EOI there, as the V86 BOP arm gives it. The safety nets
      (250 ms timeout, auto-EOI fallback) are Irq0CanDeliver's and cover these arms. */
-static INT Irq0PmClaim(VOID)
+INT Irq0PmClaim(VOID)
 {
     if (!Irq0CanDeliver()) return 0;
     Irq0Ack();
     return 1;
 }
-static VOID Irq0PmUnclaim(VOID)
+VOID Irq0PmUnclaim(VOID)
 {
     if (g_Irq0AutoEoi || AsyncVectorIsOurStub(PIC_IRQ_TIMER)) { g_Irq0IsrAuto--; return; }
     VddPicEndOfInterrupt(&g_Pic, PIC_IRQ_TIMER);
@@ -507,9 +520,9 @@ enum { PIT_PACE_WAIT_PERIODS = 4 };   /* PitPacerThread: the event wait, in pace
      fine, and the crystal is covered by cooperative delivery if a wake is ever late.
      pitprio.txt still overrides for A/B (0=idle..4=highest) but the default is the
      validated one. */
-static INT  g_PitPacePriority = THREAD_PRIORITY_NORMAL;
-static INT  g_PitPaceInject = 1;
-static LONGLONG Int15QpcAfterMicroseconds(DWORD microseconds)
+INT  g_PitPacePriority = THREAD_PRIORITY_NORMAL;
+INT  g_PitPaceInject = 1;
+LONGLONG Int15QpcAfterMicroseconds(DWORD microseconds)
 {
     LARGE_INTEGER now, frequency;
     QueryPerformanceCounter(&now); QueryPerformanceFrequency(&frequency);
@@ -530,7 +543,7 @@ static VOID Int15EventPoll(VOID)            /* pacer thread */
 typedef MMRESULT (WINAPI *PFN_TIME_SET_EVENT)(UINT, UINT, LPTIMECALLBACK, DWORD_PTR, UINT);
 static HANDLE   g_PitPaceEvent;
 static MMRESULT g_PitPaceTimer;
-static VOID PitPacerTimerStart(HMODULE winmmModule)
+VOID PitPacerTimerStart(HMODULE winmmModule)
 {
     PFN_TIME_SET_EVENT timeSetEvent = winmmModule ? (PFN_TIME_SET_EVENT)GetProcAddress(winmmModule, HOST_EXPORT_TIME_SET_EVENT) : NULL;
     if (!timeSetEvent || g_PitPaceMs <= 0) return;
@@ -540,7 +553,7 @@ static VOID PitPacerTimerStart(HMODULE winmmModule)
                           TIME_PERIODIC | TIME_CALLBACK_EVENT_SET);
     if (!g_PitPaceTimer) { CloseHandle(g_PitPaceEvent); g_PitPaceEvent = NULL; }
 }
-static DWORD WINAPI PitPacerThread(LPVOID param)
+DWORD WINAPI PitPacerThread(LPVOID param)
 {
     (VOID)param;
     /* Above the guest but below the audio pump, so it can never starve either. */
@@ -621,7 +634,7 @@ enum { COURIER_OFF = 0, COURIER_ON = 1, COURIER_NORMAL_PRIORITY = 2, COURIER_WAI
      next raise re-arm it -- which is exactly the old behaviour, so the worst case is
      no worse than today. */
 #define COURIER_BUDGET_US 3000u
-static DWORD WINAPI TickCourierThread(LPVOID parameter)
+DWORD WINAPI TickCourierThread(LPVOID parameter)
 {
     (VOID)parameter;
     /* ── ⛔ courier = 1 IS REFUTED, USER-CONFIRMED. IT COLLAPSES PROGRESSIVELY. ─────
@@ -689,7 +702,7 @@ static DWORD WINAPI TickCourierThread(LPVOID parameter)
 #define CPU_MHZ_UNKNOWN_U 0xFFFFFFFFu   /* HostCpuMhz: not read yet */
 /* #224: THIS PC's own clock in MHz (0 = unknown), from the CPU's ~MHz registry value
    -- what Windows itself shows in System Properties. Rungs at or above it are greyed. */
-static UINT HostCpuMhz(VOID)
+UINT HostCpuMhz(VOID)
 {
     static UINT mhz = CPU_MHZ_UNKNOWN_U;
     if (mhz == CPU_MHZ_UNKNOWN_U) {
@@ -704,23 +717,23 @@ static UINT HostCpuMhz(VOID)
     }
     return mhz;
 }
-static DWORD  g_CpuSpeedDebtMaximumMicroseconds;   /*   the largest debt it was cut from */
+DWORD  g_CpuSpeedDebtMaximumMicroseconds;   /*   the largest debt it was cut from */
 /* ★ THE MEASURED RUN PHASE, in microseconds, and it is the number that made this
      feature work. We ASK for a 1 ms run; what the guest actually gets is that plus
      Sleep's inaccuracy plus whatever it costs the kernel to stop a thread inside
      VdmStartExecution -- and the hold is priced off this, not off the 1 ms. */
-static DWORD  g_CpuSpeedRanMicroseconds;
+DWORD  g_CpuSpeedRanMicroseconds;
 /* The same window measured as WALL CLOCK. Printed next to ran_us so the gap between
    them -- our own servicing overhead, the thing the guest is no longer billed for --
    is a number in the log rather than an inference. */
-static DWORD  g_CpuSpeedWallMicroseconds;
+DWORD  g_CpuSpeedWallMicroseconds;
 /* ── ★ THE GRANULARITY SLIDER AND ITS AUTO-DETECT. See cpuspeed.h. ───────────────
      g_CpuSpeedGranularityMs is the TARGET PERIOD: 0 = auto (measure and choose). The
      measured round-trip cost is what auto is derived from, and it is reported so a
      surprising period can be traced to the machine rather than guessed at. */
-static UINT g_CpuSpeedGranularityMs  = CPUSPEED_GRAN_AUTO;   /* 0=auto; cpugran.txt knob */
-static DWORD    g_CpuSpeedRoundTripMicroseconds;        /* measured suspend round trip, microseconds */
-static DWORD    g_CpuSpeedPeriodMs;    /* what auto actually chose, or the setting  */
+UINT g_CpuSpeedGranularityMs  = CPUSPEED_GRAN_AUTO;   /* 0=auto; cpugran.txt knob */
+DWORD    g_CpuSpeedRoundTripMicroseconds;        /* measured suspend round trip, microseconds */
+DWORD    g_CpuSpeedPeriodMs;    /* what auto actually chose, or the setting  */
 /* ── ★★ THE ROUND TRIP IS MEASURED WHERE IT HAPPENS, NOT IN A SYNTHETIC BURST. ───
  * ⚠⚠ THE FIRST CUT DID IT AT STARTUP and the number was meaningless: it reported
  *    **3 us**, because at that moment the exec thread is not necessarily inside
@@ -815,12 +828,12 @@ static LONG ExecClockMicroseconds(VOID)
     /* +1 so a genuine reading can never collide with the 0 sentinel. */
     return (LONG)QpcMicroseconds(now.QuadPart - g_ExecQpcBase.QuadPart) + 1;
 }
-static VOID ExecEnterMark(VOID)
+VOID ExecEnterMark(VOID)
 {
     if (!g_ExecTimingOn) return;
     InterlockedExchange(&g_ExecEnterMicroseconds, ExecClockMicroseconds());
 }
-static VOID ExecLeaveMark(VOID)
+VOID ExecLeaveMark(VOID)
 {
     LONG enterMicroseconds, now;
     if (!g_ExecTimingOn) return;
@@ -857,8 +870,8 @@ enum { CPUSPEED_RELEASE_WAIT_MS = 5, CPUSPEED_CATCH_GRACE_MS = 250 };   /* the c
      cannot park the guest for longer than the longest legal hold plus slack. */
 static volatile LONG g_CpuSpeedCatchRequest;   /* throttle -> exec: park at the re-entry   */
 static volatile LONG g_CpuSpeedParked;      /* exec -> throttle: parked, not in exec     */
-static HANDLE        g_CpuSpeedRelease;     /* auto-reset: wakes the park early          */
-static VOID CpuSpeedCooperativePark(VOID)
+HANDLE        g_CpuSpeedRelease;     /* auto-reset: wakes the park early          */
+VOID CpuSpeedCooperativePark(VOID)
 {
     DWORD start;
     if (!g_CpuSpeedCatchRequest) return;
@@ -889,7 +902,7 @@ static INT CpuSpeedTimelineSeconds(VOID)
     g_ControlIo[seconds] = g_EventIo; g_ControlRaise[seconds] = g_Irq0RaiseCount;
     return (INT)seconds;
 }
-static VOID CpuSpeedTimelineDump(PCSTR tag)
+VOID CpuSpeedTimelineDump(PCSTR tag)
 {
     static PCSTR const names[7] = { "exec_ms", "hold_ms", "missed", "coop", "io", "raise", "run_us" };
     CHAR buffer[1400], *cursor; UINT column, second, last = 0;
@@ -917,7 +930,7 @@ static VOID CpuSpeedTimelineDump(PCSTR tag)
 
 /* Recompute the duty from the setting. One function so the menu, the dialog and
    the file knob cannot each arrive at a different answer. */
-static VOID CpuSpeedRecompute(VOID)
+VOID CpuSpeedRecompute(VOID)
 {
     LONG duty = (LONG)CpuSpeedDutyBp((UINT)g_CpuSpeedIndex, g_CpuSpeedReferenceMhz);
     InterlockedExchange(&g_CpuSpeedDuty, duty);
@@ -957,8 +970,8 @@ static VOID CpuSpeedRecompute(VOID)
  *   benefit is unmeasured; a knob that alters timing must be opt-in until there is a
  *   number attached to it. cpuaff.txt = 1 to try it.
  */
-static INT   g_CpuAffinityOn;              /* cpuaff.txt = 1 (file knob only): pin the guest */
-static DWORD g_CpuAffinityGuest, g_CpuAffinityRest, g_CpuAffinityCpuCount;   /* what we chose       */
+INT   g_CpuAffinityOn;              /* cpuaff.txt = 1 (file knob only): pin the guest */
+DWORD g_CpuAffinityGuest, g_CpuAffinityRest, g_CpuAffinityCpuCount;   /* what we chose       */
 static VOID CpuAffinityApply(VOID)
 {
     SYSTEM_INFO systemInfo;
@@ -983,7 +996,7 @@ static VOID CpuAffinityApply(VOID)
 }
 enum { CPUSPEED_IDLE_SLEEP_MS = 4, CPUSPEED_CATCH_TIMEOUT_MS = 400, CPUSPEED_CATCH_NONE = 0, CPUSPEED_CATCH_CONTEXT = 1, CPUSPEED_CATCH_COOPERATIVE = 2 };   /* CpuSpeedThread */
 #define CPUSPD_RUN_MIN_US 100ul   /* #225: shortest spun run slice */
-static DWORD WINAPI CpuSpeedThread(LPVOID param)
+DWORD WINAPI CpuSpeedThread(LPVOID param)
 {
     /* ── ★★★ THE CLOSED-LOOP THROTTLE. The whole control law is CpuSpeedStep (the
          long note in cpuspeed.h); this loop only FEEDS it two measured numbers and
@@ -1210,7 +1223,7 @@ enum { HEARTBEAT_MS = 500 };   /* HeartbeatThread: one line this often */
    means the process died without user-mode notice. A once-per-500ms beat carrying the
    guest's CS:IP/EFLAGS and the counters turns that silence into a timestamped last known
    position, which is the only way to tell "guest still spinning" from "process killed". */
-static DWORD WINAPI HeartbeatThread(LPVOID parameter)
+DWORD WINAPI HeartbeatThread(LPVOID parameter)
 {
     INT beat;
     (VOID)parameter;
@@ -1347,7 +1360,7 @@ static DWORD WINAPI HeartbeatThread(LPVOID parameter)
 }
 
 /* #238: guest time against host time, the host's share charged per event (g_HostMicrosecondsEvent). */
-static VOID ExecShareReport(VOID)
+VOID ExecShareReport(VOID)
 {
     CHAR base[1024], *cursor = base;
     INT event;
@@ -1405,7 +1418,7 @@ enum { HEADLESS_EXIT_CODE = 3 };   /* the deadline ended the run */
    iterating), so this thread forces the wind-down: after PM_HEADLESS_MS it clears
    g_Running -- which unblocks every blocking key-read (all check !g_Running) AND exits
    both exec loops -- and wakes any blocked reader. Started only when g_Headless. */
-static DWORD WINAPI HeadlessDeadlineThread(LPVOID parameter)
+DWORD WINAPI HeadlessDeadlineThread(LPVOID parameter)
 {
     /* ⛔ 2048, NOT 512 (s80). The hot-ports line alone is up to IO_HOT_MAX (48) x ~22
          chars = ~1.1 KB -- IO_HOT_MAX grew from 12 and this buffer did not, so a run with
@@ -1567,7 +1580,7 @@ static INT    g_ExecPriorityNow = EXEC_PRIORITY_UNSET;       /* what BackgroundP
      max_ms 0x11/0xe/0x15. The idle class costs a background host nothing when the CPU
      is free (it runs at full speed); it only yields. A throttle would slow two DOS
      windows to a crawl the moment the user clicked on anything else. */
-static VOID BackgroundPriorityTick(HWND window)
+VOID BackgroundPriorityTick(HWND window)
 {
     static DWORD last; static INT logged;
     DWORD now = GetTickCount();
@@ -1639,8 +1652,8 @@ static VOID BackgroundPriorityTick(HWND window)
      CPU affinity set anywhere, a TSC-backed QueryPerformanceCounter can JUMP FORWARD
      when a thread migrates cores, which is indistinguishable from a stall in here. */
 #define PIT_CATCHUP_MAX (PIT_INPUT_HZ / 100u)      /* 10 ms: the reporting threshold */
-static UINT32 g_PitCatchupClamped;             /* gaps past it (STAGE2)          */
-static UINT32 g_PitGapMaximum;                     /* the worst one, in 8254 clocks  */
+UINT32 g_PitCatchupClamped;             /* gaps past it (STAGE2)          */
+UINT32 g_PitGapMaximum;                     /* the worst one, in 8254 clocks  */
 
 /* Wired onto g_Pit at startup; see g_PitCs and PIT_STATE.guard. */
 /* ── THE MACHINE'S CLOCK, for INT 1Ah AH=02h/04h. ────────────────────────────────
@@ -1651,7 +1664,7 @@ static UINT32 g_PitGapMaximum;                     /* the worst one, in 8254 clo
 /* ► GH #250: THE VDM'S RTC, NOT THE HOST'S. Host-now moved by g_DosClock.RtcOffset,
      which a guest's INT 1Ah AH=03h/05h or INT 21h AH=2Bh/2Dh sets (dos_clock.h). Zero
      until a guest sets it, so an untouched VDM reads exactly GetLocalTime as before. */
-static VOID HostRtcNow(PVOID context, PIT_RTC_READING *out)
+VOID HostRtcNow(PVOID context, PIT_RTC_READING *out)
 {
     DOS_CLOCK_TIME clock;
     (VOID)context;
@@ -1670,7 +1683,7 @@ static VOID HostRtcNow(PVOID context, PIT_RTC_READING *out)
    already decoded from BCD by the PIT. Moves only the RTC's offset: DOS keeps its own
    clock, as on an AT (p_clock clk.2c.after.1a03 / clk.2a.after.1a05). Returns 0 --
    the clock untouched -- for a reading no calendar has. */
-static INT HostRtcSet(PVOID context, const PIT_RTC_READING *reading, INT what)
+INT HostRtcSet(PVOID context, const PIT_RTC_READING *reading, INT what)
 {
     DOS_CLOCK_TIME host;
     (VOID)context;
@@ -1689,7 +1702,7 @@ static INT HostRtcSet(PVOID context, const PIT_RTC_READING *reading, INT what)
 /* GH #262 case B: has 0040:006C been set by anything but the BIOS since DOS last
    looked? The PIT keeps the witness (vdd_pit.h); this is DOS's door onto it, under the
    crystal's lock like every other host touch of the count. */
-static INT HostTickTake(UINT32 *ticks, UINT32 *wraps, UINT32 *since)
+INT HostTickTake(UINT32 *ticks, UINT32 *wraps, UINT32 *since)
 {
     INT result;
     /* ⚠ THE COMMON ANSWER IS "NOTHING", AND IT MUST NOT QUEUE BEHIND THE PACER. Some
@@ -1710,7 +1723,7 @@ static INT HostTickTake(UINT32 *ticks, UINT32 *wraps, UINT32 *since)
    had already carried it through; the RTC is not touched -- on an AT the two clocks
    are separate (p_clock / p_tick2c). The take also makes the new count the BIOS's own,
    so the next tick does not mistake it for a guest's store. */
-static VOID HostTicksSet(PVOID context, UINT32 ticks)
+VOID HostTicksSet(PVOID context, UINT32 ticks)
 {
     UINT32 takenTicks = ticks, wraps = 0, since = 0;
     (VOID)context;
@@ -1721,7 +1734,7 @@ static VOID HostTicksSet(PVOID context, UINT32 ticks)
 /* INT 21h AH=2Dh's tick reload (GH #250): what DOS's CLOCK$ does through INT 1Ah
    AH=01h -- the new count, midnight flag cleared. Under the crystal's lock so it
    cannot interleave with anything that holds it while touching the count. */
-static VOID HostSetTicks(PVOID context, UINT32 ticks)
+VOID HostSetTicks(PVOID context, UINT32 ticks)
 {
     (VOID)context;
     EnterCriticalSection(&g_PitCs);
@@ -1731,7 +1744,7 @@ static VOID HostSetTicks(PVOID context, UINT32 ticks)
     LeaveCriticalSection(&g_PitCs);
 }
 
-static VOID HostPitGuard(PVOID context, INT enter)
+VOID HostPitGuard(PVOID context, INT enter)
 {
     (VOID)context;
     if (enter) EnterCriticalSection(&g_PitCs);
@@ -1745,7 +1758,7 @@ static VOID HostPitGuard(PVOID context, INT enter)
      timing stalls were ticks never generated on time because the renderer, the
      mixer or a port-trap storm held the lock (STAGE2: IRQ0WHY gen=443 del=71).
      Delivery is a separate concern with separate rules: HostPitDeliver below. */
-static VOID HostPitGenerate(VOID)
+VOID HostPitGenerate(VOID)
 {
     static LARGE_INTEGER frequency, last;
     LARGE_INTEGER now;
@@ -1999,8 +2012,8 @@ enum { INT10_WAIT_MAX_MS = 50 };   /* Int10WaitAfter: never hold a video call lo
      that out here, after dropping the lock -- sleeping while the retrace is more than
      1.5 ms away, spinning for the last stretch -- so a guest that flips pages with it
      gets at most one flip per frame, as on a real card. Bounded at 50 ms. */
-static DWORD g_VbeWaits;
-static VOID Int10WaitAfter(VOID)
+DWORD g_VbeWaits;
+VOID Int10WaitAfter(VOID)
 {
     DWORD start = GetTickCount();
     UINT32 microseconds;
@@ -2013,7 +2026,7 @@ static VOID Int10WaitAfter(VOID)
     if (waited) ++g_VbeWaits;
 }
 enum { RETRACE_IDLE_PATTERN_LENGTH = 4, RETRACE_IDLE_BACK_MAX = 3 };   /* RetraceIdle: test/and al ; jcc back to the IN */
-static volatile DWORD g_RetracePending, g_RetraceCs, g_RetraceIp, g_RetraceAl, g_RetraceCx, g_RetraceIdles;
+volatile DWORD g_RetracePending, g_RetraceCs, g_RetraceIp, g_RetraceAl, g_RetraceCx, g_RetraceIdles;
 static INT g_RetraceOffset = -1;
 VOID RetraceNote(volatile BYTE *tib, WORD port, INT isIn, DWORD cs, DWORD ipAfter)
 {
@@ -2032,7 +2045,7 @@ VOID RetraceNote(volatile BYTE *tib, WORD port, INT isIn, DWORD cs, DWORD ipAfte
     g_RetraceCs = cs; g_RetraceIp = ipAfter; g_RetraceAl = VDM_REG(tib, VTIB_EAX) & BYTE_MASK;
     g_RetraceCx = VDM_REG16(tib, VTIB_ECX); g_RetracePending = 1;
 }
-static VOID RetraceIdle(VOID)
+VOID RetraceIdle(VOID)
 {
     const volatile BYTE *code;
     INT want, bit3;

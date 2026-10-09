@@ -107,7 +107,6 @@ static CHAR             g_TextFontLive[NTVDMEX_PATH_MAX];
 
 #include "host_internal.h"
 #include "host_diag.c"
-#include "host_timing.c"
 #include "host_bios.c"
 #include "host_dos.c"
 #include "host_mouse.c"
@@ -373,7 +372,7 @@ INT          g_GusOn = 0;
 static WORD     g_Emu8KDram[EMU8K_DRAM_WORDS];
 static PCSTR g_DosVersionWhy = 0;
 static INT          g_DosVersionShell = 0;      /* #208: an XP shell is present, told 5.00 itself */
-static UINT32 g_PitAsyncAttempts;
+UINT32 g_PitAsyncAttempts;
 static DWORD g_KeyPmLogged  = 0;           /* bounded KEYPM account; see the PM exec loop */
 static INT g_PmIrq0Latch = 0;             /* #2b: a virtual IRQ0 awaiting injection into the PM hook */
 /* Suppress the asynchronous IRQ0 -> PM INT 08h injection. A knob, not a feature: when a
@@ -469,16 +468,16 @@ static INT g_PmIrq0Latch = 0;             /* #2b: a virtual IRQ0 awaiting inject
          25x the other way. Neither number means anything until it is a rate.
       ⇒ Both are the [[instrument-must-not-infer-its-own-frame]] shape: an instrument
         that quietly assumes a constant the system is free to change. */
-static DWORD          g_Irq0IoPrevious, g_Irq0WorstGapMs, g_Irq0WorstGapIo;
-static DWORD          g_Irq0WorstCs, g_Irq0WorstIp;    /* where IF re-opened     */
-static DWORD          g_Irq0NormalCount, g_Irq0NormalMicroseconds, g_Irq0NormalIo;
-static DWORD          g_Irq0WorstRaise, g_Irq0WorstAttempts, g_Irq0WorstNie, g_Irq0WorstYield;
-static DWORD          g_Irq0WorstPerMicroseconds;   /* the period in force at the worst gap  */
+DWORD          g_Irq0IoPrevious, g_Irq0WorstGapMs, g_Irq0WorstGapIo;
+DWORD          g_Irq0WorstCs, g_Irq0WorstIp;    /* where IF re-opened     */
+DWORD          g_Irq0NormalCount, g_Irq0NormalMicroseconds, g_Irq0NormalIo;
+DWORD          g_Irq0WorstRaise, g_Irq0WorstAttempts, g_Irq0WorstNie, g_Irq0WorstYield;
+DWORD          g_Irq0WorstPerMicroseconds;   /* the period in force at the worst gap  */
 /* V86 single-run stretch durations (Skyroads wobble, s61). See the exec loop. */
 static DWORD          g_V86StringHistogram[8], g_V86StringCount8;
 static DWORD          g_V86StringMaximumMs, g_V86StringMaximumCs, g_V86StringMaximumIp, g_V86StringMaximumEvent;
-static DWORD          g_HeartbeatDs = 0;            /* guest DS sampled by the heartbeat (s69 fade dump) */
-static DWORD          g_EventIoString      = 0;  /* REP INS/OUTS (event 1) reflects serviced */
+DWORD          g_HeartbeatDs = 0;            /* guest DS sampled by the heartbeat (s69 fade dump) */
+DWORD          g_EventIoString      = 0;  /* REP INS/OUTS (event 1) reflects serviced */
 static HANDLE         g_OnceMutex    = NULL; /* the single-instance mutex (WinMain); handed
                                                  over before a relaunch, see task-done */
 /* ── ⚠ AN INTERMITTENT I/O STORM, NOT YET EXPLAINED (session 53). ────────────
@@ -503,7 +502,7 @@ static INT            g_NoA000       = 0;  /* NOA000_FLAG present: leave A0000 m
 static INT            g_NoPmPatch    = 0;  /* NOPMPATCH_FLAG present: scan no code regions (diagnostic) */
 static INT            g_Fault32Warned  = 0;  /* said once: NT's 16-bit frame cannot locate a flat client's INT */
 static DWORD          g_NoPmPatchMinimum = 0; /* ...or only regions >= this many bytes */
-static DWORD          g_MemoryDumpLinear = 0, g_MemoryDumpLength = 0;   /* MEMDUMP_FLAG */
+DWORD          g_MemoryDumpLinear = 0, g_MemoryDumpLength = 0;   /* MEMDUMP_FLAG */
 static INT            g_Interp12      = 0;  /* INTERP12_FLAG: interpret mode 12h, no page trap */
 static DWORD          g_RunStartTick= 0;  /* exec-loop start, so STAGE2 can report a RATE    */
 /* Planar-mode interpretation, measured. `batches` is how many times we drove the
@@ -523,7 +522,7 @@ static DWORD          g_P12Bails     = 0;
 #define P12_SITE_MAX 24
 static struct { DWORD Cs, Ip, Count; BYTE Bytes[8]; } g_P12Site[P12_SITE_MAX];
 static UINT g_P12SiteCount = 0, g_P12SiteLost = 0;
-static DWORD g_HeadlessMs = PM_HEADLESS_MS_DEFAULT;   /* overridable via HEADLESS_MS_PATH */
+DWORD g_HeadlessMs = PM_HEADLESS_MS_DEFAULT;   /* overridable via HEADLESS_MS_PATH */
 static INT   g_LdtClientMark = 0;          /* g_LdtNext when the client switched in */
 /* Ticks run per asynchronous entry -- see the drain in the main loop. */
 /* ► A BATCH IS CATCH-UP, NOT A LICENCE TO COMPRESS TIME. At Doom's 140 Hz, draining
@@ -574,7 +573,7 @@ static DWORD          g_InterpRefused = 0;  /* interpreter declined the faulting
      condition never holds -- no restart while in service -- so nothing changes for them.
      The deviation from the hardware is exactly one tick, at exactly the moment the
      guest asked for a new period. Counted: STAGE2 irq0_isr[...,resync_drop]. */
-static DWORD    g_Irq0ResyncDrop = 0;
+DWORD    g_Irq0ResyncDrop = 0;
 enum { PM_GATE_NO_LATCH = 0, PM_GATE_VIF_OFF = 1, PM_GATE_NO_HOOK = 2, PM_GATE_IN_PM_IRQ = 3, PM_GATE_NO_IRQ = 4, PM_GATE_ASYNC_IN_FLIGHT = 5, PM_GATE_ARMED = 6, PM_GATE_TRIED = 7, PM_GATE_CLAIM_REFUSED = 8, PM_GATE_DECLINED = 9, PM_GATES = 10 };   /* g_PmCooperativeGate's columns */
 /* ── #172: WHY THE PER-PASS TIMER LATCH LEFT A BACKLOG STANDING. ─────────────────
      Doom's quit wait (I_WaitVBL, a PM 3DAh poll) drops IRQ0 to ~25/s, and s81 filed it
@@ -682,7 +681,7 @@ static HANDLE g_PitPaceThread;
    re-execute its BOP (every nested loop counts its passes). See the PM INT 15h 86h arm. */
 static INT g_PmTopDispatch;   /* set by the top-level loop before it dispatches  */
 static HANDLE g_CourierThread;
-static UINT g_CpuSpeedReferenceMhz = CPUSPEED_REF_MHZ_DEFAULT;  /* cpuref.txt       */
+UINT g_CpuSpeedReferenceMhz = CPUSPEED_REF_MHZ_DEFAULT;  /* cpuref.txt       */
 static HANDLE g_CpuSpeedThread;
 /* ── TYPEMATIC REPEAT: WE ARE THE KEYBOARD, SO WE MUST DO ITS REPEATING ───────
    THE BUG (user, reported twice): crash the ship in Skyroads while holding the up
@@ -766,8 +765,8 @@ static INT       g_WowEntering = 0;   /* the guest is krnl386, not DOS     */
      drops its guest to BELOW_NORMAL, and gets its own priority back when it is brought
      forward. A host running alone is never touched: its priority is exactly what it was,
      which is what the Skyroads timing guard and every rig measurement assume. */
-static HANDLE g_ExecThread;                        /* the exec (guest) thread               */
-static INT    g_ExecPriorityForeground = THREAD_PRIORITY_NORMAL;
+HANDLE g_ExecThread;                        /* the exec (guest) thread               */
+INT    g_ExecPriorityForeground = THREAD_PRIORITY_NORMAL;
 static NTVDMEX_SETTINGS g_SettingsDisk;
 
 static INT g_DspVersionForced;                /* cfg\dspver.txt beat the model's version */

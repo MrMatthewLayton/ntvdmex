@@ -7,4 +7,5 @@
 
 VOID SerialOut(PCSTR buffer, PCSTR end);
 
+extern volatile DWORD g_Int15EventLinear;
 #endif

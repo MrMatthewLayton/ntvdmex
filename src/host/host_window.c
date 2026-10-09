@@ -12,7 +12,7 @@
    still build. See the call site: a bad DIALOGEX fails to CREATE, silently. */
 #define DLGCHECK_FLAG CFG_("dlgcheck.flag")
 static DWORD  g_SpeakerRealHz;   /* sampled under the lock, applied outside it */
-static DWORD    g_PitDeliverSkipped;  /* attempts foregone: g_Lock busy when the crystal knocked */
+DWORD    g_PitDeliverSkipped;  /* attempts foregone: g_Lock busy when the crystal knocked */
 static DWORD    g_UiTickSkips;
 static DWORD    g_UiHookPresents, g_UiTimerPresents;  /* who raised each present   */
 static volatile LONG g_UiPresentPending;                /* one WM_APP_PRESENT in flight */
@@ -20,7 +20,7 @@ static int      g_UiForced;                              /* this body run was ra
 static DWORD    g_UiInputFirst;                         /* input served ahead of a queued present */
 /* Which of the three exits from the cooperative IRQ1 gate fires. See its call site. */
 static DWORD    g_Irq1Checks, g_Irq1NoIf, g_Irq1In08, g_Irq1In09;
-static DWORD    g_Irq1AsyncRetry;
+DWORD    g_Irq1AsyncRetry;
 static INT            g_Headless      = 0;  /* AUTOEXIT marker present: SMB test harness -> bound infinite runs */
 static DWORD          g_Irq1Injected      = 0;  /* INT 09h injections (should track scancodes) */
 static UINT       g_CaptureMs    = CAPTURE_MS_DEFAULT; /* CAPTURE_FLAG contents: ms between shots */
@@ -182,7 +182,7 @@ static VOID HostOpenCaptureFolder(VOID)
 /* Finish an audio recording (cfg\wavrec.flag or, later, the Capture menu): patch the
    WAV sizes and say what was captured. Every exit path calls it -- a recording whose
    header still says "0 bytes" is a file most players refuse. Idempotent. */
-static VOID HostRecordFinish(VOID)
+VOID HostRecordFinish(VOID)
 {
     CHAR lineBuffer[160], *lineCursor = lineBuffer;
     UINT32 frames, dropped;
@@ -1308,7 +1308,7 @@ static VOID InputCaptureSet(HWND window, INT isOn)
        which is where SendMessage to the control is safe -- InputCaptureSet is also
        reached from the WM_KEYDOWN path, but the tick is the single writer. */
 }
-static INT OtherHostsRunning(VOID)
+INT OtherHostsRunning(VOID)
 {
     INT instance; CHAR name[48];
     for (instance = 1; instance <= HOST_INSTANCES_MAX; ++instance) {

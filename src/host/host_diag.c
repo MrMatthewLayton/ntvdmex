@@ -100,7 +100,7 @@ DWORD g_AsyncEarlyBailLogged = 0;
      spent a rig run on the one fix that could not have helped any of them. On its own
      (s85) so the headless forced exit prints it too: 3DBench's runs end that way, and
      #238 was diagnosed without it. */
-static VOID AsyncWhyReport(VOID)
+VOID AsyncWhyReport(VOID)
 {
     static PCSTR const whyNames[ASYNC_WHY_MAX] = {
         "DELIVERED","badvec","in_pm_irq","pm_noirq","no_catcher","unhooked_pm",
@@ -138,7 +138,7 @@ static VOID AsyncWhyReport(VOID)
 
 /* The IF/VIF census (see IfvNote), on its own so the headless forced exit -- which
    skips the main report, and is how ZAR's runs end -- can print it too. */
-static VOID IfvReport(VOID)
+VOID IfvReport(VOID)
 {
     CHAR base[4096], *cursor = base;
   { INT path, state, line; DWORD starveMaximumMs = g_IfvStarveMaximumMs;

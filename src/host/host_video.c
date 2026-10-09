@@ -409,7 +409,7 @@ static VOID ModeYBailNote(DWORD cs, DWORD ip, const volatile BYTE *bytes)
     for (byteIndex = 0; byteIndex < 8; ++byteIndex) g_ModeYSite[index].Bytes[byteIndex] = bytes[byteIndex];
     ++g_ModeYSiteCount;
 }
-static VOID ModeYTimelineReport(VOID)
+VOID ModeYTimelineReport(VOID)
 {
     static INT done = 0;
     CHAR buffer[1400], *cursor = buffer;
