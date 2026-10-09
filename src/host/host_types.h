@@ -1060,4 +1060,20 @@ typedef struct _P12_SITE
     BYTE Bytes[8];
 } P12_SITE, *PP12_SITE;
 
+
+/* Constants main.c's modules share (#335). */
+#define AUTOEXIT_PATH       CFG_("autoexit")    /* Marker: headless test mode -> exit when the guest exits */
+
+#define DPMI_BOP        0x50
+
+enum
+{
+    GUEST_EIP_FROM_FRAME = 0, GUEST_EIP_FROM_TIB_SLOT = 1, GUEST_EIP_FROM_BLOCKS = 2, CSRSS_REPORT_GRACE_MS = 50
+};   /* WinMain: a PM fault's EIP source, the TDB's hInstance, ExitVDM's wait */
+
+enum
+{
+    PAUSE_POLL_MS = 20, PMWATCH_COLUMNS = 2, PM_HEADLESS_CHECK_MASK = 0xFFF, PM_STEPS_MAX = 100000000
+};   /* WinMain's exec loops */
+
 #endif

@@ -10,6 +10,118 @@
  * Copyright (c) 2026 Matthew Layton
  */
 
+#define DPMI_FLT_CLASS_GP   6       /* The kernel's fault class for a #GP (observed: 6) */
+
+/* Suppress the asynchronous IRQ0 -> PM INT 08h injection. A knob, not a feature: when a
+ * client dies the instant we deliver a timer tick, the first question is whether the
+ * DELIVERY is wrong or merely BADLY TIMED, and the cheapest way to ask it is to stop
+ * delivering and see how much further the client gets. Absent file = normal behaviour.
+ */
+#define PMNOIRQ_PATH    CFG_("pmnoirq.flag")
+
+#define PMVEHPASS_PATH  CFG_("pmvehpass.flag")
+
+#define NOSB_PATH       CFG_("nosb.flag")
+
+/* -- A WATCH ADDRESS: ONE HEX LINEAR ADDRESS, DUMPED EITHER SIDE OF EACH INJECTED
+ * INTERRUPT. ---------------------------------------------------------------------
+ * The question an injected timer tick always raises is not "did the handler run" --
+ * the phases/done counters answer that -- but "did it have the EFFECT the guest is
+ * waiting for". Those are different, and confusing them is how this turned into
+ * guesswork: Doom's ISR enters and IRETs cleanly while the spin it should release
+ * goes round for ever.
+ * So watch the thing the guest is actually testing. Doom's delay is
+ *   153dc:  cmp [0x28820],eax
+ *   153e2:  je  153dc
+ * and after relocation that counter is linear 0x03b68820 (obj3 base 0x03b40000).
+ * Put `03b68820` in the file and every injection prints the dword before and after.
+ * counter MOVES but the spin does not exit -> the wait is hundreds of ticks: a RATE
+ *                                             problem, coalesce far harder
+ * counter DOES NOT move while ticks complete -> the handler we enter is not the one
+ *                                             that increments it: a different bug
+ * Absent file = no watch and no cost, like every other knob here.
+ */
+#define PMWATCH_PATH    CFG_("pmwatch.txt")
+
+/* WHO WROTE THIS BYTE? (GH #128, session 37) (Importance = 1):
+ * pmbp.txt answers "what is there when I stop here", which needs you to know
+ * where to stop. The expensive question is the other one, and it has no
+ * instrument: krnl386's per-drive flag table at DGROUP 0x2a2 is READ from two
+ * places in its own code and WRITTEN from none, and it is wrong anyway.
+ * One line: `<hex offset> [segment]`, segment defaulting to 4 (DGROUP), because
+ * the addresses worth watching are data whose base moves every run. Sampled at
+ * every PM event, so it cannot name the instruction -- it brackets the write
+ * between two events that name themselves, which is a bisect's first step for
+ * one run instead of five. Absent file = no watch and no cost.
+ */
+#define PMCHG_PATH      CFG_("pmchg.txt")
+
+/* RUN PROTECTED MODE UNDER THE KERNEL MONITOR INSTEAD OF IN-PROCESS:
+ * This host far-jmps into PM (dpmi_enter.S) because an early spike found
+ * VdmStartExecution faulting when it ran PM -- and everything expensive we have
+ * built since exists to work around that one decision: the INT->BOP patch map
+ * (because a raw PM INT is not reflected to us) and the asynchronous
+ * SuspendThread injector (because the kernel will not deliver interrupts to us).
+ * The second is not a preference. Measured: PM entry loads flags with `popfd`,
+ * POPFD at CPL 3 cannot modify VIF, and the kernel's delivery gate reads VIF --
+ * so an in-process PM guest can NEVER be given a hardware interrupt by the
+ * kernel, whatever we write. Only ring 0 can set those flags, which is exactly
+ * what stock ntvdm gets and why it reaches Doom's title screen on this box.
+ * So it is worth asking the original question again, against a host that now has
+ * working descriptors, services and thunks rather than almost nothing. Opt-in,
+ * because the far-jmp path is what currently works.
+ */
+#define PMKERNEL_PATH   CFG_("pmkernel.flag")
+
+/* Per-event checkpoint verbosity. The full dump -- registers, stack, frame, entry code
+ * -- was built for the era when the client died inside the FIRST DpmiEnterProtectedMode and the
+ * only question was "did we get there at all". Now that a client runs for thousands of
+ * events it is the thing stopping it: a Doom run hit the 4 MB log cap at event 0xdb1
+ * with the game still loading. So: a handful of checkpoints always (they still catch a
+ * death at the switch), and the full firehose only when asked for.
+ */
+#define PMVERBOSE_PATH  CFG_("pmverbose.flag")
+
+/* Ticks run per asynchronous entry -- see the drain in the main loop. */
+/* - A BATCH IS CATCH-UP, NOT A LICENCE TO COMPRESS TIME. At Doom's 140 Hz, draining
+ * 64 ticks back to back hands the guest 0.45 SECONDS of game time in microseconds --
+ * and its timer ISR is where DMX writes PCM into the DMA ring, so the ring is filled
+ * in bursts while the mixer reads it smoothly. That is a chk-a-chk-a in the sampled
+ * audio no amount of mixer accuracy can undo. The exec loop gets a turn thousands of
+ * times a second, so a small batch still clears any real backlog.
+ */
+#define DPMI_IRQ0_BATCH     4
+
+/* WHERE WAS THE GUEST WHEN THE CLOCK ASKED FOR A TURN?:
+ * The asynchronous injector is the ONLY thing that can touch a protected-mode guest
+ * inside a BOP-free stretch, and session 20 localised Doom's death to exactly such a
+ * stretch (R_InitTextureMapping's ~3.5M-instruction loop 2). The commentary above
+ * AsyncInjectIrq() already names the open question: every LOGGED injection lands at
+ * 0x03ae53dc -- the millisecond-delay spin, the safe case -- and "whether a later one
+ * lands somewhere else" was never measured.
+ * It could not be measured with a per-attempt line: the guest's timer runs at 16124 Hz
+ * (PIT-RELOAD 0x4a, measured), so an uncapped line per attempt is ~700k lines a run and
+ * a capped one goes quiet long before the interesting part. Session 20 raised the cap
+ * and still saw nothing near the death, and concluded "zero async attempts" -- but the
+ * V86 arm of AsyncInjectIrq() returns SILENTLY, so that was an unread instrument, not
+ * a measurement.
+ * So dedupe by SITE instead of counting attempts: log each distinct protected-mode
+ * CS:EIP the injector finds the CPU at, ONCE. Doom's PM code has a handful of such
+ * sites, so this is tens of lines for a whole run and it CANNOT miss a new one -- a
+ * tick landing inside loop 2 is a new EIP by construction.
+ * - THE OBSERVATION PASS DOES NOT INJECT. Logging while the guest thread is suspended
+ *   is the one thing this file has always refused to do, and resuming-then-logging
+ *   races the very death we are trying to catch. So a new site costs one DROPPED tick:
+ *   resume, log, return 0. The next tick injects. At 16 kHz that is unmeasurable, and
+ *   it means the site line is on disk BEFORE anything is rewritten.
+ */
+/* The longest single DpmiEnterProtectedMode() -- i.e. the longest run of guest protected-mode
+ * code that gave the host no turn at all -- and the record-breakers past the threshold.
+ * Only NEW maxima log, so a run reports a growth curve of a few dozen lines instead of
+ * one line per entry.
+ */
+#define PM_STRETCH_LOG_US   300u
+
 /* A #GP through an IDT gate is an unserviced INT nn the client issued, not an exception it asked for: reflect it as the interrupt, and patch the site so the next pass takes the BOP path. */
 static INT DpmiServiceIdtGateFault(
     PSTR *cursorIo,

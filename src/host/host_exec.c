@@ -10,6 +10,53 @@
  * Copyright (c) 2026 Matthew Layton
  */
 
+#define NTVDM_BOP_DOS       0x50    /* XP's COMMAND.COM: 1 site, in its version-refusal path */
+
+/* How to answer an NTVDM BOP we have not implemented yet: contents of cfg\bop54.txt.
+ * A knob because the right answer is UNKNOWN and is being measured -- see the handler.
+ */
+#define BOP54_PATH          CFG_("bop54.txt")
+
+/* A command line to hand the shell ONCE through BOP 0x54 sub 01, so the path can be
+ * tested end-to-end rather than only 'it accepted an empty answer'.
+ */
+#define BOPCMD_PATH         CFG_("bopcmd.txt")
+
+/* The startup batch file BOP 0x54 sub 0x0D hands the shell. Stock NTVDM names
+ * AUTOEXEC.NT here; ours defaults to the DOS-native AUTOEXEC.BAT. See the handler.
+ */
+#define BOPAUTO_PATH        CFG_("autoexec.txt")
+
+/* The mode-12h trap-storm escape hatch. By default V86 runs on the real CPU and
+ * each VGA access (memory OR port) is emulated one-at-a-time as a device access
+ * -- pure device virtualization. But QuickBasic plots pixels one at a time and
+ * reprograms a VGA register via OUT *between* pixels, so a fill is hundreds of
+ * thousands of fault round-trips (port faults AND memory faults) and crawls.
+ *
+ * HostInterp() is the opt-in batching interpreter: load the V86 register file,
+ * run up to `cap` instructions in the host (the inner loop -- planar A0000
+ * access, IN/OUT through the bus, ALU, CALL/RET, branches), then write the
+ * architectural state back. The caller (the service loop) engages it ONLY on a
+ * detected trap-storm (the same tight PC window faulting repeatedly), so it's a
+ * measured fallback for proven pathological video loops, not a blanket policy.
+ * Returns the number of instructions executed (0 if the faulting instruction
+ * itself is unmodeled -> caller falls through).
+ */
+#define STORM_WINDOW    128         /* Faults within this PC span count as "the same loop" */
+
+#define STORM_GATE      8           /* Consecutive in-window faults -> escalate to the interpreter */
+
+#define TIER1_CAP       2000000L    /* Interpreter iteration ceiling once escalated */
+
+#define P12_SLICE       20000L      /* Planar mode: instructions per interpreter slice */
+
+#define UNIMPLEMENTED_BOP_EXIT_CODE     0xBD    /* A guest killed by an unanswered BOP: never a clean 0 */
+
+enum
+{
+    ENVIRONMENT_SCAN_MAX = 900, PATH_VALUE_MAX = 250
+};   /* sub 0Fh's environment snapshot */
+
 static INT NtvdmCommandStartupBatch(
     PSTR *cursorIo,
     PSTR const base,
