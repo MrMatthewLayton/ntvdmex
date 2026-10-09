@@ -1,4 +1,5 @@
-/* host_dpmi_int.h -- what host_dpmi_int.c offers the host's other files.
+/* host_dpmi_int.h -- protected mode: DPMI's interrupt service -- INT 31h and the PM INT 21h/2Fh/33h
+ *   paths, in DpmiServicePmIntBody.
  *
  * Declarations only (#335): defined in host_dpmi_int.c. */
 #ifndef NTVDMEX_HOST_DPMI_INT_H
@@ -21,4 +22,16 @@ extern WORD g_PmAppTimerSelector;
 extern DWORD g_PmAppTimerOffset;
 extern INT g_PmDispatchTop;
 INT DpmiServicePmIntBody(DOS_MACHINE *machine, volatile BYTE *tib, DWORD vector, UINT steps);
+extern DWORD g_WowIdleWaits;
+extern DWORD g_PmWatchOffset;
+extern UINT g_PmWatchSegment;
+extern DWORD g_PmIrqReflects;
+extern INT g_PmExitCode;
+extern INT g_SimIntReflect;
+extern DWORD g_WowSchedSwitches;
+extern WORD g_WowSchedShell;
+extern WORD g_WowSchedLaunchChild;
+extern DWORD g_Wow32Serviced;
+extern DWORD g_Wow32Declined;
+extern DWORD g_Wow32Unimplemented;
 #endif

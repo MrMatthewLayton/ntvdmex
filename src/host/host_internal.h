@@ -25,17 +25,8 @@
 #include "host_install.h"
 
 /* State used from a file other than its owner's (tentative definitions). */
-static DWORD g_WowIdleWaits;
-static DWORD g_PmWatchOffset;
-static UINT g_PmWatchSegment;
-static DWORD g_PmIrqReflects;
-static INT g_PmExitCode;
-static INT g_SimIntReflect;
 static UINT g_DmaPollOverflow;
 static UINT g_PollStackOverflow;
-static DWORD g_WowSchedSwitches;
-static WORD g_WowSchedLaunchChild, g_WowSchedShell;
-static DWORD g_Wow32Serviced, g_Wow32Unimplemented, g_Wow32Declined;
 /* Functions called from a file other than their own. */
 
 #endif

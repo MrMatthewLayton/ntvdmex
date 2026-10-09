@@ -1,7 +1,37 @@
 /* host_dpmi_int.c -- protected mode: DPMI's interrupt service -- INT 31h and the PM INT 21h/2Fh/33h
  *   paths, in DpmiServicePmIntBody.
  *
- * Part of the host's single translation unit: #included by main.c after host_internal.h. */
+ * Its own translation unit (#335): declared in host_dpmi_int.h. */
+#include "host_state.h"
+#include "log.h"
+#include "ne.h"
+#include "wow32.h"
+#include "wowanchors.h"
+#include "wowsched.h"
+#include "wowcall.h"
+#include "wowmsg.h"
+#include "wowres.h"
+#include "wowwin.h"
+#include "wowgdi.h"
+#include "wowuser.h"
+#include "wowdlg.h"
+#include "wowenum.h"
+#include "wowshell.h"
+#include "wowcommdlg.h"
+#include "wowkbd.h"
+#include "wowsound.h"
+#include "wowmmedia.h"
+#include "host_dpmi_int.h"
+#include "host_bios.h"
+#include "host_dos.h"
+#include "host_dpmi.h"
+#include "host_io.h"
+#include "host_irq.h"
+#include "host_mouse.h"
+#include "host_timing.h"
+#include "host_video.h"
+#include "host_wow.h"
+
 
 /* ── FOLDING RUNS OF THE SAME WOW32 CALL. (session 56) See the WOWFOLD note in
      the BOP handler. `mute` is set only while a run is being folded and is
@@ -19,7 +49,7 @@
 #define WOWFOLD_HARD  4096u
 #define WOWFOLD_SLOTS 1024u          /* power of two; see the collision note   */
 static DWORD g_WowFoldSeen[WOWFOLD_SLOTS];
-static DWORD g_WowIdleWaits = 0;              /* #306: krnl386 idle waits that blocked */
+DWORD g_WowIdleWaits = 0;              /* #306: krnl386 idle waits that blocked */
 /* ── ★ WHERE krnl386's SEGMENT 1 ENDED UP IN PROTECTED MODE. ────────────────────────
      krnl386 copies its own segment 1 out of conventional memory, relocates it, and
      commits a code selector over the copy -- and the base of that copy is DIFFERENT
@@ -34,8 +64,8 @@ DWORD g_WowPmBase[WOW_PMBASE_MAX];
      segment defaulting to 4 (krnl386's DGROUP), because the addresses worth watching
      are data whose base moves every run. Resolved lazily, the first PM event after
      that segment's selector is committed. See the sampler in DpmiServicePmInt. */
-static DWORD g_PmWatchOffset = 0;      /* offset within the segment; 0 = disabled     */
-static UINT g_PmWatchSegment = 4;
+DWORD g_PmWatchOffset = 0;      /* offset within the segment; 0 = disabled     */
+UINT g_PmWatchSegment = 4;
 static DWORD g_PmWatchLinear = 0;      /* resolved linear address, 0 = not yet        */
 static BYTE  g_PmWatchLast = 0;
 static BYTE  g_PmWatchHave = 0;
@@ -53,11 +83,11 @@ static BYTE  g_PmWatchHave = 0;
      footprint" for EVERY kind of hit, and `done` means "this one-shot has fired".
      The two were conflated, and the conflation is what let a one-shot loop. */
 BYTE  g_BreakpointDone[DPMI_BP_MAX];
-static DWORD          g_PmIrqReflects = 0;      /* PM default IRQ stub -> BIOS action (s80) */
+DWORD          g_PmIrqReflects = 0;      /* PM default IRQ stub -> BIOS action (s80) */
 static DWORD          g_PmIrqReflectLogged = 0; /* bounded log budget for the above       */
 WORD  g_DpmiDosBlock[DPMI_DOSBLK_MAX]; /* live 0100 DOS blocks (segments)        */
 INT   g_DpmiDosBlockCount = 0;
-static INT   g_PmExitCode = 0;             /* AL of the client's PM AH=4Ch           */
+INT   g_PmExitCode = 0;             /* AL of the client's PM AH=4Ch           */
 DWORD g_LeCodeSize[DPMI_LE_MAX];   /* page-rounded sizes of the EXEC objects */
 /* ...and WHERE it is. Kept apart from g_PmInt[8] on purpose: that table is what INT 31h
    0204 reports back, and it must keep saying exactly what the client installed through
@@ -69,7 +99,7 @@ WORD  g_PmAppTimerSelector = 0;
 DWORD g_PmAppTimerOffset = 0;
 INT g_PmDispatchTop;   /* ...as captured by the dispatch it applies to    */
 #define I33_SRC_SIM  3                      /* DPMI 0300 simulate-real-mode-interrupt */
-static INT g_SimIntReflect = 0;
+INT g_SimIntReflect = 0;
 /* ── ★★ WHICH SELECTOR IS USER'S CODE SEGMENT? LEARN IT FROM A STUB. ──────────
      WowModuleOfSelector() cannot answer this. g_WowModule[] is the BIND-STAGE view --
      the host's own NE load, used to verify and relocate -- and the modules that
@@ -192,10 +222,10 @@ WORD g_WowLastFrom = 0;
 /* A descriptor access byte names CODE iff it is a segment (S, bit 4) and executable
    (bit 3). 0xFB -- what DOS/4GW writes -- is present/DPL3/S/code/readable/accessed. */
 #define DPMI_ACC_IS_CODE(a) (((a) & DPMI_ACCESS_CODE_TYPE) == DPMI_ACCESS_CODE_TYPE)
-static DWORD g_WowSchedSwitches = 0;
+DWORD g_WowSchedSwitches = 0;
 /* s92 (#306): the task launched last and not yet run -- see "(F) LAUNCH-FIRST" -- and
    WOWEXEC (the first task resumed at (C)), whose launches keep the measured order. */
-static WORD g_WowSchedLaunchChild, g_WowSchedShell;
+WORD g_WowSchedLaunchChild, g_WowSchedShell;
 
 /* ── ★★★ wowquiet.txt -- SILENCE THE TRACE, TO MEASURE WHAT IT COSTS. ────────
      Session 51, from a user report that both Win16 games feel "laggy, like an
@@ -258,7 +288,7 @@ static DWORD g_WowBops = 0, g_WowPerfMs = 0;
      got further having been LIED to N times by the step-over path, and a single
      total could not tell them apart. */
 static WOW32_DOSDATA g_WowDosData;
-static DWORD g_Wow32Serviced = 0, g_Wow32Unimplemented = 0, g_Wow32Declined = 0;
+DWORD g_Wow32Serviced = 0, g_Wow32Unimplemented = 0, g_Wow32Declined = 0;
 
 DWORD g_WowSyncWrites = 0;      /* how many entries krnl386 has changed */
 
