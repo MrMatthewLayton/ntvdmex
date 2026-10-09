@@ -9,6 +9,33 @@
  * SPDX-License-Identifier: MIT
  * Copyright (c) 2026 Matthew Layton
  */
+#include "host_state.h"
+#include "log.h"
+#include "bios_kbdact.h"
+#include "ne.h"
+#include "wow32.h"
+#include "wowanchors.h"
+#include "wowsched.h"
+#include "wowcall.h"
+#include "wowmsg.h"
+#include "wowres.h"
+#include "wowwin.h"
+#include "wowgdi.h"
+#include "wowuser.h"
+#include "host_exec.h"
+#include "main.h"
+#include "host_audio.h"
+#include "host_bios.h"
+#include "host_dos.h"
+#include "host_dpmi_client.h"
+#include "host_input.h"
+#include "host_io.h"
+#include "host_irq.h"
+#include "host_mouse.h"
+#include "host_timing.h"
+#include "host_video.h"
+#include "host_window.h"
+
 
 #define NTVDM_BOP_DOS       0x50    /* XP's COMMAND.COM: 1 site, in its version-refusal path */
 
@@ -1838,7 +1865,7 @@ static VOID V86DeliverTimerIrq(volatile BYTE * const tib)
 }
 
 /* The exec loop: run the guest until it terminates, a hard stop, or the window closes -- deliver pending IRQs, run it (in V86 or, for planar and Mode Y video, in the interpreter), and service what stopped it: port I/O, the DPMI switch, BIOS and DOS BOPs, the guest's own NTVDM BOPs, INT 21h. */
-static VOID HostRunExecLoop(
+VOID HostRunExecLoop(
     PSTR *cursorIo,
     PSTR const base,
     DOS_MACHINE *machine,

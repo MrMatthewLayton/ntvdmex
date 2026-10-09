@@ -123,4 +123,17 @@ extern INT g_DpmiUseKernel;
 extern INT g_CloseForced;
 extern DWORD g_PmStretchLogged;
 extern INT g_DpmiUseInterp;
+extern BYTE g_TrampolineSave[DOS_HDLR_TRAMPOLINE_SIZE];
+extern INT g_TrampolineSaved;
+extern INT g_BopFromGuest;
+extern INT g_GuestNtAware;
+extern INT g_ShellGetNextCount;
+extern CHAR g_ShellPath[300];
+extern CHAR g_FirstProgram[300];
+extern CHAR g_FirstTail[128];
+extern CHAR g_Application2[1024];
+extern LONGLONG g_HostTimeLast;
+extern INT g_HostEventLast;
+extern INT g_Interp12;
+extern INT g_QiVif;
 #endif

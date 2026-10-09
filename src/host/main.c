@@ -118,6 +118,7 @@ CHAR             g_TextFontLive[NTVDMEX_PATH_MAX];
 /* The host's other modules: what each one offers main.c (#335). */
 #include "host_types.h"
 #include "host_state.h"
+#include "host_exec.h"
 #include "host_dpmi_client.h"
 #include "host_report.h"
 #include "host_dpmi_int.h"
@@ -138,8 +139,8 @@ CHAR             g_TextFontLive[NTVDMEX_PATH_MAX];
 #include "host_timing.h"
 #include "host_install.h"
 
-static BYTE g_TrampolineSave[DOS_HDLR_TRAMPOLINE_SIZE];
-static INT  g_TrampolineSaved;
+BYTE g_TrampolineSave[DOS_HDLR_TRAMPOLINE_SIZE];
+INT  g_TrampolineSaved;
 
 WORD g_DsProbe[DSPROBE_MAX];
 INT  g_DsProbeCount = 0;
@@ -149,18 +150,18 @@ INT  g_CsProbeCount = 0;
 /* Set per BOP in the exec loop: did this `C4 C4 nn` execute in GUEST code rather than at
  * one of the addresses we plant ours at? See the note where it is assigned.
  */
-static INT g_BopFromGuest = 0;
+INT g_BopFromGuest = 0;
 DWORD g_NtvdmBopCount = 0;   /* how many guest-issued NTVDM BOPs this run serviced */
 /* s79: set at load time, from the IMAGE, not the path -- see the scan in STAGE2.
  * g_GuestNtAware means "we loaded this as a shell AND it talks to NTVDM", which is
  * what earns it DOS 5.00 and the private AH=53h answers.
  */
 static DWORD g_GuestNtvdmBops = 0;
-static INT   g_GuestNtAware    = 0;
-static INT   g_ShellGetNextCount  = 0;
-static CHAR  g_ShellPath[300];         /* the shell we loaded, for its COMSPEC (s81) */   /* BOP 54 sub 01 calls this session -- see its arm (s81) */
-static CHAR  g_FirstProgram[300];         /* its 8.3 path -- the sub 01 NAME field */
-static CHAR  g_FirstTail[128];         /* its arguments -- the sub 01 command TAIL */
+INT   g_GuestNtAware    = 0;
+INT   g_ShellGetNextCount  = 0;
+CHAR  g_ShellPath[300];         /* the shell we loaded, for its COMSPEC (s81) */   /* BOP 54 sub 01 calls this session -- see its arm (s81) */
+CHAR  g_FirstProgram[300];         /* its 8.3 path -- the sub 01 NAME field */
+CHAR  g_FirstTail[128];         /* its arguments -- the sub 01 command TAIL */
 
 static DWORD g_EmsFrameLinear;                        /* set by VdmMapEmsFrame */
 
@@ -181,7 +182,7 @@ VDM_COMMAND_INFO g_CommandInfo;
  * full path, CmdLine its argument tail (CR LF terminated), Env the launcher's Win32
  * environment block. See csrss_fetch_command().
  */
-static CHAR g_Application2[1024];
+CHAR g_Application2[1024];
 static CHAR g_CommandLine2[1024];
 static CHAR g_CurrentDirectory2[512];
 static CHAR g_Environment2[8192];
@@ -284,8 +285,8 @@ static HANDLE         g_OnceMutex    = NULL; /* the single-instance mutex (WinMa
  */
 DWORD g_IoViaDirect = 0;
 DWORD g_IoViaRetro = 0;
-static LONGLONG g_HostTimeLast;           /* QPC of the last VdmRunGuest return; 0 = none */
-static INT  g_HostEventLast;
+LONGLONG g_HostTimeLast;           /* QPC of the last VdmRunGuest return; 0 = none */
+INT  g_HostEventLast;
 INT            g_NoA000       = 0;  /* NOA000_FLAG present: leave A0000 mapped (diagnostic) */
 INT            g_NoPmPatch    = 0;  /* NOPMPATCH_FLAG present: scan no code regions (diagnostic) */
 INT            g_Fault32Warned  = 0;  /* said once: NT's 16-bit frame cannot locate a flat client's INT */
@@ -293,7 +294,7 @@ DWORD          g_NoPmPatchMinimum = 0; /* ...or only regions >= this many bytes 
 /* MEMDUMP_FLAG */
 DWORD g_MemoryDumpLinear = 0;
 DWORD g_MemoryDumpLength = 0;
-static INT            g_Interp12      = 0;  /* INTERP12_FLAG: interpret mode 12h, no page trap */
+INT            g_Interp12      = 0;  /* INTERP12_FLAG: interpret mode 12h, no page trap */
 DWORD          g_RunStartTick= 0;  /* exec-loop start, so STAGE2 can report a RATE */
 /* Planar-mode interpretation, measured. `batches` is how many times we drove the
  * guest from the host, `instrs` how many instructions that came to, and `bails`
@@ -341,7 +342,7 @@ DWORD g_PrintScreenErrors;
 BYTE       g_PrintScreenStatus = BIOS_PRINT_SCREEN_STATUS_OK;   /* what 0050:0000 would hold */
 DWORD          g_ExecPriority     = 0;   /* guest thread priority class; see EXECPRIO_PATH */
 static INT            g_QiRaise      = 0;
-static INT            g_QiVif        = 0;   /* start the guest with EFLAGS.VIF set */
+INT            g_QiVif        = 0;   /* start the guest with EFLAGS.VIF set */
 static INT            g_QiKeys       = 0;   /* synthesise keypresses (repro the hang) */
 DWORD          g_InterpRefused = 0;  /* interpreter declined the faulting opcode */
 /* A TIMER RE-ARMED FROM INSIDE ITS OWN HANDLER DISCARDS THE TICK QUEUED BEHIND IT (Importance = 4):
@@ -851,7 +852,6 @@ static PSTR TaskReportExitToCsrss(PSTR cursor, PSTR const base, DOS_MACHINE *mac
 }
 
 
-#include "host_exec.c"
 
 #include "host_startup.c"
 
