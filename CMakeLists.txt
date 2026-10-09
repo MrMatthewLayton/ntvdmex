@@ -107,6 +107,7 @@ add_executable(ntvdmhost
     src/vdm/csrss.c
     src/dos/dos_int21.c
     src/dos/dos_recovery.c
+    src/wow/ne.c
     src/vdd/vdd_bus.c
     src/vdd/vdd_pit.c
     src/vdd/vdd_cmos.c
