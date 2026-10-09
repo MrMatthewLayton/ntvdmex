@@ -103,16 +103,6 @@
 /* Forward: the window table this proc maps through. All defined in wowuser.h,
    which owns the table and is included after this file. */
 typedef struct _WOWUSER_WINDOW WOWUSER_WINDOW, *PWOWUSER_WINDOW; typedef const WOWUSER_WINDOW *PCWOWUSER_WINDOW;
-static WORD  WowWinHwnd16(HWND window);
-static PWOWUSER_WINDOW WowUserFindWindow(WORD window16);
-static INT   WowUserIsMdiChild(PCWOWUSER_WINDOW window);
-static HWND  WowUserMdiClientOf(PCWOWUSER_WINDOW window);
-static HWND  WowUserHwnd32(WORD window16);
-static WORD  WowUserMenu16(HMENU menu);  /* the 16-bit name for a real menu */
-/* #294: COMMDLG's modeless Find/Replace dialogs -- wowcommdlg.h, included later. */
-static INT   WowCdlgRelay(UINT message, LPARAM lParam);
-static INT   WowCdlgIsDialogMessage(PMSG message);
-static DWORD WowUserTimerProcedure(WORD window16, WORD timerId);  /* 0 if none installed */
 
 /*
  * ── OUR WINDOW PROCEDURE FOR EVERY Win16 WINDOW ─────────────────────────────
@@ -179,7 +169,5 @@ typedef struct _WOWWIN_HELD_CHAR { WORD Window16, Character; DWORD LParam; DWORD
      in lParam -- exactly what Win16 queues -- and DispatchMessage calls the proc. */
 #define WOWWIN_MAX_THREAD_TIMERS 16
 typedef struct _WOWWIN_THREAD_TIMER { UINT_PTR Id32; DWORD Procedure; } WOWWIN_THREAD_TIMER;
-
-static INT WowUserIsDialog16(WORD h16);          /* wowuser.h: a dialog procedure? */
 
 #endif /* NTVDMEX_WOWWIN_H */

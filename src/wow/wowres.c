@@ -3,6 +3,22 @@
  * The code of wowres.h (#335): its functions and state, in their original order. Part of
  * the host's single translation unit: #included by main.c straight after wowres.h. */
 
+/* Forward declarations for the single translation unit (they were in wowres.h). */
+/* ── ★★★★★ AND THE GROUP CAN BE NAMED. (session 47) ─────────────────────────
+     MS Paint showed no icon at all -- Windows fell back to the generic
+     application icon -- and the cause is the one session 45 already found for
+     MENUS and did not carry across to icons:
+
+       NOTEPAD.EXE   RT_GROUP_ICON  #1          <- an ordinal, so it worked
+       PBRUSH.EXE    RT_GROUP_ICON  "PBRUSH"    <- a NAME, so it was refused
+
+     ⚠ Read straight out of the two resource tables, not inferred: PBRUSH's
+     RT_CURSOR entries are named too ("FLOOD", "CROSSH", "PICK", "TEXT",
+     "SIDEAROW"), and so is its accelerator table. **A Win16 program is as likely
+     to name a resource as to number it, and this host only understood numbers.**
+   ⇒ one lookup each way, and the caller passes whichever the guest gave it. */
+static HICON WowResIconAt(DWORD groupOffset, DWORD groupLength, PINT picked, INT width, INT height);
+
 static PBYTE g_WowResImage  = NULL;      /* the application's file, verbatim */
 static DWORD  g_WowResLength  = 0;
 static CHAR   g_WowResPath[WOWRES_PATH_MAX];

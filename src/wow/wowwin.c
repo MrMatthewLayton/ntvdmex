@@ -3,6 +3,20 @@
  * The code of wowwin.h (#335): its functions and state, in their original order. Part of
  * the host's single translation unit: #included by main.c straight after wowwin.h. */
 
+/* Forward declarations for the single translation unit (they were in wowwin.h). */
+static WORD  WowWinHwnd16(HWND window);
+static PWOWUSER_WINDOW WowUserFindWindow(WORD window16);
+static INT   WowUserIsMdiChild(PCWOWUSER_WINDOW window);
+static HWND  WowUserMdiClientOf(PCWOWUSER_WINDOW window);
+static HWND  WowUserHwnd32(WORD window16);
+static WORD  WowUserMenu16(HMENU menu);  /* the 16-bit name for a real menu */
+/* #294: COMMDLG's modeless Find/Replace dialogs -- wowcommdlg.h, included later. */
+static INT   WowCdlgRelay(UINT message, LPARAM lParam);
+static INT   WowCdlgIsDialogMessage(PMSG message);
+static DWORD WowUserTimerProcedure(WORD window16, WORD timerId);  /* 0 if none installed */
+
+static INT WowUserIsDialog16(WORD h16);          /* wowuser.h: a dialog procedure? */
+
 /* Set once the exec thread has a window: the thread id that owns them all, so a
    pump on the wrong thread can be refused rather than silently doing nothing. */
 static DWORD g_WowWinThread = 0;

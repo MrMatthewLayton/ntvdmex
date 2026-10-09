@@ -3,6 +3,11 @@
  * The code of wowdlg.h (#335): its functions and state, in their original order. Part of
  * the host's single translation unit: #included by main.c straight after wowdlg.h. */
 
+/* Forward declarations for the single translation unit (they were in wowdlg.h). */
+/* Defined in main.c, which owns the LDT: is this code selector NOT PRESENT?
+   See the call site, and WOWCALL_RETF_OFF in wowcall.h for what it decides. */
+static INT WowDlgIsSelectorAbsent(WORD selector);
+
 /* s88: per callback depth -- did the modal loop's call go to the dialog's own
    DLGPROC, and with which message. Read when the call returns (main.c). */
 static INT  g_WowDlgIsDialogCall[WOWCALL_MAX_DEPTH];

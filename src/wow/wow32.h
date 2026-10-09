@@ -468,7 +468,6 @@ typedef struct _WOW32_DOSDATA {
 #define WOW32_COMMAND_PROGRAM_MAX   512
 #define WOW32_COMMAND_ARGUMENTS_MAX 192
 #define WOW32_SHORT_PATH_BUFFER     (MAX_PATH + 16)
-static VOID Wow32CurrentDirectorySet(PCSTR dir);  /* #164: main.c's per-task directory table */
 
 /* Field offsets of the command structure -- derived in the 0x70 case, which is
    the only place they are used and the only place the derivation makes sense. */

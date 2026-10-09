@@ -3,6 +3,28 @@
  * The code of wowuser.h (#335): its functions and state, in their original order. Part of
  * the host's single translation unit: #included by main.c straight after wowuser.h. */
 
+/* Forward declarations for the single translation unit (they were in wowuser.h). */
+/* ── s93: THE HOOK BRIDGE (see SetWindowsHook). One entry per Win16 hook; the
+     Win32 hook's callback finds its entry by kind and calls the 16-bit procedure
+     through the nested run, with the procedure's own DS (its module's DGROUP). */
+static INT WowCall16SyncEx(DWORD proc, WORD ds, PCWORD args, INT n,
+                              WORD hwnd, WORD msg, PWORD res,
+                              PBYTE blob, INT blobLength, INT blobArgument,
+                              const INT *fix, INT nfix);
+
+static INT WowUserHookUnset(SHORT hookId, DWORD procedure);
+
+/* ── The modal dialog loop lives in wowdlg.h, which is included AFTER this file
+     because it reads the window table above. These three are what USER's own
+     DialogBox and EndDialog arms call into it. */
+static INT WowDlgPush(WORD window, DWORD returnLinear, DWORD dialogProcedure, DWORD windowProcedure,
+                       WORD dataSelector, INT isShowDeferred, HWND owner32);
+static INT WowDlgEnd(WORD window, WORD result);
+static VOID WowDlgSetInit(DWORD initParameter, WORD firstFocus);
+static INT WowDlgActive(VOID);
+
+static INT WowUserDestroy(WORD window16, PSTR note, INT noteCapacity, PINT noteLengthInOut);
+
 static WOWUSER_SYSRES g_WowUserSystemResources[WOWUSER_MAX_SYSRES];
 static INT              g_WowUserSystemResourceCount = 0;
 

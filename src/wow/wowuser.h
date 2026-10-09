@@ -1243,13 +1243,6 @@ VOID WowCommRts(INT id, INT on);
 #define WOWUSER_MAX_PROP 64
 typedef struct _WOWUSER_PROP { WORD Window; WORD Data; char Name[WOWUSER_SHORT_NAME_SIZE]; } WOWUSER_PROP;
 
-/* ── s93: THE HOOK BRIDGE (see SetWindowsHook). One entry per Win16 hook; the
-     Win32 hook's callback finds its entry by kind and calls the 16-bit procedure
-     through the nested run, with the procedure's own DS (its module's DGROUP). */
-static INT WowCall16SyncEx(DWORD proc, WORD ds, PCWORD args, INT n,
-                              WORD hwnd, WORD msg, PWORD res,
-                              PBYTE blob, INT blobLength, INT blobArgument,
-                              const INT *fix, INT nfix);
 #define WOWUSER_HOOKS 8
 #define WOWUSER_HOOK_ARGUMENTS      4    /* nCode, wParam, lParam high, low            */
 #define WOWUSER_HOOK_ARG_LPARAM     2    /* lParam's high word: the EVENTMSG's pointer */
@@ -1268,7 +1261,6 @@ typedef struct _WOWUSER_HOOK { SHORT Id; DWORD Procedure; WORD DataSelector; HHO
      event that arrives while one is being recorded is queued and handed over, in
      order, when the outer call returns. */
 #define WOWUSER_JREC_Q 64
-static INT WowUserHookUnset(SHORT hookId, DWORD procedure);
 
 /* ── s92 (#306): WHOSE FILE A RESOURCE IS IN. Every menu, icon, cursor and
      accelerator table used to be read from g_WowCommandProgram, the program on the
@@ -1898,15 +1890,6 @@ typedef struct _WOWUSER_WINDOW {
 typedef struct _WOWUSER_SYSPROC { PCSTR ClassName; WORD Offset; BYTE Index; } WOWUSER_SYSPROC, *PWOWUSER_SYSPROC; typedef const WOWUSER_SYSPROC *PCWOWUSER_SYSPROC;
 #define WOWUSER_SYSPROC_COUNT ((INT)(sizeof g_WowUserSystemProcedures / sizeof g_WowUserSystemProcedures[0]))
 
-/* ── The modal dialog loop lives in wowdlg.h, which is included AFTER this file
-     because it reads the window table above. These three are what USER's own
-     DialogBox and EndDialog arms call into it. */
-static INT WowDlgPush(WORD window, DWORD returnLinear, DWORD dialogProcedure, DWORD windowProcedure,
-                       WORD dataSelector, INT isShowDeferred, HWND owner32);
-static INT WowDlgEnd(WORD window, WORD result);
-static VOID WowDlgSetInit(DWORD initParameter, WORD firstFocus);
-static INT WowDlgActive(VOID);
-
 /* ── s89 (#270): THE DESKTOP HAS A HANDLE. GetDesktopWindow used to answer 0,
      on the grounds that GetDC(0) is the screen -- but a program that CENTRES a
      dialog asks GetWindowRect(GetDesktopWindow()), and IsWindow of it must be
@@ -2113,8 +2096,6 @@ typedef struct _WOWUSER_TIMER { WORD Window; WORD Id; DWORD Procedure; INT IsUse
 #define WOWUSER_LIST_OUT_BUFFER        2
 #define WOWUSER_LIST_STRUCTURE         3
 #define WOWUSER_LIST_INDEX             4
-
-static INT WowUserDestroy(WORD window16, PSTR note, INT noteCapacity, PINT noteLengthInOut);
 
 /* ── s88: the DIALOG MANAGER'S DEFAULT for one message, once the DLGPROC has
      answered FALSE (or there is none). See WOWUSER_DEFDLGPROC. The two arms are

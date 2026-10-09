@@ -233,11 +233,6 @@
 typedef struct _WOWENUM_FONT { BYTE Blob[WOWENUM_ELF16 + WOWENUM_NTM16]; WORD FontType; } WOWENUM_FONT, *PWOWENUM_FONT;
 typedef const WOWENUM_FONT *PCWOWENUM_FONT;
 
-static INT  WowEnumBusy(VOID);
-static INT  WowEnumBegin(INT kind, DWORD procedure, WORD dataSelector, DWORD lParam,
-                          DWORD returnLinear, WORD parent);
-static VOID WowEnumLine(INT startX, INT startY, INT endX, INT endY);
-
 /* Six words is not a guess about Win16 -- it is what the two things this host
    calls actually push: a window procedure's 5 (hwnd, msg, wParam, lParam hi+lo)
    and LocalAlloc's 2. Anything wider gets caught here rather than overrunning. */

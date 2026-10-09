@@ -3,6 +3,9 @@
  * The code of wow32.h (#335): its functions and state, in their original order. Part of
  * the host's single translation unit: #included by main.c straight after wow32.h. */
 
+/* Forward declarations for the single translation unit (they were in wow32.h). */
+static VOID Wow32CurrentDirectorySet(PCSTR dir);  /* #164: main.c's per-task directory table */
+
 /* ---- note building (shared by EVERY id space's dispatcher) --------------
    These live here rather than in wowuser.h because five module files build
    notes with them -- USER, SHELL, COMMDLG, KEYBOARD and GDI -- and their old

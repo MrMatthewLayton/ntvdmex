@@ -137,10 +137,6 @@ typedef struct _WOWDLG_MODAL {
      complete -- and re-declaring the struct would be a duplicate typedef. The
      include order in main.c is what makes that true; it is commented there. */
 
-/* Defined in main.c, which owns the LDT: is this code selector NOT PRESENT?
-   See the call site, and WOWCALL_RETF_OFF in wowcall.h for what it decides. */
-static INT WowDlgIsSelectorAbsent(WORD selector);
-
 /*
  * ── ★★★ THE PUMP, WITH ITS MOUTH OPEN. (session 57, second run) ─────────────
  * The heartbeat refuted the obvious explanation -- `this thread 0x334, the

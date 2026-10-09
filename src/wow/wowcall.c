@@ -3,6 +3,12 @@
  * The code of wowcall.h (#335): its functions and state, in their original order. Part of
  * the host's single translation unit: #included by main.c straight after wowcall.h. */
 
+/* Forward declarations for the single translation unit (they were in wowcall.h). */
+static INT  WowEnumBusy(VOID);
+static INT  WowEnumBegin(INT kind, DWORD procedure, WORD dataSelector, DWORD lParam,
+                          DWORD returnLinear, WORD parent);
+static VOID WowEnumLine(INT startX, INT startY, INT endX, INT endY);
+
 /* s89: a SECOND far pointer into the same stack block. EnumFontFamilies' callback
    takes two structures (ENUMLOGFONT, NEWTEXTMETRIC); they travel as one blob and
    this names the argument (HIGH word index) that points `off` bytes into it. Set

@@ -132,21 +132,6 @@ typedef struct _WOWRES_ACCEL { BYTE Flags; WORD Key, Id; } WOWRES_ACCEL, *PWOWRE
 #define WOWRES_GROUP_ENTRY_ID     12
 #define WOWRES_ICON_VERSION       0x00030000
 
-/* ── ★★★★★ AND THE GROUP CAN BE NAMED. (session 47) ─────────────────────────
-     MS Paint showed no icon at all -- Windows fell back to the generic
-     application icon -- and the cause is the one session 45 already found for
-     MENUS and did not carry across to icons:
-
-       NOTEPAD.EXE   RT_GROUP_ICON  #1          <- an ordinal, so it worked
-       PBRUSH.EXE    RT_GROUP_ICON  "PBRUSH"    <- a NAME, so it was refused
-
-     ⚠ Read straight out of the two resource tables, not inferred: PBRUSH's
-     RT_CURSOR entries are named too ("FLOOD", "CROSSH", "PICK", "TEXT",
-     "SIDEAROW"), and so is its accelerator table. **A Win16 program is as likely
-     to name a resource as to number it, and this host only understood numbers.**
-   ⇒ one lookup each way, and the caller passes whichever the guest gave it. */
-static HICON WowResIconAt(DWORD groupOffset, DWORD groupLength, PINT picked, INT width, INT height);
-
 /* ── ★ AND THE SAME DIRECTORY SHAPE FOR CURSORS. ─────────────────────────────
      `RT_GROUP_CURSOR` (12) indexes `RT_CURSOR` (1) exactly as GROUP_ICON indexes
      ICON, and `CreateIconFromResourceEx` takes a cursor resource with `fIcon =
