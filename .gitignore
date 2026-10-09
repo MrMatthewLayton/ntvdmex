@@ -167,3 +167,7 @@ tools/score/probe-cache.json
 /scripts/member_rename.py
 /scripts/style_signatures.py
 /scripts/style_pointers.py
+
+# #335: the main.c split and giant-function extraction tools (local-only: they drive one-off
+# refactors; tools/fncmp, which proves them, is the committed part)
+/tools/split/
