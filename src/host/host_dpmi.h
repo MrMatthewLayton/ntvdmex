@@ -10,4 +10,6 @@ DWORD DpmiSelectorBase(WORD selector);
 
 INT DpmiAsyncInjectPm(UINT irq, CONTEXT *context);
 WORD DpmiSegmentToDescriptor(WORD segment);
+INT DpmiSelectorDescriptor(WORD selector, UINT32 *accessRights, UINT32 *limit);
+INT DpmiServicePmInt(DOS_MACHINE *machine, volatile BYTE *tib, DWORD vector, UINT steps);
 #endif

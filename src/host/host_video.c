@@ -1,20 +1,47 @@
 /* host_video.c -- video: Mode Y, the A000 trap, the instruction interpreters' host callbacks
  *   (v86interp.h, pm32interp.h) and the profiler.
  *
- * Part of the host's single translation unit: #included by main.c after host_internal.h. */
+ * Its own translation unit (#335): declared in host_video.h. */
+#include "host_state.h"
+#include "log.h"
+#include "host_video.h"
+#include "main.h"
+#include "host_dpmi.h"
+#include "host_bios.h"
+#include "host_timing.h"
+/* Used before their definitions below. */
+static VOID ModeYRemapSelectBody(PVOID context, INT mask);
+static VOID ModeYGr4CloseRun(VOID);
+static INT ModeYInterpServes(VOID);
+static VOID InterpreterMemoryBadNote(UINT32 linear, INT write);
+static VOID HostProfileDump(VOID);
+
+/* The interpreter templates' host callbacks, then the templates themselves. */
+static inline __attribute__((always_inline)) BYTE V86HostRead8(UINT32 linear);
+static inline __attribute__((always_inline)) VOID V86HostWrite8(UINT32 linear, BYTE value);
+static inline __attribute__((always_inline)) const volatile BYTE *V86HostCodePointer(UINT32 linear);
+static UINT32 V86HostIn(WORD port, INT width);
+static VOID V86HostOut(WORD port, INT width, UINT32 byteValue);
+static BYTE Pm32HostRead8(UINT32 linear);
+static VOID Pm32HostWrite8(UINT32 linear, BYTE value);
+static INT Pm32HostCanAccess(UINT32 linear, INT width, INT isWrite);
+static UINT32 Pm32HostIn(WORD port, INT width);
+static VOID Pm32HostOut(WORD port, INT width, UINT32 value);
+#include "v86interp.h"
+#include "pm32interp.h"
 
 /* #183: present = sample the exec thread's host EIP ~1 kHz and log the hottest 16-byte
    buckets at exit (STAGE2: HOSTPROF). Map them with `i686-w64-mingw32-nm -n`. */
 #define HOSTPROF_FLAG CFG_("hostprof.flag")
 enum { MYPM_STOP_RETURNED, MYPM_STOP_WINDOW_CLOSED, MYPM_STOP_DECLINED, MYPM_STOP_CAP, MYPM_STOP_NOT_FLAT, MYPM_STOP_IRQ_WAITING, MYPM_STOP_REASONS, MYPM_CHECK_MASK = 0x3F };
-static INT            g_P12Offset       = 0;  /* P12OFF_FLAG: revert to the A0000 page trap      */
+INT            g_P12Offset       = 0;  /* P12OFF_FLAG: revert to the A0000 page trap      */
 /* North star 1, design C (s80) -- see ModeYNeedsInterp(). */
-static INT            g_ModeYInterpOffset = 0;  /* MYINTERP_OFF_FLAG                          */
-static INT            g_ModeYInterp     = 0;  /* inside HostInterp on mode Y's behalf       */
-static DWORD          g_ModeYSlices = 0, g_ModeYInstructions = 0, g_ModeYBails = 0, g_ModeYBailMp = 0;
-static INT            g_ModeYRingOn    = 0;  /* MYRING_FLAG: record the ring (a copy per instruction) */
-static INT            g_ModeYPmOffset     = 0;  /* MYPM_OFF_FLAG                               */
-static INT            g_ModeYPmDetect  = 0;  /* MYPM_DETECT_FLAG                            */
+INT            g_ModeYInterpOffset = 0;  /* MYINTERP_OFF_FLAG                          */
+INT            g_ModeYInterp     = 0;  /* inside HostInterp on mode Y's behalf       */
+DWORD          g_ModeYSlices = 0, g_ModeYInstructions = 0, g_ModeYBails = 0, g_ModeYBailMp = 0;
+INT            g_ModeYRingOn    = 0;  /* MYRING_FLAG: record the ring (a copy per instruction) */
+INT            g_ModeYPmOffset     = 0;  /* MYPM_OFF_FLAG                               */
+INT            g_ModeYPmDetect  = 0;  /* MYPM_DETECT_FLAG                            */
 static DWORD          g_ModeYPmRuns = 0, g_ModeYPmInstructions = 0, g_ModeYPmBails = 0, g_ModeYPmBailMp = 0;
 static DWORD          g_ModeYPmStop[MYPM_STOP_REASONS];       /* returned, window closed, declined, cap, not32, irq (#172) */
 /* ► THE SOURCE BESIDE THE PICTURE. (s68) A planar frame is st->fb rendered from
@@ -24,7 +51,7 @@ static DWORD          g_ModeYPmStop[MYPM_STOP_REASONS];       /* returned, windo
      periodic capture right after its BMP, under cfg\planedump.flag: writes the BMP's
      path with `.pln` = a 16-byte header (start, offset in 2-byte units, gw, gh) +
      the four 64K planes. Caller holds no lock; this takes it. */
-static VOID PlanesDumpBeside(PCSTR bitmapPath)
+VOID PlanesDumpBeside(PCSTR bitmapPath)
 {
     CHAR path[200]; INT length = 0; HANDLE file;
     DWORD header[4], bytesWritten; INT plane;
@@ -44,17 +71,17 @@ static VOID PlanesDumpBeside(PCSTR bitmapPath)
 }
 enum { MODEY_VIEW_LINEAR = 4, MODEY_VIEW_SCRATCH = 5 };   /* g_ModeYSeconds/View: 0-3 the planes, then these */
 static HANDLE g_ModeYSeconds[MODEY_NSEC];
-static PVOID g_ModeYView[MODEY_NSEC];           /* host-side views, always mapped       */
+PVOID g_ModeYView[MODEY_NSEC];           /* host-side views, always mapped       */
 static HANDLE g_BarSecond;
 static BYTE   g_ModeYSeed[MODEY_WIN];            /* scratch contents as it was seeded    */
-static INT    g_ModeYRemap      = 0;             /* the window is ours                   */
+INT    g_ModeYRemap      = 0;             /* the window is ours                   */
 static INT    g_ModeYCurrent        = -1;            /* section index currently at A0000     */
 static INT    g_ModeYPreviousMask  = 0;             /* mask live while the scratch was up   */
-static DWORD  g_ModeYSwaps = 0, g_ModeYFanouts = 0, g_ModeYFail = 0;
+DWORD  g_ModeYSwaps = 0, g_ModeYFanouts = 0, g_ModeYFail = 0;
 static DWORD  g_ModeYTimelineSelector[YTL_SECS], g_ModeYTimelineSwap[YTL_SECS], g_ModeYTimelineFanout[YTL_SECS];
 static DWORD  g_ModeYTimelineFanoutBytes[YTL_SECS], g_ModeYTimelineFlip[YTL_SECS];
 static UINT64 g_ModeYTimelineCycles[YTL_SECS];
-static DWORD  g_ModeYTimelineT0 = 0;
+DWORD  g_ModeYTimelineT0 = 0;
 static UINT64 g_ModeYTimelineTscBase = 0;
 static LONGLONG g_ModeYTimelineQpcBase = 0;
 static DWORD  g_ModeYFanoutBytes = 0;   /* changed bytes fanned out, whole run */
@@ -67,7 +94,7 @@ static DWORD  g_ModeYFanoutBytes = 0;   /* changed bytes fanned out, whole run *
 static BYTE   g_ModeYShadow[MODEY_WIN];
 static DWORD  g_ModeYFanoutNew = 0;
 static DWORD  g_ModeYTimelineFanoutCount[YTL_SECS];
-static UINT64 ModeYTimelineRdtsc(VOID)
+UINT64 ModeYTimelineRdtsc(VOID)
 {
     UINT low, high;
     __asm__ __volatile__("rdtsc" : "=a"(low), "=d"(high));
@@ -81,9 +108,9 @@ static BYTE  g_ModeYSample[2][4][YSMP_LEN];      /* [band][plane] last seen     
 static INT   g_ModeYSampleHave[2][4];
 static BYTE  g_ModeYSampleLast[2][YSMP_LEN];    /* last CHANGED window, any plane         */
 static INT   g_ModeYSampleLastPlane[2] = { -1, -1 };
-static DWORD g_ModeYSampleCrossSame[2], g_ModeYSampleCrossDiff[2], g_ModeYSampleWrites[2];
-static DWORD g_ModeYSampleCrossEqualBytes[2], g_ModeYSampleCrossTotalBytes[2];
-static DWORD g_ModeYSampleP1Equal[2][4], g_ModeYSampleP1Total[2][4];
+DWORD g_ModeYSampleCrossSame[2], g_ModeYSampleCrossDiff[2], g_ModeYSampleWrites[2];
+DWORD g_ModeYSampleCrossEqualBytes[2], g_ModeYSampleCrossTotalBytes[2];
+DWORD g_ModeYSampleP1Equal[2][4], g_ModeYSampleP1Total[2][4];
 /* ── ⚠ AND `cross_eqb` IS A STATE MEASUREMENT, NOT A DELIVERY ONE. ───────────────────
      It compares the WHOLE 256-byte window whenever ANY byte of it changed, so 255 of
      those bytes can be stale content left by an earlier event. That makes it very
@@ -95,7 +122,7 @@ static DWORD g_ModeYSampleP1Equal[2][4], g_ModeYSampleP1Total[2][4];
      actually wrote, was the value already present in the other plane? Stale bytes are
      excluded by construction, so a high rate means the guest HANDED us the same byte for
      two different planes -- which state cannot fake. */
-static DWORD g_ModeYSampleDeliveredEqual[2], g_ModeYSampleDeliveredTotal[2];
+DWORD g_ModeYSampleDeliveredEqual[2], g_ModeYSampleDeliveredTotal[2];
 static VOID ModeYSampleCheck(INT band, UINT offset, INT plane)
 {
     const BYTE *view = (const BYTE *)g_ModeYView[plane] + offset;
@@ -190,7 +217,7 @@ static VOID ModeYRemapEmit(PCSTR begin, PCSTR end)
     while (begin < end && g_RemapReportCursor < g_RemapReport + sizeof g_RemapReport - 1) *g_RemapReportCursor++ = *begin++;
     *g_RemapReportCursor = 0;
 }
-static VOID ModeYRemapFlushReport(VOID)
+VOID ModeYRemapFlushReport(VOID)
 {
     if (g_RemapReportCursor == g_RemapReport) return;
     LogAppend(LOG_PATH, g_RemapReport, g_RemapReportCursor);
@@ -207,7 +234,7 @@ static VOID ModeYRemapLog(PCSTR what, DWORD error)
 
 /* Take ownership of the A0000 window. Returns 0 and leaves everything as it was if any
    step fails -- the heuristic path still works, so a failure here must not be fatal. */
-static INT ModeYRemapInitialize(VOID)
+INT ModeYRemapInitialize(VOID)
 {
     static BYTE savedWindowA[MODEY_WIN], savedWindowB[MODEY_WIN];
     UINT index;
@@ -361,7 +388,7 @@ static VOID ModeYPmSiteNote(INT mask)
     }
 }
 
-static VOID ModeYRemapSelect(PVOID context, INT mask)
+VOID ModeYRemapSelect(PVOID context, INT mask)
 {
     UINT64 cycleStart;
     DWORD seconds, swapsBase, fan0, fanoutBytesBase, function0;
@@ -399,7 +426,7 @@ static VOID ModeYRemapSelect(PVOID context, INT mask)
 #define MY_SITE_MAX 16
 static struct { DWORD Cs, Ip, Count; BYTE Bytes[8]; } g_ModeYSite[MY_SITE_MAX];
 static UINT g_ModeYSiteCount = 0;
-static VOID ModeYBailNote(DWORD cs, DWORD ip, const volatile BYTE *bytes)
+VOID ModeYBailNote(DWORD cs, DWORD ip, const volatile BYTE *bytes)
 {
     UINT index, byteIndex;
     for (index = 0; index < g_ModeYSiteCount; ++index)
@@ -566,7 +593,7 @@ static VOID ModeYRemapSelectBody(PVOID context, INT mask)
     ++g_ModeYSwaps;
 }
 
-static BYTE *ModeYRemapPlane(PVOID context, INT plane)
+BYTE *ModeYRemapPlane(PVOID context, INT plane)
 {
     (VOID)context;
     return (BYTE *)g_ModeYView[plane & VIDEO_PLANE_INDEX_MASK];
@@ -612,7 +639,7 @@ static BYTE *ModeYRemapPlane(PVOID context, INT plane)
      preceded by a mask change that puts the window back. Not done when the scratch is up
      (`g_ModeYCurrent == 5`): a multi-plane write window is mid-flight and I_ReadScreen never runs
      under one. */
-static DWORD g_ModeYGr4Calls = 0, g_ModeYGr4Mismatch = 0, g_ModeYGr4Pair[4][6];
+DWORD g_ModeYGr4Calls = 0, g_ModeYGr4Mismatch = 0, g_ModeYGr4Pair[4][6];
 /* ── AND THE MISMATCH ONLY BITES IF NO MASK CHANGE FOLLOWS. ──────────────────────────
      `mismatch` is sampled at the instant GR4 is written, and 74% of those instants have
      the window one plane behind -- but that is HARMLESS in the ordinary blit, where the
@@ -625,7 +652,7 @@ static DWORD g_ModeYGr4Calls = 0, g_ModeYGr4Mismatch = 0, g_ModeYGr4Pair[4][6];
      replicated across each four-pixel group. That is the collapse, and a run length of
      4 with no intervening select is its fingerprint. A run of 1 is the ordinary blit and
      is fine. This is the counter that can come out either way. */
-static DWORD g_ModeYGr4SinceSelector = 0, g_ModeYGr4Runs[10], g_ModeYGr4RunPlanes[VIDEO_PLANES];
+DWORD g_ModeYGr4SinceSelector = 0, g_ModeYGr4Runs[10], g_ModeYGr4RunPlanes[VIDEO_PLANES];
 static VOID ModeYGr4CloseRun(VOID)
 {
     if (g_ModeYGr4SinceSelector) {
@@ -636,8 +663,8 @@ static VOID ModeYGr4CloseRun(VOID)
         g_ModeYGr4SinceSelector = 0;
     }
 }
-static DWORD g_ModeYGr4Moves = 0;
-static VOID ModeYRemapReadMap(PVOID context, INT plane)
+DWORD g_ModeYGr4Moves = 0;
+VOID ModeYRemapReadMap(PVOID context, INT plane)
 {
     (VOID)context;
     if (!g_ModeYRemap) return;
@@ -666,7 +693,7 @@ static VOID ModeYRemapReadMap(PVOID context, INT plane)
      union of several moves and no single displacement explains them. Between `write mode
      := 1` and `write mode := 0` there is exactly one burst, which is the thing a single
      displacement CAN describe. Seed at the start of the burst, solve at its end. */
-static VOID ModeYRemapWriteMode(PVOID context, INT writeMode)
+VOID ModeYRemapWriteMode(PVOID context, INT writeMode)
 {
     (VOID)context;
     if (!g_ModeYRemap) { g_ModeYWriteMode = writeMode; return; }
@@ -824,7 +851,7 @@ static VOID A000Protect(INT isOn)
  * engine by construction (V86HostRead8/V86HostWrite8). The interpreter is the CPU for as long
  * as mode 12h is set; it yields whenever an IRQ is pending, and any opcode it does
  * not model drops that one instruction back to V86.                              */
-static INT g_P12Interp = 0;    /* planar mode is current -> interpret the guest  */
+INT g_P12Interp = 0;    /* planar mode is current -> interpret the guest  */
 
 VOID VideoTrapSync(VOID)
 {
@@ -863,7 +890,7 @@ static INT ModeYInterpServes(VOID)
     return 1;
 }
 /* Is the guest RIGHT NOW in a window no mapping can serve? */
-static INT ModeYNeedsInterp(VOID)
+INT ModeYNeedsInterp(VOID)
 {
     BYTE mask;
     if (!g_ModeYRemap || !ModeYInterpServes() || g_Video.IsChain4) return 0;
@@ -908,8 +935,8 @@ enum { PAGE_MAP_UNKNOWN = 0, PAGE_MAP_OK = 1, PAGE_MAP_BAD = 2 };   /* g_PageMap
      own aperture never reach the probe (handled above / by the A000 branch), so the
      cost falls only on the upper-memory accesses that are the anomaly. */
 static BYTE g_PageMap[X86_REAL_MODE_SIZE_U >> PAGE_SHIFT];     /* one entry per 4KB page of the low 1MB */
-static DWORD   g_InterpreterMemoryBadReads, g_InterpreterMemoryBadWrites, g_InterpreterMemoryBadLogged;
-static INT InterpreterMemoryPageOk(UINT32 linear)
+DWORD   g_InterpreterMemoryBadReads, g_InterpreterMemoryBadWrites, g_InterpreterMemoryBadLogged;
+INT InterpreterMemoryPageOk(UINT32 linear)
 {
     UINT32 page = linear >> PAGE_SHIFT;
     if (linear >= X86_REAL_MODE_SIZE_U) return 1;             /* HMA and above: leave to the raw path */
@@ -1024,7 +1051,7 @@ static VOID     Pm32HostOut(WORD port, INT width, UINT32 value) { V86HostOut(por
 
 /* Is a PROTECTED-mode guest in a window no mapping can serve? (The real-mode twin is
    ModeYNeedsInterp.) */
-static INT ModeYPmNeedsInterp(VOID)
+INT ModeYPmNeedsInterp(VOID)
 {
     BYTE mask;
     if (!g_DpmiPm || g_ModeYPmOffset || g_ModeYInterpOffset || !g_ModeYRemap) return 0;
@@ -1068,7 +1095,7 @@ static INT ModeYPmIrqWaiting(VOID)
     return g_PmTickOwed > 0 || g_Irq1Pending > 0
         || (g_Pic.Master.Irr & (BYTE)~g_Pic.Master.Imr) != 0;
 }
-static VOID ModeYPmRun(volatile BYTE *tib)
+VOID ModeYPmRun(volatile BYTE *tib)
 {
     PM32_CPU cpu; INT32 steps = 0, idleFrom = 0; UINT32 espStart; INT why;
     DWORD vgaSeen;
@@ -1125,7 +1152,7 @@ static VOID ModeYPmRun(volatile BYTE *tib)
    crash or a stray access inside istep (s69) leaves the VDM context a whole slice
    stale; this is the es/di the effective address was actually built from. NULL when
    the interpreter is not running. */
-static const V86_CPU *g_InterpreterCpu;
+const V86_CPU *g_InterpreterCpu;
 
 /* Name the FIRST few out-of-range accesses: the guest cs:ip, and the interpreter's
    live es/di/ds -- which is what says whether a bad address is a wrong SEGMENT or an
@@ -1148,7 +1175,7 @@ static VOID InterpreterMemoryBadNote(UINT32 linear, INT write)
 /* Where the guest was at the last interpreted instruction. Every planar VRAM write
    arrives through V86HostWrite8 above, i.e. from the interpreter, so this is exact at the
    moment the video VDD's watchpoint fires. */
-static UINT32 HostGuestPc(VOID) { return g_V86InstructionPointer; }
+UINT32 HostGuestPc(VOID) { return g_V86InstructionPointer; }
 
 /* ── WHAT DID THE INTERPRETER JUST RUN? (s80, north star 1) ──────────────────────────
      Design C hands Wolf3D's renderer to the interpreter, and the first run ended with the
@@ -1160,7 +1187,7 @@ static UINT32 HostGuestPc(VOID) { return g_V86InstructionPointer; }
 static struct { WORD Cs, Ip, Sp, Ss; BYTE Bytes[6]; } g_ModeYRing[MY_RING];
 static UINT g_ModeYRingPosition = 0;
 static INT      g_ModeYRingDumped = 0;
-static VOID ModeYRingDump(PCSTR why)
+VOID ModeYRingDump(PCSTR why)
 {
     CHAR lineBuffer[160], *cursor;
     UINT age, byteIndex;
@@ -1229,7 +1256,7 @@ static DWORD WINAPI HostProfileThread(LPVOID parameter)
     }
     return 0;
 }
-static VOID HostProfileStart(VOID)
+VOID HostProfileStart(VOID)
 {
     const BYTE *image = (const BYTE *)GetModuleHandleA(NULL);
     DWORD newHeaderOffset, size;
@@ -1413,7 +1440,7 @@ static INT32 HostInterp(volatile BYTE *tib, INT32 cap)
    ⚠ SLEEPING HERE IS SAFE AND SLEEPING INSIDE HostInterp WOULD NOT BE: this is
      outside the HOST_LOCK, so a throttled guest does not hold the bus lock while it
      waits and the audio pump is untouched. */
-static INT32 HostInterpPaced(volatile BYTE *tib, INT32 cap)
+INT32 HostInterpPaced(volatile BYTE *tib, INT32 cap)
 {
     static CPUSPEED_PACE pace;              /* exec thread only -- no lock needed */
     DWORD instructionsPerSecond = CpuSpeedInstructionsPerSecond((UINT)g_CpuSpeedIndex);
@@ -1461,7 +1488,7 @@ static VOID DpmiInterpreterCpuStore(V86_CPU *cpu, volatile BYTE *tib)
 }
 /* Returns 0 = client exited (INT 21h AH=4Ch), -1 = stopped on an unmodeled/
    unserviceable opcode (already logged). Never touches the kernel PM path. */
-static INT DpmiRunPmInterp(DOS_MACHINE *machine, volatile BYTE *tib)
+INT DpmiRunPmInterp(DOS_MACHINE *machine, volatile BYTE *tib)
 {
     V86_CPU cpu; INT32 guard = 0; CHAR lineBuffer[256]; PSTR lineCursor;
     g_V86SegmentToLinear = DpmiSegmentToLinear;                 /* interpreter now resolves LDT bases */

@@ -23,23 +23,15 @@
 #include "host_timing.h"
 #include "host_install.h"
 
-static VOID HostProfileDump(VOID);
 static VOID WowIcaDeliver(DOS_MACHINE *machine, volatile BYTE *tib, UINT steps);
-static INT  ModeYInterpServes(VOID);      /* fwd: north star 1, design C */
-static VOID ModeYRingDump(PCSTR why);  /* fwd: north star 1, design C */
-static INT InterpreterMemoryPageOk(UINT32 linear);        /* fwd: page-validity guard, defined with V86HostRead8 */
 static BYTE  g_FaultTable[DOS_FLTSITE_N * DPMI_FAULT_TABLE_ENTRY] __attribute__((aligned(16)));
 static BYTE  g_FaultStack[DPMI_FAULT_STK_SIZE] __attribute__((aligned(16)));   /* #205 */
 static struct _DPMI_DESCRIPTOR { DWORD Base, Limit; BYTE Access, Flags; } g_Ldt[DPMI_LDT_MAX];
 static VOID HostFullscreenToggle(HWND window);
-static VOID ModeYGr4CloseRun(VOID);       /* defined with the GR4 counters below */
-static VOID ModeYRemapSelectBody(PVOID context, INT mask);
-static VOID InterpreterMemoryBadNote(UINT32 linear, INT write);   /* defined after v86interp.h (needs icpu) */
 static VOID DpmiInstall(INT index);           /* defined just below; used by the helper */
 static VOID WowShadowPut(INT index);         /* GH #128: keep the descriptor shadow in step */
 static VOID DpmiBreakpointArm(VOID);               /* fwd: a new region may hold a requested BP */
 static VOID DpmiBreakpointRearmPending(DWORD currentLinear);   /* fwd: re-plant stepped-over breakpoints */
-static INT DpmiServicePmInt(DOS_MACHINE *machine, volatile BYTE *tib, DWORD vector, UINT steps);
 static VOID DpmiEnsurePmReturnSelector(VOID);   /* fwd: shared PM-return catcher installer (#2b + 0303) */
 /* ── ★★★ THE NESTED RUN: CALL 16-BIT CODE AND WAIT FOR THE ANSWER. (s89, #162) ─────
      Every call into Win16 code so far was ARRANGED from a BOP and taken on the way out
@@ -57,19 +49,6 @@ static INT WowCall16SyncEx(DWORD proc, WORD ds, const WORD *args, INT argumentCo
                               WORD hwnd, WORD message, WORD *result,
                               BYTE *blob, INT blobLength, INT blobArgument,
                               const INT *fix, INT fixupCount);
-/* The interpreter templates' host callbacks, then the templates themselves. */
-static inline __attribute__((always_inline)) BYTE V86HostRead8(UINT32 linear);
-static inline __attribute__((always_inline)) VOID V86HostWrite8(UINT32 linear, BYTE value);
-static inline __attribute__((always_inline)) const volatile BYTE *V86HostCodePointer(UINT32 linear);
-static UINT32 V86HostIn(WORD port, INT width);
-static VOID V86HostOut(WORD port, INT width, UINT32 byteValue);
-static BYTE Pm32HostRead8(UINT32 linear);
-static VOID Pm32HostWrite8(UINT32 linear, BYTE value);
-static INT Pm32HostCanAccess(UINT32 linear, INT width, INT isWrite);
-static UINT32 Pm32HostIn(WORD port, INT width);
-static VOID Pm32HostOut(WORD port, INT width, UINT32 value);
-#include "v86interp.h"
-#include "pm32interp.h"
 /* State used from a file other than its owner's (tentative definitions). */
 static WORD g_DsProbe[DSPROBE_MAX];
 static INT g_DsProbeCount;
@@ -102,16 +81,8 @@ static DWORD g_PmIrqReflects;
 static UINT g_CaptureMs;
 static DWORD g_CaptureDelayMs, g_CaptureStart;
 static INT g_Capture;
-static INT g_NoA000;
 static INT g_NoPmPatch;
 static DWORD g_NoPmPatchMinimum;
-static INT g_P12Offset;
-static INT g_ModeYInterpOffset;
-static INT g_ModeYInterp;
-static DWORD g_ModeYSlices, g_ModeYInstructions, g_ModeYBails, g_ModeYBailMp;
-static INT g_ModeYRingOn;
-static INT g_ModeYPmOffset;
-static INT g_ModeYPmDetect;
 static volatile DWORD g_DpmiEnterCs;
 static volatile DWORD g_DpmiEnterEip;
 static volatile DWORD g_DpmiLastEvent;
@@ -151,30 +122,6 @@ static WORD g_PmTransferParagraphs;
 static INT g_LowLevelKeyboardOn;
 static UINT g_DmaPollOverflow;
 static UINT g_PollStackOverflow;
-static PVOID g_ModeYView[MODEY_NSEC];
-static INT g_ModeYRemap;
-static DWORD g_ModeYSwaps, g_ModeYFanouts, g_ModeYFail;
-static DWORD g_ModeYSelectorCalls;
-static DWORD g_ModeYSelectorSame;
-static DWORD g_ModeYSelectorZero;
-static DWORD g_ModeYTimelineT0;
-static DWORD g_ModeYTimelineIns[YTL_SECS];
-static UINT64 g_ModeYTimelineInterpreterCycles[YTL_SECS];
-static DWORD g_ModeYFanoutBarWrites[2];
-static DWORD g_ModeYFanoutBarDistinct[2];
-static DWORD g_ModeYFanoutBar4Way[2];
-static DWORD g_ModeYSampleCrossSame[2], g_ModeYSampleCrossDiff[2], g_ModeYSampleWrites[2];
-static DWORD g_ModeYSampleCrossEqualBytes[2], g_ModeYSampleCrossTotalBytes[2];
-static DWORD g_ModeYSampleP1Equal[2][4], g_ModeYSampleP1Total[2][4];
-static DWORD g_ModeYSampleDeliveredEqual[2], g_ModeYSampleDeliveredTotal[2];
-static DWORD g_ModeYLatchOk, g_ModeYLatchUnsolved, g_ModeYLatchDescriptor;
-static DWORD g_ModeYGr4Calls, g_ModeYGr4Mismatch, g_ModeYGr4Pair[4][6];
-static DWORD g_ModeYGr4SinceSelector, g_ModeYGr4Runs[10], g_ModeYGr4RunPlanes[VIDEO_PLANES];
-static DWORD g_ModeYGr4Moves;
-static INT g_A000Protection;
-static INT g_P12Interp;
-static DWORD g_InterpreterMemoryBadReads, g_InterpreterMemoryBadWrites, g_InterpreterMemoryBadLogged;
-static const V86_CPU *g_InterpreterCpu;
 static WORD g_WowLastId;
 static WORD g_WowLastFrom;
 static INT g_HostPoolSpill;
@@ -190,7 +137,6 @@ static DWORD g_WowSyncWrites;
 /* Functions called from a file other than their own. */
 static VOID DsProbeLoad(VOID);
 static VOID WowLogFlush(PSTR base, PSTR *logCursor);
-static VOID PlanesDumpBeside(PCSTR bitmapPath);
 static INT LaunchIsWow(PCSTR command);
 static INT WowModuleOfSelector(WORD selector);
 static INT WowUserAnchor(WORD thunkId, WORD argumentBytes, WORD returnStub);
@@ -210,27 +156,6 @@ static VOID HostPanicRelease(VOID);
 static DWORD WINAPI CaptureWatchdogThread(LPVOID parameter);
 static VOID HostFullscreenToggle(HWND window);
 static DWORD WINAPI UiThread(LPVOID argument);
-static UINT64 ModeYTimelineRdtsc(VOID);
-static VOID ModeYRemapFlushReport(VOID);
-static INT ModeYRemapInitialize(VOID);
-static VOID ModeYRemapSelect(PVOID context, INT mask);
-static VOID ModeYBailNote(DWORD cs, DWORD ip, const volatile BYTE *bytes);
-static VOID ModeYRemapSelectBody(PVOID context, INT mask);
-static BYTE *ModeYRemapPlane(PVOID context, INT plane);
-static VOID ModeYGr4CloseRun(VOID);
-static VOID ModeYRemapReadMap(PVOID context, INT plane);
-static VOID ModeYRemapWriteMode(PVOID context, INT writeMode);
-static INT ModeYInterpServes(VOID);
-static INT ModeYNeedsInterp(VOID);
-static INT InterpreterMemoryPageOk(UINT32 linear);
-static INT ModeYPmNeedsInterp(VOID);
-static VOID ModeYPmRun(volatile BYTE *tib);
-static VOID InterpreterMemoryBadNote(UINT32 linear, INT write);
-static UINT32 HostGuestPc(VOID);
-static VOID ModeYRingDump(PCSTR why);
-static VOID HostProfileStart(VOID);
-static VOID HostProfileDump(VOID);
-static INT32 HostInterpPaced(volatile BYTE *tib, INT32 cap);
 static LONG CALLBACK DpmiCrashVeh(EXCEPTION_POINTERS *pointers);
 static LONG WINAPI HostUnhandledFilter(EXCEPTION_POINTERS *pointers);
 static DWORD WINAPI DpmiWatchdog(LPVOID param);
@@ -246,7 +171,6 @@ static VOID DpmiInstall(INT index);
 static VOID DpmiInstallFaultTrampoline(VOID);
 static VOID DpmiArmFaultTrampoline(volatile BYTE *tib, WORD flag);
 static DWORD DpmiRecoverFlatEip(DWORD lo16, BYTE vector, INT *candidateCount);
-static INT DpmiSelectorDescriptor(WORD selector, UINT32 *accessRights, UINT32 *limit);
 static DWORD DpmiBopVector(DWORD csValue, DWORD eip);
 static DWORD DpmiPmEip(volatile BYTE *tib);
 static VOID DpmiPatchCodeRegion(DWORD base, DWORD limit, INT is32BitRegion);
@@ -297,7 +221,6 @@ static PSTR PmInt21Transfer(DOS_MACHINE *machine, volatile BYTE *tib, DWORD ah, 
 static PSTR PmInt21Lfn(DOS_MACHINE *machine, volatile BYTE *tib, PSTR cursor);
 static INT DpmiReflectIrqToRm(DOS_MACHINE *machine, volatile BYTE *tib, UINT vector);
 static INT DpmiServicePmIntBody(DOS_MACHINE *machine, volatile BYTE *tib, DWORD vector, UINT steps);
-static INT DpmiServicePmInt(DOS_MACHINE *machine, volatile BYTE *tib, DWORD vector, UINT steps);
 static VOID DpmiEnsurePmReturnSelector(VOID);
 static INT WowCall16Sync(DWORD proc, WORD ds, const WORD *args, INT argumentCount, WORD hwnd, WORD message, WORD *result);
 static DWORD ShimGlobal16(INT operation, DWORD firstArgument, DWORD secondArgument);
@@ -311,6 +234,5 @@ static INT DpmiInjectPmIrq(DOS_MACHINE *machine, volatile BYTE *tib, UINT interr
 static VOID WowIcaDeliver(DOS_MACHINE *machine, volatile BYTE *tib, UINT steps);
 static INT DpmiInjectPmMouseCallback(DOS_MACHINE *machine, volatile BYTE *tib, UINT steps);
 static VOID DpmiClientTeardown(VOID);
-static INT DpmiRunPmInterp(DOS_MACHINE *machine, volatile BYTE *tib);
 
 #endif

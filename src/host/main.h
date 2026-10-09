@@ -54,4 +54,17 @@ extern PCSTR g_DosVersionWhy;
 extern NTVDMEX_SETTINGS g_SettingsDisk;
 extern INT g_DspVersionForced;
 extern UINT g_ConventionalKbWant;
+extern INT g_NoA000;
+extern DWORD g_ModeYSelectorCalls;
+extern DWORD g_ModeYSelectorSame;
+extern DWORD g_ModeYSelectorZero;
+extern DWORD g_ModeYTimelineIns[YTL_SECS];
+extern UINT64 g_ModeYTimelineInterpreterCycles[YTL_SECS];
+extern DWORD g_ModeYFanoutBarWrites[2];
+extern DWORD g_ModeYFanoutBarDistinct[2];
+extern DWORD g_ModeYFanoutBar4Way[2];
+extern DWORD g_ModeYLatchDescriptor;
+extern DWORD g_ModeYLatchUnsolved;
+extern DWORD g_ModeYLatchOk;
+extern INT g_A000Protection;
 #endif

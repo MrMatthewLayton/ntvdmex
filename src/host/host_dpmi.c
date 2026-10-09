@@ -548,7 +548,7 @@ static DWORD DpmiRecoverFlatEip(DWORD lo16, BYTE vector, INT *candidateCount)
     return (matches == 1) ? found : 0;
 }
 
-static INT DpmiSelectorDescriptor(WORD selector, UINT32 *accessRights, UINT32 *limit)
+INT DpmiSelectorDescriptor(WORD selector, UINT32 *accessRights, UINT32 *limit)
 {
     INT index = DPMI_SELECTOR_INDEX(selector & WORD_MASK);
     if (index < 1 || index >= DPMI_LDT_LEGACY_LIMIT || g_Ldt[index].Access == 0) return 0;
@@ -2499,7 +2499,7 @@ static VOID DpmiPmCarryToFrame(volatile BYTE *tib)
 /* The service, and then the one thing it cannot say in a register. Kept as a wrapper
    rather than repeated at the ~90 `return 1` sites above, because a rule enforced in
    one place is a rule and a rule repeated ninety times is a lottery. */
-static INT DpmiServicePmInt(DOS_MACHINE *machine, volatile BYTE *tib, DWORD vector,
+INT DpmiServicePmInt(DOS_MACHINE *machine, volatile BYTE *tib, DWORD vector,
                                UINT steps)
 {
     INT status;

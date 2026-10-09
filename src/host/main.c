@@ -107,7 +107,6 @@ CHAR             g_TextFontLive[NTVDMEX_PATH_MAX];
 
 #include "host_internal.h"
 #include "host_diag.c"
-#include "host_video.c"
 #include "host_dpmi.c"
 #include "host_dpmi_int.c"
 #include "host_wow.c"
@@ -494,7 +493,7 @@ static HANDLE         g_OnceMutex    = NULL; /* the single-instance mutex (WinMa
 static DWORD g_IoViaDirect = 0, g_IoViaRetro = 0;
 static LONGLONG g_HostTimeLast;           /* QPC of the last VdmRunGuest return; 0 = none */
 static INT  g_HostEventLast;
-static INT            g_NoA000       = 0;  /* NOA000_FLAG present: leave A0000 mapped (diagnostic) */
+INT            g_NoA000       = 0;  /* NOA000_FLAG present: leave A0000 mapped (diagnostic) */
 static INT            g_NoPmPatch    = 0;  /* NOPMPATCH_FLAG present: scan no code regions (diagnostic) */
 static INT            g_Fault32Warned  = 0;  /* said once: NT's 16-bit frame cannot locate a flat client's INT */
 static DWORD          g_NoPmPatchMinimum = 0; /* ...or only regions >= this many bytes */
@@ -790,20 +789,20 @@ UINT g_ConventionalKbWant = BIOS_CONV_KB_MAX;
          sel_calls   = swaps + sel_same + sel_zero + failed
      A residual in either line is a path nobody has accounted for. This is deliberately
      an IDENTITY rather than a rate: a rate cannot show a shape, and 8.6% has no shape. */
-static DWORD  g_ModeYSelectorCalls = 0;   /* ModeYRemapSelect() entered with the remap live  */
-static DWORD  g_ModeYSelectorSame  = 0;   /* ...and the window was already where it wanted     */
-static DWORD  g_ModeYSelectorZero  = 0;   /* ...and the mask selected no plane at all          */
-static DWORD  g_ModeYTimelineIns[YTL_SECS];   /* instructions interpreted for mode Y (s80, design C) */
-static UINT64 g_ModeYTimelineInterpreterCycles[YTL_SECS];   /* ...and the host cycles that took */
-static DWORD g_ModeYFanoutBarWrites[2];      /* fan-out writes to bar bytes, by band  */
-static DWORD g_ModeYFanoutBarDistinct[2];    /* ...distinct offsets, by band          */
-static DWORD g_ModeYFanoutBar4Way[2];        /* ...of which the mask was all four     */
-static DWORD  g_ModeYLatchOk = 0, g_ModeYLatchUnsolved = 0, g_ModeYLatchDescriptor = 0;
+DWORD  g_ModeYSelectorCalls = 0;   /* ModeYRemapSelect() entered with the remap live  */
+DWORD  g_ModeYSelectorSame  = 0;   /* ...and the window was already where it wanted     */
+DWORD  g_ModeYSelectorZero  = 0;   /* ...and the mask selected no plane at all          */
+DWORD  g_ModeYTimelineIns[YTL_SECS];   /* instructions interpreted for mode Y (s80, design C) */
+UINT64 g_ModeYTimelineInterpreterCycles[YTL_SECS];   /* ...and the host cycles that took */
+DWORD g_ModeYFanoutBarWrites[2];      /* fan-out writes to bar bytes, by band  */
+DWORD g_ModeYFanoutBarDistinct[2];    /* ...distinct offsets, by band          */
+DWORD g_ModeYFanoutBar4Way[2];        /* ...of which the mask was all four     */
+DWORD  g_ModeYLatchOk = 0, g_ModeYLatchUnsolved = 0, g_ModeYLatchDescriptor = 0;
 
 /* --- planar mode-12h: trap direct A0000 writes through the VGA write engine -- */
 
 
-static INT g_A000Protection = 0;
+INT g_A000Protection = 0;
 
 /* The mode-12h trap-storm escape hatch. By default V86 runs on the real CPU and
    each VGA access (memory OR port) is emulated one-at-a-time as a device access
