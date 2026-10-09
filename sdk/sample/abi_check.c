@@ -29,17 +29,19 @@
 /* C89-compatible static assert: a negative-width array is a hard error. */
 #define ABI_ASSERT(name, cond)  typedef char abi_assert_##name[(cond) ? 1 : -1]
 
-/* the register struct, which crosses the ABI by pointer: */
-ABI_ASSERT(regs_size, sizeof(ntvdmex_regs) == sizeof(NTVDD_REGISTERS));
-
 /* The SDK keeps its own (frozen, public) member names; the in-tree ones follow the
  * house style since #333, so each pair is named on both sides.
  */
 #define ABI_OFF(sdkMember, treeMember) \
     ABI_ASSERT(off_##sdkMember, offsetof(ntvdmex_regs, sdkMember) == offsetof(NTVDD_REGISTERS, treeMember))
+
+/* the register struct, which crosses the ABI by pointer: */
+ABI_ASSERT(regs_size, sizeof(ntvdmex_regs) == sizeof(NTVDD_REGISTERS));
 ABI_OFF(eax, Eax); ABI_OFF(ebx, Ebx); ABI_OFF(ecx, Ecx); ABI_OFF(edx, Edx);
 ABI_OFF(esi, Esi); ABI_OFF(edi, Edi); ABI_OFF(ebp, Ebp);
 ABI_OFF(ds,  Ds);  ABI_OFF(es,  Es);  ABI_OFF(cf,  CarryFlag);
+
+int NtvdmexAbiCheck(void);
 
 /* the callback signatures:
  * sizeof cannot see a parameter list, so the real proof is ASSIGNMENT: each
@@ -81,7 +83,6 @@ static void AbiProbeFrame(void *self)
     (void)self;
 }
 
-int NtvdmexAbiCheck(void);
 int NtvdmexAbiCheck(void)
 {
     PVDD_PORT_IN_ROUTINE      treeIn    = AbiProbeIn;

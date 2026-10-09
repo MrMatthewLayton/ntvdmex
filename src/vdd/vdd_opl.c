@@ -18,6 +18,41 @@
 #define OPL_TIMER_MAX       0xFF    /* A timer overflows past this */
 #define OPL_FAILED          (-1)
 
+/* --- timers --------------------------------------------------------------- */
+/* Each timer counts UP from its preset; overflowing past 255 raises its status
+ * flag (unless masked) and reloads the preset, so the period is
+ * (256 - preset) * resolution. AdLib detection is exactly this measurement:
+ * preset 0xFF gives one 80us tick, which is why a detect that sees no flag
+ * concludes there is no card.
+ */
+/* nosb.flag: no FM chip fitted. Kept as its own flag rather than reading the Sound
+ * Blaster's, because the off-VM suites link these two VDDs SEPARATELY -- referencing
+ * vdd_sb.c's copy from here broke `opl_synth_test` with an undefined symbol and cost
+ * half the gate (580 checks -> 244) until run.sh caught it.
+ */
+INT g_OplAbsent = 0;
+
+/* 0xBD's low five bits key the percussion voices. MEASURED, not assumed -- each
+ * operator was silenced in turn and the drum that went quiet named the owner
+ * (tools/oplref/oplprobe.c, experiment M):
+ *   bit 0 hi-hat -> op13      bit 1 cymbal -> op17     bit 2 tom-tom -> op14
+ *   bit 3 snare  -> op16      bit 4 bass drum -> channel 6, BOTH operators
+ * The bass drum is an ordinary two-operator FM voice; the other four are single
+ * operators heard directly.
+ *
+ * -- A DRUM BIT AND ITS CHANNEL'S OWN KEY BIT ARE OR'D (#139). MEASURED
+ *  (`oplprobe keyor`): with channel 8's B0 key already on, setting the tom-tom
+ *  bit leaves the reference's output bit-identical -- no restart, because the
+ *  operator was already keyed -- and a channel 6-8 key bit written DURING
+ *  rhythm mode still keys that channel's operators, which then sound as the
+ *  drums they now are. So each of operators 12-17 is keyed while (its channel's
+ *  key bit) OR (its drum bit, in rhythm mode) is set, and restarts only on a
+ *  rising edge of that OR. This once ignored channel keys in rhythm mode and
+ *  re-keyed on every drum bit, which restarted drums that were already sounding
+ *  -- harmless while three of them were silent, audible once they were not.
+ */
+static const BYTE g_OplRhythmBit[OPL_RHYTHM_OPERATORS] = { 0x10, 0x01, 0x04, 0x10, 0x08, 0x02 };  /* op12-17 */
+
 /* The OPL's 18 operators are addressed by a register offset that deliberately
  * skips 0x06/0x07, 0x0E/0x0F: offsets are 0x00-0x05, 0x08-0x0D, 0x10-0x15, in
  * three banks of six. Channel n's two operators are the n-th slot of a bank and
@@ -95,20 +130,6 @@ static INT OplOffsetToOperator(BYTE registerNumber)
     return bank * OPL_OPERATOR_BANK_SLOTS + slot;
 }
 
-/* --- timers --------------------------------------------------------------- */
-/* Each timer counts UP from its preset; overflowing past 255 raises its status
- * flag (unless masked) and reloads the preset, so the period is
- * (256 - preset) * resolution. AdLib detection is exactly this measurement:
- * preset 0xFF gives one 80us tick, which is why a detect that sees no flag
- * concludes there is no card.
- */
-/* nosb.flag: no FM chip fitted. Kept as its own flag rather than reading the Sound
- * Blaster's, because the off-VM suites link these two VDDs SEPARATELY -- referencing
- * vdd_sb.c's copy from here broke `opl_synth_test` with an undefined symbol and cost
- * half the gate (580 checks -> 244) until run.sh caught it.
- */
-INT g_OplAbsent = 0;
-
 static VOID OplTimerStep(WORD *count, BYTE preset, BYTE mask, BYTE flag, BYTE *status)
 {
     if (++(*count) > OPL_TIMER_MAX)
@@ -158,27 +179,6 @@ static VOID OplKeyOperator(POPL_STATE state, INT operatorIndex, INT isOn)
         state->Operators[operatorIndex].EnvelopeState = OPL_ENVELOPE_RELEASE;
     }
 }
-
-/* 0xBD's low five bits key the percussion voices. MEASURED, not assumed -- each
- * operator was silenced in turn and the drum that went quiet named the owner
- * (tools/oplref/oplprobe.c, experiment M):
- *   bit 0 hi-hat -> op13      bit 1 cymbal -> op17     bit 2 tom-tom -> op14
- *   bit 3 snare  -> op16      bit 4 bass drum -> channel 6, BOTH operators
- * The bass drum is an ordinary two-operator FM voice; the other four are single
- * operators heard directly.
- *
- * -- A DRUM BIT AND ITS CHANNEL'S OWN KEY BIT ARE OR'D (#139). MEASURED
- *  (`oplprobe keyor`): with channel 8's B0 key already on, setting the tom-tom
- *  bit leaves the reference's output bit-identical -- no restart, because the
- *  operator was already keyed -- and a channel 6-8 key bit written DURING
- *  rhythm mode still keys that channel's operators, which then sound as the
- *  drums they now are. So each of operators 12-17 is keyed while (its channel's
- *  key bit) OR (its drum bit, in rhythm mode) is set, and restarts only on a
- *  rising edge of that OR. This once ignored channel keys in rhythm mode and
- *  re-keyed on every drum bit, which restarted drums that were already sounding
- *  -- harmless while three of them were silent, audible once they were not.
- */
-static const BYTE g_OplRhythmBit[OPL_RHYTHM_OPERATORS] = { 0x10, 0x01, 0x04, 0x10, 0x08, 0x02 };  /* op12-17 */
 
 static INT OplRhythmHeld(INT operatorIndex, BYTE bd, BYTE channelKeys)
 {

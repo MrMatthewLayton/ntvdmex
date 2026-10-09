@@ -28,9 +28,39 @@
 #include <stdint.h>
 #include "../../src/wow/ne.h"
 
+/* build a synthetic NE in memory: */
+#define HDR         0x40
+#define SEGTAB      0x40    /* Relative to HDR */
+#define ENTTAB      0x60
+#define SECSHIFT    4
+
+#define LRES        0x100   /* Resident names, relative to HDR */
+#define LNRES       0x300   /* Non-resident, ABSOLUTE */
+
+/* Two segments. Seg1 = code with relocations, seg2 = data.
+ * Relocation records exercise: SEGMENT/chained, FARADDR/chained, OFFSET16/additive,
+ * and an INTERNALREF whose target is a MOVEABLE entry ordinal. With `imports`, two
+ * more records arrive: an IMPORTORDINAL and an IMPORTNAME, both against TESTLIB.
+ */
+#define MODTAB      0x80    /* Relative to HDR */
+#define IMPTAB      0x90
+
 static INT g_Passes;
 static INT g_Failures;
 static INT g_Skips;
+
+static BYTE g_Image[0x4000];
+
+/* a synthetic LIBRARY to import from:
+ * Exports ordinal 1 (fixed, exported), 2 (moveable, exported, reachable by the name
+ * BAR from the NON-resident table) and 3 (present but NOT exported). Its own name is
+ * TESTLIB, which is what an importer refers to it by.
+ */
+static BYTE g_LibraryImage[0x1000];
+static BYTE g_LibrarySegmentMemory[0x200];
+
+static BYTE g_SegmentMemory[2][0x200];
+
 static VOID NeTestCheck(INT condition, PCSTR description)
 {
     if (condition)
@@ -51,14 +81,6 @@ static VOID NeTestSkip(PCSTR description)
     printf("  SKIP  %s\n", description);
 }
 
-/* build a synthetic NE in memory: */
-#define HDR         0x40
-#define SEGTAB      0x40    /* Relative to HDR */
-#define ENTTAB      0x60
-#define SECSHIFT    4
-
-static BYTE g_Image[0x4000];
-
 static VOID NeTestWrite16(UINT32 offset, WORD value)
 {
     g_Image[offset] = (BYTE)value;
@@ -70,17 +92,6 @@ static VOID NeTestWrite32(UINT32 offset, UINT32 value)
     NeTestWrite16(offset, (WORD)value);
     NeTestWrite16(offset+2, (WORD)(value>>16));
 }
-
-/* a synthetic LIBRARY to import from:
- * Exports ordinal 1 (fixed, exported), 2 (moveable, exported, reachable by the name
- * BAR from the NON-resident table) and 3 (present but NOT exported). Its own name is
- * TESTLIB, which is what an importer refers to it by.
- */
-static BYTE g_LibraryImage[0x1000];
-static BYTE g_LibrarySegmentMemory[0x200];
-
-#define LRES    0x100   /* Resident names, relative to HDR */
-#define LNRES   0x300   /* Non-resident, ABSOLUTE */
 
 static VOID NeTestLibraryWrite16(UINT32 offset, WORD value)
 {
@@ -171,14 +182,6 @@ static VOID NeTestBuildLibrary(VOID)
     NeTestLibraryWrite32(HDR+0x2C, LNRES);                             /* ABSOLUTE, and a DWORD */
     NeTestLibraryWrite16(HDR+0x20, (WORD)(offset + 1 - LNRES));
 }
-
-/* Two segments. Seg1 = code with relocations, seg2 = data.
- * Relocation records exercise: SEGMENT/chained, FARADDR/chained, OFFSET16/additive,
- * and an INTERNALREF whose target is a MOVEABLE entry ordinal. With `imports`, two
- * more records arrive: an IMPORTORDINAL and an IMPORTNAME, both against TESTLIB.
- */
-#define MODTAB  0x80    /* Relative to HDR */
-#define IMPTAB  0x90
 
 static VOID NeTestBuild(INT imports)
 {
@@ -289,8 +292,6 @@ static VOID NeTestBuild(INT imports)
     NeTestWrite16(relocations+42+6, 8);
     NeTestWrite16(segment1Offset + 0x3A, 0xFFFF);
 }
-
-static BYTE g_SegmentMemory[2][0x200];
 
 INT main(VOID)
 {

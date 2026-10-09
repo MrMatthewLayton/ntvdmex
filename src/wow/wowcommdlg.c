@@ -28,6 +28,15 @@
 #include "wowenum.h"
 #include "wowshell.h"
 
+/* An answer CommDlgExtendedError owes for a call THIS HOST refused before comdlg32
+ * saw it (a wrong lStructSize): comdlg32's own per-thread value would say 0, and
+ * stock says CDERR_STRUCTSIZE (w_cdlg). Cleared by every call that reaches comdlg32.
+ */
+static DWORD g_WowCdlgError = 0;
+
+static WOWCDLG_FIND g_WowCdlgFinds[WOWCDLG_MAX_FIND];
+static UINT         g_WowCdlgFindMessage = 0;     /* "commdlg_FindReplace" */
+
 static DWORD WowCdlgPeekDword(const volatile BYTE *bytes, INT offset)
 {
     return (DWORD)Wow32PeekWord((volatile BYTE *)bytes + offset)
@@ -39,12 +48,6 @@ static VOID WowCdlgPokeDword(volatile BYTE *bytes, INT offset, DWORD value)
     Wow32PokeWord(bytes + offset,     (WORD)(value & WORD_MASK));
     Wow32PokeWord(bytes + offset + WOW_WORD_BYTES, (WORD)(value >> WORD_SHIFT));
 }
-
-/* An answer CommDlgExtendedError owes for a call THIS HOST refused before comdlg32
- * saw it (a wrong lStructSize): comdlg32's own per-thread value would say 0, and
- * stock says CDERR_STRUCTSIZE (w_cdlg). Cleared by every call that reaches comdlg32.
- */
-static DWORD g_WowCdlgError = 0;
 
 static VOID WowCdlgLogFont16To32(const volatile BYTE *logFont16, PLOGFONTA logFont)
 {
@@ -89,9 +92,6 @@ static VOID WowCdlgLogFont32To16(const LOGFONTA *logFont, volatile BYTE *logFont
         logFont16[WOWCDLG_LF16_FACENAME + index] = (index < LF_FACESIZE && logFont->lfFaceName[index]) ? (BYTE)logFont->lfFaceName[index] : 0;
     logFont16[WOWCDLG_LF16_FACENAME + WOWCDLG_LF16_FACESIZE - 1] = 0;
 }
-
-static WOWCDLG_FIND g_WowCdlgFinds[WOWCDLG_MAX_FIND];
-static UINT         g_WowCdlgFindMessage = 0;     /* "commdlg_FindReplace" */
 
 /* Called by WowWinProc for every message to a guest window it would otherwise
  * not relay. Returns 1 if it was a Find/Replace notification and was posted to

@@ -17,11 +17,11 @@
 #include <stdio.h>
 #include <string.h>
 #include "vdd_speaker.h"
+#define CHECK(condition,message) do{ g_Total++; if(condition){printf("  PASS  %s\n",(message));} \
+    else{printf("  FAIL  %s\n",(message)); g_Failures++;} }while(0)
 
 static INT g_Total = 0;
 static INT g_Failures = 0;
-#define CHECK(condition,message) do{ g_Total++; if(condition){printf("  PASS  %s\n",(message));} \
-    else{printf("  FAIL  %s\n",(message)); g_Failures++;} }while(0)
 
 static BYTE g_GuestMemory[0x100000];
 

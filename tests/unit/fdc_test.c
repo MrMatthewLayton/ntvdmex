@@ -29,17 +29,32 @@
 #include <stdio.h>
 #include <string.h>
 #include "vdd_fdc.h"
-
-static INT g_Total = 0;
-static INT g_Failures = 0;
 #define CHECK(condition, message) do {                                  \
         g_Total++;                                               \
         if (condition) { printf("  PASS  %s\n", (message)); }           \
         else      { printf("  FAIL  %s\n", (message)); g_Failures++; }  \
     } while (0)
 
+static INT g_Total = 0;
+static INT g_Failures = 0;
+
 static BYTE g_GuestMemory[0x1000];
 static INT g_Irq6Count;
+
+/* THE DRIVER'S OWN SEND LOOP, BOUNDED. Returns 0 if it would have hung:
+ *
+ * [WARNING]: AND THE RETURN VALUE IS NOT OPTIONAL. The first version of this file
+ * ignored it, and that quietly gutted a check: with 09h missing from the
+ * command length table the chip executed on byte one, went to result phase,
+ * and every one of the eight parameter sends that followed FAILED SILENTLY --
+ * after which the drain found the 7 result bytes it was looking for and the
+ * test passed. A send that would have hung is the single most important thing
+ * this file can observe, so it is counted and asserted rather than returned
+ * into nothing. (The project's own rule: a guard that returns success is a lie
+ * the whole stack repeats.)
+ */
+static INT g_SendFailures;
+
 static VOID FdcTestIrqSink(PVOID context, BYTE irq)
 {
     (VOID)context;
@@ -62,19 +77,6 @@ static VOID FdcTestWrite(PVDD_BUS bus, WORD port, BYTE byteValue)
     VddBusIo(bus, port, 1, 0, &value);
 }
 
-/* THE DRIVER'S OWN SEND LOOP, BOUNDED. Returns 0 if it would have hung:
- *
- * [WARNING]: AND THE RETURN VALUE IS NOT OPTIONAL. The first version of this file
- * ignored it, and that quietly gutted a check: with 09h missing from the
- * command length table the chip executed on byte one, went to result phase,
- * and every one of the eight parameter sends that followed FAILED SILENTLY --
- * after which the drain found the 7 result bytes it was looking for and the
- * test passed. A send that would have hung is the single most important thing
- * this file can observe, so it is counted and asserted rather than returned
- * into nothing. (The project's own rule: a guard that returns success is a lie
- * the whole stack repeats.)
- */
-static INT g_SendFailures;
 static INT FdcTestDriverSend(PVDD_BUS bus, BYTE byte)
 {
     INT spin;

@@ -66,6 +66,7 @@ static BYTE g_VideoMemory[VIDEO_APERTURE_SIZE];
 static BYTE g_GuestMemory[BENCH_GUEST_MEMORY_SIZE];   /* guest memory: init writes the IVT's font vectors */
 static VIDEO_STATE g_Video;
 static UINT64 g_TimeUs = 0;
+
 static UINT64 BenchClock(void)
 {
     return g_TimeUs;

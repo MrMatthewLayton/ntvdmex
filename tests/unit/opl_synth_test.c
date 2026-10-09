@@ -31,18 +31,69 @@
 #include <stdio.h>
 #include <string.h>
 #include "vdd_opl.h"
-
-VOID VddOplRender(POPL_STATE state, INT16 *output, UINT32 frames);
-
-static INT g_Total = 0;
-static INT g_Failures = 0;
 #define CHECK(condition,message) do{ g_Total++; if(condition){printf("  PASS  %s\n",(message));} \
     else{printf("  FAIL  %s\n",(message)); g_Failures++;} }while(0)
 
-#define OPL_NATIVE_HZ   49716
+#define OPL_NATIVE_HZ           49716
+
+/* -- THE OPL2 GOLDEN. A fixed register sequence touching every OPL2 feature the
+ * synth models -- 9 voices, feedback, both connections, the four waveforms
+ * (with WSE), KSL, AM/VIB at full depth, key-offs, rhythm bass drum and
+ * tom-tom -- rendered and hashed. The checksum was taken from the build BEFORE
+ * the OPL3 existed (42a9029); an OPL2 must still produce it sample for sample,
+ * and so must an OPL3 with NEW clear. `which` selects the render path:
+ * 0 mono, 1 the left of the stereo render, 2 its right.
+ *
+ * [CAUTION]: #139 CHANGED THE FULL HASH, DELIBERATELY, AND ONLY FROM THE RHYTHM WRITE ON.
+ * The sequence enters rhythm mode with channel 7 still keyed and then keys the
+ * hi-hat, cymbal and snare -- three voices that were silent before #139 -- and a
+ * drum bit is now OR'd with its channel's key bit (as the reference does), which
+ * also changes what is still sounding after rhythm mode is left. So the golden is
+ * now TWO numbers: OPL2_GOLDEN_MELODIC hashes the 16800 samples BEFORE the first
+ * 0xBD rhythm write and is the pre-OPL3 value's own prefix, unchanged by #139
+ * (a sample-by-sample dump of the old and new builds differs first at sample
+ * 16800); OPL2_GOLDEN is the whole run, re-taken at #139. Against the reference,
+ * the three segments after that point moved from 0.975/0.966/0.980 best-lag
+ * correlation to 0.988/0.983/0.998, the melodic one stayed at 0.9995.
+ */
+#define OPL2_GOLDEN_MELODIC     0xD827E8E0u     /* samples 0-16799: must NEVER change */
+#define OPL2_GOLDEN         0x48947CCEu     /* the whole run, as of #139 (it was
+                                               0xA60B79B9 from 42a9029 until then)  */
+
+/* The noise, one step at a time: u[i] = u[i-9] ^ u[i-23], seeded with the synth's
+ * power-on window (bit k = u[k]); sample m reads u[72(m+1)] (hi-hat) and
+ * u[72(m+1)+6] (snare).
+ */
+#define T_NSAMP     6000
+
+static INT g_Total = 0;
+static INT g_Failures = 0;
 static INT16 g_Samples[OPL_NATIVE_HZ];              /* one second */
 
 static OPL_STATE g_Opl;
+
+/* OPL3 helpers (#232): */
+static INT16 g_StereoSamples[2 * 8192];                /* interleaved L/R */
+static UINT32 g_Hash;
+static UINT32 g_HashMelodic;
+
+/* RHYTHM MODE: SNARE, HI-HAT, CYMBAL (#139):
+ * The rules in vdd_opl_synth.c were measured against a reference core
+ * (tools/oplref/oplprobe rphase / noise / restart / keyor); these checks need no
+ * reference. They restate each rule HERE, independently -- the noise as a
+ * one-bit-at-a-time LFSR rather than the synth's nine-at-once, the phases from
+ * the published F-number formula -- and hold the synth's output to it sample by
+ * sample, through what can be read off a sample without inverting anything:
+ * cymbal  phase B<<9 | 0x080       -> sign is B, magnitude sin(45 deg)
+ * snare   phase S<<9 | (S^n)<<8    -> loud iff S^n, and then its sign is S
+ * hi-hat  phase B<<9 | 0x0D0/0x034 -> sign is B, loud (0x0D0) iff B^n
+ * Each stream is checked from the SECOND sample after its key-on: the first is
+ * still at the envelope's starting attenuation (silent) and carries no phase.
+ */
+static const BYTE g_MultiplierTimesTwo[16] = { 1, 2, 4, 6, 8, 10, 12, 14, 16, 18, 20, 20, 24, 24, 30, 30 };
+static BYTE g_Noise[72 * (T_NSAMP + 2) + 32];
+
+VOID VddOplRender(POPL_STATE state, INT16 *output, UINT32 frames);
 
 /* Operator index -> register offset. The banks skip 0x06/0x07 and 0x0E/0x0F. */
 static BYTE OplSynthTestOperatorRegister(INT operatorIndex)
@@ -101,9 +152,6 @@ static long OplSynthTestRms(const INT16 *samples, INT count)
         accumulator += (long long)samples[index] * samples[index];
     return (long)(accumulator / (count ? count : 1));
 }
-
-/* OPL3 helpers (#232): */
-static INT16 g_StereoSamples[2 * 8192];                /* interleaved L/R */
 
 /* Operator 0-35 -> 9-bit register offset: array 1 is 0x100 + the same layout. */
 static WORD OplSynthTestOperatorRegister9(INT operatorIndex)
@@ -174,31 +222,6 @@ static UINT32 OplSynthTestFnv16(UINT32 hash, const INT16 *samples, INT count)
     return hash;
 }
 
-/* -- THE OPL2 GOLDEN. A fixed register sequence touching every OPL2 feature the
- * synth models -- 9 voices, feedback, both connections, the four waveforms
- * (with WSE), KSL, AM/VIB at full depth, key-offs, rhythm bass drum and
- * tom-tom -- rendered and hashed. The checksum was taken from the build BEFORE
- * the OPL3 existed (42a9029); an OPL2 must still produce it sample for sample,
- * and so must an OPL3 with NEW clear. `which` selects the render path:
- * 0 mono, 1 the left of the stereo render, 2 its right.
- *
- * [CAUTION]: #139 CHANGED THE FULL HASH, DELIBERATELY, AND ONLY FROM THE RHYTHM WRITE ON.
- * The sequence enters rhythm mode with channel 7 still keyed and then keys the
- * hi-hat, cymbal and snare -- three voices that were silent before #139 -- and a
- * drum bit is now OR'd with its channel's key bit (as the reference does), which
- * also changes what is still sounding after rhythm mode is left. So the golden is
- * now TWO numbers: OPL2_GOLDEN_MELODIC hashes the 16800 samples BEFORE the first
- * 0xBD rhythm write and is the pre-OPL3 value's own prefix, unchanged by #139
- * (a sample-by-sample dump of the old and new builds differs first at sample
- * 16800); OPL2_GOLDEN is the whole run, re-taken at #139. Against the reference,
- * the three segments after that point moved from 0.975/0.966/0.980 best-lag
- * correlation to 0.988/0.983/0.998, the melodic one stayed at 0.9995.
- */
-#define OPL2_GOLDEN_MELODIC     0xD827E8E0u     /* samples 0-16799: must NEVER change */
-#define OPL2_GOLDEN         0x48947CCEu     /* the whole run, as of #139 (it was
-                                               0xA60B79B9 from 42a9029 until then)  */
-static UINT32 g_Hash;
-static UINT32 g_HashMelodic;
 static VOID OplSynthTestEat(INT which, INT count)
 {
     INT index;
@@ -269,20 +292,6 @@ static UINT32 OplSynthTestGoldenRun(INT isOpl3, INT which)
     return g_Hash;
 }
 
-/* RHYTHM MODE: SNARE, HI-HAT, CYMBAL (#139):
- * The rules in vdd_opl_synth.c were measured against a reference core
- * (tools/oplref/oplprobe rphase / noise / restart / keyor); these checks need no
- * reference. They restate each rule HERE, independently -- the noise as a
- * one-bit-at-a-time LFSR rather than the synth's nine-at-once, the phases from
- * the published F-number formula -- and hold the synth's output to it sample by
- * sample, through what can be read off a sample without inverting anything:
- * cymbal  phase B<<9 | 0x080       -> sign is B, magnitude sin(45 deg)
- * snare   phase S<<9 | (S^n)<<8    -> loud iff S^n, and then its sign is S
- * hi-hat  phase B<<9 | 0x0D0/0x034 -> sign is B, loud (0x0D0) iff B^n
- * Each stream is checked from the SECOND sample after its key-on: the first is
- * still at the envelope's starting attenuation (silent) and carries no phase.
- */
-static const BYTE g_MultiplierTimesTwo[16] = { 1, 2, 4, 6, 8, 10, 12, 14, 16, 18, 20, 20, 24, 24, 30, 30 };
 static UINT32 OplSynthTestIncrement(WORD fnum, BYTE block, BYTE mult)
 {
     return ((UINT32)(fnum << block) * g_MultiplierTimesTwo[mult]) >> 1;
@@ -293,12 +302,6 @@ static UINT32 OplSynthTestPhaseBit(UINT32 phase13, UINT32 phase17)
     return (((phase13 >> 2) ^ (phase13 >> 7)) | ((phase13 >> 3) ^ (phase17 >> 5)) | ((phase17 >> 3) ^ (phase17 >> 5))) & 1;
 }
 
-/* The noise, one step at a time: u[i] = u[i-9] ^ u[i-23], seeded with the synth's
- * power-on window (bit k = u[k]); sample m reads u[72(m+1)] (hi-hat) and
- * u[72(m+1)+6] (snare).
- */
-#define T_NSAMP     6000
-static BYTE g_Noise[72 * (T_NSAMP + 2) + 32];
 static VOID OplSynthTestNoiseInitialize(VOID)
 {
     INT index;

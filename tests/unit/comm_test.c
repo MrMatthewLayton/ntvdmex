@@ -36,18 +36,31 @@
 #include <stdio.h>
 #include <string.h>
 #include "vdd_comm.h"
-
-static INT g_Total = 0;
-static INT g_Failures = 0;
 #define CHECK(condition,message) do{ g_Total++; if(condition){printf("  PASS  %s\n",(message));} \
     else{printf("  FAIL  %s\n",(message)); g_Failures++;} }while(0)
 
+#define CAP                 64
+
+#define BASE                0x3F8
+
+#define wr8(port,value)     CommTestWrite((port),(value))
+
+static INT g_Total = 0;
+static INT g_Failures = 0;
+
 static VDD_BUS    g_Bus;
 static COMM_STATE g_Comm;
-
-#define CAP     64
 static BYTE g_Transmitted[CAP];
 static INT     g_TransmittedCount;
+
+/* Every IRQ the device raised, by line. The device has no "lower" -- the PIC
+ * sees an edge per raise -- so a COUNT is the whole observable.
+ */
+static INT g_IrqCounts[16];
+
+static BYTE g_PrinterBytes[CAP];
+static INT     g_PrinterCount;
+
 static VOID CommTestSink(PVOID context, INT port, BYTE byteValue)
 {
     (VOID)context;
@@ -56,10 +69,6 @@ static VOID CommTestSink(PVOID context, INT port, BYTE byteValue)
         g_Transmitted[g_TransmittedCount++] = byteValue;
 }
 
-/* Every IRQ the device raised, by line. The device has no "lower" -- the PIC
- * sees an edge per raise -- so a COUNT is the whole observable.
- */
-static INT g_IrqCounts[16];
 static VOID CommTestIrqSink(PVOID context, BYTE irq)
 {
     (VOID)context;
@@ -67,8 +76,6 @@ static VOID CommTestIrqSink(PVOID context, BYTE irq)
         ++g_IrqCounts[irq];
 }
 
-static BYTE g_PrinterBytes[CAP];
-static INT     g_PrinterCount;
 static VOID CommTestPrinterSink(PVOID context, INT port, BYTE byteValue)
 {
     (VOID)context;
@@ -77,7 +84,6 @@ static VOID CommTestPrinterSink(PVOID context, INT port, BYTE byteValue)
         g_PrinterBytes[g_PrinterCount++] = byteValue;
 }
 
-#define BASE    0x3F8
 static VOID CommTestWrite(WORD port, BYTE byteValue)
 {
     UINT32 value=byteValue;
@@ -92,8 +98,6 @@ static BYTE CommTestRead(WORD port)
     VddBusIo(&g_Bus,port,1,1,&value);
     return (BYTE)value;
 }
-
-#define wr8(port,value)     CommTestWrite((port),(value))
 
 static VOID CommTestInt14(BYTE ah, BYTE al, WORD dx, PNTVDD_REGISTERS registers)
 {

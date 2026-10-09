@@ -15,6 +15,32 @@
 #include <string.h>
 #include "vdd_video.h"
 #include "vga_font.h"
+#define CHECK(condition,message) do{ g_Total++; if(condition){printf("  PASS  %s\n",(message));} \
+    else{printf("  FAIL  %s\n",(message)); g_Failures++;} }while(0)
+
+/* #324: the text frame's stride -- cols x the live cell width (9 dots in VGA text). */
+#define TXW     (g_Video.Columns * VddVideoTextCellWidth(&g_Video))
+
+/* Fake microsecond clock for the 0x3DA retrace timing tests (T17). The VDD takes
+ * its timebase as a hook so the host can hand it QueryPerformanceCounter and the
+ * battery can hand it a value it controls -- which makes CRT timing, normally the
+ * least testable thing in an emulator, an ordinary deterministic assertion.
+ */
+UINT64 g_FakeMicroseconds = 0;
+
+static INT g_Total = 0;
+static INT g_Failures = 0;
+
+static BYTE g_GuestMemory[0x100000];          /* guest memory for INT 10h ES:BP/ES:DX */
+
+/* The same trick for the guest's CS:IP. The site instruments all key on it, so
+ * without a hook the battery exercises the VGA engine and NONE of the tables that
+ * are used to reason about a guest -- which is how they shipped unverified.
+ */
+static UINT32 g_FakePc = 0;
+
+static BYTE g_VideoMemory[VIDEO_APERTURE_SIZE]; /* the video aperture (A0000) stand-in */
+static VIDEO_STATE g_Video;
 
 /* #322: the host fills the character tables from the system's fonts at start-up; off-VM
  * there are no fonts, so the tables get a deterministic pattern with every glyph lit.
@@ -60,29 +86,11 @@ static INT VideoTestClaimsPort(const VDD_BUS *bus, WORD port)
     return 0;
 }
 
-static INT g_Total = 0;
-static INT g_Failures = 0;
-#define CHECK(condition,message) do{ g_Total++; if(condition){printf("  PASS  %s\n",(message));} \
-    else{printf("  FAIL  %s\n",(message)); g_Failures++;} }while(0)
-
-static BYTE g_GuestMemory[0x100000];          /* guest memory for INT 10h ES:BP/ES:DX */
-
-/* Fake microsecond clock for the 0x3DA retrace timing tests (T17). The VDD takes
- * its timebase as a hook so the host can hand it QueryPerformanceCounter and the
- * battery can hand it a value it controls -- which makes CRT timing, normally the
- * least testable thing in an emulator, an ordinary deterministic assertion.
- */
-UINT64 g_FakeMicroseconds = 0;
 static UINT64 VideoTestFakeClock(VOID)
 {
     return g_FakeMicroseconds;
 }
 
-/* The same trick for the guest's CS:IP. The site instruments all key on it, so
- * without a hook the battery exercises the VGA engine and NONE of the tables that
- * are used to reason about a guest -- which is how they shipped unverified.
- */
-static UINT32 g_FakePc = 0;
 static UINT32 VideoTestFakePc(VOID)
 {
     return g_FakePc;
@@ -117,9 +125,6 @@ static VOID VideoTestWriteCrtc(VDD_BUS *bus, BYTE registerIndex, BYTE byteValue)
     VddBusIo(bus, 0x3D5, 1, 0, &value);
 }
 
-static BYTE g_VideoMemory[VIDEO_APERTURE_SIZE]; /* the video aperture (A0000) stand-in */
-static VIDEO_STATE g_Video;
-
 static PBYTE VideoTestTextCell(INT row, INT column)
 {
     return g_VideoMemory + VIDEO_TEXT_OFFSET + (row*g_Video.Columns+column)*2;
@@ -135,8 +140,6 @@ static BYTE VideoTestCellAttribute(INT row, INT column)
     return VideoTestTextCell(row,column)[1];
 }
 
-/* #324: the text frame's stride -- cols x the live cell width (9 dots in VGA text). */
-#define TXW     (g_Video.Columns * VddVideoTextCellWidth(&g_Video))
 static UINT32 VideoTestDacPackReference(BYTE red, BYTE green, BYTE blue)
 {
     return 0xFF000000u | ((UINT32)(red<<2)<<16) | ((UINT32)(green<<2)<<8) | (UINT32)(blue<<2);

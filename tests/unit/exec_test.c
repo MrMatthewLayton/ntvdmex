@@ -64,6 +64,8 @@
 static INT g_Checks;
 static INT g_Failures;
 
+static BYTE g_File[EXEC_TEST_FILE_SIZE];
+
 static VOID ExecTestExpect(PCSTR description, LONG actual, LONG expected)
 {
     ++g_Checks;
@@ -72,8 +74,6 @@ static VOID ExecTestExpect(PCSTR description, LONG actual, LONG expected)
     ++g_Failures;
     printf("  FAIL %-58s got 0x%lX, want 0x%lX\n", description, (long)actual, (long)expected);
 }
-
-static BYTE g_File[EXEC_TEST_FILE_SIZE];
 
 static VOID ExecTestPutWord(UINT offset, UINT value)
 {

@@ -18,11 +18,13 @@
 #include <string.h>
 #include "vdd_audio.h"
 #include "vdd_dma.h"
+#define CHECK(condition,message) do{ g_Total++; if(condition){printf("  PASS  %s\n",(message));} \
+    else{printf("  FAIL  %s\n",(message)); g_Failures++;} }while(0)
+
+#define BASE    0x220
 
 static INT g_Total = 0;
 static INT g_Failures = 0;
-#define CHECK(condition,message) do{ g_Total++; if(condition){printf("  PASS  %s\n",(message));} \
-    else{printf("  FAIL  %s\n",(message)); g_Failures++;} }while(0)
 
 static BYTE g_GuestMemory[0x100000];
 static VDD_BUS g_Bus;
@@ -31,6 +33,7 @@ static OPL_STATE g_Opl;
 static SB_STATE  g_Sb;
 static AUDIO_STATE g_Mixer;
 static INT g_IrqCount;
+static INT16 g_Samples[44100];
 
 static VOID AudioTestIrqSink(PVOID context, BYTE irq)
 {
@@ -45,9 +48,6 @@ static VOID AudioTestWrite(WORD port, BYTE byteValue)
 
     VddBusIo(&g_Bus,port,1,0,&value);
 }
-
-#define BASE    0x220
-static INT16 g_Samples[44100];
 
 static double AudioTestMeasureHz(const INT16 *samples, INT count, INT rate)
 {

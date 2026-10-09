@@ -27,9 +27,188 @@
 #include "wowenum.h"
 #include "host_wow.h"
 #include "host_dpmi.h"
+
+CHAR g_WowUserClipboard[WOWUSER_CLIPBOARD_SIZE];
+INT  g_WowUserClipboardLength;
+WORD g_WowUserClipboardFormat;  /* SetClipboardData's format, for the put */
+
+/* The Win16 task that is running right now. [CAUTION] NOT invented and not derived here:
+ * it is krnl386's own current-task word -- the DGROUP word at offset 0x228,
+ * observed at run time (session 38) to hold the running task's handle -- which
+ * the dispatcher already reads at every BOP for the log -- this just keeps the
+ * last value where `GetWindowTask` can see it. 0 until the first BOP.
+ */
+WORD g_WowUserCurrentTask = 0;
+
+WOWUSER_CLASS g_WowUserClasses[WOWUSER_MAX_CLASS];
+
+WOWUSER_WINDOW g_WowUserWindows[WOWUSER_MAX_WIN];
+/* s92 (#306): the hTask an EnumTaskWindows walk is for (wowenum.h); 0 = any. */
+WORD          g_WowUserEnumTask = 0;
+
+/* krnl386's SEGMENT 1, AS A LIVE SELECTOR:
+ * Needed to call KERNEL exports (see EM_GETHANDLE16), and it costs nothing to
+ * know: the WOW32 common thunk lives in krnl386's segment 1, so the CS at
+ * every WOW32 BOP IS that selector. The host records it there rather than
+ * looking it up -- `wow_module_of_sel()` is a bind-stage table and cannot name
+ * a selector krnl386 allocated at run time, which is the same trap that made
+ * the id-space label print `?` about a segment the dispatcher had identified.
+ */
+WORD g_WowUserKernelSegment = 0;
+
+/* main.c: a 16-bit procedure, now, through the nested run (WowCall16Sync). */
+INT (*g_WowUserCall16)(DWORD procedure, WORD dataSelector, PCWORD arguments, INT argumentCount,
+                              WORD window16, WORD message, PWORD result);
+
+/* Returns 1 if serviced (the caller advances EIP past the BOP), 0 if not.
+ * `note` receives a short human-readable description of what happened, so the
+ * caller's log line can say what was registered rather than just that something was.
+ *
+ * [CAUTION]: CALLED ONLY WHEN THE STUB IS USER'S. The caller checks; this file must never
+ * be reachable from krnl386's id space or the whole point of splitting it is lost.
+ */
+/* The guest's DestroyWindow: the real window goes, its child records are released,
+ * and the guest is TOLD (WM_DESTROY) -- lifted out of USER 0x35 in s82 so that
+ * DefWindowProc's WM_CLOSE (#162) destroys a window the same way. Appends to `note`
+ * at *k; returns 0 if there is no such window.
+ */
+/* s89 (#305 M10): send a message to a guest window NOW, through the nested run
+ * (main.c wires this to WowCall16Sync with the window's own procedure and
+ * instance, exactly as DispatchMessage would choose them). 0 = could not.
+ */
+INT (*g_WowUserSend16)(WORD window16, WORD message, WORD wParam, DWORD lParam, PWORD result);
+/* ...and with a structure as lParam, placed on the guest's stack; `fix` lists the
+ * far pointers inside it that point back into it (main.c: WowSend16Blob).
+ */
+INT (*g_WowUserSend16Blob)(WORD window16, WORD message, WORD wParam, PBYTE blob, INT blobLength,
+                                  const INT *fix, INT fixCount, PWORD result);
+
+WOWUSER_DLGDEF g_WowUserDlgDefaults[WOWCALL_MAX_DEPTH];
+
+static WOWUSER_SYSRES g_WowUserSystemResources[WOWUSER_MAX_SYSRES];
+static INT              g_WowUserSystemResourceCount = 0;
+
+static WOWUSER_PROP g_WowUserProps[WOWUSER_MAX_PROP];
+static INT            g_WowUserPropCount = 0;
+
+static WOWUSER_HOOK g_WowUserHooks[WOWUSER_HOOKS];
+
+static BYTE g_WowUserJournalQueue[WOWUSER_JREC_Q][WOWUSER_EVENTMSG16_SIZE];
+static INT g_WowUserJournalQueueCount;
+static INT g_WowUserIsJournalRecordBusy;
+
+static CHAR g_WowUserResourceProgram[MAX_PATH];
+
+static WOWUSER_MENU g_WowUserMenus[WOWUSER_MAX_MENU];
+static INT            g_WowUserMenuCount = 0;
+
+static const WORD g_WowUserDefWindowProcForwarded[] = {
+    WM_CLOSE,           /* WM_CLOSE: its default is DestroyWindow (see 0x6b) */
+    WM_ERASEBKGND,      /* WM_ERASEBKGND: its DC token is translated (s89) */
+    WM_PAINT,           /* WM_PAINT: the default erases + validates (s89) */
+};
+static INT             g_WowUserClassCount = 0;
+
+/* THE SYSTEM CLASSES ARE THE 32-BIT SIDE'S, WHICH MEANS THEY ARE OURS (Importance = 3):
+ * Measured, not assumed. Under WOW, `USER.EXE` is a THUNK MODULE: every export
+ * funnels to the 32-bit half, which is why `RegisterClass` reaches this host at
+ * all. So the classes Windows itself provides -- the ones no application ever
+ * registers because they are already there -- have nowhere else to come from.
+ * The run says so directly: in a whole SYSEDIT launch there are exactly four
+ * RegisterClass calls, and all four are a program's own (`WOWExecClass`,
+ * `WOWFaxClass`, `mpframe`, `mpchild`). USER never registers one, because in
+ * this architecture it cannot.
+ *
+ * [INFO]: AND THIS IS THE WALL THE FIRST 16-BIT CALLBACK UNCOVERED. With WM_CREATE
+ * delivered, SYSEDIT's frame procedure runs and does the one thing it exists
+ * to do -- `CreateWindow("MDICLIENT", ...)` -- and this host answered "no such
+ * class", because nothing had ever registered it. SYSEDIT's MDI client handle
+ * stayed zero for a NEW reason, one step further on.
+ *
+ * [CAUTION]: THE LIST IS WHAT THE RUN ASKED FOR, NOT A LIST OF SYSTEM CLASSES. Windows
+ * provides BUTTON, EDIT, STATIC, LISTBOX, COMBOBOX, SCROLLBAR and the numbered
+ * dialog/menu classes too, and seeding all of them would be answering questions
+ * nothing has asked -- every one would be a class that exists and does nothing,
+ * which is the "runs but lies" shape. They go in when a run names them.
+ *
+ * [CAUTION]: AND A SYSTEM CLASS HAS NO 16-BIT WINDOW PROCEDURE HERE, deliberately. On real
+ * Windows MDICLIENT's procedure lives in USER; ours is a host object with no
+ * behaviour, so a window made from it gets a handle and no WM_CREATE -- there is
+ * nothing to send it to. That is a stated gap, and it is the next thing an MDI
+ * application will feel: WM_MDICREATE has nowhere to go yet.
+ */
+/* [CAUTION]: `EDIT` IS HERE BECAUSE THE GUEST NAMES IT, not because it is on a list of
+ * system classes. SYSEDIT's `mpchild` creates a window of class `"edit"` in
+ * its own WM_CREATE handler -- the string sits in SYSEDIT's DGROUP next to
+ * `"mdiclient"` (which the frame procedure creates, as a run has shown) and
+ * `"mpchild"` (the class named in the MDICREATESTRUCT below).
+ */
+/* [CAUTION]: `LISTBOX` JOINED THE LIST IN SESSION 53 BECAUSE A RUN NAMED IT, which is
+ * the rule two paragraphs up and not an exception to it: RECORDER.EXE stopped
+ * dead with `CreateWindow: no such class "ListBox"` and produced no window at
+ * all. The remaining standard classes (BUTTON, STATIC, COMBOBOX, SCROLLBAR,
+ * the numbered dialog classes) are still absent for the same reason as before
+ * -- nothing has asked -- and each is one string when something does.
+ *
+ * [INFO]: The "a class that exists and does nothing" objection does NOT apply to these:
+ * a system class here resolves to the OS's OWN Win32 class, so a window made
+ * from it is a real listbox with real behaviour, not a stub.
+ */
+/* [CAUTION]: THE DIALOG CONTROL CLASSES ARE HERE BECAUSE A DLGITEMTEMPLATE NAMES THEM BY
+ * NUMBER, NOT BY STRING. A Win16 dialog item encodes its class as a single
+ * byte 0x80..0x85, and those six values ARE these classes -- so a dialog
+ * cannot be built at all until each one resolves to something CreateWindow
+ * will accept. They are the OS's own classes, used as-is, for exactly the
+ * reason MDICLIENT and EDIT already are: a BUTTON that we drew ourselves
+ * would be a reimplementation of a control this machine already has.
+ *
+ * [INFO]: "#32770" is the standard DIALOG class and it is a real class on XP, so a
+ * dialog whose template names NO class gets the OS's dialog window rather
+ * than one of ours. (session 55)
+ */
+static PCSTR const g_WowUserSystemClassNames[] = { "MDICLIENT", "EDIT", "LISTBOX",
+                                             "BUTTON", "STATIC", "SCROLLBAR",
+                                             "COMBOBOX", "#32770",
+                                             "~FOREIGN" };  /* s91: see WowUserAlias16 */
+static INT               g_WowUserIsSystemClassesDone = 0;
+static INT           g_WowUserWindowCount = 0;
+
+static const WOWUSER_SYSPROC g_WowUserSystemProcedures[] = {
+    { "BUTTON",    0x43f4, 3 }, { "COMBOBOX",  0x4434, 4 }, { "EDIT",      0x4474, 5 },
+    { "STATIC",    0x4534, 6 }, { "LISTBOX",   0x44b4, 7 }, { "SCROLLBAR", 0x44f4, 8 },
+    { "MDICLIENT", 0x4574, 11 },
+};
+static HWND g_WowUserSubclassBypass;  /* CallWindowProc(thunk) in progress for this HWND */
+/* for the STAGE2 line */
+static UINT g_WowUserSubclassSent;
+static UINT g_WowUserSubclassDirect;
+static UINT g_WowUserSubclassChained;
+
+static WOWUSER_WINDOW g_WowUserDesktop;
+
+static WOWDLG_FONT g_WowDlgFonts[WOWDLG_MAXFONT];
+static INT g_WowDlgFontCount;
+
+static WOWUSER_TIMER g_WowUserTimers[WOWUSER_MAXTIMER];
+/* s89 (#302): the modeless dialog whose WM_INITDIALOG is running right now, and
+ * whether the program called ShowWindow on it meanwhile (CreateDialog, below).
+ */
+static WORD g_WowUserInitDialogWindow = 0;
+static INT  g_WowUserIsInitDialogShown = 0;
+
+static WOWUSER_GONE g_WowUserGone;
+
+/* -- s91: A Win16 DEFAULT PROCEDURE'S CALL INTO WIN32, WITH THE s91 MESSAGES TRANSLATED.
+ * The default-procedure forwards handed lParam to Win32 as it came. Harmless while
+ * nothing sent these messages; since #305 M9 sends WM_GETMINMAXINFO with a 16:16
+ * pointer, an MDI child passing it to DefMDIChildProc made USER32 write through
+ * 0B87:15B4 as a flat address (w_mdi, the final s91 regression run). kind: 0
+ * DefWindowProc, 1 DefFrameProc, 2 DefMDIChildProc.
+ */
+static PCWOW32_FRAME g_WowUserCurrentFrame;  /* the frame being serviced (sel2lin) */
+
 /* Used before their definitions below. */
 static INT WowUserHookUnset(SHORT hookId, DWORD procedure);
-static INT WowUserDestroy(WORD window16, PSTR note, INT noteCapacity, PINT noteLengthInOut);
 
 /* Forward declarations, from when this file was part of main.c's unit (they were in wowuser.h). */
 /* -- s93: THE HOOK BRIDGE (see SetWindowsHook). One entry per Win16 hook; the
@@ -50,8 +229,6 @@ INT WowCall16SyncEx(
     const INT *fix,
     INT nfix);
 
-static INT WowUserHookUnset(SHORT hookId, DWORD procedure);
-
 /* -- The modal dialog loop lives in wowdlg.h, which is included AFTER this file
  * because it reads the window table above. These three are what USER's own
  * DialogBox and EndDialog arms call into it.
@@ -67,11 +244,6 @@ INT WowDlgPush(
 INT WowDlgEnd(WORD window, WORD result);
 VOID WowDlgSetInit(DWORD initParameter, WORD firstFocus);
 INT WowDlgActive(VOID);
-
-static INT WowUserDestroy(WORD window16, PSTR note, INT noteCapacity, PINT noteLengthInOut);
-
-static WOWUSER_SYSRES g_WowUserSystemResources[WOWUSER_MAX_SYSRES];
-static INT              g_WowUserSystemResourceCount = 0;
 
 /* The slot behind a token, or NULL. */
 static PWOWUSER_SYSRES WowUserSystemResourceSlot(WORD handle16)
@@ -148,23 +320,6 @@ static PCSTR WowUserSystemResourceName(WORD handle16)
     return NULL;
 }
 
-CHAR g_WowUserClipboard[WOWUSER_CLIPBOARD_SIZE];
-INT  g_WowUserClipboardLength;
-WORD g_WowUserClipboardFormat;  /* SetClipboardData's format, for the put */
-
-static WOWUSER_PROP g_WowUserProps[WOWUSER_MAX_PROP];
-static INT            g_WowUserPropCount = 0;
-
-/* The Win16 task that is running right now. [CAUTION] NOT invented and not derived here:
- * it is krnl386's own current-task word -- the DGROUP word at offset 0x228,
- * observed at run time (session 38) to hold the running task's handle -- which
- * the dispatcher already reads at every BOP for the log -- this just keeps the
- * last value where `GetWindowTask` can see it. 0 until the first BOP.
- */
-WORD g_WowUserCurrentTask = 0;
-
-static WOWUSER_HOOK g_WowUserHooks[WOWUSER_HOOKS];
-
 static INT WowUserHookFind(SHORT hookId)
 {
     INT index;
@@ -220,9 +375,6 @@ static LRESULT CALLBACK WowUserHookKeyboard(INT code, WPARAM wParam, LPARAM lPar
     return CallNextHookEx(NULL, code, wParam, lParam);
 }
 
-static BYTE g_WowUserJournalQueue[WOWUSER_JREC_Q][WOWUSER_EVENTMSG16_SIZE];
-static INT g_WowUserJournalQueueCount;
-static INT g_WowUserIsJournalRecordBusy;
 static LRESULT CALLBACK WowUserHookJournalRecord(INT code, WPARAM wParam, LPARAM lParam)
 {
     INT slot = WowUserHookFind(WH_JOURNALRECORD);
@@ -289,6 +441,22 @@ static LRESULT CALLBACK WowUserHookJournalPlayback(INT code, WPARAM wParam, LPAR
     return CallNextHookEx(NULL, code, wParam, lParam);
 }
 
+static INT WowUserHookUnset(SHORT hookId, DWORD procedure)
+{
+    INT index;
+
+    for (index = 0; index < WOWUSER_HOOKS; ++index)
+        if (g_WowUserHooks[index].Procedure && g_WowUserHooks[index].Id == hookId && (!procedure || g_WowUserHooks[index].Procedure == procedure))
+        {
+            if (g_WowUserHooks[index].Hook32)
+                UnhookWindowsHookEx(g_WowUserHooks[index].Hook32);
+            g_WowUserHooks[index].Procedure = 0;
+            g_WowUserHooks[index].Hook32 = NULL;
+            return 1;
+        }
+    return 0;
+}
+
 /* 1 = installed, 2 = a kind not run here (recorded), 0 = refused. */
 static INT WowUserHookSet(SHORT hookId, DWORD procedure, WORD dataSelector)
 {
@@ -342,23 +510,6 @@ static INT WowUserHookSet(SHORT hookId, DWORD procedure, WORD dataSelector)
     return 1;
 }
 
-static INT WowUserHookUnset(SHORT hookId, DWORD procedure)
-{
-    INT index;
-
-    for (index = 0; index < WOWUSER_HOOKS; ++index)
-        if (g_WowUserHooks[index].Procedure && g_WowUserHooks[index].Id == hookId && (!procedure || g_WowUserHooks[index].Procedure == procedure))
-        {
-            if (g_WowUserHooks[index].Hook32)
-                UnhookWindowsHookEx(g_WowUserHooks[index].Hook32);
-            g_WowUserHooks[index].Procedure = 0;
-            g_WowUserHooks[index].Hook32 = NULL;
-            return 1;
-        }
-    return 0;
-}
-
-static CHAR g_WowUserResourceProgram[MAX_PATH];
 static PCSTR WowUserResourceProgram(VOID)
 {
     WORD task = g_WowUserCurrentTask;
@@ -390,9 +541,6 @@ static PCSTR WowUserResourceProgram(VOID)
         return g_WowCommandProgram;
     return g_WowUserResourceProgram;
 }
-
-static WOWUSER_MENU g_WowUserMenus[WOWUSER_MAX_MENU];
-static INT            g_WowUserMenuCount = 0;
 
 /* One token per HMENU: the OS hands back the same handle for the same menu, and
  * a program that asks twice must get one answer, the way it does for a cursor.
@@ -579,78 +727,6 @@ static HCURSOR WowUserSystemResourceCursor(WORD token, PINT fell)
     return cursor;
 }
 
-static const WORD g_WowUserDefWindowProcForwarded[] = {
-    WM_CLOSE,           /* WM_CLOSE: its default is DestroyWindow (see 0x6b) */
-    WM_ERASEBKGND,      /* WM_ERASEBKGND: its DC token is translated (s89) */
-    WM_PAINT,           /* WM_PAINT: the default erases + validates (s89) */
-};
-
-WOWUSER_CLASS g_WowUserClasses[WOWUSER_MAX_CLASS];
-static INT             g_WowUserClassCount = 0;
-
-/* THE SYSTEM CLASSES ARE THE 32-BIT SIDE'S, WHICH MEANS THEY ARE OURS (Importance = 3):
- * Measured, not assumed. Under WOW, `USER.EXE` is a THUNK MODULE: every export
- * funnels to the 32-bit half, which is why `RegisterClass` reaches this host at
- * all. So the classes Windows itself provides -- the ones no application ever
- * registers because they are already there -- have nowhere else to come from.
- * The run says so directly: in a whole SYSEDIT launch there are exactly four
- * RegisterClass calls, and all four are a program's own (`WOWExecClass`,
- * `WOWFaxClass`, `mpframe`, `mpchild`). USER never registers one, because in
- * this architecture it cannot.
- *
- * [INFO]: AND THIS IS THE WALL THE FIRST 16-BIT CALLBACK UNCOVERED. With WM_CREATE
- * delivered, SYSEDIT's frame procedure runs and does the one thing it exists
- * to do -- `CreateWindow("MDICLIENT", ...)` -- and this host answered "no such
- * class", because nothing had ever registered it. SYSEDIT's MDI client handle
- * stayed zero for a NEW reason, one step further on.
- *
- * [CAUTION]: THE LIST IS WHAT THE RUN ASKED FOR, NOT A LIST OF SYSTEM CLASSES. Windows
- * provides BUTTON, EDIT, STATIC, LISTBOX, COMBOBOX, SCROLLBAR and the numbered
- * dialog/menu classes too, and seeding all of them would be answering questions
- * nothing has asked -- every one would be a class that exists and does nothing,
- * which is the "runs but lies" shape. They go in when a run names them.
- *
- * [CAUTION]: AND A SYSTEM CLASS HAS NO 16-BIT WINDOW PROCEDURE HERE, deliberately. On real
- * Windows MDICLIENT's procedure lives in USER; ours is a host object with no
- * behaviour, so a window made from it gets a handle and no WM_CREATE -- there is
- * nothing to send it to. That is a stated gap, and it is the next thing an MDI
- * application will feel: WM_MDICREATE has nowhere to go yet.
- */
-/* [CAUTION]: `EDIT` IS HERE BECAUSE THE GUEST NAMES IT, not because it is on a list of
- * system classes. SYSEDIT's `mpchild` creates a window of class `"edit"` in
- * its own WM_CREATE handler -- the string sits in SYSEDIT's DGROUP next to
- * `"mdiclient"` (which the frame procedure creates, as a run has shown) and
- * `"mpchild"` (the class named in the MDICREATESTRUCT below).
- */
-/* [CAUTION]: `LISTBOX` JOINED THE LIST IN SESSION 53 BECAUSE A RUN NAMED IT, which is
- * the rule two paragraphs up and not an exception to it: RECORDER.EXE stopped
- * dead with `CreateWindow: no such class "ListBox"` and produced no window at
- * all. The remaining standard classes (BUTTON, STATIC, COMBOBOX, SCROLLBAR,
- * the numbered dialog classes) are still absent for the same reason as before
- * -- nothing has asked -- and each is one string when something does.
- *
- * [INFO]: The "a class that exists and does nothing" objection does NOT apply to these:
- * a system class here resolves to the OS's OWN Win32 class, so a window made
- * from it is a real listbox with real behaviour, not a stub.
- */
-/* [CAUTION]: THE DIALOG CONTROL CLASSES ARE HERE BECAUSE A DLGITEMTEMPLATE NAMES THEM BY
- * NUMBER, NOT BY STRING. A Win16 dialog item encodes its class as a single
- * byte 0x80..0x85, and those six values ARE these classes -- so a dialog
- * cannot be built at all until each one resolves to something CreateWindow
- * will accept. They are the OS's own classes, used as-is, for exactly the
- * reason MDICLIENT and EDIT already are: a BUTTON that we drew ourselves
- * would be a reimplementation of a control this machine already has.
- *
- * [INFO]: "#32770" is the standard DIALOG class and it is a real class on XP, so a
- * dialog whose template names NO class gets the OS's dialog window rather
- * than one of ours. (session 55)
- */
-static PCSTR const g_WowUserSystemClassNames[] = { "MDICLIENT", "EDIT", "LISTBOX",
-                                             "BUTTON", "STATIC", "SCROLLBAR",
-                                             "COMBOBOX", "#32770",
-                                             "~FOREIGN" };  /* s91: see WowUserAlias16 */
-static INT               g_WowUserIsSystemClassesDone = 0;
-
 static VOID WowUserEnsureSystemClasses(VOID)
 {
     UINT index;
@@ -734,11 +810,6 @@ static VOID WowUserEnsureSystemClasses(VOID)
     }
 }
 
-WOWUSER_WINDOW g_WowUserWindows[WOWUSER_MAX_WIN];
-static INT           g_WowUserWindowCount = 0;
-/* s92 (#306): the hTask an EnumTaskWindows walk is for (wowenum.h); 0 = any. */
-WORD          g_WowUserEnumTask = 0;
-
 /* s93: is this one of our windows driven by a DIALOG procedure? (wowwin.h) */
 INT WowUserIsDialog16(WORD window16)
 {
@@ -760,31 +831,6 @@ WORD WowUserOwner16(WORD window16)
             return g_WowUserWindows[index].Task;
     return 0;
 }
-
-/* krnl386's SEGMENT 1, AS A LIVE SELECTOR:
- * Needed to call KERNEL exports (see EM_GETHANDLE16), and it costs nothing to
- * know: the WOW32 common thunk lives in krnl386's segment 1, so the CS at
- * every WOW32 BOP IS that selector. The host records it there rather than
- * looking it up -- `wow_module_of_sel()` is a bind-stage table and cannot name
- * a selector krnl386 allocated at run time, which is the same trap that made
- * the id-space label print `?` about a segment the dispatcher had identified.
- */
-WORD g_WowUserKernelSegment = 0;
-
-static const WOWUSER_SYSPROC g_WowUserSystemProcedures[] = {
-    { "BUTTON",    0x43f4, 3 }, { "COMBOBOX",  0x4434, 4 }, { "EDIT",      0x4474, 5 },
-    { "STATIC",    0x4534, 6 }, { "LISTBOX",   0x44b4, 7 }, { "SCROLLBAR", 0x44f4, 8 },
-    { "MDICLIENT", 0x4574, 11 },
-};
-
-/* main.c: a 16-bit procedure, now, through the nested run (WowCall16Sync). */
-INT (*g_WowUserCall16)(DWORD procedure, WORD dataSelector, PCWORD arguments, INT argumentCount,
-                              WORD window16, WORD message, PWORD result);
-static HWND g_WowUserSubclassBypass;  /* CallWindowProc(thunk) in progress for this HWND */
-/* for the STAGE2 line */
-static UINT g_WowUserSubclassSent;
-static UINT g_WowUserSubclassDirect;
-static UINT g_WowUserSubclassChained;
 
 /* A free window slot with its synthetic handle assigned, or NULL. Factored out
  * of CreateWindow the moment a SECOND thing started making windows -- the MDI
@@ -844,8 +890,6 @@ DWORD WowUserWindowProcedureOf(PCWOWUSER_WINDOW window)
      */
     return (DWORD)WowConvWindowProcedure((UINT)window->WindowProcedure, (UINT)window->DialogProcedure);
 }
-
-static WOWUSER_WINDOW g_WowUserDesktop;
 
 PWOWUSER_WINDOW WowUserFindWindow(WORD window16)
 {
@@ -1217,8 +1261,6 @@ static PCSTR WowDlgClassName(BYTE classByte)
     return NULL;
 }
 
-static WOWDLG_FONT g_WowDlgFonts[WOWDLG_MAXFONT];
-static INT g_WowDlgFontCount;
 static HFONT WowDlgFont(PCSTR faceName, INT pointSize, PINT baseX, PINT baseY)
 {
     INT index;
@@ -1376,8 +1418,6 @@ static PWOWUSER_CLASS WowUserFindClassByAtom(WORD atom)
             return &g_WowUserClasses[index];
     return NULL;
 }
-
-static WOWUSER_TIMER g_WowUserTimers[WOWUSER_MAXTIMER];
 
 static VOID WowUserTimerSet(WORD window16, WORD timerId, DWORD procedure)
 {
@@ -1752,6 +1792,137 @@ static INT WowUserListMessage(
     *noteLengthInOut = noteLength;
     *out = (LONG)result;
     return 1;
+}
+
+static INT WowUserDestroy(WORD window16, PSTR note, INT noteCapacity, PINT noteLengthInOut)
+{
+        PWOWUSER_WINDOW window = WowUserFindWindow(window16);
+        INT noteLength = *noteLengthInOut;
+        INT index;
+        INT childCount = 0;
+        INT isSent = 0;
+        HWND window32;
+        WORD result16;
+
+        WowNotePut(note, noteCapacity, &noteLength, "DestroyWindow 0x");
+        WowNoteHex(note, noteCapacity, &noteLength, window16, WOW_HEX_WORD_DIGITS);
+        if (!window)
+        {
+            WowNotePut(note, noteCapacity, &noteLength, " -- NO SUCH WINDOW");
+            *noteLengthInOut = noteLength;
+            return 0;
+        }
+        /* [CAUTION]: RE-ENTRY: a WM_DESTROY handler that destroys its own window again is
+         * legal and common. It is already going; say yes and do nothing.
+         */
+        if (window->IsDying) { WowNotePut(note, noteCapacity, &noteLength, " -- already being destroyed");
+                        *noteLengthInOut = noteLength;
+                        return 1; }
+        window32 = window->Window32;
+        /* #305 (M10): WM_DESTROY IS SENT, WHILE EVERYTHING STILL EXISTS (Importance = 3):
+         * Measured on Charmap (s89, the inventory's profile-write check): it
+         * saves its font in its WM_DESTROY handler by asking its own font combo
+         * box -- CB_GETCURSEL, CB_GETLBTEXT -- and wrote an EMPTY name, because
+         * this function had already destroyed the real window and released
+         * every child record before the posted WM_DESTROY reached it ("no real
+         * window"). On real Windows DestroyWindow SENDS WM_DESTROY to the window
+         * and then to each child, all still alive, and only then takes them
+         * down. Any program that saves state on close works that way.
+         * The nested run makes that possible now; the old posted path below
+         * stays as the fallback for a context where a nested call cannot run.
+         */
+        window->IsDying = 1;
+        if (g_WowUserSend16 && WowUserWindowProcedureOf(window)
+            && g_WowUserSend16(window16, WM_DESTROY16, 0, 0, &result16))
+        {
+            isSent = 1;
+            for (index = 0; index < g_WowUserWindowCount; ++index)
+            {
+                PWOWUSER_WINDOW child = &g_WowUserWindows[index];
+                if (child->Window16 && child != window && !child->IsDying && child->Window32 && window32
+                    && IsChild(window32, child->Window32) && WowUserWindowProcedureOf(child))
+                {
+                    child->IsDying = 1;
+                    g_WowUserSend16(child->Window16, WM_DESTROY16, 0, 0, &result16);
+                }
+            }
+            window32 = window->Window32;  /* the guest may have changed things meanwhile */
+        }
+        window->IsDying = 0;
+        for (index = 0; index < g_WowUserWindowCount; ++index)
+        {
+            PWOWUSER_WINDOW child = &g_WowUserWindows[index];
+            if (child->Window16 && child != window && child->Window32 && window32 && IsChild(window32, child->Window32))
+            {
+                child->Window16 = 0;
+                child->Window32 = NULL;
+                child->IsDying = 0;
+                ++childCount;
+            }
+        }
+        /* AND TELL THE GUEST, WHICH THIS NEVER DID. (session 56) (Importance = 5):
+         * REPORTED BY THE USER: Win16 tray icons "stacking up". [CAUTION] I called
+         * them live hosts rather than ghosts and the user refuted it in one
+         * line -- "they all disappear when the mouse hovers over them", which
+         * only a DEAD owner's icon does. Measured: 5 icons, 0 processes.
+         * The chain is: this missing message left the host ALIVE with nothing
+         * to do, the next launch's `taskkill /f` killed it without cleanup, and
+         * its icon became a ghost. Fixing this line means no host is left to
+         * kill. See the note in main.c's exec-loop tail.
+         * A Win16 application ends when its window does: WM_CLOSE ->
+         * DestroyWindow -> **WM_DESTROY** -> PostQuitMessage -> GetMessage
+         * returns 0 -> WinMain returns -> the task exits -> the VDM has
+         * nothing left to run. We relayed WM_CLOSE (wowwin.h) and implemented
+         * DestroyWindow, and then dropped the middle link: WM_DESTROY was
+         * delivered by nothing, anywhere. So the guest destroyed its window
+         * and went straight back to GetMessage, where it blocked FOREVER --
+         * measured, `WOWMSG: blocked 0x7f23 ms` and climbing, with the window
+         * already gone from the desktop.
+         *
+         * [CAUTION]: ORDER: post BEFORE releasing the record, and KEEP the Win16 handle
+         * until the message is dispatched. DispatchMessage resolves the window
+         * procedure THROUGH this record (WowUserFindWindow), so clearing `hwnd`
+         * here -- which is what the note above rightly wants for a dead
+         * window -- would make the message we just posted undeliverable. The
+         * record is marked `dying` instead and released the moment its
+         * WM_DESTROY is dispatched.
+         *
+         * [CAUTION]: ON REAL WINDOWS WM_DESTROY IS **SENT**, NOT POSTED. Same caveat, and
+         * for the same reason, as WM_SIZE and WM_SETFOCUS in wowwin.h: sending
+         * it means re-entering the guest from inside a service. Posted, the
+         * guest sees it at its next GetMessage, which for this message is
+         * precisely where its message loop already is.
+         */
+        if (isSent)
+        {
+            /* Told already, synchronously: the record goes with the window. */
+            window->Window16 = 0;
+            window->IsDying = 0;
+            window->Window32 = NULL;
+            if (g_WowMsgFocus == window16)
+                g_WowMsgFocus = 0;
+            if (window32)
+                DestroyWindow(window32);
+            WowNotePut(note, noteCapacity, &noteLength, " -> WM_DESTROY SENT (nested), then destroyed");
+            if (childCount) { WowNotePut(note, noteCapacity, &noteLength, ", with 0x");
+                        WowNoteHex(note, noteCapacity, &noteLength, (DWORD)childCount, WOW_HEX_BYTE_DIGITS);
+                        WowNotePut(note, noteCapacity, &noteLength, " child record(s) released too"); }
+            *noteLengthInOut = noteLength;
+            return 1;
+        }
+        WowMsgPost(window16, WM_DESTROY16, 0, 0, GetTickCount(), 0, 0);
+        window->IsDying  = 1;
+        window->Window32 = NULL;       /* the real window is going NOW... */
+        if (g_WowMsgFocus == window16)
+            g_WowMsgFocus = 0;
+        if (window32)
+            DestroyWindow(window32);
+        WowNotePut(note, noteCapacity, &noteLength, " -> destroyed, WM_DESTROY posted to the guest");
+        if (childCount) { WowNotePut(note, noteCapacity, &noteLength, ", with 0x");
+                    WowNoteHex(note, noteCapacity, &noteLength, (DWORD)childCount, WOW_HEX_BYTE_DIGITS);
+                    WowNotePut(note, noteCapacity, &noteLength, " child record(s) released too"); }
+        *noteLengthInOut = noteLength;
+        return 1;
 }
 
 static LONG WowUserDefProc(
@@ -2556,169 +2727,6 @@ static LONG WowUserDefProc(
     }
 }
 
-/* Returns 1 if serviced (the caller advances EIP past the BOP), 0 if not.
- * `note` receives a short human-readable description of what happened, so the
- * caller's log line can say what was registered rather than just that something was.
- *
- * [CAUTION]: CALLED ONLY WHEN THE STUB IS USER'S. The caller checks; this file must never
- * be reachable from krnl386's id space or the whole point of splitting it is lost.
- */
-/* The guest's DestroyWindow: the real window goes, its child records are released,
- * and the guest is TOLD (WM_DESTROY) -- lifted out of USER 0x35 in s82 so that
- * DefWindowProc's WM_CLOSE (#162) destroys a window the same way. Appends to `note`
- * at *k; returns 0 if there is no such window.
- */
-/* s89 (#305 M10): send a message to a guest window NOW, through the nested run
- * (main.c wires this to WowCall16Sync with the window's own procedure and
- * instance, exactly as DispatchMessage would choose them). 0 = could not.
- */
-INT (*g_WowUserSend16)(WORD window16, WORD message, WORD wParam, DWORD lParam, PWORD result);
-/* ...and with a structure as lParam, placed on the guest's stack; `fix` lists the
- * far pointers inside it that point back into it (main.c: WowSend16Blob).
- */
-INT (*g_WowUserSend16Blob)(WORD window16, WORD message, WORD wParam, PBYTE blob, INT blobLength,
-                                  const INT *fix, INT fixCount, PWORD result);
-/* s89 (#302): the modeless dialog whose WM_INITDIALOG is running right now, and
- * whether the program called ShowWindow on it meanwhile (CreateDialog, below).
- */
-static WORD g_WowUserInitDialogWindow = 0;
-static INT  g_WowUserIsInitDialogShown = 0;
-
-static INT WowUserDestroy(WORD window16, PSTR note, INT noteCapacity, PINT noteLengthInOut)
-{
-        PWOWUSER_WINDOW window = WowUserFindWindow(window16);
-        INT noteLength = *noteLengthInOut;
-        INT index;
-        INT childCount = 0;
-        INT isSent = 0;
-        HWND window32;
-        WORD result16;
-
-        WowNotePut(note, noteCapacity, &noteLength, "DestroyWindow 0x");
-        WowNoteHex(note, noteCapacity, &noteLength, window16, WOW_HEX_WORD_DIGITS);
-        if (!window)
-        {
-            WowNotePut(note, noteCapacity, &noteLength, " -- NO SUCH WINDOW");
-            *noteLengthInOut = noteLength;
-            return 0;
-        }
-        /* [CAUTION]: RE-ENTRY: a WM_DESTROY handler that destroys its own window again is
-         * legal and common. It is already going; say yes and do nothing.
-         */
-        if (window->IsDying) { WowNotePut(note, noteCapacity, &noteLength, " -- already being destroyed");
-                        *noteLengthInOut = noteLength;
-                        return 1; }
-        window32 = window->Window32;
-        /* #305 (M10): WM_DESTROY IS SENT, WHILE EVERYTHING STILL EXISTS (Importance = 3):
-         * Measured on Charmap (s89, the inventory's profile-write check): it
-         * saves its font in its WM_DESTROY handler by asking its own font combo
-         * box -- CB_GETCURSEL, CB_GETLBTEXT -- and wrote an EMPTY name, because
-         * this function had already destroyed the real window and released
-         * every child record before the posted WM_DESTROY reached it ("no real
-         * window"). On real Windows DestroyWindow SENDS WM_DESTROY to the window
-         * and then to each child, all still alive, and only then takes them
-         * down. Any program that saves state on close works that way.
-         * The nested run makes that possible now; the old posted path below
-         * stays as the fallback for a context where a nested call cannot run.
-         */
-        window->IsDying = 1;
-        if (g_WowUserSend16 && WowUserWindowProcedureOf(window)
-            && g_WowUserSend16(window16, WM_DESTROY16, 0, 0, &result16))
-        {
-            isSent = 1;
-            for (index = 0; index < g_WowUserWindowCount; ++index)
-            {
-                PWOWUSER_WINDOW child = &g_WowUserWindows[index];
-                if (child->Window16 && child != window && !child->IsDying && child->Window32 && window32
-                    && IsChild(window32, child->Window32) && WowUserWindowProcedureOf(child))
-                {
-                    child->IsDying = 1;
-                    g_WowUserSend16(child->Window16, WM_DESTROY16, 0, 0, &result16);
-                }
-            }
-            window32 = window->Window32;  /* the guest may have changed things meanwhile */
-        }
-        window->IsDying = 0;
-        for (index = 0; index < g_WowUserWindowCount; ++index)
-        {
-            PWOWUSER_WINDOW child = &g_WowUserWindows[index];
-            if (child->Window16 && child != window && child->Window32 && window32 && IsChild(window32, child->Window32))
-            {
-                child->Window16 = 0;
-                child->Window32 = NULL;
-                child->IsDying = 0;
-                ++childCount;
-            }
-        }
-        /* AND TELL THE GUEST, WHICH THIS NEVER DID. (session 56) (Importance = 5):
-         * REPORTED BY THE USER: Win16 tray icons "stacking up". [CAUTION] I called
-         * them live hosts rather than ghosts and the user refuted it in one
-         * line -- "they all disappear when the mouse hovers over them", which
-         * only a DEAD owner's icon does. Measured: 5 icons, 0 processes.
-         * The chain is: this missing message left the host ALIVE with nothing
-         * to do, the next launch's `taskkill /f` killed it without cleanup, and
-         * its icon became a ghost. Fixing this line means no host is left to
-         * kill. See the note in main.c's exec-loop tail.
-         * A Win16 application ends when its window does: WM_CLOSE ->
-         * DestroyWindow -> **WM_DESTROY** -> PostQuitMessage -> GetMessage
-         * returns 0 -> WinMain returns -> the task exits -> the VDM has
-         * nothing left to run. We relayed WM_CLOSE (wowwin.h) and implemented
-         * DestroyWindow, and then dropped the middle link: WM_DESTROY was
-         * delivered by nothing, anywhere. So the guest destroyed its window
-         * and went straight back to GetMessage, where it blocked FOREVER --
-         * measured, `WOWMSG: blocked 0x7f23 ms` and climbing, with the window
-         * already gone from the desktop.
-         *
-         * [CAUTION]: ORDER: post BEFORE releasing the record, and KEEP the Win16 handle
-         * until the message is dispatched. DispatchMessage resolves the window
-         * procedure THROUGH this record (WowUserFindWindow), so clearing `hwnd`
-         * here -- which is what the note above rightly wants for a dead
-         * window -- would make the message we just posted undeliverable. The
-         * record is marked `dying` instead and released the moment its
-         * WM_DESTROY is dispatched.
-         *
-         * [CAUTION]: ON REAL WINDOWS WM_DESTROY IS **SENT**, NOT POSTED. Same caveat, and
-         * for the same reason, as WM_SIZE and WM_SETFOCUS in wowwin.h: sending
-         * it means re-entering the guest from inside a service. Posted, the
-         * guest sees it at its next GetMessage, which for this message is
-         * precisely where its message loop already is.
-         */
-        if (isSent)
-        {
-            /* Told already, synchronously: the record goes with the window. */
-            window->Window16 = 0;
-            window->IsDying = 0;
-            window->Window32 = NULL;
-            if (g_WowMsgFocus == window16)
-                g_WowMsgFocus = 0;
-            if (window32)
-                DestroyWindow(window32);
-            WowNotePut(note, noteCapacity, &noteLength, " -> WM_DESTROY SENT (nested), then destroyed");
-            if (childCount) { WowNotePut(note, noteCapacity, &noteLength, ", with 0x");
-                        WowNoteHex(note, noteCapacity, &noteLength, (DWORD)childCount, WOW_HEX_BYTE_DIGITS);
-                        WowNotePut(note, noteCapacity, &noteLength, " child record(s) released too"); }
-            *noteLengthInOut = noteLength;
-            return 1;
-        }
-        WowMsgPost(window16, WM_DESTROY16, 0, 0, GetTickCount(), 0, 0);
-        window->IsDying  = 1;
-        window->Window32 = NULL;       /* the real window is going NOW... */
-        if (g_WowMsgFocus == window16)
-            g_WowMsgFocus = 0;
-        if (window32)
-            DestroyWindow(window32);
-        WowNotePut(note, noteCapacity, &noteLength, " -> destroyed, WM_DESTROY posted to the guest");
-        if (childCount) { WowNotePut(note, noteCapacity, &noteLength, ", with 0x");
-                    WowNoteHex(note, noteCapacity, &noteLength, (DWORD)childCount, WOW_HEX_BYTE_DIGITS);
-                    WowNotePut(note, noteCapacity, &noteLength, " child record(s) released too"); }
-        *noteLengthInOut = noteLength;
-        return 1;
-}
-
-WOWUSER_DLGDEF g_WowUserDlgDefaults[WOWCALL_MAX_DEPTH];
-
-static WOWUSER_GONE g_WowUserGone;
-
 /* s89 (#162): a Win16 message's wParam as the OS's default procedure needs it.
  * WM_ERASEBKGND carries the guest's DC TOKEN; DefWindowProc fills the real DC
  * behind it with the class brush. Everything else still goes raw (see the
@@ -2802,15 +2810,6 @@ static VOID WowUserDefaultPaint(PWOWUSER_WINDOW window, INT isDialog)
     }
     ReleaseDC(window->Window32, dc);
 }
-
-/* -- s91: A Win16 DEFAULT PROCEDURE'S CALL INTO WIN32, WITH THE s91 MESSAGES TRANSLATED.
- * The default-procedure forwards handed lParam to Win32 as it came. Harmless while
- * nothing sent these messages; since #305 M9 sends WM_GETMINMAXINFO with a 16:16
- * pointer, an MDI child passing it to DefMDIChildProc made USER32 write through
- * 0B87:15B4 as a flat address (w_mdi, the final s91 regression run). kind: 0
- * DefWindowProc, 1 DefFrameProc, 2 DefMDIChildProc.
- */
-static PCWOW32_FRAME g_WowUserCurrentFrame;  /* the frame being serviced (sel2lin) */
 
 static LRESULT WowUserDef32(
     INT kind,

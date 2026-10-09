@@ -30,6 +30,12 @@
 #include <stdint.h>
 #include "interp_xcpu.h"
 
+static BYTE g_Image[XMEM_SIZE];
+static UINT64 g_Random;
+
+static UINT g_ExtraByKey[0x20000];
+static UINT g_MismatchByKey[0x20000];
+
 VOID ref_Initialize(PCBYTE image, INT isProtectedMode);  VOID new_Initialize(
     PCBYTE image,
     INT isProtectedMode);
@@ -40,8 +46,6 @@ INT  ref_Step(PINTERP_XCPU state, PUINT64 effects);       INT  new_Step(
     PUINT64 effects);
 VOID new_UndoBegin(VOID);  INT new_UndoRollback(VOID);  VOID new_UndoEnd(VOID);
 
-static BYTE g_Image[XMEM_SIZE];
-static UINT64 g_Random;
 static UINT32 InterpSupersetRandom(VOID)
 {
     g_Random ^= g_Random << 13;
@@ -81,9 +85,6 @@ static VOID InterpSupersetKeyString(UINT key, PSTR output)
     else
         sprintf(output, "%s%02X", (key >> 16) ? "66:" : "", key & 0xFF);
 }
-
-static UINT g_ExtraByKey[0x20000];
-static UINT g_MismatchByKey[0x20000];
 
 /* Whole-token match in a space-separated list: "8C" must not match "66:8C". */
 static INT InterpSupersetIsAllowedKey(PCSTR allowList, PCSTR keyText)

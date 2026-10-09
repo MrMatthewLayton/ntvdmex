@@ -38,9 +38,9 @@
  * from PspIsDescriptorValid; run 30 confirmed base 0 / limit 0x7FFEF / G=1 installs
  * while a true 4GB selector does not. Used to clamp a client's flat selector.
  */
-#define XP_LDT_MAX_LINEAR   0x7FFEFFFFu
+#define XP_LDT_MAX_LINEAR                   0x7FFEFFFFu
 
-#define DPMI_FAULT_BOP      0x57    /* BOP number planted at the handler code:COFF */
+#define DPMI_FAULT_BOP                      0x57            /* BOP number planted at the handler code:COFF */
 
 /* Where the client's exception handler's FAR RETURN lands. DPMI 0.9 puts a return CS:IP
  * at the bottom of the exception frame and the handler exits through it with a `retf`
@@ -49,7 +49,7 @@
  * two words ZERO for the host to fill (measured, session 34), so this is the address we
  * fill them with, and the arm that catches it completes the resume.
  */
-#define DPMI_FLTRET_BOP     0x5A
+#define DPMI_FLTRET_BOP                     0x5A
 
 /* GUEST BREAKPOINTS IN PROTECTED MODE:
  * THE PROBLEM THIS EXISTS FOR, because it has now cost three sessions. When a PM
@@ -71,9 +71,133 @@
  * the real instruction executes and the client runs on undisturbed. A loop therefore
  * reports its first pass, not its ten-thousandth.
  */
-#define PMBP_PATH           CFG_("pmbp.txt")
+#define PMBP_PATH                           CFG_("pmbp.txt")
+
+/* How many times each breakpoint has been PLANTED, and the ceiling. A repeating
+ * breakpoint on a hot instruction is a log bomb: one mis-sequenced re-arm fired
+ * 340,808 times and produced a 268 MB log in a single run. Past the ceiling the site
+ * is simply left unarmed -- it has stopped answering a question by then.
+ */
+#define DPMI_BP_ARM_MAX                     512
+#define DPMI_LE_MIN_CODE_SIZE               0x10000u /* Only code objects this big are matched (see g_LeCodeSize) */
+
+/* How far an injected protected-mode ISR may run before we stop waiting for its IRET.
+ * See the commentary at the phase loop in DpmiInjectPmIrq(): a phase is one PM entry,
+ * not a unit of time, so the real bound is the clock; the phase count is only a backstop
+ * against a handler that traps forever without making progress.
+ */
+#define DPMI_IRQ0_PHASE_MAX                 65536u
+#define DPMI_IRQ0_MS_MAX                    500u
+
+/* [INFO]: The host's private LDT pool sits between the reserved entries and the
+ * client's arena; see the long note at DpmiHostIndex(). The range is MEASURED
+ * (the guest never touches 0x09..0x2b across three full runs), and the
+ * client-facing counter starts ABOVE it so the two can never meet.
+ */
+#define DPMI_HOSTPOOL_LO                    0x09
+
+/* DPMI 0002: SEGMENT TO DESCRIPTOR:
+ * Hand back a selector whose base is a real-mode paragraph address and whose limit
+ * is 64K-1. Trivially small, and it was missing -- which mattered more than it
+ * sounds: it is the DPMI function krnl386 calls MOST at start-up (per our INT 31h
+ * log), because that is how the 16-bit
+ * Windows kernel reaches the BIOS data area, the DOS list-of-lists, and everything
+ * else it knows only as a paragraph.
+ *
+ * [CAUTION]: THE SAME SEGMENT MUST GIVE THE SAME SELECTOR. The descriptor belongs to the HOST,
+ * not the client -- the client is told never to modify or free it -- so handing out
+ * a fresh LDT entry per call would leak a descriptor per call and let a client
+ * modify a mapping another part of it is still using. Hence the cache.
+ * If a client frees one anyway (0001), the cache entry is dropped there, so the
+ * next 0002 builds a fresh one rather than returning a selector that is no longer
+ * present. That is the failure this avoids: a stale mapping faults far from here.
+ */
+#define DPMI_S2D_MAX                        64
+
+#define DPMI_FAULT_TRAMPOLINE_LDT_LIMIT     510             /* The trampoline takes two descriptors */
+
+#define DPMI_PATCH_REGION_MAX_U             0x00400000u     /* Larger = a flat selector, not a region */
+
+#define DPMI_PATCH_FLOOR                    0x600           /* Below: the IVT, the BDA and DOS's own area */
+
+/* A REFLECTED INTERRUPT IS THE ONE TRACE THAT CAN OUTRUN THE GUEST (Importance = 4):
+ * Every dispatch below writes two LogAppend lines (~350 bytes) and does two
+ * HostReadable() probes to print the caller's pointer. That is the right amount of
+ * detail for a handler called a dozen times, and a firehose for one the guest POLLS.
+ *
+ * [INFO]: MEASURED ON ZAR (GH #23), and it is most of why "Game loading..." crawls: while it
+ * decompresses ZARN0.SFS the game asks its OWN INT 21h hook for AH=2Ch about 3,800
+ * times a second. A 45 s run is ~170,000 reflected dispatches, ~340,000 WriteFile
+ * calls and 53 MB of log -- and a histogram of that log is 100% one line, one vector,
+ * one AX value, repeated. The reads it is there to explain are 501 lines of it.
+ *
+ * [INFO]: THIS PROJECT HAS PAID FOR THIS EXACT SHAPE TWICE. Per-line LogAppend under the
+ * device lock cost SKYROADS 24% of its delivered timer ticks and only a player's ear
+ * caught it (see HostIrqSink); the same argument is written out again over
+ * wowquiet.txt. Both times the lesson was "stop writing a kilobyte per event". This
+ * is the third site, and the first one on a path a guest can drive at will.
+ * - SO BOUND IT PER (VECTOR, AH) -- NOT GLOBALLY. A global cap goes quiet on a RARE
+ *   vector because a common one already spent the budget, which is how a bounded log
+ *   becomes worse than no log at all (it is the "instrument lying by omission" that
+ *   LOG_MAX_BYTES was raised three times to avoid). Keyed this way, INT 21h AH=2Ch
+ *   falls silent after its first few and an INT 21h AH=3Fh arriving ten minutes later
+ *   still prints in full.
+ * - ...AND BOUND IT BY RATE, NOT ONLY BY COUNT. A pure count cap answers the wrong
+ *   question: it silences a pair after N lines however slowly they arrive, so the run
+ *   that matters -- a guest that is still going ten minutes in -- goes dark exactly
+ *   where the evidence is. ZAR is both cases at once: AH=2Ch at ~3,800/s must be
+ *   stopped, AH=3Fh at ~6/s (2,553 reads in a seven-minute run) is the ACTUAL SIGNAL
+ *   and must not be. So: the first PM_DISP_LOG_MAX of a pair always print (a rare call
+ *   is fully visible from its first appearance), and after that a pair may print again
+ *   once every PM_DISP_QUIET_MS. A 6/s caller stays fully traced; a 3,800/s one drops
+ *   to ten lines a second, ~400x smaller, and never goes silent.
+ *
+ * [CAUTION]: NOTHING IS LOST, only un-written: every pair is COUNTED whether logged or not and
+ * the totals are reported at STAGE2. And a pair says so when it crosses into the
+ * rate-limited regime, because a trace that simply stops reads as a crash (the rule
+ * LogAppend's own cap follows).
+ */
+#define PM_DISP_LOG_MAX                     24              /* Always-loud lines per (vec, AH) */
+#define PM_DISP_QUIET_MS                    100u            /* ...then at most one more per pair per this */
+
+#define DPMI_REFLECT_STACK_TOP              0xFB00 /* DpmiReflectIrqToRm: the real-mode stack it lends the ISR */
+
+enum
+{
+    DPMI_PMDEF_PARAS = 0x40
+};   /* the 256 default PM stubs, DPMI_PMDEF_STRIDE bytes each */
+
+enum
+{
+    LE_SCAN_FILE_MIN = 0x200, LE_SCAN_HEADER_ROOM = 0x100
+};   /* DpmiLeLearn: shortest file searched; header room left at the end */
+
+enum
+{
+    BREAKPOINT_COLUMN_LINEAR = 0, BREAKPOINT_COLUMN_DUMP = 1, BREAKPOINT_COLUMN_SKIP = 2, BREAKPOINT_COLUMN_MODE = 3, BREAKPOINT_COLUMN_REPORT = 4, BREAKPOINT_COLUMNS = 5
+};   /* pmbreak.txt: one breakpoint a line */
+
+enum
+{
+    DPMI_CALLBACK_STACK_TOP = 0xF400, DPMI_CALLBACK_PHASE_MAX = 64
+};   /* DpmiInvokeCallback: the PM stack it lends, the run's bound */
+
+enum
+{
+    DPMI_DISPATCH_PHASE_MAX = 4096
+};   /* DpmiDispatchToPmHandler: the nested run's bound */
+
+enum
+{
+    DPMI_IRQ_TIME_CHECK_MASK = 0x3F
+};   /* DpmiInjectPmIrq: look at the clock every 64 phases */
+
+enum
+{
+    DPMI_HOST_SELECTORS = 4
+};   /* DpmiClientTeardown: the host's own LDT entries it keeps */
+
 UINT g_DpmiCpMaximum = 8;
-static DWORD g_BreakpointLinear[DPMI_BP_MAX];     /* requested linear addresses (from PMBP_PATH) */
 DWORD g_BreakpointDump[DPMI_BP_MAX];    /* optional 2nd column: linear addr to dump on hit */
 /* Optional 3rd column: bytes to SKIP on hit instead of re-executing the instruction.
  * This turns a breakpoint into a one-instruction PATCH, which is how you test "would
@@ -103,6 +227,82 @@ BYTE  g_BreakpointPending[DPMI_BP_MAX];  /* skipped -> needs re-arming once EIP 
  * gives a register dump per iteration.
  */
 DWORD g_BreakpointReport[DPMI_BP_MAX];
+INT g_DpmiBlockCount = 0;
+DWORD g_DpmiOwned[DPMI_OWNED_MAX];  /* live 0501 blocks (VirtualAlloc bases) */
+INT   g_DpmiOwnedCount = 0;
+INT   g_LeCodeCount = 0;
+WORD  g_PmDefaultSelector  = 0;      /* code selector over the stub block */
+WORD  g_LdtFree[DPMI_LDT_MAX];   /* recycled indices, LIFO */
+INT   g_LdtFreeCount = 0;
+INT   g_PmWatchCount      = 0;
+/* THE OTHER HALF OF THE DELIVERY ACCOUNT:
+ * `pit budget` reads "raises 144/s ... delivered 56/s" and concludes the guest's clock
+ * runs at 39% of the rate it programmed. But `delivered` is g_AsyncInjectedLine[0] -- the
+ * ASYNCHRONOUS arm only -- and the client's INT 08h handler is entered by TWO
+ * mechanisms: that one, and the cooperative DpmiInjectPmIrq() the PM loop runs (the
+ * per-pass latch at #2b, and the catch-up batch on the catcher's return). Putting an
+ * async-only counter next to `raises` invites reading it as the total, which is a
+ * units error of exactly the kind that has cost this project rig runs before.
+ * Count the cooperative arm per VECTOR and print both arms against `raises`, so the
+ * line answers the question it appears to answer.
+ */
+DWORD g_PmCooperativeLine[PIC_LINES_PER_CHIP];
+WORD      g_PmTransferParagraphs = 0;
+INT g_HostPoolSpill = 0;
+
+/* A 16-bit CODE selector based on DOS_HDLR_SEG, so the host's own stubs (the 0306
+ * protected-to-real entry, the 0305 save/restore no-op) have a protected-mode address
+ * to hand the client. Allocated once, from the host-private pool above, and cached --
+ * 0305 and 0306 both want it and a client may call either more than once.
+ */
+WORD g_DpmiHandlerSelector = 0;
+
+/* Service one protected-mode interrupt the DPMI client raised (a patched INT nn
+ * that reflected as a BOP). `vec` = the ORIGINAL vector (0x31 = DPMI, 0x21 = DOS).
+ * Updates the guest CONTEXT with the results (regs + CF) and advances EIP past the
+ * 2-byte INT. Returns  1 = serviced, keep running;  0 = client terminated (INT 21h
+ * AH=4Ch);  -1 = unexpected / unserviceable stop (already logged).
+ * Extracted from the main PM loop so nested handlers -- a 0303 real-mode callback or
+ * a 0301 excursion proc that itself issues INT 31h/21h -- get the SAME full dispatch
+ * (GH #2). `steps` is only used for a log line. `mp` aliases the machine as `m` so the
+ * moved body is byte-for-byte the original (localized, #undef'd immediately).
+ */
+/* VECTOR A PROTECTED-MODE SOFTWARE INTERRUPT TO THE CLIENT'S OWN HANDLER:
+ *
+ * THE GAP THIS CLOSES, and it is architectural rather than a missing service.
+ * A DPMI client may install its own protected-mode handler for any interrupt (INT 31h
+ * 0205), and a host that then services the interrupt ITSELF has taken the client's
+ * interrupt away from it. We did exactly that for every PM INT, and the old comment on
+ * g_PmInt[] admitted it: "We still service patched INT 21h/31h ourselves -- routing to
+ * a client-installed PM handler is a deeper item".
+ *
+ * It is not deep, it is load-bearing. DOS/4GW installs a PM INT 21h handler at
+ * 0x67:0x84 (inside the aliased code window at base 0xd9b0) and then calls its OWN
+ * private extender functions through it -- `mov ax,0xff80 / mov dx,0x1301 / mov es,sel
+ * / int 21h`, and on CF it prints "DOS/16M error: [34] DPMI host error (cannot lock
+ * stack)" and dies. AX=FF80h is not a DOS function and never was; it is DOS/4GW talking
+ * to itself, and every answer WE invent for it is wrong. Measured both ways: leaving the
+ * flags alone let it limp on to a later failure, returning CF=1 killed it here. The only
+ * right answer is to let its handler run.
+ *
+ * Mechanics are the proven ones from DpmiInjectPmIrq(): push an IRET frame on the
+ * client's own stack pointing at the PM-return catcher, vector to the handler, and run
+ * it through the SAME dispatcher the main loop uses so a handler that issues INT 31h,
+ * port I/O or a nested DOS call still works.
+ *
+ * - WHAT WE DELIBERATELY DO **NOT** DO IS RESTORE THE REGISTER FILE. An async IRQ is
+ *   transparent, so DpmiInjectPmIrq restores everything; a SOFTWARE interrupt is a
+ *   call, and its whole purpose is to return AX/BX/CF to the caller. We keep what the
+ *   handler produced -- including EFLAGS, which after its IRET holds whatever it wrote
+ *   into the stack frame, which is precisely how a DOS handler returns CF.
+ *
+ * - RE-ENTRANCY: g_PmDispatch[vec] guards the case where the handler issues the same INT
+ *   again (a chain back to the host). We then service it ourselves, which is the
+ *   correct meaning of "chain to the previous handler" when the previous one is us.
+ */
+BYTE g_PmDispatch[IVT_VECTORS];                 /* 1 while inside vec's client handler */
+DWORD g_PmDispatchCount[IVT_VECTORS][BYTE_VALUES];     /* every dispatch, logged or not */
+static DWORD g_BreakpointLinear[DPMI_BP_MAX];     /* requested linear addresses (from PMBP_PATH) */
 static BYTE  g_BreakpointOriginal[DPMI_BP_MAX][DPMI_PM_BOP_LENGTH]; /* the two bytes we displaced */
 static BYTE  g_BreakpointArmed[DPMI_BP_MAX];
 /* [CAUTION]: A REFUSAL IS A STANDING CONDITION, NOT AN EVENT. (session 59) (Importance = 2):
@@ -117,66 +317,11 @@ static BYTE  g_BreakpointArmed[DPMI_BP_MAX];
  *   same per-key argument the reflected-INT trace needed this session.
  */
 static BYTE  g_BreakpointRefused[DPMI_BP_MAX];
-/* How many times each breakpoint has been PLANTED, and the ceiling. A repeating
- * breakpoint on a hot instruction is a log bomb: one mis-sequenced re-arm fired
- * 340,808 times and produced a 268 MB log in a single run. Past the ceiling the site
- * is simply left unarmed -- it has stopped answering a question by then.
- */
-#define DPMI_BP_ARM_MAX     512
 static DWORD g_BreakpointArms[DPMI_BP_MAX];
-INT g_DpmiBlockCount = 0;
-DWORD g_DpmiOwned[DPMI_OWNED_MAX];  /* live 0501 blocks (VirtualAlloc bases) */
-INT   g_DpmiOwnedCount = 0;
-#define DPMI_LE_MIN_CODE_SIZE   0x10000u    /* Only code objects this big are matched (see g_LeCodeSize) */
-INT   g_LeCodeCount = 0;
-
-/* How far an injected protected-mode ISR may run before we stop waiting for its IRET.
- * See the commentary at the phase loop in DpmiInjectPmIrq(): a phase is one PM entry,
- * not a unit of time, so the real bound is the clock; the phase count is only a backstop
- * against a handler that traps forever without making progress.
- */
-#define DPMI_IRQ0_PHASE_MAX     65536u
-#define DPMI_IRQ0_MS_MAX        500u
-WORD  g_PmDefaultSelector  = 0;      /* code selector over the stub block */
 static DWORD g_PmDefaultBase = 0;      /* its linear base */
 static INT   g_PmDefaultIndex  = -1;     /* its LDT slot, so its D/B can follow the client */
 static INT   g_PmDefaultFromDos = 0; /* the block came from the DOS arena, not the host pool */
-/* [INFO]: The host's private LDT pool sits between the reserved entries and the
- * client's arena; see the long note at DpmiHostIndex(). The range is MEASURED
- * (the guest never touches 0x09..0x2b across three full runs), and the
- * client-facing counter starts ABOVE it so the two can never meet.
- */
-#define DPMI_HOSTPOOL_LO    0x09
-WORD  g_LdtFree[DPMI_LDT_MAX];   /* recycled indices, LIFO */
-INT   g_LdtFreeCount = 0;
-INT   g_PmWatchCount      = 0;
 static DWORD g_PmIrq0Done   = 0;           /* cooperative injections that reached an IRET */
-/* THE OTHER HALF OF THE DELIVERY ACCOUNT:
- * `pit budget` reads "raises 144/s ... delivered 56/s" and concludes the guest's clock
- * runs at 39% of the rate it programmed. But `delivered` is g_AsyncInjectedLine[0] -- the
- * ASYNCHRONOUS arm only -- and the client's INT 08h handler is entered by TWO
- * mechanisms: that one, and the cooperative DpmiInjectPmIrq() the PM loop runs (the
- * per-pass latch at #2b, and the catch-up batch on the catcher's return). Putting an
- * async-only counter next to `raises` invites reading it as the total, which is a
- * units error of exactly the kind that has cost this project rig runs before.
- * Count the cooperative arm per VECTOR and print both arms against `raises`, so the
- * line answers the question it appears to answer.
- */
-DWORD g_PmCooperativeLine[PIC_LINES_PER_CHIP];
-WORD      g_PmTransferParagraphs = 0;
-
-/* True if selector `sel`'s descriptor has the D/B (32-bit default) bit set. The bit
- * lives in g_Ldt[].flags bit 2 (descriptor byte-6 bit 6). All 16-bit DPMI clients leave
- * it 0; a DOS/4GW-class 32-bit code selector sets it (via INT 31h 0009).
- */
-INT DpmiSelectorIs32(WORD selector)
-{
-    INT index = DPMI_SELECTOR_INDEX(selector & WORD_MASK);
-
-    if (index < 1 || index >= DPMI_LDT_LEGACY_LIMIT)
-        return 0;
-    return (g_Ldt[index].Flags & DPMI_DESCRIPTOR_FLAG_BIG) != 0;
-}
 
 /* A HOST-PRIVATE LDT POOL, BECAUSE krnl386 IS A SECOND ALLOCATOR (Importance = 5):
  * (session 48) MS Paint and Notepad both died on `File > Save As` with a #GP in
@@ -214,7 +359,24 @@ INT DpmiSelectorIs32(WORD selector)
  * host that stops minting selectors is worse than one that risks the old bug.
  */
 static INT g_HostPoolNext = DPMI_HOSTPOOL_LO;
-INT g_HostPoolSpill = 0;
+static WORD g_SegmentToDescriptorSegment[DPMI_S2D_MAX];
+static WORD g_SegmentToDescriptorSelector[DPMI_S2D_MAX];
+static INT  g_SegmentToDescriptorCount = 0;
+static BYTE  g_PmDispatchLogged[IVT_VECTORS][BYTE_VALUES];    /* always-loud lines emitted for (vec, AH) */
+static DWORD g_PmDispatchMs[IVT_VECTORS][BYTE_VALUES];        /* GetTickCount of the last line for the pair */
+
+/* True if selector `sel`'s descriptor has the D/B (32-bit default) bit set. The bit
+ * lives in g_Ldt[].flags bit 2 (descriptor byte-6 bit 6). All 16-bit DPMI clients leave
+ * it 0; a DOS/4GW-class 32-bit code selector sets it (via INT 31h 0009).
+ */
+INT DpmiSelectorIs32(WORD selector)
+{
+    INT index = DPMI_SELECTOR_INDEX(selector & WORD_MASK);
+
+    if (index < 1 || index >= DPMI_LDT_LEGACY_LIMIT)
+        return 0;
+    return (g_Ldt[index].Flags & DPMI_DESCRIPTOR_FLAG_BIG) != 0;
+}
 
 INT DpmiHostIndex(VOID)
 {
@@ -226,12 +388,6 @@ INT DpmiHostIndex(VOID)
     return g_LdtNext++;
 }
 
-/* A 16-bit CODE selector based on DOS_HDLR_SEG, so the host's own stubs (the 0306
- * protected-to-real entry, the 0305 save/restore no-op) have a protected-mode address
- * to hand the client. Allocated once, from the host-private pool above, and cached --
- * 0305 and 0306 both want it and a client may call either more than once.
- */
-WORD g_DpmiHandlerSelector = 0;
 WORD DpmiHandlerCodeSelector(VOID)
 {
     INT index;
@@ -249,27 +405,6 @@ WORD DpmiHandlerCodeSelector(VOID)
     g_DpmiHandlerSelector = (WORD)DPMI_LDT_SELECTOR(index);
     return g_DpmiHandlerSelector;
 }
-
-/* DPMI 0002: SEGMENT TO DESCRIPTOR:
- * Hand back a selector whose base is a real-mode paragraph address and whose limit
- * is 64K-1. Trivially small, and it was missing -- which mattered more than it
- * sounds: it is the DPMI function krnl386 calls MOST at start-up (per our INT 31h
- * log), because that is how the 16-bit
- * Windows kernel reaches the BIOS data area, the DOS list-of-lists, and everything
- * else it knows only as a paragraph.
- *
- * [CAUTION]: THE SAME SEGMENT MUST GIVE THE SAME SELECTOR. The descriptor belongs to the HOST,
- * not the client -- the client is told never to modify or free it -- so handing out
- * a fresh LDT entry per call would leak a descriptor per call and let a client
- * modify a mapping another part of it is still using. Hence the cache.
- * If a client frees one anyway (0001), the cache entry is dropped there, so the
- * next 0002 builds a fresh one rather than returning a selector that is no longer
- * present. That is the failure this avoids: a stale mapping faults far from here.
- */
-#define DPMI_S2D_MAX    64
-static WORD g_SegmentToDescriptorSegment[DPMI_S2D_MAX];
-static WORD g_SegmentToDescriptorSelector[DPMI_S2D_MAX];
-static INT  g_SegmentToDescriptorCount = 0;
 
 WORD DpmiSegmentToDescriptor(WORD segment)
 {
@@ -313,10 +448,6 @@ VOID DpmiSegmentToDescriptorForget(WORD selector)
         }
 }
 
-enum
-{
-    DPMI_PMDEF_PARAS = 0x40
-};   /* the 256 default PM stubs, DPMI_PMDEF_STRIDE bytes each */
 /* Plant the default PM interrupt handlers and point every vector at them. See the
  * note on g_PmDefaultSelector. Called once, at the mode switch, before the client runs.
  */
@@ -515,8 +646,6 @@ VOID DpmiInstall(INT index)
         }
     }
 }
-
-#define DPMI_FAULT_TRAMPOLINE_LDT_LIMIT     510     /* The trampoline takes two descriptors */
 
 /* GH #18 (run 67 corrected): install the PM-fault reflect machinery. Two LDT selectors:
  * a writable-DATA stack selector (g_DpmiFaultSelector, based at the host's g_FaultStack so
@@ -774,8 +903,6 @@ DWORD DpmiBopVector(DWORD csValue, DWORD eip)
     return 0;
 }
 
-#define DPMI_PATCH_REGION_MAX_U     0x00400000u     /* Larger = a flat selector, not a region */
-
 /* AN EIP IS ONLY 16 BITS WIDE WHEN ITS CODE SELECTOR IS:
  * Every PM stop used to read `VDM_REG(tib, VTIB_EIP) & 0xFFFF`, which is right for the
  * 16-bit selectors this host grew up on and WRONG the moment a client runs 32-bit code
@@ -796,8 +923,6 @@ DWORD DpmiPmEip(volatile BYTE *tib)
 
     return DpmiSelectorIs32((WORD)VDM_REG16(tib, VTIB_CS)) ? currentEip : (currentEip & WORD_MASK);
 }
-
-#define DPMI_PATCH_FLOOR    0x600   /* Below: the IVT, the BDA and DOS's own area */
 
 /* PATCH A REGION THE CLIENT HAS JUST DECLARED TO BE CODE:
  * Called from INT 31h 0009/000C when the resulting descriptor is a CODE type. The
@@ -1275,10 +1400,6 @@ VOID DpmiPatchCodeRegion(DWORD base, DWORD limit, INT is32BitRegion)
     DpmiBreakpointArm();          /* a module that has just appeared may hold a requested BP */
 }
 
-enum
-{
-    LE_SCAN_FILE_MIN = 0x200, LE_SCAN_HEADER_ROOM = 0x100
-};   /* DpmiLeLearn: shortest file searched; header room left at the end */
 /* Learn the program's EXECUTABLE object sizes from its own LE header. See the commentary
  * on g_LeCodeSize. The image is already in `filebuf` -- the loader read it to run the
  * MZ stub -- so this costs one pass over memory we are holding anyway and no file I/O.
@@ -1371,10 +1492,6 @@ VOID DpmiScanCodeBlocks(VOID)
                                    g_DpmiIsClient32);
 }
 
-enum
-{
-    BREAKPOINT_COLUMN_LINEAR = 0, BREAKPOINT_COLUMN_DUMP = 1, BREAKPOINT_COLUMN_SKIP = 2, BREAKPOINT_COLUMN_MODE = 3, BREAKPOINT_COLUMN_REPORT = 4, BREAKPOINT_COLUMNS = 5
-};   /* pmbreak.txt: one breakpoint a line */
 /* Read PMBP_PATH. One line per breakpoint:
  *   <addr>  [dump linear]  [skip bytes]  [mode]  [rep]   # comment
  * mode is a bit field: bit 0 (1) = the site is a ONE-BYTE instruction, so plant a
@@ -1926,10 +2043,6 @@ static VOID DpmiSyncDefaultSelectorWidth(VOID)
     DpmiInstall(g_PmDefaultIndex);
 }
 
-enum
-{
-    DPMI_CALLBACK_STACK_TOP = 0xF400, DPMI_CALLBACK_PHASE_MAX = 64
-};   /* DpmiInvokeCallback: the PM stack it lends, the run's bound */
 /* Invoke a DPMI 0303 real-mode callback: the guest (running in V86 during a 0301
  * excursion) far-called a planted callback BOP -- switch V86->PM, run the client's
  * PM handler with the real-mode register state marshalled into its RMCS, then resume
@@ -2067,97 +2180,6 @@ VOID DpmiInvokeCallback(DOS_MACHINE *machine, volatile BYTE *tib, INT slot)
     LogAppend(LOG_PATH, lineBuffer, lineCursor); SerialOut(lineBuffer, lineCursor); lineCursor = lineBuffer;
 }
 
-/* Service one protected-mode interrupt the DPMI client raised (a patched INT nn
- * that reflected as a BOP). `vec` = the ORIGINAL vector (0x31 = DPMI, 0x21 = DOS).
- * Updates the guest CONTEXT with the results (regs + CF) and advances EIP past the
- * 2-byte INT. Returns  1 = serviced, keep running;  0 = client terminated (INT 21h
- * AH=4Ch);  -1 = unexpected / unserviceable stop (already logged).
- * Extracted from the main PM loop so nested handlers -- a 0303 real-mode callback or
- * a 0301 excursion proc that itself issues INT 31h/21h -- get the SAME full dispatch
- * (GH #2). `steps` is only used for a log line. `mp` aliases the machine as `m` so the
- * moved body is byte-for-byte the original (localized, #undef'd immediately).
- */
-/* VECTOR A PROTECTED-MODE SOFTWARE INTERRUPT TO THE CLIENT'S OWN HANDLER:
- *
- * THE GAP THIS CLOSES, and it is architectural rather than a missing service.
- * A DPMI client may install its own protected-mode handler for any interrupt (INT 31h
- * 0205), and a host that then services the interrupt ITSELF has taken the client's
- * interrupt away from it. We did exactly that for every PM INT, and the old comment on
- * g_PmInt[] admitted it: "We still service patched INT 21h/31h ourselves -- routing to
- * a client-installed PM handler is a deeper item".
- *
- * It is not deep, it is load-bearing. DOS/4GW installs a PM INT 21h handler at
- * 0x67:0x84 (inside the aliased code window at base 0xd9b0) and then calls its OWN
- * private extender functions through it -- `mov ax,0xff80 / mov dx,0x1301 / mov es,sel
- * / int 21h`, and on CF it prints "DOS/16M error: [34] DPMI host error (cannot lock
- * stack)" and dies. AX=FF80h is not a DOS function and never was; it is DOS/4GW talking
- * to itself, and every answer WE invent for it is wrong. Measured both ways: leaving the
- * flags alone let it limp on to a later failure, returning CF=1 killed it here. The only
- * right answer is to let its handler run.
- *
- * Mechanics are the proven ones from DpmiInjectPmIrq(): push an IRET frame on the
- * client's own stack pointing at the PM-return catcher, vector to the handler, and run
- * it through the SAME dispatcher the main loop uses so a handler that issues INT 31h,
- * port I/O or a nested DOS call still works.
- *
- * - WHAT WE DELIBERATELY DO **NOT** DO IS RESTORE THE REGISTER FILE. An async IRQ is
- *   transparent, so DpmiInjectPmIrq restores everything; a SOFTWARE interrupt is a
- *   call, and its whole purpose is to return AX/BX/CF to the caller. We keep what the
- *   handler produced -- including EFLAGS, which after its IRET holds whatever it wrote
- *   into the stack frame, which is precisely how a DOS handler returns CF.
- *
- * - RE-ENTRANCY: g_PmDispatch[vec] guards the case where the handler issues the same INT
- *   again (a chain back to the host). We then service it ourselves, which is the
- *   correct meaning of "chain to the previous handler" when the previous one is us.
- */
-BYTE g_PmDispatch[IVT_VECTORS];                 /* 1 while inside vec's client handler */
-
-/* A REFLECTED INTERRUPT IS THE ONE TRACE THAT CAN OUTRUN THE GUEST (Importance = 4):
- * Every dispatch below writes two LogAppend lines (~350 bytes) and does two
- * HostReadable() probes to print the caller's pointer. That is the right amount of
- * detail for a handler called a dozen times, and a firehose for one the guest POLLS.
- *
- * [INFO]: MEASURED ON ZAR (GH #23), and it is most of why "Game loading..." crawls: while it
- * decompresses ZARN0.SFS the game asks its OWN INT 21h hook for AH=2Ch about 3,800
- * times a second. A 45 s run is ~170,000 reflected dispatches, ~340,000 WriteFile
- * calls and 53 MB of log -- and a histogram of that log is 100% one line, one vector,
- * one AX value, repeated. The reads it is there to explain are 501 lines of it.
- *
- * [INFO]: THIS PROJECT HAS PAID FOR THIS EXACT SHAPE TWICE. Per-line LogAppend under the
- * device lock cost SKYROADS 24% of its delivered timer ticks and only a player's ear
- * caught it (see HostIrqSink); the same argument is written out again over
- * wowquiet.txt. Both times the lesson was "stop writing a kilobyte per event". This
- * is the third site, and the first one on a path a guest can drive at will.
- * - SO BOUND IT PER (VECTOR, AH) -- NOT GLOBALLY. A global cap goes quiet on a RARE
- *   vector because a common one already spent the budget, which is how a bounded log
- *   becomes worse than no log at all (it is the "instrument lying by omission" that
- *   LOG_MAX_BYTES was raised three times to avoid). Keyed this way, INT 21h AH=2Ch
- *   falls silent after its first few and an INT 21h AH=3Fh arriving ten minutes later
- *   still prints in full.
- * - ...AND BOUND IT BY RATE, NOT ONLY BY COUNT. A pure count cap answers the wrong
- *   question: it silences a pair after N lines however slowly they arrive, so the run
- *   that matters -- a guest that is still going ten minutes in -- goes dark exactly
- *   where the evidence is. ZAR is both cases at once: AH=2Ch at ~3,800/s must be
- *   stopped, AH=3Fh at ~6/s (2,553 reads in a seven-minute run) is the ACTUAL SIGNAL
- *   and must not be. So: the first PM_DISP_LOG_MAX of a pair always print (a rare call
- *   is fully visible from its first appearance), and after that a pair may print again
- *   once every PM_DISP_QUIET_MS. A 6/s caller stays fully traced; a 3,800/s one drops
- *   to ten lines a second, ~400x smaller, and never goes silent.
- *
- * [CAUTION]: NOTHING IS LOST, only un-written: every pair is COUNTED whether logged or not and
- * the totals are reported at STAGE2. And a pair says so when it crosses into the
- * rate-limited regime, because a trace that simply stops reads as a crash (the rule
- * LogAppend's own cap follows).
- */
-#define PM_DISP_LOG_MAX     24      /* Always-loud lines per (vec, AH) */
-#define PM_DISP_QUIET_MS    100u    /* ...then at most one more per pair per this */
-static BYTE  g_PmDispatchLogged[IVT_VECTORS][BYTE_VALUES];    /* always-loud lines emitted for (vec, AH) */
-DWORD g_PmDispatchCount[IVT_VECTORS][BYTE_VALUES];     /* every dispatch, logged or not */
-static DWORD g_PmDispatchMs[IVT_VECTORS][BYTE_VALUES];        /* GetTickCount of the last line for the pair */
-enum
-{
-    DPMI_DISPATCH_PHASE_MAX = 4096
-};   /* DpmiDispatchToPmHandler: the nested run's bound */
 INT DpmiDispatchToPmHandler(DOS_MACHINE *machine, volatile BYTE *tib, DWORD vector, UINT steps)
 {
     /* [CAUTION]: 256 WAS NINE BYTES OF HEADROOM, AND ADDING ONE FIELD BLEW IT (Importance = 2):
@@ -2816,8 +2838,6 @@ PSTR PmInt21Transfer(DOS_MACHINE *machine, volatile BYTE *tib, DWORD ah, PSTR cu
     return cursor;
 #undef m
 }
-
-#define DPMI_REFLECT_STACK_TOP  0xFB00  /* DpmiReflectIrqToRm: the real-mode stack it lends the ISR */
 
 /* #210: THE LONG-FILENAME API (INT 21h AH=71h) FROM PROTECTED MODE:
  * Same bridge as PmInt21Transfer, but an LFN call can carry THREE pointers at once (7156h:
@@ -3524,10 +3544,6 @@ INT DpmiAsyncInjectPm(UINT irq, CONTEXT *context)
     return 1;
 }
 
-enum
-{
-    DPMI_IRQ_TIME_CHECK_MASK = 0x3F
-};   /* DpmiInjectPmIrq: look at the clock every 64 phases */
 /* A FAULT INSIDE A NESTED RUN IS STILL A FAULT. (s90, found tracing #278) (Importance = 2):
  * The main PM loop owns exception delivery: the kernel reflects a fault onto one
  * of our fault sites (`C4 C4 57` in g_DpmiFaultCodeSelector), and the main loop hands
@@ -3661,10 +3677,6 @@ INT DpmiNestedFault(volatile BYTE *tib, DWORD event, DWORD eip)
     return 0;
 }
 
-enum
-{
-    DPMI_HOST_SELECTORS = 4
-};   /* DpmiClientTeardown: the host's own LDT entries it keeps */
 INT DpmiInjectPmIrq(DOS_MACHINE *machine, volatile BYTE *tib, UINT interruptVector, UINT steps)
 {
     CHAR lineBuffer[256];

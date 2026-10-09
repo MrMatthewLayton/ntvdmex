@@ -20,8 +20,6 @@
 #include <stdio.h>
 #include "dos_clock.h"
 
-DOS_CLOCK_STATE g_DosClock;
-
 /* Days of the week as 2Ah's AL numbers them. */
 #define CLOCK_TEST_SUNDAY               0
 #define CLOCK_TEST_TUESDAY              2
@@ -56,6 +54,8 @@ DOS_CLOCK_STATE g_DosClock;
 #define CLOCK_TEST_HUNDREDTHS_IN_DAY    8639985     /* 0x1800B0 ticks: 24h - 0.15 s */
 #define CLOCK_TEST_TICKS_5_SECONDS      91          /* ~5 s of ticks */
 #define CLOCK_TEST_TICKS_10_SECONDS     182         /* ~10 s of ticks */
+
+DOS_CLOCK_STATE g_DosClock;
 
 static INT g_Checks;
 static INT g_Failures;

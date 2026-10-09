@@ -122,6 +122,234 @@
 #define INPUT_INT16_CAPABILITY_BITS             0xB1
 #define INPUT_KEYBOARD_ID_MF2                   0x41AB  /* MF2 behind a translating 8042 */
 
+/* --- scancode set 1 -> the BIOS keycode (US layout) ------------------------- */
+/* FOUR COLUMNS, BECAUSE THE BIOS HAS FOUR (Importance = 1):
+ * Indexed by make code 0x00..0x58: what INT 09h stores for the key plain, with
+ * Shift, with Ctrl and with Alt. A 0 entry means the BIOS stores NOTHING for that
+ * combination (Ctrl+1 on a real keyboard is silent). This is the IBM table as every
+ * BIOS carries it (SeaBIOS's scan_to_scanascii is the same data).
+ *
+ * [CAUTION]: The old code had only a plain and a shifted ASCII column and derived Ctrl by
+ * masking; it never looked at Alt at all. So Alt+F arrived as AH=21h AL='f' -- a
+ * letter -- where the BIOS says 2100h, and every DOS editor's menu accelerator
+ * (edit.com, QBasic, Turbo Pascal's IDE, Norton) typed a letter instead of opening
+ * its menu. The F-key rows matter just as much: Shift+F1 is 5400h, Ctrl+F1 5E00h,
+ * Alt+F1 6800h, and a program that binds them (every editor) needs those exact codes.
+ * The keypad rows hold the NAVIGATION codes in the plain column and the DIGITS in the
+ * Shift column, because that is how NumLock works: it swaps the two, and Shift undoes
+ * the swap. The Alt column of the keypad digits is 0 because those keys feed the BIOS's
+ * Alt+numpad accumulator at 0040:0019 instead of storing anything (#274, kb_altnum).
+ */
+#define INPUT_SCANCODE_TABLE_LAST               0x58
+
+/* Shift-state bits in 0040:0017, as every DOS program expects to find them. */
+#define INPUT_SHIFT_RIGHT_SHIFT                 0x01
+#define INPUT_SHIFT_LEFT_SHIFT                  0x02
+#define INPUT_SHIFT_CTRL                        0x04
+#define INPUT_SHIFT_ALT                         0x08
+#define INPUT_SHIFT_SCROLL_LOCK                 0x10
+#define INPUT_SHIFT_NUM_LOCK                    0x20
+#define INPUT_SHIFT_CAPS_LOCK                   0x40
+
+/* #254: THE REST OF THE BIOS's KEYBOARD STATE:
+ * 0040:0018 (KB_FLAG_1): bit 0 LEFT Ctrl held, 1 LEFT Alt held, 2 SysReq held,
+ * 3 PAUSE active, 4 Scroll held, 5 NumLock held, 6 Caps held, 7 Insert held.
+ * 0040:0096 (KB_FLAG_3): bit 0 last code was E1h, 1 last code was E0h, 2 RIGHT Ctrl
+ * held, 3 RIGHT Alt held, 4 enhanced keyboard (set at reset).
+ * 0040:0017 bit 2/3 (Ctrl/Alt) are "either side", so they follow the two held bits
+ * rather than the last make/break -- releasing left Ctrl while right is held used to
+ * clear Ctrl. The lock keys toggle once per PRESS: a held key's typematic repeats
+ * arrive as more makes, and the "held" bit is what stops them re-toggling.
+ */
+#define INPUT_SHIFT2_LEFT_CTRL                  0x01
+#define INPUT_SHIFT2_LEFT_ALT                   0x02
+#define INPUT_SHIFT2_SYSREQ                     0x04
+#define INPUT_SHIFT2_PAUSE                      0x08
+#define INPUT_SHIFT2_SCROLL_HELD                0x10
+#define INPUT_SHIFT2_NUM_HELD                   0x20
+#define INPUT_SHIFT2_CAPS_HELD                  0x40
+#define INPUT_SHIFT2_INSERT_HELD                0x80
+#define INPUT_FLAGS3_E1                         0x01
+#define INPUT_FLAGS3_E0                         0x02
+#define INPUT_FLAGS3_RIGHT_CTRL                 0x04
+#define INPUT_FLAGS3_RIGHT_ALT                  0x08
+#define INPUT_SHIFT_INSERT                      0x80
+
+/* #136: KEYBOARD LAYOUTS, TAKEN FROM WINDOWS XP'S OWN TABLES:
+ * The table above is the US BIOS. A layout only changes what the PLAIN and SHIFT
+ * columns produce for some keys, so each layout is an overlay of (scan code, plain,
+ * shift) in the DOS code page. The rows were NOT typed from memory: `rigshot kbdmap
+ * <KLID>` asked XP (LoadKeyboardLayout -> ToAsciiEx -> CharToOem) what every scan
+ * code produces on the rig, and the tables are the differences from its US answer
+ * (runs/s82/kbdmap.txt; the US dump matches this BIOS table except Shift+Tab and
+ * keypad 5, where the BIOS deliberately differs). Dead keys (German ^ and the accent
+ * key, French ^) keep the US character: composition is not modelled. Ctrl and Alt
+ * columns are unchanged, except that a letter which MOVED (German Y/Z, French A/Q/
+ * W/Z/M) gets the Ctrl code of the letter it now types. Index = SET_KBLAYOUT's item:
+ * US | United Kingdom | German | French.
+ */
+typedef struct _KEYBOARD_OVERRIDE
+{
+    BYTE ScanCode;
+    BYTE Plain;
+    BYTE Shifted;
+} KEYBOARD_OVERRIDE, *PKEYBOARD_OVERRIDE;
+
+static const WORD g_InputScanCodeTable[INPUT_SCANCODE_TABLE_LAST + 1][INPUT_SCANCODE_COLUMNS] = {
+    { 0x0000, 0x0000, 0x0000, 0x0000 },                 /* 00: none */
+    { 0x011B, 0x011B, 0x011B, 0x0100 },                 /* 01: Esc */
+    { 0x0231, 0x0221, 0x0000, 0x7800 },                 /* 02: 1 ! */
+    { 0x0332, 0x0340, 0x0300, 0x7900 },                 /* 03: 2 @  (Ctrl+2=NUL) */
+    { 0x0433, 0x0423, 0x0000, 0x7A00 },                 /* 04: 3 # */
+    { 0x0534, 0x0524, 0x0000, 0x7B00 },                 /* 05: 4 $ */
+    { 0x0635, 0x0625, 0x0000, 0x7C00 },                 /* 06: 5 % */
+    { 0x0736, 0x075E, 0x071E, 0x7D00 },                 /* 07: 6 ^  (Ctrl+6=RS) */
+    { 0x0837, 0x0826, 0x0000, 0x7E00 },                 /* 08: 7 & */
+    { 0x0938, 0x092A, 0x0000, 0x7F00 },                 /* 09: 8 * */
+    { 0x0A39, 0x0A28, 0x0000, 0x8000 },                 /* 0A: 9 ( */
+    { 0x0B30, 0x0B29, 0x0000, 0x8100 },                 /* 0B: 0 ) */
+    { 0x0C2D, 0x0C5F, 0x0C1F, 0x8200 },                 /* 0C: - _  (Ctrl+-=US) */
+    { 0x0D3D, 0x0D2B, 0x0000, 0x8300 },                 /* 0D: = + */
+    { 0x0E08, 0x0E08, 0x0E7F, 0x0E00 },                 /* 0E: Backspace */
+    { 0x0F09, 0x0F00, 0x9400, 0xA500 },                 /* 0F: Tab */
+    { 0x1071, 0x1051, 0x1011, 0x1000 },                 /* 10: Q */
+    { 0x1177, 0x1157, 0x1117, 0x1100 },                 /* 11: W */
+    { 0x1265, 0x1245, 0x1205, 0x1200 },                 /* 12: E */
+    { 0x1372, 0x1352, 0x1312, 0x1300 },                 /* 13: R */
+    { 0x1474, 0x1454, 0x1414, 0x1400 },                 /* 14: T */
+    { 0x1579, 0x1559, 0x1519, 0x1500 },                 /* 15: Y */
+    { 0x1675, 0x1655, 0x1615, 0x1600 },                 /* 16: U */
+    { 0x1769, 0x1749, 0x1709, 0x1700 },                 /* 17: I */
+    { 0x186F, 0x184F, 0x180F, 0x1800 },                 /* 18: O */
+    { 0x1970, 0x1950, 0x1910, 0x1900 },                 /* 19: P */
+    { 0x1A5B, 0x1A7B, 0x1A1B, 0x1A00 },                 /* 1A: [ { */
+    { 0x1B5D, 0x1B7D, 0x1B1D, 0x1B00 },                 /* 1B: ] } */
+    { 0x1C0D, 0x1C0D, 0x1C0A, 0x1C00 },                 /* 1C: Enter */
+    { 0x0000, 0x0000, 0x0000, 0x0000 },                 /* 1D: Ctrl */
+    { 0x1E61, 0x1E41, 0x1E01, 0x1E00 },                 /* 1E: A */
+    { 0x1F73, 0x1F53, 0x1F13, 0x1F00 },                 /* 1F: S */
+    { 0x2064, 0x2044, 0x2004, 0x2000 },                 /* 20: D */
+    { 0x2166, 0x2146, 0x2106, 0x2100 },                 /* 21: F */
+    { 0x2267, 0x2247, 0x2207, 0x2200 },                 /* 22: G */
+    { 0x2368, 0x2348, 0x2308, 0x2300 },                 /* 23: H */
+    { 0x246A, 0x244A, 0x240A, 0x2400 },                 /* 24: J */
+    { 0x256B, 0x254B, 0x250B, 0x2500 },                 /* 25: K */
+    { 0x266C, 0x264C, 0x260C, 0x2600 },                 /* 26: L */
+    { 0x273B, 0x273A, 0x0000, 0x2700 },                 /* 27: ; : */
+    { 0x2827, 0x2822, 0x0000, 0x2800 },                 /* 28: ' " */
+    { 0x2960, 0x297E, 0x0000, 0x2900 },                 /* 29: ` ~ */
+    { 0x0000, 0x0000, 0x0000, 0x0000 },                 /* 2A: LShift */
+    { 0x2B5C, 0x2B7C, 0x2B1C, 0x2B00 },                 /* 2B: \ | */
+    { 0x2C7A, 0x2C5A, 0x2C1A, 0x2C00 },                 /* 2C: Z */
+    { 0x2D78, 0x2D58, 0x2D18, 0x2D00 },                 /* 2D: X */
+    { 0x2E63, 0x2E43, 0x2E03, 0x2E00 },                 /* 2E: C */
+    { 0x2F76, 0x2F56, 0x2F16, 0x2F00 },                 /* 2F: V */
+    { 0x3062, 0x3042, 0x3002, 0x3000 },                 /* 30: B */
+    { 0x316E, 0x314E, 0x310E, 0x3100 },                 /* 31: N */
+    { 0x326D, 0x324D, 0x320D, 0x3200 },                 /* 32: M */
+    { 0x332C, 0x333C, 0x0000, 0x3300 },                 /* 33: , < */
+    { 0x342E, 0x343E, 0x0000, 0x3400 },                 /* 34: . > */
+    { 0x352F, 0x353F, 0x0000, 0x3500 },                 /* 35: / ? */
+    { 0x0000, 0x0000, 0x0000, 0x0000 },                 /* 36: RShift */
+    { 0x372A, 0x372A, 0x9600, 0x3700 },                 /* 37: keypad * */
+    { 0x0000, 0x0000, 0x0000, 0x0000 },                 /* 38: Alt */
+    { 0x3920, 0x3920, 0x3920, 0x3920 },                 /* 39: Space */
+    { 0x0000, 0x0000, 0x0000, 0x0000 },                 /* 3A: CapsLock */
+    { 0x3B00, 0x5400, 0x5E00, 0x6800 },                 /* 3B: F1 */
+    { 0x3C00, 0x5500, 0x5F00, 0x6900 },                 /* 3C: F2 */
+    { 0x3D00, 0x5600, 0x6000, 0x6A00 },                 /* 3D: F3 */
+    { 0x3E00, 0x5700, 0x6100, 0x6B00 },                 /* 3E: F4 */
+    { 0x3F00, 0x5800, 0x6200, 0x6C00 },                 /* 3F: F5 */
+    { 0x4000, 0x5900, 0x6300, 0x6D00 },                 /* 40: F6 */
+    { 0x4100, 0x5A00, 0x6400, 0x6E00 },                 /* 41: F7 */
+    { 0x4200, 0x5B00, 0x6500, 0x6F00 },                 /* 42: F8 */
+    { 0x4300, 0x5C00, 0x6600, 0x7000 },                 /* 43: F9 */
+    { 0x4400, 0x5D00, 0x6700, 0x7100 },                 /* 44: F10 */
+    { 0x0000, 0x0000, 0x0000, 0x0000 },                 /* 45: NumLock */
+    { 0x0000, 0x0000, 0x0000, 0x0000 },                 /* 46: ScrollLock */
+    { 0x4700, 0x4737, 0x7700, 0x0000 },                 /* 47: keypad 7 / Home */
+    { 0x4800, 0x4838, 0x8D00, 0x0000 },                 /* 48: keypad 8 / Up */
+    { 0x4900, 0x4939, 0x8400, 0x0000 },                 /* 49: keypad 9 / PgUp */
+    { 0x4A2D, 0x4A2D, 0x8E00, 0x4A00 },                 /* 4A: keypad - */
+    { 0x4B00, 0x4B34, 0x7300, 0x0000 },                 /* 4B: keypad 4 / Left */
+    { 0x4CF0, 0x4C35, 0x8F00, 0x0000 },                 /* 4C: keypad 5 */
+    { 0x4D00, 0x4D36, 0x7400, 0x0000 },                 /* 4D: keypad 6 / Right */
+    { 0x4E2B, 0x4E2B, 0x9000, 0x4E00 },                 /* 4E: keypad + */
+    { 0x4F00, 0x4F31, 0x7500, 0x0000 },                 /* 4F: keypad 1 / End */
+    { 0x5000, 0x5032, 0x9100, 0x0000 },                 /* 50: keypad 2 / Down */
+    { 0x5100, 0x5133, 0x7600, 0x0000 },                 /* 51: keypad 3 / PgDn */
+    { 0x5200, 0x5230, 0x9200, 0x0000 },                 /* 52: keypad 0 / Ins */
+    { 0x5300, 0x532E, 0x9300, 0x0000 },                 /* 53: keypad . / Del */
+    { 0x0000, 0x0000, 0x0000, 0x0000 },                 /* 54: SysRq */
+    { 0x0000, 0x0000, 0x0000, 0x0000 },                 /* 55 */
+    { 0x565C, 0x567C, 0x0000, 0x0000 },                 /* 56: 102-key \ | */
+    { 0x8500, 0x8700, 0x8900, 0x8B00 },                 /* 57: F11 */
+    { 0x8600, 0x8800, 0x8A00, 0x8C00 },                 /* 58: F12 */
+};
+/* United Kingdom (XP layout 00000809): 5 keys differ from US. */
+static const KEYBOARD_OVERRIDE g_KeyboardUk[] = {
+    { 0x03, 0x32, 0x22 },
+    { 0x04, 0x33, 0x9C },
+    { 0x28, 0x27, 0x40 },
+    { 0x29, 0x60, 0xAA },
+    { 0x2B, 0x23, 0x7E },
+    { 0, 0, 0 }
+};
+/* German (XP layout 00000407): 19 keys differ from US. */
+static const KEYBOARD_OVERRIDE g_KeyboardDe[] = {
+    { 0x03, 0x32, 0x22 },
+    { 0x04, 0x33, 0xF5 },
+    { 0x07, 0x36, 0x26 },
+    { 0x08, 0x37, 0x2F },
+    { 0x09, 0x38, 0x28 },
+    { 0x0A, 0x39, 0x29 },
+    { 0x0B, 0x30, 0x3D },
+    { 0x0C, 0xE1, 0x3F },
+    { 0x15, 0x7A, 0x5A },
+    { 0x1A, 0x81, 0x9A },
+    { 0x1B, 0x2B, 0x2A },
+    { 0x27, 0x94, 0x99 },
+    { 0x28, 0x84, 0x8E },
+    { 0x2B, 0x23, 0x27 },
+    { 0x2C, 0x79, 0x59 },
+    { 0x33, 0x2C, 0x3B },
+    { 0x34, 0x2E, 0x3A },
+    { 0x35, 0x2D, 0x5F },
+    { 0x56, 0x3C, 0x3E },
+    { 0, 0, 0 }
+};
+/* French (XP layout 0000040C): 25 keys differ from US. */
+static const KEYBOARD_OVERRIDE g_KeyboardFr[] = {
+    { 0x02, 0x26, 0x31 },
+    { 0x03, 0x82, 0x32 },
+    { 0x04, 0x22, 0x33 },
+    { 0x05, 0x27, 0x34 },
+    { 0x06, 0x28, 0x35 },
+    { 0x07, 0x2D, 0x36 },
+    { 0x08, 0x8A, 0x37 },
+    { 0x09, 0x5F, 0x38 },
+    { 0x0A, 0x87, 0x39 },
+    { 0x0B, 0x85, 0x30 },
+    { 0x0C, 0x29, 0xF8 },
+    { 0x10, 0x61, 0x41 },
+    { 0x11, 0x7A, 0x5A },
+    { 0x1B, 0x24, 0x9C },
+    { 0x1E, 0x71, 0x51 },
+    { 0x27, 0x6D, 0x4D },
+    { 0x28, 0x97, 0x25 },
+    { 0x29, 0xFD, 0x00 },
+    { 0x2B, 0x2A, 0xE6 },
+    { 0x2C, 0x77, 0x57 },
+    { 0x32, 0x2C, 0x3F },
+    { 0x33, 0x3B, 0x2E },
+    { 0x34, 0x3A, 0x2F },
+    { 0x35, 0x21, 0xF5 },
+    { 0x56, 0x3C, 0x3E },
+    { 0, 0, 0 }
+};
+
+static const KEYBOARD_OVERRIDE *const g_KeyboardLayouts[INPUT_KEYBOARD_LAYOUTS] = { 0, g_KeyboardUk, g_KeyboardDe, g_KeyboardFr };
+
 static INT InputNextIndex(INT index)
 {
     return (index + 1) % INPUT_SCANCODE_QUEUE_SIZE;
@@ -332,116 +560,6 @@ VOID VddInputPushScanCode(PINPUT_STATE state, BYTE scanCode)
         VddInputPoll(state);
 }
 
-/* --- scancode set 1 -> the BIOS keycode (US layout) ------------------------- */
-/* FOUR COLUMNS, BECAUSE THE BIOS HAS FOUR (Importance = 1):
- * Indexed by make code 0x00..0x58: what INT 09h stores for the key plain, with
- * Shift, with Ctrl and with Alt. A 0 entry means the BIOS stores NOTHING for that
- * combination (Ctrl+1 on a real keyboard is silent). This is the IBM table as every
- * BIOS carries it (SeaBIOS's scan_to_scanascii is the same data).
- *
- * [CAUTION]: The old code had only a plain and a shifted ASCII column and derived Ctrl by
- * masking; it never looked at Alt at all. So Alt+F arrived as AH=21h AL='f' -- a
- * letter -- where the BIOS says 2100h, and every DOS editor's menu accelerator
- * (edit.com, QBasic, Turbo Pascal's IDE, Norton) typed a letter instead of opening
- * its menu. The F-key rows matter just as much: Shift+F1 is 5400h, Ctrl+F1 5E00h,
- * Alt+F1 6800h, and a program that binds them (every editor) needs those exact codes.
- * The keypad rows hold the NAVIGATION codes in the plain column and the DIGITS in the
- * Shift column, because that is how NumLock works: it swaps the two, and Shift undoes
- * the swap. The Alt column of the keypad digits is 0 because those keys feed the BIOS's
- * Alt+numpad accumulator at 0040:0019 instead of storing anything (#274, kb_altnum).
- */
-#define INPUT_SCANCODE_TABLE_LAST   0x58
-static const WORD g_InputScanCodeTable[INPUT_SCANCODE_TABLE_LAST + 1][INPUT_SCANCODE_COLUMNS] = {
-    { 0x0000, 0x0000, 0x0000, 0x0000 },                 /* 00: none */
-    { 0x011B, 0x011B, 0x011B, 0x0100 },                 /* 01: Esc */
-    { 0x0231, 0x0221, 0x0000, 0x7800 },                 /* 02: 1 ! */
-    { 0x0332, 0x0340, 0x0300, 0x7900 },                 /* 03: 2 @  (Ctrl+2=NUL) */
-    { 0x0433, 0x0423, 0x0000, 0x7A00 },                 /* 04: 3 # */
-    { 0x0534, 0x0524, 0x0000, 0x7B00 },                 /* 05: 4 $ */
-    { 0x0635, 0x0625, 0x0000, 0x7C00 },                 /* 06: 5 % */
-    { 0x0736, 0x075E, 0x071E, 0x7D00 },                 /* 07: 6 ^  (Ctrl+6=RS) */
-    { 0x0837, 0x0826, 0x0000, 0x7E00 },                 /* 08: 7 & */
-    { 0x0938, 0x092A, 0x0000, 0x7F00 },                 /* 09: 8 * */
-    { 0x0A39, 0x0A28, 0x0000, 0x8000 },                 /* 0A: 9 ( */
-    { 0x0B30, 0x0B29, 0x0000, 0x8100 },                 /* 0B: 0 ) */
-    { 0x0C2D, 0x0C5F, 0x0C1F, 0x8200 },                 /* 0C: - _  (Ctrl+-=US) */
-    { 0x0D3D, 0x0D2B, 0x0000, 0x8300 },                 /* 0D: = + */
-    { 0x0E08, 0x0E08, 0x0E7F, 0x0E00 },                 /* 0E: Backspace */
-    { 0x0F09, 0x0F00, 0x9400, 0xA500 },                 /* 0F: Tab */
-    { 0x1071, 0x1051, 0x1011, 0x1000 },                 /* 10: Q */
-    { 0x1177, 0x1157, 0x1117, 0x1100 },                 /* 11: W */
-    { 0x1265, 0x1245, 0x1205, 0x1200 },                 /* 12: E */
-    { 0x1372, 0x1352, 0x1312, 0x1300 },                 /* 13: R */
-    { 0x1474, 0x1454, 0x1414, 0x1400 },                 /* 14: T */
-    { 0x1579, 0x1559, 0x1519, 0x1500 },                 /* 15: Y */
-    { 0x1675, 0x1655, 0x1615, 0x1600 },                 /* 16: U */
-    { 0x1769, 0x1749, 0x1709, 0x1700 },                 /* 17: I */
-    { 0x186F, 0x184F, 0x180F, 0x1800 },                 /* 18: O */
-    { 0x1970, 0x1950, 0x1910, 0x1900 },                 /* 19: P */
-    { 0x1A5B, 0x1A7B, 0x1A1B, 0x1A00 },                 /* 1A: [ { */
-    { 0x1B5D, 0x1B7D, 0x1B1D, 0x1B00 },                 /* 1B: ] } */
-    { 0x1C0D, 0x1C0D, 0x1C0A, 0x1C00 },                 /* 1C: Enter */
-    { 0x0000, 0x0000, 0x0000, 0x0000 },                 /* 1D: Ctrl */
-    { 0x1E61, 0x1E41, 0x1E01, 0x1E00 },                 /* 1E: A */
-    { 0x1F73, 0x1F53, 0x1F13, 0x1F00 },                 /* 1F: S */
-    { 0x2064, 0x2044, 0x2004, 0x2000 },                 /* 20: D */
-    { 0x2166, 0x2146, 0x2106, 0x2100 },                 /* 21: F */
-    { 0x2267, 0x2247, 0x2207, 0x2200 },                 /* 22: G */
-    { 0x2368, 0x2348, 0x2308, 0x2300 },                 /* 23: H */
-    { 0x246A, 0x244A, 0x240A, 0x2400 },                 /* 24: J */
-    { 0x256B, 0x254B, 0x250B, 0x2500 },                 /* 25: K */
-    { 0x266C, 0x264C, 0x260C, 0x2600 },                 /* 26: L */
-    { 0x273B, 0x273A, 0x0000, 0x2700 },                 /* 27: ; : */
-    { 0x2827, 0x2822, 0x0000, 0x2800 },                 /* 28: ' " */
-    { 0x2960, 0x297E, 0x0000, 0x2900 },                 /* 29: ` ~ */
-    { 0x0000, 0x0000, 0x0000, 0x0000 },                 /* 2A: LShift */
-    { 0x2B5C, 0x2B7C, 0x2B1C, 0x2B00 },                 /* 2B: \ | */
-    { 0x2C7A, 0x2C5A, 0x2C1A, 0x2C00 },                 /* 2C: Z */
-    { 0x2D78, 0x2D58, 0x2D18, 0x2D00 },                 /* 2D: X */
-    { 0x2E63, 0x2E43, 0x2E03, 0x2E00 },                 /* 2E: C */
-    { 0x2F76, 0x2F56, 0x2F16, 0x2F00 },                 /* 2F: V */
-    { 0x3062, 0x3042, 0x3002, 0x3000 },                 /* 30: B */
-    { 0x316E, 0x314E, 0x310E, 0x3100 },                 /* 31: N */
-    { 0x326D, 0x324D, 0x320D, 0x3200 },                 /* 32: M */
-    { 0x332C, 0x333C, 0x0000, 0x3300 },                 /* 33: , < */
-    { 0x342E, 0x343E, 0x0000, 0x3400 },                 /* 34: . > */
-    { 0x352F, 0x353F, 0x0000, 0x3500 },                 /* 35: / ? */
-    { 0x0000, 0x0000, 0x0000, 0x0000 },                 /* 36: RShift */
-    { 0x372A, 0x372A, 0x9600, 0x3700 },                 /* 37: keypad * */
-    { 0x0000, 0x0000, 0x0000, 0x0000 },                 /* 38: Alt */
-    { 0x3920, 0x3920, 0x3920, 0x3920 },                 /* 39: Space */
-    { 0x0000, 0x0000, 0x0000, 0x0000 },                 /* 3A: CapsLock */
-    { 0x3B00, 0x5400, 0x5E00, 0x6800 },                 /* 3B: F1 */
-    { 0x3C00, 0x5500, 0x5F00, 0x6900 },                 /* 3C: F2 */
-    { 0x3D00, 0x5600, 0x6000, 0x6A00 },                 /* 3D: F3 */
-    { 0x3E00, 0x5700, 0x6100, 0x6B00 },                 /* 3E: F4 */
-    { 0x3F00, 0x5800, 0x6200, 0x6C00 },                 /* 3F: F5 */
-    { 0x4000, 0x5900, 0x6300, 0x6D00 },                 /* 40: F6 */
-    { 0x4100, 0x5A00, 0x6400, 0x6E00 },                 /* 41: F7 */
-    { 0x4200, 0x5B00, 0x6500, 0x6F00 },                 /* 42: F8 */
-    { 0x4300, 0x5C00, 0x6600, 0x7000 },                 /* 43: F9 */
-    { 0x4400, 0x5D00, 0x6700, 0x7100 },                 /* 44: F10 */
-    { 0x0000, 0x0000, 0x0000, 0x0000 },                 /* 45: NumLock */
-    { 0x0000, 0x0000, 0x0000, 0x0000 },                 /* 46: ScrollLock */
-    { 0x4700, 0x4737, 0x7700, 0x0000 },                 /* 47: keypad 7 / Home */
-    { 0x4800, 0x4838, 0x8D00, 0x0000 },                 /* 48: keypad 8 / Up */
-    { 0x4900, 0x4939, 0x8400, 0x0000 },                 /* 49: keypad 9 / PgUp */
-    { 0x4A2D, 0x4A2D, 0x8E00, 0x4A00 },                 /* 4A: keypad - */
-    { 0x4B00, 0x4B34, 0x7300, 0x0000 },                 /* 4B: keypad 4 / Left */
-    { 0x4CF0, 0x4C35, 0x8F00, 0x0000 },                 /* 4C: keypad 5 */
-    { 0x4D00, 0x4D36, 0x7400, 0x0000 },                 /* 4D: keypad 6 / Right */
-    { 0x4E2B, 0x4E2B, 0x9000, 0x4E00 },                 /* 4E: keypad + */
-    { 0x4F00, 0x4F31, 0x7500, 0x0000 },                 /* 4F: keypad 1 / End */
-    { 0x5000, 0x5032, 0x9100, 0x0000 },                 /* 50: keypad 2 / Down */
-    { 0x5100, 0x5133, 0x7600, 0x0000 },                 /* 51: keypad 3 / PgDn */
-    { 0x5200, 0x5230, 0x9200, 0x0000 },                 /* 52: keypad 0 / Ins */
-    { 0x5300, 0x532E, 0x9300, 0x0000 },                 /* 53: keypad . / Del */
-    { 0x0000, 0x0000, 0x0000, 0x0000 },                 /* 54: SysRq */
-    { 0x0000, 0x0000, 0x0000, 0x0000 },                 /* 55 */
-    { 0x565C, 0x567C, 0x0000, 0x0000 },                 /* 56: 102-key \ | */
-    { 0x8500, 0x8700, 0x8900, 0x8B00 },                 /* 57: F11 */
-    { 0x8600, 0x8800, 0x8A00, 0x8C00 },                 /* 58: F12 */
-};
 /* The E0-prefixed (grey) keys: arrows, the nav cluster, keypad Enter and slash. Plain
  * and Shift are the scancode with AL=0 -- the AL=0 is how a guest tells LEFT from '4'.
  * Ctrl takes the keypad's Ctrl column above (Ctrl+Left = 7300h, the word-left of every
@@ -524,89 +642,6 @@ static WORD InputExtendedCtrl(BYTE code)
     return 0;
 }
 
-/* #136: KEYBOARD LAYOUTS, TAKEN FROM WINDOWS XP'S OWN TABLES:
- * The table above is the US BIOS. A layout only changes what the PLAIN and SHIFT
- * columns produce for some keys, so each layout is an overlay of (scan code, plain,
- * shift) in the DOS code page. The rows were NOT typed from memory: `rigshot kbdmap
- * <KLID>` asked XP (LoadKeyboardLayout -> ToAsciiEx -> CharToOem) what every scan
- * code produces on the rig, and the tables are the differences from its US answer
- * (runs/s82/kbdmap.txt; the US dump matches this BIOS table except Shift+Tab and
- * keypad 5, where the BIOS deliberately differs). Dead keys (German ^ and the accent
- * key, French ^) keep the US character: composition is not modelled. Ctrl and Alt
- * columns are unchanged, except that a letter which MOVED (German Y/Z, French A/Q/
- * W/Z/M) gets the Ctrl code of the letter it now types. Index = SET_KBLAYOUT's item:
- * US | United Kingdom | German | French.
- */
-typedef struct _KEYBOARD_OVERRIDE
-{
-    BYTE ScanCode;
-    BYTE Plain;
-    BYTE Shifted;
-} KEYBOARD_OVERRIDE, *PKEYBOARD_OVERRIDE;
-/* United Kingdom (XP layout 00000809): 5 keys differ from US. */
-static const KEYBOARD_OVERRIDE g_KeyboardUk[] = {
-    { 0x03, 0x32, 0x22 },
-    { 0x04, 0x33, 0x9C },
-    { 0x28, 0x27, 0x40 },
-    { 0x29, 0x60, 0xAA },
-    { 0x2B, 0x23, 0x7E },
-    { 0, 0, 0 }
-};
-/* German (XP layout 00000407): 19 keys differ from US. */
-static const KEYBOARD_OVERRIDE g_KeyboardDe[] = {
-    { 0x03, 0x32, 0x22 },
-    { 0x04, 0x33, 0xF5 },
-    { 0x07, 0x36, 0x26 },
-    { 0x08, 0x37, 0x2F },
-    { 0x09, 0x38, 0x28 },
-    { 0x0A, 0x39, 0x29 },
-    { 0x0B, 0x30, 0x3D },
-    { 0x0C, 0xE1, 0x3F },
-    { 0x15, 0x7A, 0x5A },
-    { 0x1A, 0x81, 0x9A },
-    { 0x1B, 0x2B, 0x2A },
-    { 0x27, 0x94, 0x99 },
-    { 0x28, 0x84, 0x8E },
-    { 0x2B, 0x23, 0x27 },
-    { 0x2C, 0x79, 0x59 },
-    { 0x33, 0x2C, 0x3B },
-    { 0x34, 0x2E, 0x3A },
-    { 0x35, 0x2D, 0x5F },
-    { 0x56, 0x3C, 0x3E },
-    { 0, 0, 0 }
-};
-/* French (XP layout 0000040C): 25 keys differ from US. */
-static const KEYBOARD_OVERRIDE g_KeyboardFr[] = {
-    { 0x02, 0x26, 0x31 },
-    { 0x03, 0x82, 0x32 },
-    { 0x04, 0x22, 0x33 },
-    { 0x05, 0x27, 0x34 },
-    { 0x06, 0x28, 0x35 },
-    { 0x07, 0x2D, 0x36 },
-    { 0x08, 0x8A, 0x37 },
-    { 0x09, 0x5F, 0x38 },
-    { 0x0A, 0x87, 0x39 },
-    { 0x0B, 0x85, 0x30 },
-    { 0x0C, 0x29, 0xF8 },
-    { 0x10, 0x61, 0x41 },
-    { 0x11, 0x7A, 0x5A },
-    { 0x1B, 0x24, 0x9C },
-    { 0x1E, 0x71, 0x51 },
-    { 0x27, 0x6D, 0x4D },
-    { 0x28, 0x97, 0x25 },
-    { 0x29, 0xFD, 0x00 },
-    { 0x2B, 0x2A, 0xE6 },
-    { 0x2C, 0x77, 0x57 },
-    { 0x32, 0x2C, 0x3F },
-    { 0x33, 0x3B, 0x2E },
-    { 0x34, 0x3A, 0x2F },
-    { 0x35, 0x21, 0xF5 },
-    { 0x56, 0x3C, 0x3E },
-    { 0, 0, 0 }
-};
-
-static const KEYBOARD_OVERRIDE *const g_KeyboardLayouts[INPUT_KEYBOARD_LAYOUTS] = { 0, g_KeyboardUk, g_KeyboardDe, g_KeyboardFr };
-
 /* The plain (shift=0) or shifted character of a key on the active layout; 0 = none. */
 static BYTE InputKeyboardChar(PCINPUT_STATE state, BYTE code, INT shift)
 {
@@ -649,15 +684,6 @@ INT VddInputCharToKey(PCINPUT_STATE state, BYTE character, BYTE *scanCode, INT *
     return 0;
 }
 
-/* Shift-state bits in 0040:0017, as every DOS program expects to find them. */
-#define INPUT_SHIFT_RIGHT_SHIFT     0x01
-#define INPUT_SHIFT_LEFT_SHIFT      0x02
-#define INPUT_SHIFT_CTRL            0x04
-#define INPUT_SHIFT_ALT             0x08
-#define INPUT_SHIFT_SCROLL_LOCK     0x10
-#define INPUT_SHIFT_NUM_LOCK        0x20
-#define INPUT_SHIFT_CAPS_LOCK       0x40
-
 static BYTE InputShiftFlags(PCINPUT_STATE state)
 {
     return state->BiosData ? state->BiosData[BIOS_BDA_SHIFT_FLAGS] : 0;
@@ -672,30 +698,6 @@ static VOID InputSetShiftFlag(PINPUT_STATE state, BYTE bit, INT isOn)
     else
         state->BiosData[BIOS_BDA_SHIFT_FLAGS] = (BYTE)(state->BiosData[BIOS_BDA_SHIFT_FLAGS] & ~bit);
 }
-
-/* #254: THE REST OF THE BIOS's KEYBOARD STATE:
- * 0040:0018 (KB_FLAG_1): bit 0 LEFT Ctrl held, 1 LEFT Alt held, 2 SysReq held,
- * 3 PAUSE active, 4 Scroll held, 5 NumLock held, 6 Caps held, 7 Insert held.
- * 0040:0096 (KB_FLAG_3): bit 0 last code was E1h, 1 last code was E0h, 2 RIGHT Ctrl
- * held, 3 RIGHT Alt held, 4 enhanced keyboard (set at reset).
- * 0040:0017 bit 2/3 (Ctrl/Alt) are "either side", so they follow the two held bits
- * rather than the last make/break -- releasing left Ctrl while right is held used to
- * clear Ctrl. The lock keys toggle once per PRESS: a held key's typematic repeats
- * arrive as more makes, and the "held" bit is what stops them re-toggling.
- */
-#define INPUT_SHIFT2_LEFT_CTRL      0x01
-#define INPUT_SHIFT2_LEFT_ALT       0x02
-#define INPUT_SHIFT2_SYSREQ         0x04
-#define INPUT_SHIFT2_PAUSE          0x08
-#define INPUT_SHIFT2_SCROLL_HELD    0x10
-#define INPUT_SHIFT2_NUM_HELD       0x20
-#define INPUT_SHIFT2_CAPS_HELD      0x40
-#define INPUT_SHIFT2_INSERT_HELD    0x80
-#define INPUT_FLAGS3_E1             0x01
-#define INPUT_FLAGS3_E0             0x02
-#define INPUT_FLAGS3_RIGHT_CTRL     0x04
-#define INPUT_FLAGS3_RIGHT_ALT      0x08
-#define INPUT_SHIFT_INSERT          0x80
 
 static BYTE InputBdaByte(PCINPUT_STATE state, INT offset)
 {

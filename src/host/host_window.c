@@ -40,21 +40,272 @@
  * instead of forwarding them to the guest. Any non-zero sentinel a real device will
  * not use.
  */
-#define HOST_INJECT_TAG     0x4E56444Du     /* 'NVDM' */
+#define HOST_INJECT_TAG         0x4E56444Du                 /* 'NVDM' */
 
 /* Create every Settings page off-screen at startup and log whether the templates
  * still build. See the call site: a bad DIALOGEX fails to CREATE, silently.
  */
-#define DLGCHECK_FLAG       CFG_("dlgcheck.flag")
-static DWORD  g_SpeakerRealHz;   /* sampled under the lock, applied outside it */
+#define DLGCHECK_FLAG           CFG_("dlgcheck.flag")
+
+/* The UI tick must be well ABOVE the guest refresh (60/70 Hz) or the phase window
+ * is unreachable and every present falls back to the staleness path.
+ */
+#define VID_PRESENT_TICK_MS     5
+#define VID_PRESENT_STALE_MS    25                          /* Never let the screen go quiet longer than this */
+#define DDFLIP_DRIVER_FLAG      CFG_("ddflip_driver.flag")  /* s86: DirectDraw flip timed by the driver (old path) */
+
+/* THE HOST ARROW over the video area, which is a SEPARATE thing from the INT 33h
+ * driver cursor above.
+ * - IT IS NO LONGER A MENU ITEM OR A HOTKEY, and that is the point: the pointer's
+ *   visibility is not an independent knob, it is what EXCLUSIVE MODE looks like.
+ *   Captured, the guest owns the mouse and the desktop arrow must be gone; not
+ *   captured, the mouse belongs to the Windows desktop and the arrow must be there.
+ *   Two controls for one idea is how a UI starts disagreeing with itself -- the user
+ *   put it plainly: the pointer "belongs to the Windows XP desktop, and NTVDMEX at
+ *   the same time", which is exactly what a separate toggle produces.
+ *
+ * [WARNING]: SUPERSEDED BY #218 (below): the setting and its menu item are gone; what follows
+ * is the history of how it got there.
+ *
+ * [CAUTION]: THE SETTING SURVIVES AND IS STILL LIVE. `ShowHostCursor` now means "show the
+ * desktop arrow over the video WHEN NOT CAPTURED" (default 1). Capture overrides
+ * it unconditionally; there is no state in which an exclusive-mode guest shows the
+ * host pointer. So the row is still honoured -- it is narrower, not dead.
+ *
+ * [INFO]: s64: THE SETTING IS NOW PHRASED AS `HideHostCursor`, and the flag with it. The row
+ * read "Show the host mouse cursor over the video area" and defaulted to ON, so the
+ * only thing it could ever do was be switched OFF -- a checkbox whose default is
+ * "yes, do the ordinary thing" is a checkbox that reads as a question nobody asked.
+ * Phrased as HIDE, ticking it is the action and leaving it alone is the default.
+ *
+ * [CAUTION]: The REGISTRY KEY changed with it (`ShowHostCursor` -> `HideHostCursor`) rather than
+ * keeping the old name with the opposite meaning, because a stored 1 that used to
+ * mean "show" and now means "hide" is a value that silently flips on upgrade. A new
+ * name simply defaults, and the default is the behaviour everyone already had.
+ */
+/* #218 (user, s83 sweep): SMART MOUSE, which REPLACES the setting above (Importance = 1):
+ * A program that does NOT use the mouse keeps the Windows pointer; once it has sat
+ * still over the video for CURSOR_IDLE_MS it hides, and any movement brings it back
+ * -- "like Windows Media Player over a video" -- in a window and fullscreen alike.
+ * A program that DOES use the mouse is governed by capture alone (rules 1-6 below).
+ * The HideHostCursor setting and View > Show Host Cursor are gone: the toggle "feels
+ * jaggy", and a pointer that hides itself needs no knob. UI thread only.
+ */
+#define CURSOR_IDLE_MS          5000u
+#define MENU_COMBO_N            ((INT)(sizeof g_MenuCombos / sizeof g_MenuCombos[0]))
+#define MENU_CHECK_N            ((INT)(sizeof g_MenuChecks / sizeof g_MenuChecks[0]))
+
+/* A WIN16 GUEST HAS NO VDM WINDOW, AND NOW NEITHER DO WE. (#128, s.42) (Importance = 2):
+ * On real XP a 16-bit Windows program shows no VDM window at all: it puts its own
+ * windows on the desktop and the machine hosting it is invisible. Ours used to
+ * sit on top of the guest's own windows showing a BLACK TEXT SCREEN -- not merely
+ * redundant but misleading, because there is nothing for a Win16 guest to draw
+ * there. krnl386 never sets a video mode.
+ *
+ * For a `-w` launch the window is created and never shown. But the menu behind
+ * it is not useless -- Settings, Close Program, About and the screenshot are all
+ * still things you might want during a Win16 run -- so it goes to the SYSTEM
+ * TRAY, which is where a running-but-invisible machine belongs.
+ *
+ * [CAUTION]: THE WINDOW IS CREATED EITHER WAY, and that is deliberate rather than lazy: it
+ * owns the present surface, the raw-input registration, the frame timer and the
+ * tray callbacks. Hidden is a state; absent would be a second code path through
+ * everything the UI thread does.
+ * - A DOS guest keeps its window and gets no icon. Whether it should have one too
+ *   is an open question (the user's, and a fair one) -- the only thing that would
+ *   change is the condition on this flag, which is why it is one flag.
+ */
+#define WM_TRAY                 (WM_APP + 1)
+#define WM_APP_PRESENT          (WM_APP + 2)                /* The guest finished a frame: present now (Auto) */
+
+#define TRAY_ID                 1
+
+/* THE CAPTION IS A CONSTANT NOW:
+ * It used to carry the running program's name and, while captured, the release
+ * chord. Both have moved to the status strip below, where they sit beside the
+ * machine state they belong with -- and where a 63-character program name can no
+ * longer push the release chord off the end of a caption the window manager is
+ * free to truncate. The window is a DOS machine whatever happens to be running
+ * inside it, so the title says exactly that and nothing else.
+ */
+/* User, s84: "Windows NT Virtual DOS Machine" (was "Microsoft Windows XP ..."). The rig
+ * harness finds the window by this string -- scripts/bm/*.bat and rigshot.c follow it.
+ */
+#define VDM_WIN_TITLE           "Windows NT Virtual DOS Machine"
+
+/* [WARNING]: THE LAST LINE OF DEFENCE: HAND THE MACHINE BACK WITHOUT BEING ASKED (Importance = 2):
+ * HostPanicRelease covers the paths where we KNOW we are going away. This covers
+ * the one where we do not: the UI thread stops pumping while capture is held. That
+ * is the state that cost the user two hard resets -- the box runs, answers ping, and
+ * cannot be typed at or clicked out of, because the things capture holds are
+ * system-wide and only that same stalled thread ever releases them.
+ * A separate thread owes the user nothing but this: if capture is held and the UI
+ * thread has not reached its timer for CAPWD_STALL_MS, take the machine back. It
+ * does NOT try to diagnose, kill or recover the guest -- a wedged emulator is a bug
+ * report, a wedged computer is a lost afternoon, and only the second is urgent.
+ *
+ * [CAUTION]: ClipCursor and UnhookWindowsHookEx are safe from another thread; SetCursor and
+ * the menu check are not, so they are deliberately not touched here.
+ *
+ * [CAUTION]: It must not fire while merely SLOW. 3 s is far longer than any frame this host
+ * has ever taken (worst measured UI gap: 35 ms) and far shorter than a human's
+ * patience with a dead keyboard.
+ */
+#define CAPWD_STALL_MS          3000u
+#define PLANEDUMP_FLAG          CFG_("planedump.flag")
+
+enum
+{
+    INSTALL_UNFORCED = 0, INSTALL_FORCED = 1
+};   /* InstallPerform: /force replaces another program's Debugger value */
+
+enum
+{
+    SCREENSHOT_NAME_ROOM = 24, SCREENSHOT_NAME_DIGITS = 12
+};   /* "shot_manual_NN.bmp": path room kept for it, and where NN starts */
+
+enum                                         /* wired command IDs */
+{
+    IDM_STUB = 1,                            /* every not-yet-wired item */
+    IDM_FILE_EXIT, IDM_FILE_CLOSEPROG,
+    IDM_FILE_OPEN,                           /* #153: Open Executable... */
+    IDM_DISP_FULLSCREEN,
+    IDM_INPUT_CAPTURE,          /* (IDM_INPUT_CURSOR retired -- see g_cursor_show) */
+    IDM_FILE_SETTINGS,
+    IDM_CAP_SHOT,
+    IDM_HELP_ABOUT,
+    IDM_TRAY_SHOW,                           /* bring the hidden host window back */
+    IDM_FILE_INSTALL, IDM_FILE_UNINSTALL, IDM_FILE_STATUS,   /* GH #13 */
+    /* THE EDIT ITEMS HAVE REAL IDS PURELY SO THEY CAN BE ADDRESSED:
+     * Implemented since s82 (#154 -- see g_MarkMode); they needed their own
+     * ids first because "grey these five in a graphics mode" names them one at a
+     * time, and EnableMenuItem with MF_BYCOMMAND cannot distinguish five items
+     * that all carry IDM_STUB.
+     *
+     * [CAUTION]: THIS IS NOT THE SCAFFOLD-STUB DECISION BEING RE-LITIGATED. That decision
+     * says an UNIMPLEMENTED item stays enabled, and in text mode these still are.
+     * Greying them in a graphics mode is a different claim -- mark, copy and
+     * paste operate on a CHARACTER GRID, and in mode 13h there is no such thing
+     * to select -- so it is about what the item MEANS here, not about whether it
+     * is finished. See MenuSyncModal().
+     */
+    IDM_EDIT_MARK, IDM_EDIT_COPY, IDM_EDIT_COPYSCREEN, IDM_EDIT_PASTE,
+    IDM_EDIT_SELECTALL,
+    /* The View menu's two CHECKBOX settings (the combos are ranges, below). */
+    IDM_VIEW_VSYNC, IDM_VIEW_BLINK,
+    IDM_VIEW_HOSTCURSOR,                     /* RETIRED by #218; kept so later ids keep their numbers */
+    /* #155. APPENDED, not beside IDM_CAP_SHOT: the rig scripts post these ids as
+     * NUMBERS (textedit.bat: 14-18), and an insertion renumbers everything after it.
+     */
+    IDM_CAP_AUDIO, IDM_CAP_FOLDER,
+
+    /* ONE CONTIGUOUS RANGE PER DROPDOWN SETTING (Importance = 1):
+     * Every combo on the Display page, plus the CPU speed, appears in a menu as a
+     * run of ids `base + index`, so one handler serves all of them: find which
+     * range the id fell in, and the offset IS the setting's value. No per-item
+     * cases, and nothing to keep in step when a list gains an entry.
+     *
+     * [CAUTION]: THE ITEM TEXT IS NOT DUPLICATED HERE. MenuCombo() below builds each
+     * submenu by walking g_SetDefinitions' own `items` string -- the same string the
+     * dialog fills its combo from -- so the menu and the dialog cannot disagree
+     * about what the options are or which index each one means. Duplicating the
+     * list is how a menu ends up setting Scale2x when it says Scanlines.
+     *
+     * [CAUTION]: SPAN IS THE MOST ITEMS ANY ONE LIST MAY HAVE. MenuCombo() stops at it, so
+     * overflowing collides with nothing -- the extra items simply do not appear,
+     * which is visible, rather than silently invoking the next setting along.
+     */
+#define IDM_COMBO_SPAN  32
+    IDM_RECENT_0    = 180,                   /* #153: Open Recent, MRU_MAX items */
+    IDM_COMBO_BASE  = 200,
+    IDM_SPEED_0     = IDM_COMBO_BASE + 0 * IDM_COMBO_SPAN,   /* CPU speed (#56) */
+    IDM_WINSIZE_0   = IDM_COMBO_BASE + 1 * IDM_COMBO_SPAN,
+    IDM_RENDER_0    = IDM_COMBO_BASE + 2 * IDM_COMBO_SPAN,
+    IDM_SCALER_0    = IDM_COMBO_BASE + 3 * IDM_COMBO_SPAN,
+    IDM_FILTER_0    = IDM_COMBO_BASE + 4 * IDM_COMBO_SPAN,
+    IDM_FSKIP_0     = IDM_COMBO_BASE + 5 * IDM_COMBO_SPAN,
+    IDM_ASPECT_0    = IDM_COMBO_BASE + 6 * IDM_COMBO_SPAN,
+    IDM_TINT_0      = IDM_COMBO_BASE + 7 * IDM_COMBO_SPAN,   /* #229 (user, s84) */
+    IDM_FIT_0       = IDM_COMBO_BASE + 8 * IDM_COMBO_SPAN    /* #325 */
+};
+
+typedef INT (WINAPI *PFN_INTGETWT)(HWND, LPWSTR, INT);
+
+enum
+{
+    MANAGER_RELAUNCH_MS = 5000, MANAGER_START_WAIT_MS = 500, MANAGER_SEND_TIMEOUT_MS = 500, MANAGER_POLL_MS = 2000
+};   /* ManagerThread */
+
+enum
+{
+    STATUS_PART_PROGRAM = 0, STATUS_PART_MODE = 1, STATUS_PART_SPEED = 2, STATUS_PART_CAPTURE = 3, STATUS_PARTS = 4, STATUS_TEXT_INSET = 18, STATUS_PROGRAM_WIDTH_MAX = 260, STATUS_PART_WIDTH_MIN = 40, STATUS_PART_TO_EDGE = -1
+};   /* the status strip, left to right */
+
+enum
+{
+    TEXT_COPY_SELECTION = 0, TEXT_COPY_SCREEN = 1
+};   /* TextCopy: the marked region, or the whole screen */
+
+enum
+{
+    PASTE_KEY_HOLD_MS = 12, PASTE_KEY_GAP_MS = 20
+};   /* PasteThread: per typed key */
+
+enum
+{
+    PASTE_TEXT_MAX = 4096
+};   /* TextPaste: the most it types in one go */
+
+enum
+{
+    FULLSCREEN_RELEASE_HINT_MS = 4000
+};   /* FullscreenReleaseHint: how long its hint shows */
+
+enum
+{
+    HOST_PANIC_RESUME_MAX = 64
+};   /* HostPanicRelease: undo at most this many suspends */
+
+enum
+{
+    CAPTURE_WATCH_MS = 250
+};   /* CaptureWatchdogThread */
+
+enum
+{
+    HOST_SCALE_MAX = 4
+};   /* the window's integer scales: 1x to 4x */
+
+enum
+{
+    WINDOW_RESIZE_SETTLE_MS = 150
+};   /* a frame-size change must hold this long before it is applied */
+
+enum
+{
+    PAUSE_SUSPEND_TRIES = 200
+};   /* HostPauseSet: attempts to catch the CPU thread */
+
+enum
+{
+    UI_TICK_FRAME_NUMERATOR = 9, UI_TICK_FRAME_DENOMINATOR = 10, UI_PRESENT_STALE_FRAMES = 2
+};   /* the UI tick: 90% of a frame; quiet for two */
+
+enum
+{
+    HOST_DUMP_INTERVAL_MS = 5000, FULLSCREEN_HINT_MS = 5000, CAPTURE_SHOTS_MAX = 40, CAPTURE_NAME_DIGITS = 4, HOST_MINIMUM_PICTURE_WIDTH = 160, HOST_MINIMUM_PICTURE_HEIGHT = 100
+};   /* the census interval, the leave-fullscreen hint, capture.flag's shots and "shotNN.bmp", the smallest picture */
+
+enum
+{
+    HID_USAGE_PAGE_GENERIC_DESKTOP = 0x01, HID_USAGE_GENERIC_MOUSE = 0x02
+};   /* hidusage.h: raw input's mouse */
+
 DWORD    g_PitDeliverSkipped;  /* attempts foregone: g_Lock busy when the crystal knocked */
 DWORD    g_UiTickSkips;
 /* who raised each present */
 DWORD g_UiHookPresents;
 DWORD g_UiTimerPresents;
-static volatile LONG g_UiPresentPending;                /* one WM_APP_PRESENT in flight */
-static int      g_UiForced;                              /* this body run was raised by the hook; stays int: INT here moves the compiled code */
-static DWORD    g_UiInputFirst;                         /* input served ahead of a queued present */
 /* Which of the three exits from the cooperative IRQ1 gate fires. See its call site. */
 DWORD g_Irq1Checks;
 DWORD g_Irq1NoIf;
@@ -70,13 +321,101 @@ UINT       g_CaptureMs    = CAPTURE_MS_DEFAULT; /* CAPTURE_FLAG contents: ms bet
 DWORD g_CaptureDelayMs;
 DWORD g_CaptureStart;
 INT            g_Capture       = 0;  /* CAPTURE_FLAG present: opt-in self-screenshot for graphical tests */
-/* The UI tick must be well ABOVE the guest refresh (60/70 Hz) or the phase window
- * is unreachable and every present falls back to the staleness path.
- */
-#define VID_PRESENT_TICK_MS     5
-#define VID_PRESENT_STALE_MS    25  /* Never let the screen go quiet longer than this */
 volatile LONG g_CloseRequest;     /* UI -> exec thread: end the innermost program */
 INT  g_TopIsShell;           /* depth 0 is a shell: nothing to close there */
+DWORD g_PauseCount;
+DWORD g_PauseCooperative;
+DWORD g_PauseMs;
+
+INT           g_MouseRawOk;           /* raw mouse registered with the window */
+INT g_TextDump = 0;              /* textdump.flag: dump the text screen too */
+
+/* s84 (user): Settings > Input > Show Host Mouse Cursor -- HOSTCUR_* in settings.h.
+ * Smart is the rule above; Always never hides over the video, Never always does.
+ */
+INT   g_HostCursorMode = HOSTCUR_SMART;
+volatile LONG g_MouseAutoCaptureDone = 0;   /* we have grabbed once; never again */
+/* A PROGRAM THAT TOOK THE MOUSE GIVES IT BACK WHEN IT EXITS. (s81, user) (Importance = 1):
+ * The grab above is latched per PROCESS, so after a game quit to the prompt the
+ * pointer stayed captured over a shell that has no use for it -- and the next game
+ * could never be auto-captured again. On every return to a parent the exec thread
+ * clears the request and the latch and asks the UI thread (the owner of ClipCursor)
+ * to let go.
+ */
+volatile LONG g_MouseWantRelease = 0;
+
+DWORD         g_MouseAltCalls;       /* events delivered to an alternate handler */
+
+/* INPUT CAPTURE ("exclusivity"):
+ * Two different things are stealing the guest's keys, and they need different fixes.
+ * 1. WINDOWS' OWN MENU KEYS. F10 and Alt do not arrive as WM_KEYDOWN at all -- they are
+ *  SYSTEM keys (WM_SYSKEYDOWN) and DefWindowProc turns them into menu activation. So a
+ *  DOS program that wants F10 -- Doom's SETUP.EXE is the reported case -- never sees
+ *  it, and the menu bar lights up instead. That is fixed unconditionally below: system
+ *  keys are routed to the guest like any other, because in a DOS box they ARE the
+ *  guest's. Alt+F4 is the deliberate exception while uncaptured, so the window can
+ *  always be closed.
+ * 2. THE SHELL'S CHORDS -- Alt+Tab, Ctrl+Esc, the Windows keys. Those never reach the
+ *  window at all; only a low-level hook sees them, and only while we are foreground.
+ *  Swallowing them is what "exclusive" means, and it is a MODE, not a default: a
+ *  window that eats Alt+Tab whenever it has focus is hostile. WIN+F10 toggles it
+ *  (Scroll Lock too, where the keyboard still has one),
+ *  swallowed by us so the guest never sees it -- there is no chord a DOS guest cannot
+ *  generate, so the release must be one WE reserve. It is deliberately NOT Ctrl+F10
+ *  (DOSBox's binding): Doom fires with Ctrl and uses every F-key, so that chord fought
+ *  the guest for keys it needs constantly -- and F10 is a SYSTEM key, so the check
+ *  never even ran. See the WM_KEYDOWN handler.
+ *
+ * [CAUTION]: Ctrl+Alt+Del is the Secure Attention Sequence and CANNOT be hooked. That is by
+ * design in Windows and not a defect here.
+ *
+ * [CAUTION]: Capture is dropped on WM_KILLFOCUS -- otherwise a clipped cursor and a swallowed
+ * Alt+Tab would strand the user in a window they cannot leave.
+ */
+HHOOK         g_LowLevelKeyboard;
+INT           g_LowLevelKeyboardOn = 0;     /* OFF by default; llkbd.txt = 1. See InputCaptureSet. */
+
+/* Frames the presenter drops between the ones it shows. 0 = every frame, which is
+ * what this host has always done. Read on the UI thread's timer tick.
+ */
+INT g_FrameSkip;
+
+/* PUT g_Settings INTO EFFECT, WITHOUT TOUCHING THE REGISTRY:
+ * One function so the View menu, the CPU Speed submenu and the dialog's OK all
+ * reach the machine by the same path -- three call sites that each remembered a
+ * different subset is how a knob ends up working from one route and not another.
+ *
+ * [CAUTION]: SettingsApplyDevices is NOT called here. Nothing on the View menu is an audio
+ * setting, and re-pushing the mixer on every scaler change is reach this has no
+ * business having. The dialog calls it separately, where it belongs.
+ */
+/* [CAUTION]: THE RESIZE FIRES ONLY WHEN THE SIZE SETTING ACTUALLY CHANGED, and that is not
+ * an optimisation. Every live apply passes through here, so resizing
+ * unconditionally would mean picking a different SCALER snapped a window the user
+ * had dragged to their own size back to 1x -- the setting reaching past its own
+ * business, which is the thing that makes people stop touching the menu.
+ */
+DWORD g_WindowSizeLive = WINDOW_SETTING_UNSET_U;   /* what the window is currently AT */
+DWORD g_AspectLive  = WINDOW_SETTING_UNSET_U;   /* ...and the shape it is that size IN */
+
+/* THE TABBED SETTINGS DIALOG:
+ * IDD_SETTINGS is only a frame: a tab control, OK, Cancel, Restore Defaults. Each
+ * tab is its OWN child dialog (IDD_PAGE_*), created here and parked in the tab's
+ * display rectangle. Nothing below is written per-control -- every fill and every
+ * read is a loop over g_SetDefinitions in settings.h, so adding a knob is one table row and
+ * one line of .rc layout, not four edits in four functions that can disagree.
+ */
+/* s84, the user's redesign: six tabs in a 640 x 480 dialog. Processor, Memory and
+ * Advanced became "Machine"; General is "MS-DOS"; Display is "Video".
+ */
+const INT g_SettingsPages[NTVDMEX_PAGE_COUNT] = {
+    IDD_PAGE_GENERAL, IDD_PAGE_CPU, IDD_PAGE_DISPLAY,
+    IDD_PAGE_AUDIO,   IDD_PAGE_INPUT, IDD_PAGE_DRIVES
+};
+static DWORD  g_SpeakerRealHz;   /* sampled under the lock, applied outside it */
+static volatile LONG g_UiPresentPending;                /* one WM_APP_PRESENT in flight */
+static int      g_UiForced;                              /* this body run was raised by the hook; stays int: INT here moves the compiled code */
+static DWORD    g_UiInputFirst;                         /* input served ahead of a queued present */
 /* The menu bar while FULLSCREEN has it detached. There used to be a second
  * detacher -- a "Show Menu Bar" toggle -- and it was a ONE-WAY DOOR: unticking it
  * removed the only control that could put it back. Removed (user report, s79);
@@ -87,17 +426,205 @@ INT  g_TopIsShell;           /* depth 0 is a shell: nothing to close there */
 static HMENU        g_FsMenu;
 
 static INT            g_PauseSuspended    = 0;   /* the CPU thread is suspended BY THE PAUSE */
-DWORD g_PauseCount;
-DWORD g_PauseCooperative;
-DWORD g_PauseMs;
-enum
+/* g_SimIntBusy (declared above AsyncInjectIrq) is set across 0300h. */
+static LONG g_MouseRawTotalX;
+static LONG g_MouseRawTotalY;
+static DWORD g_CursorMovedMs;         /* GetTickCount of the last real movement */
+static POINT g_CursorLastPoint = { -1, -1 };
+static INT   g_CursorIdle;             /* hidden for stillness, until it next moves */
+/* Reported at STAGE2, because "the guest asked and we took it" and "the guest asked
+ * and we did not" are different outcomes and a headless run must be able to tell
+ * them apart. want=1 fired=0 means the request was raised and the window was not in
+ * the foreground -- which is correct behaviour, not a failure, and only a counter
+ * can say which of the two happened.
+ */
+static DWORD         g_MouseAutoCaptureFired = 0;
+
+/* Which setting each range drives. The ONLY place the two are tied together. */
+static const struct
 {
-    INSTALL_UNFORCED = 0, INSTALL_FORCED = 1
-};   /* InstallPerform: /force replaces another program's Debugger value */
-enum
+    UINT Base;
+    INT IsSet;
+}
+
+g_MenuCombos[] = {
+    { IDM_SPEED_0,   SET_SPEEDMODE }, { IDM_WINSIZE_0, SET_WINSIZE   },
+    { IDM_RENDER_0,  SET_RENDERER  }, { IDM_SCALER_0,  SET_SCALER    },
+    { IDM_FILTER_0,  SET_FILTER    }, { IDM_FSKIP_0,   SET_FRAMESKIP },
+    { IDM_ASPECT_0,  SET_ASPECT    }, { IDM_TINT_0,    SET_TINT      },
+    { IDM_FIT_0,     SET_FIT       },
+};
+
+/* ...and the checkbox ones, same idea. */
+static const struct
 {
-    SCREENSHOT_NAME_ROOM = 24, SCREENSHOT_NAME_DIGITS = 12
-};   /* "shot_manual_NN.bmp": path room kept for it, and where NN starts */
+    UINT Id;
+    INT IsSet;
+}
+
+g_MenuChecks[] = {
+    { IDM_VIEW_VSYNC, SET_VSYNC }, { IDM_VIEW_BLINK, SET_BLINKCURSOR },
+};
+
+/* THE MENU BAR AFTER THE SETTINGS MOVE:
+ * CPU, Display, Audio, Input and Drive are GONE from the bar. Everything they held
+ * that was configuration now lives on a tab of the Settings dialog, which is one
+ * place to look instead of five menus deep in submenus, and one store instead of a
+ * tick per item.
+ * - What stayed behind is what was never a setting: Fullscreen, input
+ *   capture, the mount commands. Those are ACTIONS -- things you do once, now, and
+ *   usually by keystroke. A command you reach for mid-game does not belong behind an
+ *   OK button, so View and Machine keep them.
+ * The rest is still scaffold: items carrying IDM_STUB no-op until they are wired.
+ */
+static HMENU g_RecentMenu;                  /* File > Open Recent (#153) */
+static INT  g_TrayOn    = 0;                /* the icon is currently installed */
+
+/* THE NTVDMEX MANAGER: ONE TRAY ICON FOR EVERY PROGRAM. (GH #281, s88) (Importance = 2):
+ * User design: the first host brings up `ntvdmex.exe`, every host (DOS and
+ * Win16) appears in its one tray menu, and it exits when the last has gone.
+ * Protocol and lifetime in src/host/mgrproto.h; the manager in src/manager/.
+ * - THIS SIDE IS ONE LOW-PRIORITY THREAD that re-announces the host every two
+ *   seconds. Not the UI thread: a SendMessageTimeout on a frame tick is a stall
+ *   Skyroads would feel, and the announcement has no deadline worth that.
+ *
+ * [CAUTION]: IF ntvdmex.exe IS NOT BESIDE US, nothing changes: a Win16 host keeps its own
+ * tray icon exactly as before (g_ManagerAvailable = 0), and a DOS host never had one.
+ */
+static INT   g_ManagerAvailable;                    /* ntvdmex.exe exists beside the host */
+static UINT  g_ManagerCommandMessage;                   /* the registered manager->host message */
+static CHAR  g_ManagerExe[MAX_PATH];
+/* for the log */
+static DWORD g_ManagerHellos;
+static DWORD g_ManagerLaunches;
+
+static HWND g_Status;                        /* the native comctl32 status bar */
+
+/* THE STATUS STRIP:
+ * PROG.EXE | 16-bit Real mode | the input-capture state and the chord for it.
+ *
+ * [CAUTION]: THREE REAL PARTS, NOT ONE STRING WITH BARS IN IT. This used to pack the program
+ * name, the bitness and the CPU mode into the left part separated by a literal
+ * "   |   ", which is a drawn-by-hand imitation of the sunken divider comctl32
+ * already puts between parts -- and it did not line up with the genuine divider
+ * before the right-hand part, so the strip had two kinds of separator on it.
+ *
+ * [INFO]: AND THE BITNESS AND THE MODE ARE ONE FACT, so they are one field: "16-bit Real
+ * mode", "32-bit Protected mode". They were never independent -- 32-bit only ever
+ * means a DPMI client in protected mode -- so splitting them invited the reader to
+ * look for a combination that cannot occur.
+ * The mode is not decoration. A DPMI guest crossing into 32-bit protected mode is
+ * the largest single change of behaviour this host has -- different interrupt
+ * delivery, different pointer widths, a different service path for every INT -- and
+ * before it was on the strip the only way to know it had happened was the log.
+ * The mode pair is not decoration. A DPMI guest crossing into 32-bit protected mode
+ * is the largest single change of behaviour this host has -- different interrupt
+ * delivery, different pointer widths, a different service path for every INT -- and
+ * until now the only way to know it had happened was to read the log afterwards.
+ *
+ * [CAUTION]: IN EXCLUSIVE FULLSCREEN NEITHER PART IS VISIBLE: the DirectDraw primary covers
+ * the strip exactly as it covers the menu bar. Win+F10 still releases.
+ */
+/* s84 (user spec): EVERY PART LEFT-ALIGNED, EACH SIZED TO ITS TEXT (Importance = 1):
+ * appname.exe | 16-bit Real Mode | 66 MHz
+ * appname.exe | 32-bit Protected Mode | 133 MHz | Press WIN to release mouse
+ * appname.exe | 32-bit Protected Mode | Unlimited | Click video to capture mouse
+ * The capture message used to live in a fixed-width part against the RIGHT edge,
+ * which cut it off; it now follows the speed. A program that never used the mouse
+ * gets no fourth part at all -- there is nothing to say about capture. The speed is
+ * the clock alone ("66 MHz", "Unlimited"), never the CPU's name.
+ */
+/* ON it now */
+static CHAR g_StatusLeft[128];
+static CHAR g_StatusMode[96];
+static CHAR g_StatusSpeed[32];
+static CHAR g_StatusRight[64];
+/* #325: the window's whole scale (setting or drag), the frame size it was sized for, and
+ * whether 1x did not fit the screen and was scaled down. See HostApplyScale.
+ */
+static INT g_ScaleFactor = 0;            /* the scale the window is AT (after fitting) */
+static INT g_ScaleWant = 0;         /* the scale ASKED for (setting or drag) -- every mode
+                                        change starts from this, so one mode too big for 2x
+                                        does not leave the next one stuck at 1x            */
+static INT g_WindowFrameWidth;
+static INT g_WindowFrameHeight;
+static INT g_FitDown;
+
+/* #154: THE EDIT MENU, ON THE CHARACTER GRID:
+ * The five items were greyed outside text mode and did nothing inside it. The grid
+ * is page 0 at VIDEO_TEXT_OFFSET, 8x16 cells -- exactly what the text renderer draws, so
+ * what is copied is what is seen.
+ *   Mark        the next left drag selects a rectangle of cells (Esc cancels)
+ *   Select All  the whole grid
+ *   Copy        the selection, as CF_OEMTEXT (the grid is code page 437; Windows
+ *               converts), lines right-trimmed, CRLF between them
+ *   Copy Whole Screen   the same, for every cell
+ *   Paste       the clipboard, TYPED: real scancodes through the same path as a
+ *               keypress, so a prompt, EDIT and a program reading port 60h all get it
+ * The selection is shown by the presenter inverting it after each frame.
+ */
+static INT g_MarkMode;
+static INT g_MarkDrag;
+static INT g_SelectionOn;
+static INT g_SelectionColumn0;
+static INT g_SelectionRow0;
+static INT g_SelectionColumn1;
+static INT g_SelectionRow1;
+static volatile LONG g_PasteBusy;
+static volatile LONG g_UiBeat;          /* ++ per WM_TIMER: the UI thread is pumping */
+static DWORD         g_CaptureWatchdogReleased;   /* times the watchdog had to hand the box back */
+
+/* CAPTURED MEANS THE POINTER NEVER REACHES THE DESKTOP. (user, s84) (Importance = 1):
+ * Focusing the window from its TITLE BAR captured (WM_ACTIVATE, rule 5) -- and then
+ * the press on the caption entered Windows' own move loop, which leaves the cursor
+ * UNCLIPPED when it ends. So we believed we were captured, the pointer was hidden over
+ * the video, and it walked straight out onto the desktop. ClipCursor is global state
+ * anyone can change, so re-applying it at WM_EXITSIZEMOVE is not enough on its own:
+ * from the UI tick, while captured and in front (and not mid-drag, where Windows owns
+ * the clip), check the clip is still OURS and restore it if not. Counted.
+ */
+static INT   g_InSizeMove;
+static DWORD g_ClipRepairs;
+
+/* FULLSCREEN IS A WINDOW STYLE, NOT JUST A DIRECTDRAW MODE. (s64) (Importance = 2):
+ * We asked DirectDraw for an exclusive fullscreen mode and left the WINDOW exactly
+ * as it was: WS_OVERLAPPEDWINDOW, caption, thick resizing frame, menu bar. The
+ * DirectDraw primary covers the pixels, so it LOOKS right -- until the pointer nears
+ * an edge and Windows hit-tests the frame that is still there and hands back a
+ * RESIZE cursor over a fullscreen game. The user saw exactly that and drew the right
+ * conclusion: "fullscreen mode might not be using the correct window style. It
+ * should essentially have no style."
+ * - So take the style off going in and put it back coming out: WS_POPUP over the whole
+ *   virtual screen, no caption, no frame, no menu. There is then no non-client area to
+ *   hit-test, which is what actually removes the resize cursors -- SetCursor could
+ *   never have done it, because the frame cursors are decided in WM_NCHITTEST long
+ *   before WM_SETCURSOR is asked.
+ *
+ * [CAUTION]: AND RESTORE THE GEOMETRY, WHICH IS THE OTHER HALF OF THE SAME BUG. Going exclusive
+ * leaves the window sized to the screen; coming back out we used to keep that size,
+ * so Alt+Enter twice turned a 640x480 window into a full-screen-sized one that was
+ * no longer fullscreen. Alt+Enter is a TOGGLE and a toggle must land back where it
+ * started. GetWindowPlacement/SetWindowPlacement rather than a bare rect: it carries
+ * the maximised/minimised state too, so a window that was maximised before returns
+ * maximised rather than to some remembered restored size.
+ *
+ * [CAUTION]: ORDER, both ways. Going in: style first, then DirectDraw -- ddraw wants the window
+ * it is about to own to already be the shape it will be. Coming out: DirectDraw
+ * first, then style, then placement, so the mode is back before we ask Windows to
+ * lay a window out on it.
+ */
+static WINDOWPLACEMENT g_FullscreenPlace;      /* geometry to come back to */
+static LONG            g_FullscreenStyle;      /* the style we took off */
+static LONG            g_FullscreenExStyle;
+static INT             g_FullscreenSaved;
+
+/* -- START FULLSCREEN (s68). One decision per process, on the UI thread, and it only
+ * ever turns fullscreen ON: Alt+Enter owns everything after that. `graphics` says
+ * whether the guest is in a graphics mode right now -- Always fires regardless,
+ * Graphics only waits for it, Never does nothing.
+ */
+static INT g_AutoFullscreenDone = 0;
+
 /* Async-preemption probe driver (session 11, QIMODE_PATH bit 2). Raises IRQ 5 from a
  * thread that is NOT the exec thread -- exactly how the audio thread raises the Sound
  * Blaster's completion IRQ -- while the guest (qirq.com) spins in pure V86 code that
@@ -332,170 +859,6 @@ VOID HostRecordFinish(VOID)
     LogAppend(LOG_PATH, lineBuffer, lineCursor); SerialOut(lineBuffer, lineCursor);
 }
 
-INT           g_MouseRawOk;           /* raw mouse registered with the window */
-#define DDFLIP_DRIVER_FLAG  CFG_("ddflip_driver.flag")  /* s86: DirectDraw flip timed by the driver (old path) */
-INT g_TextDump = 0;              /* textdump.flag: dump the text screen too */
-/* g_SimIntBusy (declared above AsyncInjectIrq) is set across 0300h. */
-static LONG g_MouseRawTotalX;
-static LONG g_MouseRawTotalY;
-/* THE HOST ARROW over the video area, which is a SEPARATE thing from the INT 33h
- * driver cursor above.
- * - IT IS NO LONGER A MENU ITEM OR A HOTKEY, and that is the point: the pointer's
- *   visibility is not an independent knob, it is what EXCLUSIVE MODE looks like.
- *   Captured, the guest owns the mouse and the desktop arrow must be gone; not
- *   captured, the mouse belongs to the Windows desktop and the arrow must be there.
- *   Two controls for one idea is how a UI starts disagreeing with itself -- the user
- *   put it plainly: the pointer "belongs to the Windows XP desktop, and NTVDMEX at
- *   the same time", which is exactly what a separate toggle produces.
- *
- * [WARNING]: SUPERSEDED BY #218 (below): the setting and its menu item are gone; what follows
- * is the history of how it got there.
- *
- * [CAUTION]: THE SETTING SURVIVES AND IS STILL LIVE. `ShowHostCursor` now means "show the
- * desktop arrow over the video WHEN NOT CAPTURED" (default 1). Capture overrides
- * it unconditionally; there is no state in which an exclusive-mode guest shows the
- * host pointer. So the row is still honoured -- it is narrower, not dead.
- *
- * [INFO]: s64: THE SETTING IS NOW PHRASED AS `HideHostCursor`, and the flag with it. The row
- * read "Show the host mouse cursor over the video area" and defaulted to ON, so the
- * only thing it could ever do was be switched OFF -- a checkbox whose default is
- * "yes, do the ordinary thing" is a checkbox that reads as a question nobody asked.
- * Phrased as HIDE, ticking it is the action and leaving it alone is the default.
- *
- * [CAUTION]: The REGISTRY KEY changed with it (`ShowHostCursor` -> `HideHostCursor`) rather than
- * keeping the old name with the opposite meaning, because a stored 1 that used to
- * mean "show" and now means "hide" is a value that silently flips on upgrade. A new
- * name simply defaults, and the default is the behaviour everyone already had.
- */
-/* #218 (user, s83 sweep): SMART MOUSE, which REPLACES the setting above (Importance = 1):
- * A program that does NOT use the mouse keeps the Windows pointer; once it has sat
- * still over the video for CURSOR_IDLE_MS it hides, and any movement brings it back
- * -- "like Windows Media Player over a video" -- in a window and fullscreen alike.
- * A program that DOES use the mouse is governed by capture alone (rules 1-6 below).
- * The HideHostCursor setting and View > Show Host Cursor are gone: the toggle "feels
- * jaggy", and a pointer that hides itself needs no knob. UI thread only.
- */
-#define CURSOR_IDLE_MS  5000u
-
-/* s84 (user): Settings > Input > Show Host Mouse Cursor -- HOSTCUR_* in settings.h.
- * Smart is the rule above; Always never hides over the video, Never always does.
- */
-INT   g_HostCursorMode = HOSTCUR_SMART;
-static DWORD g_CursorMovedMs;         /* GetTickCount of the last real movement */
-static POINT g_CursorLastPoint = { -1, -1 };
-static INT   g_CursorIdle;             /* hidden for stillness, until it next moves */
-volatile LONG g_MouseAutoCaptureDone = 0;   /* we have grabbed once; never again */
-/* A PROGRAM THAT TOOK THE MOUSE GIVES IT BACK WHEN IT EXITS. (s81, user) (Importance = 1):
- * The grab above is latched per PROCESS, so after a game quit to the prompt the
- * pointer stayed captured over a shell that has no use for it -- and the next game
- * could never be auto-captured again. On every return to a parent the exec thread
- * clears the request and the latch and asks the UI thread (the owner of ClipCursor)
- * to let go.
- */
-volatile LONG g_MouseWantRelease = 0;
-/* Reported at STAGE2, because "the guest asked and we took it" and "the guest asked
- * and we did not" are different outcomes and a headless run must be able to tell
- * them apart. want=1 fired=0 means the request was raised and the window was not in
- * the foreground -- which is correct behaviour, not a failure, and only a counter
- * can say which of the two happened.
- */
-static DWORD         g_MouseAutoCaptureFired = 0;
-
-DWORD         g_MouseAltCalls;       /* events delivered to an alternate handler */
-
-enum                                         /* wired command IDs */
-{
-    IDM_STUB = 1,                            /* every not-yet-wired item */
-    IDM_FILE_EXIT, IDM_FILE_CLOSEPROG,
-    IDM_FILE_OPEN,                           /* #153: Open Executable... */
-    IDM_DISP_FULLSCREEN,
-    IDM_INPUT_CAPTURE,          /* (IDM_INPUT_CURSOR retired -- see g_cursor_show) */
-    IDM_FILE_SETTINGS,
-    IDM_CAP_SHOT,
-    IDM_HELP_ABOUT,
-    IDM_TRAY_SHOW,                           /* bring the hidden host window back */
-    IDM_FILE_INSTALL, IDM_FILE_UNINSTALL, IDM_FILE_STATUS,   /* GH #13 */
-    /* THE EDIT ITEMS HAVE REAL IDS PURELY SO THEY CAN BE ADDRESSED:
-     * Implemented since s82 (#154 -- see g_MarkMode); they needed their own
-     * ids first because "grey these five in a graphics mode" names them one at a
-     * time, and EnableMenuItem with MF_BYCOMMAND cannot distinguish five items
-     * that all carry IDM_STUB.
-     *
-     * [CAUTION]: THIS IS NOT THE SCAFFOLD-STUB DECISION BEING RE-LITIGATED. That decision
-     * says an UNIMPLEMENTED item stays enabled, and in text mode these still are.
-     * Greying them in a graphics mode is a different claim -- mark, copy and
-     * paste operate on a CHARACTER GRID, and in mode 13h there is no such thing
-     * to select -- so it is about what the item MEANS here, not about whether it
-     * is finished. See MenuSyncModal().
-     */
-    IDM_EDIT_MARK, IDM_EDIT_COPY, IDM_EDIT_COPYSCREEN, IDM_EDIT_PASTE,
-    IDM_EDIT_SELECTALL,
-    /* The View menu's two CHECKBOX settings (the combos are ranges, below). */
-    IDM_VIEW_VSYNC, IDM_VIEW_BLINK,
-    IDM_VIEW_HOSTCURSOR,                     /* RETIRED by #218; kept so later ids keep their numbers */
-    /* #155. APPENDED, not beside IDM_CAP_SHOT: the rig scripts post these ids as
-     * NUMBERS (textedit.bat: 14-18), and an insertion renumbers everything after it.
-     */
-    IDM_CAP_AUDIO, IDM_CAP_FOLDER,
-
-    /* ONE CONTIGUOUS RANGE PER DROPDOWN SETTING (Importance = 1):
-     * Every combo on the Display page, plus the CPU speed, appears in a menu as a
-     * run of ids `base + index`, so one handler serves all of them: find which
-     * range the id fell in, and the offset IS the setting's value. No per-item
-     * cases, and nothing to keep in step when a list gains an entry.
-     *
-     * [CAUTION]: THE ITEM TEXT IS NOT DUPLICATED HERE. MenuCombo() below builds each
-     * submenu by walking g_SetDefinitions' own `items` string -- the same string the
-     * dialog fills its combo from -- so the menu and the dialog cannot disagree
-     * about what the options are or which index each one means. Duplicating the
-     * list is how a menu ends up setting Scale2x when it says Scanlines.
-     *
-     * [CAUTION]: SPAN IS THE MOST ITEMS ANY ONE LIST MAY HAVE. MenuCombo() stops at it, so
-     * overflowing collides with nothing -- the extra items simply do not appear,
-     * which is visible, rather than silently invoking the next setting along.
-     */
-#define IDM_COMBO_SPAN  32
-    IDM_RECENT_0    = 180,                   /* #153: Open Recent, MRU_MAX items */
-    IDM_COMBO_BASE  = 200,
-    IDM_SPEED_0     = IDM_COMBO_BASE + 0 * IDM_COMBO_SPAN,   /* CPU speed (#56) */
-    IDM_WINSIZE_0   = IDM_COMBO_BASE + 1 * IDM_COMBO_SPAN,
-    IDM_RENDER_0    = IDM_COMBO_BASE + 2 * IDM_COMBO_SPAN,
-    IDM_SCALER_0    = IDM_COMBO_BASE + 3 * IDM_COMBO_SPAN,
-    IDM_FILTER_0    = IDM_COMBO_BASE + 4 * IDM_COMBO_SPAN,
-    IDM_FSKIP_0     = IDM_COMBO_BASE + 5 * IDM_COMBO_SPAN,
-    IDM_ASPECT_0    = IDM_COMBO_BASE + 6 * IDM_COMBO_SPAN,
-    IDM_TINT_0      = IDM_COMBO_BASE + 7 * IDM_COMBO_SPAN,   /* #229 (user, s84) */
-    IDM_FIT_0       = IDM_COMBO_BASE + 8 * IDM_COMBO_SPAN    /* #325 */
-};
-
-/* Which setting each range drives. The ONLY place the two are tied together. */
-static const struct
-{
-    UINT Base;
-    INT IsSet;
-}
-
-g_MenuCombos[] = {
-    { IDM_SPEED_0,   SET_SPEEDMODE }, { IDM_WINSIZE_0, SET_WINSIZE   },
-    { IDM_RENDER_0,  SET_RENDERER  }, { IDM_SCALER_0,  SET_SCALER    },
-    { IDM_FILTER_0,  SET_FILTER    }, { IDM_FSKIP_0,   SET_FRAMESKIP },
-    { IDM_ASPECT_0,  SET_ASPECT    }, { IDM_TINT_0,    SET_TINT      },
-    { IDM_FIT_0,     SET_FIT       },
-};
-#define MENU_COMBO_N    ((INT)(sizeof g_MenuCombos / sizeof g_MenuCombos[0]))
-
-/* ...and the checkbox ones, same idea. */
-static const struct
-{
-    UINT Id;
-    INT IsSet;
-}
-
-g_MenuChecks[] = {
-    { IDM_VIEW_VSYNC, SET_VSYNC }, { IDM_VIEW_BLINK, SET_BLINKCURSOR },
-};
-#define MENU_CHECK_N    ((INT)(sizeof g_MenuChecks / sizeof g_MenuChecks[0]))
-
 static VOID MenuItem (HMENU menu, PCSTR text, UINT thunkId)
 {
     AppendMenuA(menu, MF_STRING, thunkId, text);
@@ -532,18 +895,6 @@ static VOID MenuCombo(HMENU parent, PCSTR label, INT set, UINT base)
     MenuSubmenu(parent, label, submenu);
 }
 
-/* THE MENU BAR AFTER THE SETTINGS MOVE:
- * CPU, Display, Audio, Input and Drive are GONE from the bar. Everything they held
- * that was configuration now lives on a tab of the Settings dialog, which is one
- * place to look instead of five menus deep in submenus, and one store instead of a
- * tick per item.
- * - What stayed behind is what was never a setting: Fullscreen, input
- *   capture, the mount commands. Those are ACTIONS -- things you do once, now, and
- *   usually by keystroke. A command you reach for mid-game does not belong behind an
- *   OK button, so View and Machine keep them.
- * The rest is still scaffold: items carrying IDM_STUB no-op until they are wired.
- */
-static HMENU g_RecentMenu;                  /* File > Open Recent (#153) */
 static HMENU BuildMenu(VOID)
 {
     HMENU menuBar = CreateMenu();
@@ -722,29 +1073,6 @@ static HMENU BuildMenu(VOID)
     return menuBar;
 }
 
-/* A WIN16 GUEST HAS NO VDM WINDOW, AND NOW NEITHER DO WE. (#128, s.42) (Importance = 2):
- * On real XP a 16-bit Windows program shows no VDM window at all: it puts its own
- * windows on the desktop and the machine hosting it is invisible. Ours used to
- * sit on top of the guest's own windows showing a BLACK TEXT SCREEN -- not merely
- * redundant but misleading, because there is nothing for a Win16 guest to draw
- * there. krnl386 never sets a video mode.
- *
- * For a `-w` launch the window is created and never shown. But the menu behind
- * it is not useless -- Settings, Close Program, About and the screenshot are all
- * still things you might want during a Win16 run -- so it goes to the SYSTEM
- * TRAY, which is where a running-but-invisible machine belongs.
- *
- * [CAUTION]: THE WINDOW IS CREATED EITHER WAY, and that is deliberate rather than lazy: it
- * owns the present surface, the raw-input registration, the frame timer and the
- * tray callbacks. Hidden is a state; absent would be a second code path through
- * everything the UI thread does.
- * - A DOS guest keeps its window and gets no icon. Whether it should have one too
- *   is an open question (the user's, and a fair one) -- the only thing that would
- *   change is the condition on this flag, which is why it is one flag.
- */
-#define WM_TRAY         (WM_APP + 1)
-#define WM_APP_PRESENT  (WM_APP + 2)    /* The guest finished a frame: present now (Auto) */
-
 /* Runs on the GUEST thread inside status_in, under the device lock: post and leave.
  * One in flight at a time so a fast poller cannot flood the queue.
  */
@@ -756,9 +1084,6 @@ VOID HostPresentHook(PVOID context)
     if (InterlockedCompareExchange(&g_UiPresentPending, 1, 0) == 0)
         PostMessageA(g_Window, WM_APP_PRESENT, 0, 0);
 }
-
-#define TRAY_ID     1
-static INT  g_TrayOn    = 0;                /* the icon is currently installed */
 
 static VOID TrayAdd(HINSTANCE instance, HWND window)
 {
@@ -796,25 +1121,6 @@ VOID TrayRemove(HWND window)
     Shell_NotifyIconA(NIM_DELETE, &notifyIconData);
     g_TrayOn = 0;
 }
-
-/* THE NTVDMEX MANAGER: ONE TRAY ICON FOR EVERY PROGRAM. (GH #281, s88) (Importance = 2):
- * User design: the first host brings up `ntvdmex.exe`, every host (DOS and
- * Win16) appears in its one tray menu, and it exits when the last has gone.
- * Protocol and lifetime in src/host/mgrproto.h; the manager in src/manager/.
- * - THIS SIDE IS ONE LOW-PRIORITY THREAD that re-announces the host every two
- *   seconds. Not the UI thread: a SendMessageTimeout on a frame tick is a stall
- *   Skyroads would feel, and the announcement has no deadline worth that.
- *
- * [CAUTION]: IF ntvdmex.exe IS NOT BESIDE US, nothing changes: a Win16 host keeps its own
- * tray icon exactly as before (g_ManagerAvailable = 0), and a DOS host never had one.
- */
-static INT   g_ManagerAvailable;                    /* ntvdmex.exe exists beside the host */
-static UINT  g_ManagerCommandMessage;                   /* the registered manager->host message */
-static CHAR  g_ManagerExe[MAX_PATH];
-/* for the log */
-static DWORD g_ManagerHellos;
-static DWORD g_ManagerLaunches;
-typedef INT (WINAPI *PFN_INTGETWT)(HWND, LPWSTR, INT);
 
 /* What the menu calls this program. DOS: the running program's name ("Doom"), or
  * "MS-DOS Prompt" for a bare shell. Win16: its main window's caption up to " - "
@@ -902,10 +1208,6 @@ static VOID ManagerName(PSTR out, HWND *show)
     lstrcpynA(out, raw[0] ? raw : HOST_PRODUCT_NAME, MGR_NAME_SIZE);
 }
 
-enum
-{
-    MANAGER_RELAUNCH_MS = 5000, MANAGER_START_WAIT_MS = 500, MANAGER_SEND_TIMEOUT_MS = 500, MANAGER_POLL_MS = 2000
-};   /* ManagerThread */
 static DWORD WINAPI ManagerThread(LPVOID unused)
 {
     DWORD lastLaunch = 0;
@@ -1023,71 +1325,6 @@ static VOID TrayMenu(HWND window)
     DestroyMenu(menu);
 }
 
-static HWND g_Status;                        /* the native comctl32 status bar */
-
-/* THE CAPTION IS A CONSTANT NOW:
- * It used to carry the running program's name and, while captured, the release
- * chord. Both have moved to the status strip below, where they sit beside the
- * machine state they belong with -- and where a 63-character program name can no
- * longer push the release chord off the end of a caption the window manager is
- * free to truncate. The window is a DOS machine whatever happens to be running
- * inside it, so the title says exactly that and nothing else.
- */
-/* User, s84: "Windows NT Virtual DOS Machine" (was "Microsoft Windows XP ..."). The rig
- * harness finds the window by this string -- scripts/bm/*.bat and rigshot.c follow it.
- */
-#define VDM_WIN_TITLE   "Windows NT Virtual DOS Machine"
-
-/* THE STATUS STRIP:
- * PROG.EXE | 16-bit Real mode | the input-capture state and the chord for it.
- *
- * [CAUTION]: THREE REAL PARTS, NOT ONE STRING WITH BARS IN IT. This used to pack the program
- * name, the bitness and the CPU mode into the left part separated by a literal
- * "   |   ", which is a drawn-by-hand imitation of the sunken divider comctl32
- * already puts between parts -- and it did not line up with the genuine divider
- * before the right-hand part, so the strip had two kinds of separator on it.
- *
- * [INFO]: AND THE BITNESS AND THE MODE ARE ONE FACT, so they are one field: "16-bit Real
- * mode", "32-bit Protected mode". They were never independent -- 32-bit only ever
- * means a DPMI client in protected mode -- so splitting them invited the reader to
- * look for a combination that cannot occur.
- * The mode is not decoration. A DPMI guest crossing into 32-bit protected mode is
- * the largest single change of behaviour this host has -- different interrupt
- * delivery, different pointer widths, a different service path for every INT -- and
- * before it was on the strip the only way to know it had happened was the log.
- * The mode pair is not decoration. A DPMI guest crossing into 32-bit protected mode
- * is the largest single change of behaviour this host has -- different interrupt
- * delivery, different pointer widths, a different service path for every INT -- and
- * until now the only way to know it had happened was to read the log afterwards.
- *
- * [CAUTION]: IN EXCLUSIVE FULLSCREEN NEITHER PART IS VISIBLE: the DirectDraw primary covers
- * the strip exactly as it covers the menu bar. Win+F10 still releases.
- */
-/* s84 (user spec): EVERY PART LEFT-ALIGNED, EACH SIZED TO ITS TEXT (Importance = 1):
- * appname.exe | 16-bit Real Mode | 66 MHz
- * appname.exe | 32-bit Protected Mode | 133 MHz | Press WIN to release mouse
- * appname.exe | 32-bit Protected Mode | Unlimited | Click video to capture mouse
- * The capture message used to live in a fixed-width part against the RIGHT edge,
- * which cut it off; it now follows the speed. A program that never used the mouse
- * gets no fourth part at all -- there is nothing to say about capture. The speed is
- * the clock alone ("66 MHz", "Unlimited"), never the CPU's name.
- */
-/* ON it now */
-static CHAR g_StatusLeft[128];
-static CHAR g_StatusMode[96];
-static CHAR g_StatusSpeed[32];
-static CHAR g_StatusRight[64];
-/* #325: the window's whole scale (setting or drag), the frame size it was sized for, and
- * whether 1x did not fit the screen and was scaled down. See HostApplyScale.
- */
-static INT g_ScaleFactor = 0;            /* the scale the window is AT (after fitting) */
-static INT g_ScaleWant = 0;         /* the scale ASKED for (setting or drag) -- every mode
-                                        change starts from this, so one mode too big for 2x
-                                        does not leave the next one stuck at 1x            */
-static INT g_WindowFrameWidth;
-static INT g_WindowFrameHeight;
-static INT g_FitDown;
-
 /* How wide a string renders IN THE STATUS BAR'S OWN FONT. Asking the control for
  * its font matters: the strip is themed, so measuring with the stock system font
  * would size the part for text of a different width than the one drawn in it.
@@ -1119,10 +1356,6 @@ static INT StatusTextWidth(PCSTR text)
     return width;
 }
 
-enum
-{
-    STATUS_PART_PROGRAM = 0, STATUS_PART_MODE = 1, STATUS_PART_SPEED = 2, STATUS_PART_CAPTURE = 3, STATUS_PARTS = 4, STATUS_TEXT_INSET = 18, STATUS_PROGRAM_WIDTH_MAX = 260, STATUS_PART_WIDTH_MIN = 40, STATUS_PART_TO_EDGE = -1
-};   /* the status strip, left to right */
 /* EACH PART HUGS ITS TEXT (s84: extended from the name to every part) (Importance = 1):
  * Measure each string in the bar's own font, add the control's inset, and lay the
  * parts out left to right; the LAST part runs to the edge (-1) so the size grip has
@@ -1309,28 +1542,6 @@ static INT CloseProgramAvailable(VOID)
     return g_ExecDepth > 0 || !g_TopIsShell;
 }
 
-/* #154: THE EDIT MENU, ON THE CHARACTER GRID:
- * The five items were greyed outside text mode and did nothing inside it. The grid
- * is page 0 at VIDEO_TEXT_OFFSET, 8x16 cells -- exactly what the text renderer draws, so
- * what is copied is what is seen.
- *   Mark        the next left drag selects a rectangle of cells (Esc cancels)
- *   Select All  the whole grid
- *   Copy        the selection, as CF_OEMTEXT (the grid is code page 437; Windows
- *               converts), lines right-trimmed, CRLF between them
- *   Copy Whole Screen   the same, for every cell
- *   Paste       the clipboard, TYPED: real scancodes through the same path as a
- *               keypress, so a prompt, EDIT and a program reading port 60h all get it
- * The selection is shown by the presenter inverting it after each frame.
- */
-static INT g_MarkMode;
-static INT g_MarkDrag;
-static INT g_SelectionOn;
-static INT g_SelectionColumn0;
-static INT g_SelectionRow0;
-static INT g_SelectionColumn1;
-static INT g_SelectionRow1;
-static volatile LONG g_PasteBusy;
-
 static VOID SelectionPublish(VOID)
 {
     INT cols = g_Video.Columns;
@@ -1392,10 +1603,6 @@ static INT ClientToCell(INT clientX, INT clientY, INT *column, INT *row)
     return 1;
 }
 
-enum
-{
-    TEXT_COPY_SELECTION = 0, TEXT_COPY_SCREEN = 1
-};   /* TextCopy: the marked region, or the whole screen */
 static VOID TextCopy(HWND window, INT all)
 {
     INT column0;
@@ -1467,10 +1674,6 @@ static VOID TextCopy(HWND window, INT all)
         GlobalFree(memory);
 }
 
-enum
-{
-    PASTE_KEY_HOLD_MS = 12, PASTE_KEY_GAP_MS = 20
-};   /* PasteThread: per typed key */
 /* Typed, not injected: ~30 characters a second, so a guest that reads slowly (or a
  * BIOS ring of 15 keys) is not overrun. One paste at a time; a new one while typing
  * is refused rather than interleaved.
@@ -1519,10 +1722,6 @@ static DWORD WINAPI PasteThread(LPVOID parameter)
     return 0;
 }
 
-enum
-{
-    PASTE_TEXT_MAX = 4096
-};   /* TextPaste: the most it types in one go */
 static VOID TextPaste(HWND window)
 {
     HANDLE clipboard;
@@ -1600,36 +1799,6 @@ static VOID MenuSyncModal(HWND window, HMENU popup)
     }
 }
 
-/* INPUT CAPTURE ("exclusivity"):
- * Two different things are stealing the guest's keys, and they need different fixes.
- * 1. WINDOWS' OWN MENU KEYS. F10 and Alt do not arrive as WM_KEYDOWN at all -- they are
- *  SYSTEM keys (WM_SYSKEYDOWN) and DefWindowProc turns them into menu activation. So a
- *  DOS program that wants F10 -- Doom's SETUP.EXE is the reported case -- never sees
- *  it, and the menu bar lights up instead. That is fixed unconditionally below: system
- *  keys are routed to the guest like any other, because in a DOS box they ARE the
- *  guest's. Alt+F4 is the deliberate exception while uncaptured, so the window can
- *  always be closed.
- * 2. THE SHELL'S CHORDS -- Alt+Tab, Ctrl+Esc, the Windows keys. Those never reach the
- *  window at all; only a low-level hook sees them, and only while we are foreground.
- *  Swallowing them is what "exclusive" means, and it is a MODE, not a default: a
- *  window that eats Alt+Tab whenever it has focus is hostile. WIN+F10 toggles it
- *  (Scroll Lock too, where the keyboard still has one),
- *  swallowed by us so the guest never sees it -- there is no chord a DOS guest cannot
- *  generate, so the release must be one WE reserve. It is deliberately NOT Ctrl+F10
- *  (DOSBox's binding): Doom fires with Ctrl and uses every F-key, so that chord fought
- *  the guest for keys it needs constantly -- and F10 is a SYSTEM key, so the check
- *  never even ran. See the WM_KEYDOWN handler.
- *
- * [CAUTION]: Ctrl+Alt+Del is the Secure Attention Sequence and CANNOT be hooked. That is by
- * design in Windows and not a defect here.
- *
- * [CAUTION]: Capture is dropped on WM_KILLFOCUS -- otherwise a clipped cursor and a swallowed
- * Alt+Tab would strand the user in a window they cannot leave.
- */
-HHOOK         g_LowLevelKeyboard;
-INT           g_LowLevelKeyboardOn = 0;     /* OFF by default; llkbd.txt = 1. See InputCaptureSet. */
-static volatile LONG g_UiBeat;          /* ++ per WM_TIMER: the UI thread is pumping */
-static DWORD         g_CaptureWatchdogReleased;   /* times the watchdog had to hand the box back */
 /* [CAUTION]: host_key_held() WAS HERE AND IS GONE (s64). It answered "is a Windows key held", which
  * only ever mattered to the Win+F10 and Win+Click CHORDS. The Windows key is now a release key in
  * its own right (capture rule 4), so nothing needs to ask whether it is held alongside something
@@ -1773,17 +1942,6 @@ static VOID CaptureClipApply(HWND window)
     ClipCursor(&clip);
 }
 
-/* CAPTURED MEANS THE POINTER NEVER REACHES THE DESKTOP. (user, s84) (Importance = 1):
- * Focusing the window from its TITLE BAR captured (WM_ACTIVATE, rule 5) -- and then
- * the press on the caption entered Windows' own move loop, which leaves the cursor
- * UNCLIPPED when it ends. So we believed we were captured, the pointer was hidden over
- * the video, and it walked straight out onto the desktop. ClipCursor is global state
- * anyone can change, so re-applying it at WM_EXITSIZEMOVE is not enough on its own:
- * from the UI tick, while captured and in front (and not mid-drag, where Windows owns
- * the clip), check the clip is still OURS and restore it if not. Counted.
- */
-static INT   g_InSizeMove;
-static DWORD g_ClipRepairs;
 static VOID CaptureClipGuard(HWND window)
 {
     RECT want;
@@ -1802,10 +1960,6 @@ static VOID CaptureClipGuard(HWND window)
     }
 }
 
-enum
-{
-    FULLSCREEN_RELEASE_HINT_MS = 4000
-};   /* FullscreenReleaseHint: how long its hint shows */
 /* #138: in fullscreen there is no status strip, so say how to get the mouse back. */
 static VOID FullscreenReleaseHint(VOID)
 {
@@ -2099,10 +2253,6 @@ static VOID MenuRecentFill(VOID)
     }
 }
 
-enum
-{
-    HOST_PANIC_RESUME_MAX = 64
-};   /* HostPanicRelease: undo at most this many suspends */
 /* [WARNING]: GIVE THE MACHINE BACK. CALL THIS BEFORE ANY TEARDOWN PATH (Importance = 3):
  * Two things this host does are SYSTEM-WIDE and outlive our window, and a third
  * can stop the process dying at all:
@@ -2141,29 +2291,6 @@ VOID HostPanicRelease(VOID)
     }
 }
 
-enum
-{
-    CAPTURE_WATCH_MS = 250
-};   /* CaptureWatchdogThread */
-/* [WARNING]: THE LAST LINE OF DEFENCE: HAND THE MACHINE BACK WITHOUT BEING ASKED (Importance = 2):
- * HostPanicRelease covers the paths where we KNOW we are going away. This covers
- * the one where we do not: the UI thread stops pumping while capture is held. That
- * is the state that cost the user two hard resets -- the box runs, answers ping, and
- * cannot be typed at or clicked out of, because the things capture holds are
- * system-wide and only that same stalled thread ever releases them.
- * A separate thread owes the user nothing but this: if capture is held and the UI
- * thread has not reached its timer for CAPWD_STALL_MS, take the machine back. It
- * does NOT try to diagnose, kill or recover the guest -- a wedged emulator is a bug
- * report, a wedged computer is a lost afternoon, and only the second is urgent.
- *
- * [CAUTION]: ClipCursor and UnhookWindowsHookEx are safe from another thread; SetCursor and
- * the menu check are not, so they are deliberately not touched here.
- *
- * [CAUTION]: It must not fire while merely SLOW. 3 s is far longer than any frame this host
- * has ever taken (worst measured UI gap: 35 ms) and far shorter than a human's
- * patience with a dead keyboard.
- */
-#define CAPWD_STALL_MS  3000u
 DWORD WINAPI CaptureWatchdogThread(LPVOID parameter)
 {
     LONG  last = -1;
@@ -2265,38 +2392,6 @@ static VOID CursorIdleTick(HWND window)
     g_CursorIdle = 1;
     HostCursorRefresh(window);
 }
-
-/* FULLSCREEN IS A WINDOW STYLE, NOT JUST A DIRECTDRAW MODE. (s64) (Importance = 2):
- * We asked DirectDraw for an exclusive fullscreen mode and left the WINDOW exactly
- * as it was: WS_OVERLAPPEDWINDOW, caption, thick resizing frame, menu bar. The
- * DirectDraw primary covers the pixels, so it LOOKS right -- until the pointer nears
- * an edge and Windows hit-tests the frame that is still there and hands back a
- * RESIZE cursor over a fullscreen game. The user saw exactly that and drew the right
- * conclusion: "fullscreen mode might not be using the correct window style. It
- * should essentially have no style."
- * - So take the style off going in and put it back coming out: WS_POPUP over the whole
- *   virtual screen, no caption, no frame, no menu. There is then no non-client area to
- *   hit-test, which is what actually removes the resize cursors -- SetCursor could
- *   never have done it, because the frame cursors are decided in WM_NCHITTEST long
- *   before WM_SETCURSOR is asked.
- *
- * [CAUTION]: AND RESTORE THE GEOMETRY, WHICH IS THE OTHER HALF OF THE SAME BUG. Going exclusive
- * leaves the window sized to the screen; coming back out we used to keep that size,
- * so Alt+Enter twice turned a 640x480 window into a full-screen-sized one that was
- * no longer fullscreen. Alt+Enter is a TOGGLE and a toggle must land back where it
- * started. GetWindowPlacement/SetWindowPlacement rather than a bare rect: it carries
- * the maximised/minimised state too, so a window that was maximised before returns
- * maximised rather than to some remembered restored size.
- *
- * [CAUTION]: ORDER, both ways. Going in: style first, then DirectDraw -- ddraw wants the window
- * it is about to own to already be the shape it will be. Coming out: DirectDraw
- * first, then style, then placement, so the mode is back before we ask Windows to
- * lay a window out on it.
- */
-static WINDOWPLACEMENT g_FullscreenPlace;      /* geometry to come back to */
-static LONG            g_FullscreenStyle;      /* the style we took off */
-static LONG            g_FullscreenExStyle;
-static INT             g_FullscreenSaved;
 
 /* Undo everything the fullscreen entry changed. Separate because BOTH the normal exit
  * and the "DirectDraw refused" path need it, and a chromeless window that is not
@@ -2439,12 +2534,6 @@ static VOID HostFullscreenToggle(HWND window)
     }
 }
 
-/* -- START FULLSCREEN (s68). One decision per process, on the UI thread, and it only
- * ever turns fullscreen ON: Alt+Enter owns everything after that. `graphics` says
- * whether the guest is in a graphics mode right now -- Always fires regardless,
- * Graphics only waits for it, Never does nothing.
- */
-static INT g_AutoFullscreenDone = 0;
 static VOID HostAutoFullscreenConsider(HWND window, INT graphics)
 {
     DWORD mode = g_Settings.Values[SET_AUTOFS];
@@ -2462,11 +2551,6 @@ static VOID HostAutoFullscreenConsider(HWND window, INT graphics)
     if (!g_PresentDdraw.IsFullscreen)
         HostFullscreenToggle(window);
 }
-
-/* Frames the presenter drops between the ones it shows. 0 = every frame, which is
- * what this host has always done. Read on the UI thread's timer tick.
- */
-INT g_FrameSkip;
 
 /* #325: THE WINDOW IS THE PICTURE, AT A WHOLE SCALE:
  * 1x is one desktop pixel per frame pixel and Nx an N x N block, and the picture is
@@ -2570,10 +2654,6 @@ static INT WindowScaleFits(INT scale)
     return pictureWidth <= roomWidth && pictureHeight <= roomHeight;
 }
 
-enum
-{
-    HOST_SCALE_MAX = 4
-};   /* the window's integer scales: 1x to 4x */
 /* -- EVERY MENU-BACKED SETTING'S TICK, FROM THE ONE PLACE THAT KNOWS THE VALUES. -
  * CheckMenuRadioItem for the dropdowns rather than a tick, because they are
  * exclusive and a bullet is what Windows uses to say so -- and because it clears
@@ -2719,27 +2799,6 @@ VOID HostApplyWindowSize(HWND window, DWORD index)
     HostApplyScale(window, (INT)index + 1 <= HOST_SCALE_MAX ? (INT)index + 1 : 1);
 }
 
-/* PUT g_Settings INTO EFFECT, WITHOUT TOUCHING THE REGISTRY:
- * One function so the View menu, the CPU Speed submenu and the dialog's OK all
- * reach the machine by the same path -- three call sites that each remembered a
- * different subset is how a knob ends up working from one route and not another.
- *
- * [CAUTION]: SettingsApplyDevices is NOT called here. Nothing on the View menu is an audio
- * setting, and re-pushing the mixer on every scaler change is reach this has no
- * business having. The dialog calls it separately, where it belongs.
- */
-/* [CAUTION]: THE RESIZE FIRES ONLY WHEN THE SIZE SETTING ACTUALLY CHANGED, and that is not
- * an optimisation. Every live apply passes through here, so resizing
- * unconditionally would mean picking a different SCALER snapped a window the user
- * had dragged to their own size back to 1x -- the setting reaching past its own
- * business, which is the thing that makes people stop touching the menu.
- */
-DWORD g_WindowSizeLive = WINDOW_SETTING_UNSET_U;   /* what the window is currently AT */
-DWORD g_AspectLive  = WINDOW_SETTING_UNSET_U;   /* ...and the shape it is that size IN */
-enum
-{
-    WINDOW_RESIZE_SETTLE_MS = 150
-};   /* a frame-size change must hold this long before it is applied */
 /* -- #325: THE WINDOW FOLLOWS THE MODE. When the frame's size changes -- text to a
  * 320x200 game, a VESA mode, Mode X -- a normal (not maximised, not fullscreen)
  * window is re-sized to the new picture at the scale it is at. Debounced: the new
@@ -2775,29 +2834,6 @@ static VOID HostFollowFrame(HWND window)
     HostApplyScale(window, g_ScaleWant ? g_ScaleWant : (INT)g_Settings.Values[SET_WINSIZE] + 1);
 }
 
-/* THE TABBED SETTINGS DIALOG:
- * IDD_SETTINGS is only a frame: a tab control, OK, Cancel, Restore Defaults. Each
- * tab is its OWN child dialog (IDD_PAGE_*), created here and parked in the tab's
- * display rectangle. Nothing below is written per-control -- every fill and every
- * read is a loop over g_SetDefinitions in settings.h, so adding a knob is one table row and
- * one line of .rc layout, not four edits in four functions that can disagree.
- */
-/* s84, the user's redesign: six tabs in a 640 x 480 dialog. Processor, Memory and
- * Advanced became "Machine"; General is "MS-DOS"; Display is "Video".
- */
-const INT g_SettingsPages[NTVDMEX_PAGE_COUNT] = {
-    IDD_PAGE_GENERAL, IDD_PAGE_CPU, IDD_PAGE_DISPLAY,
-    IDD_PAGE_AUDIO,   IDD_PAGE_INPUT, IDD_PAGE_DRIVES
-};
-#define PLANEDUMP_FLAG  CFG_("planedump.flag")
-enum
-{
-    PAUSE_SUSPEND_TRIES = 200
-};   /* HostPauseSet: attempts to catch the CPU thread */
-enum
-{
-    UI_TICK_FRAME_NUMERATOR = 9, UI_TICK_FRAME_DENOMINATOR = 10, UI_PRESENT_STALE_FRAMES = 2
-};   /* the UI tick: 90% of a frame; quiet for two */
 /* --- the UI thread: window + present + frame timer ------------------------- */
 /* -- #219: ONLY THE FOCUSED NTVDMEX WINDOW RUNS. (user, s83 sweep; decision 2026-09-28:
  * always, no setting) Skyroads and Doom side by side were "very jittery": two guests
@@ -2878,10 +2914,6 @@ static VOID HostPauseSet(INT isOn)
     }
 }
 
-enum
-{
-    HOST_DUMP_INTERVAL_MS = 5000, FULLSCREEN_HINT_MS = 5000, CAPTURE_SHOTS_MAX = 40, CAPTURE_NAME_DIGITS = 4, HOST_MINIMUM_PICTURE_WIDTH = 160, HOST_MINIMUM_PICTURE_HEIGHT = 100
-};   /* the census interval, the leave-fullscreen hint, capture.flag's shots and "shotNN.bmp", the smallest picture */
 static LRESULT CALLBACK HostWindowProcedure(HWND window, UINT message, WPARAM wParam, LPARAM lParam)
 {
     /* GH #281: a command from the manager's tray menu, mapped onto this host's own
@@ -4398,10 +4430,6 @@ static LRESULT CALLBACK HostWindowProcedure(HWND window, UINT message, WPARAM wP
     return DefWindowProcA(window, message, wParam, lParam);
 }
 
-enum
-{
-    HID_USAGE_PAGE_GENERIC_DESKTOP = 0x01, HID_USAGE_GENERIC_MOUSE = 0x02
-};   /* hidusage.h: raw input's mouse */
 DWORD WINAPI UiThread(LPVOID argument)
 {
     WNDCLASSA windowClass;

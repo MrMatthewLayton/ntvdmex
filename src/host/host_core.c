@@ -18,6 +18,27 @@
 #include "host_types.h"
 #include "host_state.h"
 
+/* -- [WARNING] THE RING IS PER-THREAD, BECAUSE A SHARED ONE WROTE A LOG LINE INTO A FLAG FILE.
+ * (s74c) The watchdog thread built WDLOG_PATH here, and before its CreateFile ran the
+ * other threads had taken 16 more slots -- so the pointer it held now read
+ * `cfg\pmnoirq.flag` (the PM loop's GetFileAttributes at entry), and the watchdog's
+ * "started" line CREATED the knob that suppresses every PM IRQ. From that run on,
+ * Duke3D failed its sound-IRQ test ("Playback failed, possibly due to an invalid or
+ * conflicting IRQ"), heaven7 and ZAR ran with time stopped, and nothing said why:
+ * the file's CONTENTS were the only clue. A caller may legitimately hold a few paths
+ * at once (LOG_PATH inside LogAppend while building another), so keep a small ring,
+ * but never let another thread's path land in it.
+ */
+#define NTVDMEX_PATH_SLOTS  8
+#define NTVDMEX_PATH_SLOT   (MAX_PATH + 96)
+
+#define DPMI_PMAP_MASK      (DPMI_PMAP_SLOTS - 1u)
+
+enum
+{
+    PATCH_MAP_HASH_SHIFT = 8, PATCH_MAP_HEADROOM = 16
+};   /* PatchMapHash / PatchMapSet */
+
 /* #211: the FIRST host writes to debug\out\ as always; a second one at the same time writes
  * to debug\out\2\, and so on (the instance claim in WinMain) -- so no host clears another's log.
  */
@@ -27,6 +48,14 @@ INT g_InstanceAbandoned;
 DWORD g_OsVersion;       /* GetVersion(): 0x0500 = 2000, 0x0501 = XP */
 
 PFN_ATTACH_CONSOLE           g_PfnAttachConsole;
+
+CRITICAL_SECTION g_Lock;             /* serialises all bus dispatch */
+DWORD g_PatchMapCount;
+static volatile LONG g_PathTls = -1;             /* TlsAlloc'd on first use (no __thread: no libgcc) */
+static DWORD g_LockOwner;
+static DWORD g_LockDepth;
+static LONGLONG g_LockSince;
+
 VOID OsCompatBind(VOID)
 {
     HMODULE kernel32 = GetModuleHandleA(HOST_MODULE_KERNEL32);
@@ -102,20 +131,6 @@ PCSTR NtvdmexRoot(VOID)
     return root;
 }
 
-/* -- [WARNING] THE RING IS PER-THREAD, BECAUSE A SHARED ONE WROTE A LOG LINE INTO A FLAG FILE.
- * (s74c) The watchdog thread built WDLOG_PATH here, and before its CreateFile ran the
- * other threads had taken 16 more slots -- so the pointer it held now read
- * `cfg\pmnoirq.flag` (the PM loop's GetFileAttributes at entry), and the watchdog's
- * "started" line CREATED the knob that suppresses every PM IRQ. From that run on,
- * Duke3D failed its sound-IRQ test ("Playback failed, possibly due to an invalid or
- * conflicting IRQ"), heaven7 and ZAR ran with time stopped, and nothing said why:
- * the file's CONTENTS were the only clue. A caller may legitimately hold a few paths
- * at once (LOG_PATH inside LogAppend while building another), so keep a small ring,
- * but never let another thread's path land in it.
- */
-#define NTVDMEX_PATH_SLOTS  8
-#define NTVDMEX_PATH_SLOT   (MAX_PATH + 96)
-static volatile LONG g_PathTls = -1;             /* TlsAlloc'd on first use (no __thread: no libgcc) */
 PCSTR NtvdmexPath(PCSTR subdirectory, PCSTR name)
 {
     PSTR ring;
@@ -178,10 +193,6 @@ INT StrStrNoCase(PCSTR block, PCSTR name)
     return 0;
 }
 
-CRITICAL_SECTION g_Lock;             /* serialises all bus dispatch */
-static DWORD g_LockOwner;
-static DWORD g_LockDepth;
-static LONGLONG g_LockSince;
 UINT32 QpcMicroseconds(LONGLONG ticks)
 {
     if (!g_QpcFrequency.QuadPart || ticks <= 0)
@@ -227,10 +238,6 @@ VOID HostLockEnter(INT site)
     g_LockDepth++;
 }
 
-enum
-{
-    PATCH_MAP_HASH_SHIFT = 8, PATCH_MAP_HEADROOM = 16
-};   /* PatchMapHash / PatchMapSet */
 VOID HostLockLeave(VOID)
 {
     if (g_LockDepth && --g_LockDepth == 0)
@@ -277,9 +284,6 @@ INT HostLockTry(INT site)
     g_LockDepth++;
     return 1;
 }
-
-#define DPMI_PMAP_MASK  (DPMI_PMAP_SLOTS - 1u)
-DWORD g_PatchMapCount;
 
 static DWORD PatchMapHash(DWORD linear)
 {
@@ -396,6 +400,7 @@ VOID PokeDword(DWORD linear, DWORD value)   /* dword store: 32-bit IRET frame sl
   memory[linear+1] = (BYTE)(value >> BYTE_SHIFT);
   memory[linear+2] = (BYTE)(value >> WORD_SHIFT);
   memory[linear+3] = (BYTE)(value >> TOP_BYTE_SHIFT); }
+
 WORD PeekWord(DWORD linear)
 {
     const volatile BYTE *memory = (const volatile BYTE *)0;
@@ -411,6 +416,7 @@ DWORD PeekWidth(DWORD linear, INT width)
   if (width == X86_WORD_SIZE)
       return PeekWord(linear);
   return (DWORD)PeekWord(linear) | ((DWORD)PeekWord(linear + X86_WORD_SIZE) << WORD_SHIFT); }
+
 VOID PokeWidth(DWORD linear, DWORD value, INT width)
 { volatile BYTE *memory = (volatile BYTE *)0;
   if (width == 1)

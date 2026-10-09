@@ -29,92 +29,18 @@
 #include "wowcommdlg.h"
 #include "host_dpmi.h"
 
-/* Forward declarations, from when this file was part of main.c's unit (they were in wowwin.h). */
-WORD  WowWinHwnd16(HWND window);
-PWOWUSER_WINDOW WowUserFindWindow(WORD window16);
-INT   WowUserIsMdiChild(PCWOWUSER_WINDOW window);
-HWND  WowUserMdiClientOf(PCWOWUSER_WINDOW window);
-HWND  WowUserHwnd32(WORD window16);
-WORD  WowUserMenu16(HMENU menu);  /* the 16-bit name for a real menu */
-/* #294: COMMDLG's modeless Find/Replace dialogs -- wowcommdlg.h, included later. */
-INT   WowCdlgRelay(UINT message, LPARAM lParam);
-INT   WowCdlgIsDialogMessage(PMSG message);
-DWORD WowUserTimerProcedure(WORD window16, WORD timerId);  /* 0 if none installed */
-
-INT WowUserIsDialog16(WORD h16);          /* wowuser.h: a dialog procedure? */
-
 /* Set once the exec thread has a window: the thread id that owns them all, so a
  * pump on the wrong thread can be refused rather than silently doing nothing.
  */
 DWORD g_WowWinThread = 0;
 DWORD g_WowWinCreated = 0;
 DWORD g_WowWinMessages = 0;
-/* #160: menus held back until the guest set them up, and the replay's re-entry flag. */
-static DWORD g_WowWinMenuDeferred = 0;
-static INT   g_WowWinIsReplaying = 0;
-/* Times Alt/F10 had to take the mouse capture off a guest window so the menu
- * could open. Non-zero is normal for a paint program; zero on a session where
- * the menu is dead means the cause is something else.
- */
-static DWORD g_WowWinMenuUncaptures = 0;
 /* Win32 messages this thread has dispatched for the guest's windows. The answer to
  * "is the window hung", which cannot be read off anything else.
  */
 DWORD g_WowWinPumped = 0;
-
-static WOWWIN_PAINT g_WowWinPaints[WOWWIN_MAXPAINT];
 /* Tick at which the most recent WM_PAINT was posted to the Win16 queue. */
 DWORD g_WowWinPaintMs = 0;
-
-static VOID WowWinPaintWant(WORD window16, const RECT *rect, INT isErase)
-{
-    INT index;
-    INT freeSlot = -1;
-
-    for (index = 0; index < WOWWIN_MAXPAINT; ++index)
-    {
-        if (g_WowWinPaints[index].IsPending && g_WowWinPaints[index].Window16 == window16)
-        {
-            if (rect->left   < g_WowWinPaints[index].Rect.left)
-                g_WowWinPaints[index].Rect.left   = rect->left;
-            if (rect->top    < g_WowWinPaints[index].Rect.top)
-                g_WowWinPaints[index].Rect.top    = rect->top;
-            if (rect->right  > g_WowWinPaints[index].Rect.right)
-                g_WowWinPaints[index].Rect.right  = rect->right;
-            if (rect->bottom > g_WowWinPaints[index].Rect.bottom)
-                g_WowWinPaints[index].Rect.bottom = rect->bottom;
-            if (isErase)
-                g_WowWinPaints[index].IsErase = 1;
-            return;
-        }
-        if (!g_WowWinPaints[index].IsPending && freeSlot < 0)
-            freeSlot = index;
-    }
-    if (freeSlot < 0)
-        return;                  /* full: the guest still gets the
-                                              message, just no rectangle */
-    g_WowWinPaints[freeSlot].Window16 = window16;
-    g_WowWinPaints[freeSlot].Rect = *rect;
-    g_WowWinPaints[freeSlot].IsErase = isErase;
-    g_WowWinPaints[freeSlot].IsPending = 1;
-}
-
-/* Take the pending rectangle for a window, or 0 if there is none. */
-INT WowWinPaintTake(WORD window16, PRECT output, PINT isErase)
-{
-    INT index;
-
-    for (index = 0; index < WOWWIN_MAXPAINT; ++index)
-        if (g_WowWinPaints[index].IsPending && g_WowWinPaints[index].Window16 == window16)
-        {
-            *output = g_WowWinPaints[index].Rect;
-            if (isErase)
-                *isErase = g_WowWinPaints[index].IsErase;
-            g_WowWinPaints[index].IsPending = 0;
-            return 1;
-        }
-    return 0;
-}
 
 /* -- MSG.pt IS THE CURSOR IN *SCREEN* COORDINATES, AND IT WAS ALWAYS 0,0.
  * Every WowMsgPost here passed `0, 0` for it, because nothing this host had
@@ -169,13 +95,130 @@ INT (*g_WowWinSend16)(WORD window16, WORD message, WORD wParam, DWORD lParam, PW
  */
 LRESULT (*g_WowWinOwnerDraw)(HWND window, WORD window16, UINT message, WPARAM wParam, LPARAM lParam,
                                  PINT isHandled);
-
-static UINT g_WowWinMultimediaLogged;   /* s90: first MM notifications logged */
 /* s92 (#305 M12): krnl386's OWN global heap, through the nested run (main.c:
  * shim_global16 -- 0 GlobalAlloc(flags, cb) 1 GlobalFree 2 GlobalLock -> 16:16
  * 3 GlobalUnlock). NULL until main.c wires it.
  */
 DWORD (*g_WowWinGlobal16)(INT operation, DWORD first, DWORD second);
+
+/* s91 (#305 M9): a message with a STRUCTURE, sent now (main.c: wow_send16_blob) --
+ * WM_GETMINMAXINFO's 16-bit MINMAXINFO, copied back. 0 = it could not run.
+ */
+INT (*g_WowWinSend16Blob)(WORD window16, WORD message, WORD wParam, PBYTE blob, INT blobLength,
+                           const INT *fixups, INT fixupCount, PWORD result);
+
+/* s93: the guest's SetFocus calls, counted, and the real window of the last one --
+ * so WM_ACTIVATE can tell that the program placed the focus itself (wowuser.h).
+ */
+UINT g_WowWinSetFocusCount;
+HWND     g_WowWinSetFocusWindow;
+
+/* PUMP THE EXEC THREAD'S Win32 QUEUE (Importance = 2):
+ * The windows belong to this thread, so nothing about them happens -- no paint,
+ * no move, no click, no title bar -- unless this thread dispatches. Called at
+ * every WOW32 BOP, which is the only regular moment the exec thread is not
+ * inside the guest.
+ *
+ * [CAUTION]: BOUNDED. A pump that drained without limit would let a flood of mouse moves
+ * starve the guest, and the guest is the thing we are here to run.
+ */
+/* Ticks spent in here, and how many times it was entered -- the other half of
+ * the per-BOP cost. See the note in log.h.
+ */
+LONGLONG g_WowWinPumpTicks = 0;
+DWORD    g_WowWinPumpCalls = 0;
+/* #160: menus held back until the guest set them up, and the replay's re-entry flag. */
+static DWORD g_WowWinMenuDeferred = 0;
+static INT   g_WowWinIsReplaying = 0;
+/* Times Alt/F10 had to take the mouse capture off a guest window so the menu
+ * could open. Non-zero is normal for a paint program; zero on a session where
+ * the menu is dead means the cause is something else.
+ */
+static DWORD g_WowWinMenuUncaptures = 0;
+
+static WOWWIN_PAINT g_WowWinPaints[WOWWIN_MAXPAINT];
+
+static UINT g_WowWinMultimediaLogged;   /* s90: first MM notifications logged */
+
+static WOWWIN_SENDING g_WowWinSending[WOWWIN_MAX_SENDING];
+static INT g_WowWinSendingCount;
+/* s92 (#289): inside USER32's move/size loop (WM_ENTERSIZEMOVE..WM_EXITSIZEMOVE).
+ * The guest cannot run there, so a POSTED WM_PAINT waits for the mouse to come up
+ * and the vacated areas are never erased -- Packager's panes left a trail of
+ * scrollbars across the window. Win16's size loop dispatches WM_PAINT as it goes,
+ * so inside it the relay SENDS the paint (see WM_PAINT below).
+ */
+static INT g_WowWinSizeMove;
+static UINT g_WowWinPaintsLogged;
+
+static WOWWIN_HELD_CHAR g_WowWinHeldChars[WOWWIN_MAX_HELD_CHARS];
+static DWORD g_WowWinHeldCharSequence;
+
+static WOWWIN_THREAD_TIMER g_WowWinThreadTimers[WOWWIN_MAX_THREAD_TIMERS];
+
+/* Forward declarations, from when this file was part of main.c's unit (they were in wowwin.h). */
+WORD  WowWinHwnd16(HWND window);
+PWOWUSER_WINDOW WowUserFindWindow(WORD window16);
+INT   WowUserIsMdiChild(PCWOWUSER_WINDOW window);
+HWND  WowUserMdiClientOf(PCWOWUSER_WINDOW window);
+HWND  WowUserHwnd32(WORD window16);
+WORD  WowUserMenu16(HMENU menu);  /* the 16-bit name for a real menu */
+/* #294: COMMDLG's modeless Find/Replace dialogs -- wowcommdlg.h, included later. */
+INT   WowCdlgRelay(UINT message, LPARAM lParam);
+INT   WowCdlgIsDialogMessage(PMSG message);
+DWORD WowUserTimerProcedure(WORD window16, WORD timerId);  /* 0 if none installed */
+
+INT WowUserIsDialog16(WORD h16);          /* wowuser.h: a dialog procedure? */
+
+static VOID WowWinPaintWant(WORD window16, const RECT *rect, INT isErase)
+{
+    INT index;
+    INT freeSlot = -1;
+
+    for (index = 0; index < WOWWIN_MAXPAINT; ++index)
+    {
+        if (g_WowWinPaints[index].IsPending && g_WowWinPaints[index].Window16 == window16)
+        {
+            if (rect->left   < g_WowWinPaints[index].Rect.left)
+                g_WowWinPaints[index].Rect.left   = rect->left;
+            if (rect->top    < g_WowWinPaints[index].Rect.top)
+                g_WowWinPaints[index].Rect.top    = rect->top;
+            if (rect->right  > g_WowWinPaints[index].Rect.right)
+                g_WowWinPaints[index].Rect.right  = rect->right;
+            if (rect->bottom > g_WowWinPaints[index].Rect.bottom)
+                g_WowWinPaints[index].Rect.bottom = rect->bottom;
+            if (isErase)
+                g_WowWinPaints[index].IsErase = 1;
+            return;
+        }
+        if (!g_WowWinPaints[index].IsPending && freeSlot < 0)
+            freeSlot = index;
+    }
+    if (freeSlot < 0)
+        return;                  /* full: the guest still gets the
+                                              message, just no rectangle */
+    g_WowWinPaints[freeSlot].Window16 = window16;
+    g_WowWinPaints[freeSlot].Rect = *rect;
+    g_WowWinPaints[freeSlot].IsErase = isErase;
+    g_WowWinPaints[freeSlot].IsPending = 1;
+}
+
+/* Take the pending rectangle for a window, or 0 if there is none. */
+INT WowWinPaintTake(WORD window16, PRECT output, PINT isErase)
+{
+    INT index;
+
+    for (index = 0; index < WOWWIN_MAXPAINT; ++index)
+        if (g_WowWinPaints[index].IsPending && g_WowWinPaints[index].Window16 == window16)
+        {
+            *output = g_WowWinPaints[index].Rect;
+            if (isErase)
+                *isErase = g_WowWinPaints[index].IsErase;
+            g_WowWinPaints[index].IsPending = 0;
+            return 1;
+        }
+    return 0;
+}
 
 /* s92 (#305 M12): WM_DROPFILES -- A WIN16 HDROP IS A REAL GLOBAL BLOCK:
  * DragQueryPoint (SHELL ord 13) and DragFinish (ord 12) never reach us -- they
@@ -254,25 +297,6 @@ static WORD WowWinDrop16(HDROP drop, PSTR reason, INT reasonCapacity)
     return handle16;
 }
 
-/* s91 (#305 M9): a message with a STRUCTURE, sent now (main.c: wow_send16_blob) --
- * WM_GETMINMAXINFO's 16-bit MINMAXINFO, copied back. 0 = it could not run.
- */
-INT (*g_WowWinSend16Blob)(WORD window16, WORD message, WORD wParam, PBYTE blob, INT blobLength,
-                           const INT *fixups, INT fixupCount, PWORD result);
-
-static WOWWIN_SENDING g_WowWinSending[WOWWIN_MAX_SENDING];
-static INT g_WowWinSendingCount;
-/* s92 (#289): inside USER32's move/size loop (WM_ENTERSIZEMOVE..WM_EXITSIZEMOVE).
- * The guest cannot run there, so a POSTED WM_PAINT waits for the mouse to come up
- * and the vacated areas are never erased -- Packager's panes left a trail of
- * scrollbars across the window. Win16's size loop dispatches WM_PAINT as it goes,
- * so inside it the relay SENDS the paint (see WM_PAINT below).
- */
-static INT g_WowWinSizeMove;
-static UINT g_WowWinPaintsLogged;
-
-static WOWWIN_HELD_CHAR g_WowWinHeldChars[WOWWIN_MAX_HELD_CHARS];
-static DWORD g_WowWinHeldCharSequence;
 static VOID WowWinHoldChar(WORD window16, WORD character, DWORD lParam)
 {
     INT index;
@@ -317,7 +341,6 @@ INT WowWinReleaseChars(WORD window16, DWORD keyLParam)
     }
 }
 
-static WOWWIN_THREAD_TIMER g_WowWinThreadTimers[WOWWIN_MAX_THREAD_TIMERS];
 INT WowWinThreadTimerAdd(UINT_PTR id32, DWORD procedure)
 {
     INT index;
@@ -363,12 +386,6 @@ INT WowWinThreadTimerFire(const MSG *message)
         }
     return 0;
 }
-
-/* s93: the guest's SetFocus calls, counted, and the real window of the last one --
- * so WM_ACTIVATE can tell that the program placed the focus itself (wowuser.h).
- */
-UINT g_WowWinSetFocusCount;
-HWND     g_WowWinSetFocusWindow;
 
 static VOID WowWinSendOrPost(
     WORD window16,
@@ -1228,21 +1245,6 @@ static LRESULT CALLBACK WowWinProc(HWND window, UINT message, WPARAM wParam, LPA
         return 0;
     return WowWinDefProc(window, window16, message, wParam, lParam);
 }
-
-/* PUMP THE EXEC THREAD'S Win32 QUEUE (Importance = 2):
- * The windows belong to this thread, so nothing about them happens -- no paint,
- * no move, no click, no title bar -- unless this thread dispatches. Called at
- * every WOW32 BOP, which is the only regular moment the exec thread is not
- * inside the guest.
- *
- * [CAUTION]: BOUNDED. A pump that drained without limit would let a flood of mouse moves
- * starve the guest, and the guest is the thing we are here to run.
- */
-/* Ticks spent in here, and how many times it was entered -- the other half of
- * the per-BOP cost. See the note in log.h.
- */
-LONGLONG g_WowWinPumpTicks = 0;
-DWORD    g_WowWinPumpCalls = 0;
 
 INT WowWinPump(INT budget)
 {

@@ -46,7 +46,7 @@
  * cleared the instant a different call arrives, so it can never outlive the
  * pattern that justified it.
  */
-#define WOWFOLD_KEEP    256u    /* full dumps kept per function id */
+#define WOWFOLD_KEEP                256u            /* full dumps kept per function id */
 
 /* AND A SECOND, MUCH HIGHER CAP ON THE VERDICT LINE ITSELF:
  * The dump fold took TERMINAL from 177 MB to 85 MB and left 900,374 verdict
@@ -57,20 +57,30 @@
  * 4096 is fifty times that. A guest that passes it is not being measured any
  * more, it is looping.
  */
-#define WOWFOLD_HARD    4096u
-#define WOWFOLD_SLOTS   1024u   /* Power of two; see the collision note */
-static DWORD g_WowFoldSeen[WOWFOLD_SLOTS];
-DWORD g_WowIdleWaits = 0;              /* #306: krnl386 idle waits that blocked */
-/* WHERE krnl386's SEGMENT 1 ENDED UP IN PROTECTED MODE (Importance = 1):
- * krnl386 copies its own segment 1 out of conventional memory, relocates it, and
- * commits a code selector over the copy -- and the base of that copy is DIFFERENT
- * EVERY RUN (0x1ad00 and 0x2aec0 were measured one run apart). Every interesting
- * address in this investigation is `seg1:0xNNNN`, so a breakpoint list of absolute
- * linear addresses is a list that is wrong by the next run: session 32 lost readings
- * to exactly that. This is filled in when the selector is committed, and mode bit 1
- * in pmbp.txt means "the address column is an OFFSET IN THIS SEGMENT".
+#define WOWFOLD_HARD                4096u
+#define WOWFOLD_SLOTS               1024u           /* Power of two; see the collision note */
+#define I33_SRC_SIM                 3               /* DPMI 0300 simulate-real-mode-interrupt */
+
+/* seg2 ids. Numbered in THEIR OWN space -- 0xd1 here is not 0xd1 in wow32.h. */
+#define WOW32K2_TASKENV             0x00d1          /* The new task's environment; args: block offset 2, selector 4 */
+
+/* A descriptor access byte names CODE iff it is a segment (S, bit 4) and executable
+ * (bit 3). 0xFB -- what DOS/4GW writes -- is present/DPL3/S/code/readable/accessed.
  */
-static DWORD g_WowPmSegment1Base = 0;
+#define DPMI_ACC_IS_CODE(a)         (((a) & DPMI_ACCESS_CODE_TYPE) == DPMI_ACCESS_CODE_TYPE)
+#define DPMI_REPORTED_POOL_BYTES_U  0x04000000u     /* 0500h's answer: 64 MB */
+
+enum
+{
+    WOW_PUMP_BUDGET = 64, WOW_PUMP_BUDGET_BRIEF = 32, WOW_INPUT_WAIT_MS = 50, WOW32K2_TASKENV_ARG_BLOCK_OFFSET = 2, WOW32K2_TASKENV_ARG_BLOCK_SELECTOR = 4
+};   /* the WOW32 BOP service */
+
+enum
+{
+    WOW_SEGMENT_LIMIT_SLACK = 0x100
+};   /* DpmiServicePmIntBody */
+
+DWORD g_WowIdleWaits = 0;              /* #306: krnl386 idle waits that blocked */
 DWORD g_WowPmBase[WOW_PMBASE_MAX];
 /* -- THE CHANGE DETECTOR (pmchg.txt). One line: `<hex offset> [segment]`, the
  * segment defaulting to 4 (krnl386's DGROUP), because the addresses worth watching
@@ -79,9 +89,6 @@ DWORD g_WowPmBase[WOW_PMBASE_MAX];
  */
 DWORD g_PmWatchOffset = 0;      /* offset within the segment; 0 = disabled */
 UINT g_PmWatchSegment = 4;
-static DWORD g_PmWatchLinear = 0;      /* resolved linear address, 0 = not yet */
-static BYTE  g_PmWatchLast = 0;
-static BYTE  g_PmWatchHave = 0;
 /* A ONE-SHOT BREAKPOINT IS RETIRED BY ITS HIT, AND NOTHING SAID SO (Importance = 2):
  * DpmiBreakpointArm() runs before every PM entry and re-plants anything not currently
  * armed. The "never re-plant a site the guest is standing on" guard keys off
@@ -99,7 +106,6 @@ static BYTE  g_PmWatchHave = 0;
  */
 BYTE  g_BreakpointDone[DPMI_BP_MAX];
 DWORD          g_PmIrqReflects = 0;      /* PM default IRQ stub -> BIOS action (s80) */
-static DWORD          g_PmIrqReflectLogged = 0; /* bounded log budget for the above */
 WORD  g_DpmiDosBlock[DPMI_DOSBLK_MAX]; /* live 0100 DOS blocks (segments) */
 INT   g_DpmiDosBlockCount = 0;
 INT   g_PmExitCode = 0;             /* AL of the client's PM AH=4Ch */
@@ -114,8 +120,48 @@ DWORD g_LeCodeSize[DPMI_LE_MAX];   /* page-rounded sizes of the EXEC objects */
 WORD  g_PmAppTimerSelector = 0;
 DWORD g_PmAppTimerOffset = 0;
 INT g_PmDispatchTop;   /* ...as captured by the dispatch it applies to */
-#define I33_SRC_SIM     3   /* DPMI 0300 simulate-real-mode-interrupt */
 INT g_SimIntReflect = 0;
+DWORD     g_WowPspLinear[WOW_PSP_TRACK];
+WORD      g_WowPspEnvironment[WOW_PSP_TRACK];   /* last seen +0x2c, for the change log */
+/* WHICH WOW32 CALL WAS THE HOST INSIDE? (session 38) (Importance = 1):
+ * The WOWBOP log line is accumulated into `p` and only flushed WITH its result, so
+ * a host-side crash inside a service loses the whole line -- header included. The
+ * log then ends at the last call that SUCCEEDED, and the crashing one is invisible.
+ * That cost a wrong first reading of the GetProfileIntA crash: the tail named 0x57,
+ * stepped over and harmless, while the fault was in the call after it.
+ *
+ * Record the id and call site on entry. This is "the last call ENTERED", not "the
+ * call in flight" -- if the run ended cleanly it names a call that completed. The
+ * fatal dump says so rather than implying more than it knows.
+ */
+WORD g_WowLastId   = WOW_ID_NONE;
+WORD g_WowLastFrom = 0;
+DWORD g_WowSchedSwitches = 0;
+/* s92 (#306): the task launched last and not yet run -- see "(F) LAUNCH-FIRST" -- and
+ * WOWEXEC (the first task resumed at (C)), whose launches keep the measured order.
+ */
+WORD g_WowSchedLaunchChild;
+WORD g_WowSchedShell;
+DWORD g_Wow32Serviced = 0;
+DWORD g_Wow32Unimplemented = 0;
+DWORD g_Wow32Declined = 0;
+
+DWORD g_WowSyncWrites = 0;      /* how many entries krnl386 has changed */
+static DWORD g_WowFoldSeen[WOWFOLD_SLOTS];
+/* WHERE krnl386's SEGMENT 1 ENDED UP IN PROTECTED MODE (Importance = 1):
+ * krnl386 copies its own segment 1 out of conventional memory, relocates it, and
+ * commits a code selector over the copy -- and the base of that copy is DIFFERENT
+ * EVERY RUN (0x1ad00 and 0x2aec0 were measured one run apart). Every interesting
+ * address in this investigation is `seg1:0xNNNN`, so a breakpoint list of absolute
+ * linear addresses is a list that is wrong by the next run: session 32 lost readings
+ * to exactly that. This is filled in when the selector is committed, and mode bit 1
+ * in pmbp.txt means "the address column is an OFFSET IN THIS SEGMENT".
+ */
+static DWORD g_WowPmSegment1Base = 0;
+static DWORD g_PmWatchLinear = 0;      /* resolved linear address, 0 = not yet */
+static BYTE  g_PmWatchLast = 0;
+static BYTE  g_PmWatchHave = 0;
+static DWORD          g_PmIrqReflectLogged = 0; /* bounded log budget for the above */
 /* WHICH SELECTOR IS USER'S CODE SEGMENT? LEARN IT FROM A STUB (Importance = 2):
  * WowModuleOfSelector() cannot answer this. g_WowModule[] is the BIND-STAGE view --
  * the host's own NE load, used to verify and relocate -- and the modules that
@@ -235,34 +281,6 @@ static WORD g_WowGdiSegment = 0;
  * stays honestly unimplemented -- the same failure mode as USER's anchor.
  */
 static WORD g_WowKernel2Segment = 0;
-/* seg2 ids. Numbered in THEIR OWN space -- 0xd1 here is not 0xd1 in wow32.h. */
-#define WOW32K2_TASKENV     0x00d1  /* The new task's environment; args: block offset 2, selector 4 */
-DWORD     g_WowPspLinear[WOW_PSP_TRACK];
-WORD      g_WowPspEnvironment[WOW_PSP_TRACK];   /* last seen +0x2c, for the change log */
-/* WHICH WOW32 CALL WAS THE HOST INSIDE? (session 38) (Importance = 1):
- * The WOWBOP log line is accumulated into `p` and only flushed WITH its result, so
- * a host-side crash inside a service loses the whole line -- header included. The
- * log then ends at the last call that SUCCEEDED, and the crashing one is invisible.
- * That cost a wrong first reading of the GetProfileIntA crash: the tail named 0x57,
- * stepped over and harmless, while the fault was in the call after it.
- *
- * Record the id and call site on entry. This is "the last call ENTERED", not "the
- * call in flight" -- if the run ended cleanly it names a call that completed. The
- * fatal dump says so rather than implying more than it knows.
- */
-WORD g_WowLastId   = WOW_ID_NONE;
-WORD g_WowLastFrom = 0;
-
-/* A descriptor access byte names CODE iff it is a segment (S, bit 4) and executable
- * (bit 3). 0xFB -- what DOS/4GW writes -- is present/DPL3/S/code/readable/accessed.
- */
-#define DPMI_ACC_IS_CODE(a)     (((a) & DPMI_ACCESS_CODE_TYPE) == DPMI_ACCESS_CODE_TYPE)
-DWORD g_WowSchedSwitches = 0;
-/* s92 (#306): the task launched last and not yet run -- see "(F) LAUNCH-FIRST" -- and
- * WOWEXEC (the first task resumed at (C)), whose launches keep the measured order.
- */
-WORD g_WowSchedLaunchChild;
-WORD g_WowSchedShell;
 
 /* wowquiet.txt -- SILENCE THE TRACE, TO MEASURE WHAT IT COSTS (Importance = 3):
  * Session 51, from a user report that both Win16 games feel "laggy, like an
@@ -333,21 +351,6 @@ static DWORD g_WowPerfMs = 0;
  * total could not tell them apart.
  */
 static WOW32_DOSDATA g_WowDosData;
-DWORD g_Wow32Serviced = 0;
-DWORD g_Wow32Unimplemented = 0;
-DWORD g_Wow32Declined = 0;
-
-DWORD g_WowSyncWrites = 0;      /* how many entries krnl386 has changed */
-
-enum
-{
-    WOW_PUMP_BUDGET = 64, WOW_PUMP_BUDGET_BRIEF = 32, WOW_INPUT_WAIT_MS = 50, WOW32K2_TASKENV_ARG_BLOCK_OFFSET = 2, WOW32K2_TASKENV_ARG_BLOCK_SELECTOR = 4
-};   /* the WOW32 BOP service */
-#define DPMI_REPORTED_POOL_BYTES_U  0x04000000u     /* 0500h's answer: 64 MB */
-enum
-{
-    WOW_SEGMENT_LIMIT_SLACK = 0x100
-};   /* DpmiServicePmIntBody */
 
 /* INT 31h DPMI_FN_CALL_REAL_MODE_FAR: call real-mode FAR proc: ES:DI=RMCS, CX=stack words */
 static PSTR DpmiInt31CallRealModeFar(

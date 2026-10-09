@@ -118,6 +118,176 @@
 #define OPL_SAMPLE_MIN                      (-32768)
 #define OPL_MONO_FOLD_DIVISOR               2       /* The average of left and right */
 
+/* One log unit = 1/256 octave of amplitude. Envelope steps are 0.1875 dB and
+ * total-level steps 0.75 dB, so they scale into log units by 8 and 32.
+ */
+#define OPL_ENVELOPE_TO_LOG                 8
+#define OPL_TOTAL_LEVEL_TO_LOG              32
+#define OPL_KEY_SCALE_TO_LOG                32      /* 0.75 dB per ROM unit -- measured, see above */
+
+/* ENVELOPE SPEED. Measured: `oplprobe egrate` times the reference's decay at every
+ * effective rate and reports samples per envelope unit. The law it gives is
+ *   units per sample = (4 + rate_lo) / 2^(15 - rate_hi)
+ * where rate_hi/rate_lo are the top four and bottom two bits of the 6-bit rate.
+ * Note the MANTISSA: inside a group of four rates the speed goes 4:5:6:7 -- linear,
+ * not geometric -- and only the group boundary is a doubling. Measured across 30
+ * rates and all four sub-steps, the implied divisor came out 32983/33007/33008/
+ * 33006, i.e. 2^15 to within the measurement's own bias.
+ * - The previous model shifted by whole octaves and rounded the sub-step away,
+ *   which made mid-range decays and releases run 1.5x too slow.
+ */
+#define OPL_ENVELOPE_DIVIDER_SHIFT          15
+
+/* ATTACK. Not linear: the attenuation loses a FRACTION OF ITSELF each sample, so
+ * the note rushes up and then eases in. `oplprobe attack` fits that fraction
+ * against the decay speed at the same rate and gets 0.1435 -- constant to +-1.5%
+ * over 19 rates and all four sub-steps, which is what says the shape is right and
+ * not merely the endpoint. 147/1024 is that number.
+ */
+#define OPL_ENVELOPE_ATTACK_NUMERATOR       147
+#define OPL_ENVELOPE_ATTACK_SHIFT           10
+
+/* The OPL2's four waveforms are cheap edits of the sine: 1 clips the negative
+ * half to zero, 2 rectifies it, 3 keeps only the rising quarters.
+ * The OPL3 adds four more (YMF262 datasheet, waveform figure), all of which live
+ * in the FIRST half-cycle or are antisymmetric about its end:
+ * 4  a full sine at twice the rate in the first half, silence in the second
+ * 5  the same, rectified ("camel")
+ * 6  a square: full level, positive then negative
+ * 7  the "derived square": an exponential fall from full level across the first
+ *    half, and its point-mirror (negative, rising back to full) across the second.
+ * In the log domain 7 is a straight line -- attenuation growing linearly with
+ * phase. [CAUTION] The datasheet draws the curve but gives no slope; this uses one log
+ * unit per 1/8 phase step, i.e. a factor of two every 32 of the 512 steps, so the
+ * curve reaches silence by the end of its half-cycle. That slope is owed an
+ * `oplprobe wave` measurement against the oracle, as every constant here was.
+ */
+#define OPL_WAVEFORM7_SLOPE_SHIFT           3
+
+/* --- the two low-frequency oscillators ------------------------------------ */
+/* TREMOLO. MEASURED (`oplprobe lfo`): a 52-step triangle climbing to 26 envelope
+ * units and back, one step every 256 samples -- 3.73 Hz, and 4.89 dB deep at DAM=1
+ * against 4.87 measured. It is a STAIRCASE, not a sine: the reference's amplitude
+ * moves in exact 0.188 dB steps, one envelope unit at a time. DAM=0 is the same
+ * counter shifted down two places, which is why its steps last four times as long
+ * and it measures a quarter as deep.
+ */
+#define OPL_TREMOLO_STEP_SHIFT              8       /* 256 samples per tremolo step */
+#define OPL_TREMOLO_STEPS                   52
+#define OPL_TREMOLO_PEAK                    26
+
+/* VIBRATO. MEASURED: eight steps of 1024 samples -- 49716/8192 = 6.069 Hz, which
+ * is what the reference reads to four figures -- following the pattern
+ * 0, half, full, half, 0, -half, -full, -half.
+ * The depth is a SHIFT of the F-number, not a fixed number of cents: fnum >> 7,
+ * halved again when DVB is clear. That predicts 25.23 cents peak-to-peak at
+ * F-num 0x3C0 against 25.17 measured, and 27.05 at 0x200 against 27.07 -- and it
+ * means the effect QUANTISES, so an F-num below 128 gets no vibrato at all. A
+ * constant-cents implementation matches at one pitch and drifts at every other.
+ */
+#define OPL_VIBRATO_STEP_SHIFT              10      /* 1024 samples per vibrato step */
+
+/* --- rhythm mode ---------------------------------------------------------- *
+ * With 0xBD bit 5 set, channels 6-8 stop being melodic voices and become five
+ * percussion ones. Everything below was mapped from the OUTSIDE (`oplprobe
+ * rhythm`) rather than written down from memory: each operator was silenced in
+ * turn to find whose ENVELOPE drives which drum, and each operator's MULT was
+ * doubled in turn to find whose PHASE it runs on. Those are not the same answer,
+ * and assuming they were would have got the snare wrong.
+ *
+ * voice       envelope   phase        character (measured)
+ * bass drum   op12+op15  own          tonality 1.000 -- ordinary 2-op FM
+ * tom-tom     op14       own          tonality 1.000 -- a plain sine
+ * snare       op16       OP13's       tonality 0.509 -- half tone, half noise
+ * hi-hat      op13       op13 + op17  tonality 0.003 -- essentially pure noise
+ * cymbal      op17       op13 + op17  tonality 0.749
+ *
+ * Also measured, and not something to guess at: the percussion voices are summed
+ * at DOUBLE amplitude. A tom-tom peaks at 8170 where an ordinary operator at the
+ * same settings peaks at 4085.
+ *
+ * -- SNARE, HI-HAT AND CYMBAL (#139). These three read a PHASE THEY DO NOT OWN: a
+ *  10-bit index built from bits of op13's and op17's accumulators and from a
+ *  noise bit, which then goes through the operator's waveform, envelope and level
+ *  exactly as an ordinary phase would. Everything here was READ OUT of the
+ *  reference's output, never taken from its source (`oplprobe rphase`, `noise`):
+ *  run the drum eight times, once per waveform, and invert the eight output
+ *  samples against a table of the same eight waveforms measured on the tom-tom
+ *  (an ordinary operator) -- which gives the 10-bit phase index the drum used at
+ *  every sample. What came out:
+ *
+ *    voice    phase index (measured, 0 mispredictions in 11936 samples, on a
+ *             register setup the fit never saw)
+ *    hi-hat   B<<9 | (B ^ noise ? 0x0D0 : 0x034)
+ *    snare    S<<9 | (S ^ noise) << 8          S = bit 8 of op13's index
+ *    cymbal   B<<9 | 0x080
+ *
+ *  where B, "the phase bit", is a function of five accumulator bits and nothing
+ *  else. A search over every subset of up to five of the twenty bits of the two
+ *  indices found exactly ONE subset that determines it -- op13 bits 2, 3, 7 and
+ *  op17 bits 3, 5 -- and its truth table is zero in exactly four of 32 cells:
+ *    B = (p13.2 ^ p13.7) | (p13.3 ^ p17.5) | (p17.3 ^ p17.5)
+ *  (p13.3 ^ p17.3 in the middle term is the same function.) [CAUTION] Not a guess to be
+ *  "corrected" from memory: the obvious-looking alternative with p13.3 OR'd in on
+ *  its own is REFUTED by the table -- cell 11010 reads 0.
+ *
+ *  TIMING, also measured (the subset search fits the sample offsets too): the
+ *  hi-hat sees op13's index for THIS sample but op17's from the PREVIOUS one; the
+ *  cymbal and snare see both current. The reference also delivers its carrier
+ *  slots one sample later than ours -- snare and cymbal best-align at lag +4
+ *  like the bass drum, the hi-hat at +3 like the tom-tom. That is the pipeline,
+ *  not the waveform: see the lag note in `oplprobe rhythm`.
+ *
+ *  op13 and op17 run their phase every sample in rhythm mode whether or not
+ *  their own drum is keyed (the hi-hat alone still reads op17's bits). A drum's
+ *  key-on restarts its own operator's accumulator -- and WHERE it restarts
+ *  matters here as it does nowhere else, because the other accumulator is not
+ *  restarted with it. MEASURED (`oplprobe restart`, key-on at samples 1, 2, 37,
+ *  3001): a key-on restarts the accumulator ONE STEP FURTHER ON than the
+ *  running one's own start from reset would put it -- so its first sample reads
+ *  two steps, not one (RhythmRestart, set in vdd_opl.c). A key-on before the
+ *  first sample after reset is the exception and reads like reset itself, which
+ *  is why the default experiment never saw it. Without this the hi-hat and
+ *  cymbal keyed into a running chip score 0.71 / 0.70; with it 0.9999, the rest
+ *  being two samples of key-on latency the tom-tom shares. (Ordinary operators
+ *  restart the same way, but there it is a one-sample shift of a lone waveform
+ *  against its envelope -- inaudible, invisible at best lag, and the OPL2
+ *  golden holds it -- so only these two accumulators model it.)
+ *
+ * -- THE NOISE (`oplprobe noise`). With op13/op17 frozen (F-num 0) B is 0, so the
+ *  hi-hat and snare phases above carry nothing but the noise bit. Both streams
+ *  have linear complexity 23 (Berlekamp-Massey) with the SAME recurrence,
+ *      s[n] = s[n-1] ^ s[n-8] ^ s[n-9] ^ s[n-23]
+ *  which is precisely the trinomial LFSR  u[i] = u[i-9] ^ u[i-23]  (period
+ *  2^23-1) sampled once every 9*2^k of its own steps -- and 72 = 9*8 is the
+ *  chip's master clocks per output sample. The decimation is not a free choice:
+ *  solving for the one state that yields the hi-hat's stream, the snare's stream
+ *  turns out to be the SAME register read 66 steps (0.917 samples) earlier under
+ *  72 steps per sample (or 33 / 132 under 36 / 144, the same thing scaled),
+ *  while under 9 or 18 it is on no shared register at all. 72 it is, and the
+ *  state it solves to is ONE SET BIT (OPL_NOISE_SEED) at exactly the point our
+ *  renderer starts from after reset. So the noise is sample-exact from
+ *  power-on, not merely statistically alike: the hi-hat's and snare's decoded
+ *  noise bits match the model at every one of 3936 samples.
+ *  In our frame the snare's output sits one sample after the hi-hat's (the lag
+ *  note above), so "66 steps before the hi-hat's NEXT sample" is bit 6 of the
+ *  same 23-bit window whose bit 0 the hi-hat reads.
+ *
+ * Summed at double amplitude like the other drums. Hi-hat and snare follow channel
+ * 7's C0 routing and the cymbal channel 8's, like the tom-tom -- measured, OPL3
+ * with NEW set, one channel routed left at a time (`oplprobe drums`). The hit
+ * counters (ProfileRhythmHits) stay: they say how much percussion a game uses.
+ */
+
+/* The noise register: 72 steps of u[i] = u[i-9] ^ u[i-23] per sample. `window` holds
+ * the last 23 outputs, bit 0 the oldest; the nearest tap is 9 back, so nine new
+ * bits can be made at once and eight of those make one sample's 72.
+ */
+#define OPL_NOISE_STEPS_PER_SAMPLE          72
+
+#define OPL_NOISE_BIT_HIHAT                 0       /* Which bit of the window each drum reads -- the */
+#define OPL_NOISE_BIT_SNARE                 6       /* snare 6 steps later (see `oplprobe noise`) */
+
 /* MULT register -> frequency multiplier, doubled so that entry 0 (x0.5) is an
  * integer. The duplicated 20/20 and 24/24 and 30/30 entries are the chip's, not
  * a typo: MULT 11, 13 and 14 alias their neighbours.
@@ -136,35 +306,7 @@ static const BYTE g_OplKeyScaleRom[OPL_KSL_ROM_ENTRIES] =
  * enough to annihilate the value.
  */
 static const BYTE g_OplKeyScaleShift[OPL_KSL_SHIFTS] = { 8, 1, 2, 0 };
-
-/* One log unit = 1/256 octave of amplitude. Envelope steps are 0.1875 dB and
- * total-level steps 0.75 dB, so they scale into log units by 8 and 32.
- */
-#define OPL_ENVELOPE_TO_LOG             8
-#define OPL_TOTAL_LEVEL_TO_LOG          32
-#define OPL_KEY_SCALE_TO_LOG            32  /* 0.75 dB per ROM unit -- measured, see above */
-
-/* ENVELOPE SPEED. Measured: `oplprobe egrate` times the reference's decay at every
- * effective rate and reports samples per envelope unit. The law it gives is
- *   units per sample = (4 + rate_lo) / 2^(15 - rate_hi)
- * where rate_hi/rate_lo are the top four and bottom two bits of the 6-bit rate.
- * Note the MANTISSA: inside a group of four rates the speed goes 4:5:6:7 -- linear,
- * not geometric -- and only the group boundary is a doubling. Measured across 30
- * rates and all four sub-steps, the implied divisor came out 32983/33007/33008/
- * 33006, i.e. 2^15 to within the measurement's own bias.
- * - The previous model shifted by whole octaves and rounded the sub-step away,
- *   which made mid-range decays and releases run 1.5x too slow.
- */
-#define OPL_ENVELOPE_DIVIDER_SHIFT      15
-
-/* ATTACK. Not linear: the attenuation loses a FRACTION OF ITSELF each sample, so
- * the note rushes up and then eases in. `oplprobe attack` fits that fraction
- * against the decay speed at the same rate and gets 0.1435 -- constant to +-1.5%
- * over 19 rates and all four sub-steps, which is what says the shape is right and
- * not merely the endpoint. 147/1024 is that number.
- */
-#define OPL_ENVELOPE_ATTACK_NUMERATOR   147
-#define OPL_ENVELOPE_ATTACK_SHIFT       10
+static const INT8 g_OplVibratoPattern[OPL_VIBRATO_STEPS] = { 0, 1, 2, 1, 0, -1, -2, -1 };
 
 /* exp2(-x/256) * 4096 for an arbitrary x, via the table plus a shift. */
 static INT32 OplExp2Negative(INT32 logValue)
@@ -190,23 +332,6 @@ static INT32 OplLogSinFull(UINT32 phaseIndex, INT *isNegative)
     *isNegative = (quadrant & OPL_QUADRANT_NEGATIVE) ? 1 : 0;
     return (INT32)g_OplLogSin[(quadrant & OPL_QUADRANT_MIRRORED) ? (OPL_QUARTER_LAST - index) : index];
 }
-
-/* The OPL2's four waveforms are cheap edits of the sine: 1 clips the negative
- * half to zero, 2 rectifies it, 3 keeps only the rising quarters.
- * The OPL3 adds four more (YMF262 datasheet, waveform figure), all of which live
- * in the FIRST half-cycle or are antisymmetric about its end:
- * 4  a full sine at twice the rate in the first half, silence in the second
- * 5  the same, rectified ("camel")
- * 6  a square: full level, positive then negative
- * 7  the "derived square": an exponential fall from full level across the first
- *    half, and its point-mirror (negative, rising back to full) across the second.
- * In the log domain 7 is a straight line -- attenuation growing linearly with
- * phase. [CAUTION] The datasheet draws the curve but gives no slope; this uses one log
- * unit per 1/8 phase step, i.e. a factor of two every 32 of the 512 steps, so the
- * curve reaches silence by the end of its half-cycle. That slope is owed an
- * `oplprobe wave` measurement against the oracle, as every constant here was.
- */
-#define OPL_WAVEFORM7_SLOPE_SHIFT   3
 
 static INT32 OplWaveform(BYTE waveform, UINT32 phaseIndex, INT *isNegative, INT *isMuted)
 {
@@ -406,18 +531,6 @@ static VOID OplEnvelopeTick(POPL_STATE state, INT channel, INT operatorIndex)
         operatorState->Envelope = OPL_ENVELOPE_MAX << OPL_ENVELOPE_SHIFT;
 }
 
-/* --- the two low-frequency oscillators ------------------------------------ */
-/* TREMOLO. MEASURED (`oplprobe lfo`): a 52-step triangle climbing to 26 envelope
- * units and back, one step every 256 samples -- 3.73 Hz, and 4.89 dB deep at DAM=1
- * against 4.87 measured. It is a STAIRCASE, not a sine: the reference's amplitude
- * moves in exact 0.188 dB steps, one envelope unit at a time. DAM=0 is the same
- * counter shifted down two places, which is why its steps last four times as long
- * and it measures a quarter as deep.
- */
-#define OPL_TREMOLO_STEP_SHIFT  8   /* 256 samples per tremolo step */
-#define OPL_TREMOLO_STEPS       52
-#define OPL_TREMOLO_PEAK        26
-
 static INT32 OplTremoloUnits(PCOPL_STATE state)
 {
     UINT32 step = (state->LfoCount >> OPL_TREMOLO_STEP_SHIFT) % OPL_TREMOLO_STEPS;
@@ -425,18 +538,6 @@ static INT32 OplTremoloUnits(PCOPL_STATE state)
 
     return (state->Registers[OPL_REGISTER_RHYTHM] & OPL_BD_TREMOLO_DEPTH) ? units : (units >> OPL_TREMOLO_SHALLOW_SHIFT);
 }
-
-/* VIBRATO. MEASURED: eight steps of 1024 samples -- 49716/8192 = 6.069 Hz, which
- * is what the reference reads to four figures -- following the pattern
- * 0, half, full, half, 0, -half, -full, -half.
- * The depth is a SHIFT of the F-number, not a fixed number of cents: fnum >> 7,
- * halved again when DVB is clear. That predicts 25.23 cents peak-to-peak at
- * F-num 0x3C0 against 25.17 measured, and 27.05 at 0x200 against 27.07 -- and it
- * means the effect QUANTISES, so an F-num below 128 gets no vibrato at all. A
- * constant-cents implementation matches at one pitch and drifts at every other.
- */
-#define OPL_VIBRATO_STEP_SHIFT  10  /* 1024 samples per vibrato step */
-static const INT8 g_OplVibratoPattern[OPL_VIBRATO_STEPS] = { 0, 1, 2, 1, 0, -1, -2, -1 };
 
 static INT32 OplVibratoOffset(PCOPL_STATE state, INT channel)
 {
@@ -539,103 +640,6 @@ static INT32 OplOperatorSample(POPL_STATE state, INT channel, INT operatorIndex,
     return OplOperatorOutput(state, channel, operatorState, (operatorState->Phase >> OPL_PHASE_FRACTION_BITS) + (UINT32)modulation);
 }
 
-/* --- rhythm mode ---------------------------------------------------------- *
- * With 0xBD bit 5 set, channels 6-8 stop being melodic voices and become five
- * percussion ones. Everything below was mapped from the OUTSIDE (`oplprobe
- * rhythm`) rather than written down from memory: each operator was silenced in
- * turn to find whose ENVELOPE drives which drum, and each operator's MULT was
- * doubled in turn to find whose PHASE it runs on. Those are not the same answer,
- * and assuming they were would have got the snare wrong.
- *
- * voice       envelope   phase        character (measured)
- * bass drum   op12+op15  own          tonality 1.000 -- ordinary 2-op FM
- * tom-tom     op14       own          tonality 1.000 -- a plain sine
- * snare       op16       OP13's       tonality 0.509 -- half tone, half noise
- * hi-hat      op13       op13 + op17  tonality 0.003 -- essentially pure noise
- * cymbal      op17       op13 + op17  tonality 0.749
- *
- * Also measured, and not something to guess at: the percussion voices are summed
- * at DOUBLE amplitude. A tom-tom peaks at 8170 where an ordinary operator at the
- * same settings peaks at 4085.
- *
- * -- SNARE, HI-HAT AND CYMBAL (#139). These three read a PHASE THEY DO NOT OWN: a
- *  10-bit index built from bits of op13's and op17's accumulators and from a
- *  noise bit, which then goes through the operator's waveform, envelope and level
- *  exactly as an ordinary phase would. Everything here was READ OUT of the
- *  reference's output, never taken from its source (`oplprobe rphase`, `noise`):
- *  run the drum eight times, once per waveform, and invert the eight output
- *  samples against a table of the same eight waveforms measured on the tom-tom
- *  (an ordinary operator) -- which gives the 10-bit phase index the drum used at
- *  every sample. What came out:
- *
- *    voice    phase index (measured, 0 mispredictions in 11936 samples, on a
- *             register setup the fit never saw)
- *    hi-hat   B<<9 | (B ^ noise ? 0x0D0 : 0x034)
- *    snare    S<<9 | (S ^ noise) << 8          S = bit 8 of op13's index
- *    cymbal   B<<9 | 0x080
- *
- *  where B, "the phase bit", is a function of five accumulator bits and nothing
- *  else. A search over every subset of up to five of the twenty bits of the two
- *  indices found exactly ONE subset that determines it -- op13 bits 2, 3, 7 and
- *  op17 bits 3, 5 -- and its truth table is zero in exactly four of 32 cells:
- *    B = (p13.2 ^ p13.7) | (p13.3 ^ p17.5) | (p17.3 ^ p17.5)
- *  (p13.3 ^ p17.3 in the middle term is the same function.) [CAUTION] Not a guess to be
- *  "corrected" from memory: the obvious-looking alternative with p13.3 OR'd in on
- *  its own is REFUTED by the table -- cell 11010 reads 0.
- *
- *  TIMING, also measured (the subset search fits the sample offsets too): the
- *  hi-hat sees op13's index for THIS sample but op17's from the PREVIOUS one; the
- *  cymbal and snare see both current. The reference also delivers its carrier
- *  slots one sample later than ours -- snare and cymbal best-align at lag +4
- *  like the bass drum, the hi-hat at +3 like the tom-tom. That is the pipeline,
- *  not the waveform: see the lag note in `oplprobe rhythm`.
- *
- *  op13 and op17 run their phase every sample in rhythm mode whether or not
- *  their own drum is keyed (the hi-hat alone still reads op17's bits). A drum's
- *  key-on restarts its own operator's accumulator -- and WHERE it restarts
- *  matters here as it does nowhere else, because the other accumulator is not
- *  restarted with it. MEASURED (`oplprobe restart`, key-on at samples 1, 2, 37,
- *  3001): a key-on restarts the accumulator ONE STEP FURTHER ON than the
- *  running one's own start from reset would put it -- so its first sample reads
- *  two steps, not one (RhythmRestart, set in vdd_opl.c). A key-on before the
- *  first sample after reset is the exception and reads like reset itself, which
- *  is why the default experiment never saw it. Without this the hi-hat and
- *  cymbal keyed into a running chip score 0.71 / 0.70; with it 0.9999, the rest
- *  being two samples of key-on latency the tom-tom shares. (Ordinary operators
- *  restart the same way, but there it is a one-sample shift of a lone waveform
- *  against its envelope -- inaudible, invisible at best lag, and the OPL2
- *  golden holds it -- so only these two accumulators model it.)
- *
- * -- THE NOISE (`oplprobe noise`). With op13/op17 frozen (F-num 0) B is 0, so the
- *  hi-hat and snare phases above carry nothing but the noise bit. Both streams
- *  have linear complexity 23 (Berlekamp-Massey) with the SAME recurrence,
- *      s[n] = s[n-1] ^ s[n-8] ^ s[n-9] ^ s[n-23]
- *  which is precisely the trinomial LFSR  u[i] = u[i-9] ^ u[i-23]  (period
- *  2^23-1) sampled once every 9*2^k of its own steps -- and 72 = 9*8 is the
- *  chip's master clocks per output sample. The decimation is not a free choice:
- *  solving for the one state that yields the hi-hat's stream, the snare's stream
- *  turns out to be the SAME register read 66 steps (0.917 samples) earlier under
- *  72 steps per sample (or 33 / 132 under 36 / 144, the same thing scaled),
- *  while under 9 or 18 it is on no shared register at all. 72 it is, and the
- *  state it solves to is ONE SET BIT (OPL_NOISE_SEED) at exactly the point our
- *  renderer starts from after reset. So the noise is sample-exact from
- *  power-on, not merely statistically alike: the hi-hat's and snare's decoded
- *  noise bits match the model at every one of 3936 samples.
- *  In our frame the snare's output sits one sample after the hi-hat's (the lag
- *  note above), so "66 steps before the hi-hat's NEXT sample" is bit 6 of the
- *  same 23-bit window whose bit 0 the hi-hat reads.
- *
- * Summed at double amplitude like the other drums. Hi-hat and snare follow channel
- * 7's C0 routing and the cymbal channel 8's, like the tom-tom -- measured, OPL3
- * with NEW set, one channel routed left at a time (`oplprobe drums`). The hit
- * counters (ProfileRhythmHits) stay: they say how much percussion a game uses.
- */
-
-/* The noise register: 72 steps of u[i] = u[i-9] ^ u[i-23] per sample. `window` holds
- * the last 23 outputs, bit 0 the oldest; the nearest tap is 9 back, so nine new
- * bits can be made at once and eight of those make one sample's 72.
- */
-#define OPL_NOISE_STEPS_PER_SAMPLE  72
 static UINT32 OplNoiseStep(UINT32 window)
 {
     INT group;
@@ -646,9 +650,6 @@ static UINT32 OplNoiseStep(UINT32 window)
         window = (window >> OPL_NOISE_NEAREST_TAP) | ((((window >> OPL_NOISE_TAP_SHIFT) ^ window) & OPL_NOISE_NEW_BITS_MASK) << OPL_NOISE_TAP_SHIFT);
     return window;
 }
-
-#define OPL_NOISE_BIT_HIHAT     0   /* Which bit of the window each drum reads -- the */
-#define OPL_NOISE_BIT_SNARE     6   /* snare 6 steps later (see `oplprobe noise`) */
 
 /* The phase bit B from op13's and op17's 10-bit indices. */
 static UINT32 OplRhythmPhaseBit(UINT32 phase13, UINT32 phase17)

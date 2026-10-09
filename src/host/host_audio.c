@@ -19,6 +19,55 @@
 
 #define OPLTRACE_PATH   CFG_("opltrace.txt")
 
+/* OPL register trace (opltrace.flag). One entry per write; a busy run is ~6k
+ * writes a minute, so the cap is far above anything real and exists only so a
+ * runaway cannot eat memory. Dropped writes are reported, never silently lost.
+ */
+#define OPLTRACE_MAX    262144
+
+/* The audio thread's fill callback. Mixing touches the DMA controller, guest
+ * memory and the IRQ path, so it takes the same lock the exec thread uses.
+ */
+/* WATCH DMX'S TASK TABLE FROM OUTSIDE:
+ * The SB interrupt only ARMS the mixer (sets next_due = now, DOOM.EXE 0x571b4);
+ * the TIMER services it, and the scheduler's first act on a busy task is
+ * `jne 0x572ed` -- the loop EXIT, not the next task -- so ONE busy task abandons
+ * the whole pass and there are up to 12. Doom runs a MIDI task alongside the PCM
+ * mixer, so a task that overruns can starve the refill wholesale.
+ * Addresses are settled and self-checked: the IRQ table was FOUND at 0x03bc81ac and
+ * the code says it lives at virtual 0x281ac, so data guest = virtual + 0x03BA0000.
+ * That puts the task table at 0x03bc86a0 and the tick clock at 0x03bc8820 -- and it
+ * predicts the mixer task at index 4 (0x03bc8720), which is exactly where the
+ * earlier structure search found it. `mixer_ok` re-checks that in-run; if it is 0
+ * every number here is meaningless.
+ * Sampled from the audio fill, which runs ~86 times a second -- one sample per
+ * block, i.e. exactly the rate the refill is supposed to happen at.
+ */
+#define DMX_TASKS       0x03bc86a0u
+#define DMX_CLOCK       0x03bc8820u
+#define DMX_MIXER_I     4u
+
+enum
+{
+    OPL_PUMP_QUANTUM_US = 20
+};   /* OplPumpTime: shorter is carried to the next pump */
+
+DWORD          g_OplTraceCount    = 0;
+DWORD          g_OplTraceDrop = 0;
+INT            g_OplTraceOn   = 0;
+
+/* #190: the GUS's 6850 MIDI UART sends raw bytes; a PRIVATE message assembler (never on
+ * the bus) turns them into MIDI messages for the same synth. Its own, not g_Mpu's: two
+ * byte streams through one assembler would corrupt each other's running status.
+ */
+MPU_STATE g_GusMidi;
+static struct
+{
+    DWORD Microseconds;
+    BYTE Register;
+    BYTE Value;
+} g_OplTrace[OPLTRACE_MAX];
+
 /* One line: did the guest find the card, fill it, play it, and take its interrupts?
  * Printed from both exits, once.
  */
@@ -63,20 +112,6 @@ VOID GusReport(VOID)
     cursor = LogPut(cursor, "\r\n"); LogAppend(LOG_PATH, buffer, cursor);
 }
 
-/* OPL register trace (opltrace.flag). One entry per write; a busy run is ~6k
- * writes a minute, so the cap is far above anything real and exists only so a
- * runaway cannot eat memory. Dropped writes are reported, never silently lost.
- */
-#define OPLTRACE_MAX    262144
-static struct
-{
-    DWORD Microseconds;
-    BYTE Register;
-    BYTE Value;
-} g_OplTrace[OPLTRACE_MAX];
-DWORD          g_OplTraceCount    = 0;
-DWORD          g_OplTraceDrop = 0;
-INT            g_OplTraceOn   = 0;
 /* The trace hook handed to the OPL VDD. Timestamped from the same clock the CRT
  * and PIT use, so a replay reproduces the guest's real WRITE TIMING -- which is
  * most of what makes music sound like itself.
@@ -126,10 +161,6 @@ VOID OplTraceDump(VOID)
     CloseHandle(handle);
 }
 
-enum
-{
-    OPL_PUMP_QUANTUM_US = 20
-};   /* OplPumpTime: shorter is carried to the next pump */
 VOID OplPumpTime(VOID)
 {
     static LARGE_INTEGER frequency;
@@ -160,27 +191,6 @@ VOID OplPumpTime(VOID)
     HOST_UNLOCK();
 }
 
-/* The audio thread's fill callback. Mixing touches the DMA controller, guest
- * memory and the IRQ path, so it takes the same lock the exec thread uses.
- */
-/* WATCH DMX'S TASK TABLE FROM OUTSIDE:
- * The SB interrupt only ARMS the mixer (sets next_due = now, DOOM.EXE 0x571b4);
- * the TIMER services it, and the scheduler's first act on a busy task is
- * `jne 0x572ed` -- the loop EXIT, not the next task -- so ONE busy task abandons
- * the whole pass and there are up to 12. Doom runs a MIDI task alongside the PCM
- * mixer, so a task that overruns can starve the refill wholesale.
- * Addresses are settled and self-checked: the IRQ table was FOUND at 0x03bc81ac and
- * the code says it lives at virtual 0x281ac, so data guest = virtual + 0x03BA0000.
- * That puts the task table at 0x03bc86a0 and the tick clock at 0x03bc8820 -- and it
- * predicts the mixer task at index 4 (0x03bc8720), which is exactly where the
- * earlier structure search found it. `mixer_ok` re-checks that in-run; if it is 0
- * every number here is meaningless.
- * Sampled from the audio fill, which runs ~86 times a second -- one sample per
- * block, i.e. exactly the rate the refill is supposed to happen at.
- */
-#define DMX_TASKS       0x03bc86a0u
-#define DMX_CLOCK       0x03bc8820u
-#define DMX_MIXER_I     4u
 static VOID DmxSample(VOID)
 {
     static INT isOk = 0;
@@ -265,11 +275,6 @@ VOID HostMidiSysEx(PVOID context, const BYTE *message, UINT32 length)
     AudioWaveMidiLong(&g_Wave, message, length);
 }
 
-/* #190: the GUS's 6850 MIDI UART sends raw bytes; a PRIVATE message assembler (never on
- * the bus) turns them into MIDI messages for the same synth. Its own, not g_Mpu's: two
- * byte streams through one assembler would corrupt each other's running status.
- */
-MPU_STATE g_GusMidi;
 VOID GusMidiToSynth(PVOID context, BYTE byteValue)
 {
     (VOID)context;

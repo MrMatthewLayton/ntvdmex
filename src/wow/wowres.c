@@ -23,6 +23,14 @@
 #include "wowwin.h"
 #include "wowgdi.h"
 #include "wowuser.h"
+
+static PBYTE g_WowResImage  = NULL;      /* the application's file, verbatim */
+static DWORD  g_WowResLength  = 0;
+static CHAR   g_WowResPath[WOWRES_PATH_MAX];
+
+static WOWRES_CACHE_ENTRY g_WowResCache[WOWRES_CACHE];
+static INT g_WowResCacheCount = 0;
+
 /* Used before their definitions below. */
 static HICON WowResIconAt(DWORD groupOffset, DWORD groupLength, PINT picked, INT width, INT height);
 
@@ -44,19 +52,12 @@ static HICON WowResIconAt(DWORD groupOffset, DWORD groupLength, PINT picked, INT
  */
 static HICON WowResIconAt(DWORD groupOffset, DWORD groupLength, PINT picked, INT width, INT height);
 
-static PBYTE g_WowResImage  = NULL;      /* the application's file, verbatim */
-static DWORD  g_WowResLength  = 0;
-static CHAR   g_WowResPath[WOWRES_PATH_MAX];
-
 static WORD WowResReadWord(DWORD offset)
 {
     if (offset + WOW_WORD_BYTES > g_WowResLength)
         return 0;
     return (WORD)(g_WowResImage[offset] | (g_WowResImage[offset + 1] << BYTE_SHIFT));
 }
-
-static WOWRES_CACHE_ENTRY g_WowResCache[WOWRES_CACHE];
-static INT g_WowResCacheCount = 0;
 
 INT WowResOpen(PCSTR path)
 {
@@ -431,63 +432,6 @@ HMENU WowResMenuByName(PCSTR name, PINT items)
     return WowResMenuAt(offset, length, items);
 }
 
-HICON WowResIconNamed(PCSTR name, PINT picked, INT width, INT height)
-{
-    DWORD groupLength = 0;
-    DWORD groupOffset = WowResFindNamed(WOWRES_RT_GROUP_ICON, name, &groupLength);
-
-    return WowResIconAt(groupOffset, groupLength, picked, width, height);
-}
-
-HICON WowResIcon(WORD groupId, PINT picked, INT width, INT height)
-{
-    DWORD groupLength = 0;
-    DWORD groupOffset = WowResFind(WOWRES_RT_GROUP_ICON, groupId, &groupLength);
-
-    return WowResIconAt(groupOffset, groupLength, picked, width, height);
-}
-
-static HCURSOR WowResCursorAt(DWORD groupOffset, DWORD groupLength)
-{
-    DWORD cursorLength = 0;
-    DWORD cursorOffset;
-    WORD count;
-    WORD id;
-
-    if (!groupOffset || groupLength < WOWRES_GROUP_HEADER_SIZE + WOWRES_GROUP_ENTRY_SIZE)
-        return NULL;
-    if (WowResReadWord(groupOffset + WOWRES_GROUP_TYPE) != WOWRES_GROUP_TYPE_CURSOR)
-        return NULL;                                                                                           /* type 2 = cursors */
-    count = WowResReadWord(groupOffset + WOWRES_GROUP_COUNT);
-    if (!count)
-        return NULL;
-    id = WowResReadWord(groupOffset + WOWRES_GROUP_HEADER_SIZE + WOWRES_GROUP_ENTRY_ID);
-    if (!id)
-        return NULL;
-    cursorOffset = WowResFind(WOWRES_RT_CURSOR, id, &cursorLength);
-    if (!cursorOffset || !cursorLength)
-        return NULL;
-    return (HCURSOR)CreateIconFromResourceEx(g_WowResImage + cursorOffset, cursorLength, FALSE,
-                                             WOWRES_ICON_VERSION, 0, 0, LR_DEFAULTCOLOR);
-}
-
-HCURSOR WowResCursorNamed(PCSTR name)
-{
-    DWORD groupLength = 0;
-    DWORD groupOffset = WowResFindNamed(WOWRES_RT_GROUP_CURSOR, name, &groupLength);
-
-    return WowResCursorAt(groupOffset, groupLength);
-}
-
-/* s89 (#216): the same, for a cursor group asked for by ordinal. */
-HCURSOR WowResCursor(WORD groupId)
-{
-    DWORD groupLength = 0;
-    DWORD groupOffset = WowResFind(WOWRES_RT_GROUP_CURSOR, groupId, &groupLength);
-
-    return WowResCursorAt(groupOffset, groupLength);
-}
-
 /* -- AND THE SIZE IS AN ARGUMENT, BECAUSE THE TASKBAR ASKS FOR A SMALL
  * ONE. (session 47) --------------------------------------------------------
  * Measured against stock ntvdm running the same NOTEPAD.EXE on the same
@@ -548,4 +492,61 @@ static HICON WowResIconAt(DWORD groupOffset, DWORD groupLength, PINT picked, INT
         *picked = bestBits;
     return CreateIconFromResourceEx(g_WowResImage + iconOffset, iconLength, TRUE, WOWRES_ICON_VERSION,
                                     width, height, LR_DEFAULTCOLOR);
+}
+
+HICON WowResIconNamed(PCSTR name, PINT picked, INT width, INT height)
+{
+    DWORD groupLength = 0;
+    DWORD groupOffset = WowResFindNamed(WOWRES_RT_GROUP_ICON, name, &groupLength);
+
+    return WowResIconAt(groupOffset, groupLength, picked, width, height);
+}
+
+HICON WowResIcon(WORD groupId, PINT picked, INT width, INT height)
+{
+    DWORD groupLength = 0;
+    DWORD groupOffset = WowResFind(WOWRES_RT_GROUP_ICON, groupId, &groupLength);
+
+    return WowResIconAt(groupOffset, groupLength, picked, width, height);
+}
+
+static HCURSOR WowResCursorAt(DWORD groupOffset, DWORD groupLength)
+{
+    DWORD cursorLength = 0;
+    DWORD cursorOffset;
+    WORD count;
+    WORD id;
+
+    if (!groupOffset || groupLength < WOWRES_GROUP_HEADER_SIZE + WOWRES_GROUP_ENTRY_SIZE)
+        return NULL;
+    if (WowResReadWord(groupOffset + WOWRES_GROUP_TYPE) != WOWRES_GROUP_TYPE_CURSOR)
+        return NULL;                                                                                           /* type 2 = cursors */
+    count = WowResReadWord(groupOffset + WOWRES_GROUP_COUNT);
+    if (!count)
+        return NULL;
+    id = WowResReadWord(groupOffset + WOWRES_GROUP_HEADER_SIZE + WOWRES_GROUP_ENTRY_ID);
+    if (!id)
+        return NULL;
+    cursorOffset = WowResFind(WOWRES_RT_CURSOR, id, &cursorLength);
+    if (!cursorOffset || !cursorLength)
+        return NULL;
+    return (HCURSOR)CreateIconFromResourceEx(g_WowResImage + cursorOffset, cursorLength, FALSE,
+                                             WOWRES_ICON_VERSION, 0, 0, LR_DEFAULTCOLOR);
+}
+
+HCURSOR WowResCursorNamed(PCSTR name)
+{
+    DWORD groupLength = 0;
+    DWORD groupOffset = WowResFindNamed(WOWRES_RT_GROUP_CURSOR, name, &groupLength);
+
+    return WowResCursorAt(groupOffset, groupLength);
+}
+
+/* s89 (#216): the same, for a cursor group asked for by ordinal. */
+HCURSOR WowResCursor(WORD groupId)
+{
+    DWORD groupLength = 0;
+    DWORD groupOffset = WowResFind(WOWRES_RT_GROUP_CURSOR, groupId, &groupLength);
+
+    return WowResCursorAt(groupOffset, groupLength);
 }

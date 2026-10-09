@@ -24,11 +24,13 @@
 #include <stdio.h>
 #include <string.h>
 #include "vdd_sb.h"
+#define CHECK(condition,message) do{ g_Total++; if(condition){printf("  PASS  %s\n",(message));} \
+    else{printf("  FAIL  %s\n",(message)); g_Failures++;} }while(0)
+
+#define BASE    0x220
 
 static INT g_Total = 0;
 static INT g_Failures = 0;
-#define CHECK(condition,message) do{ g_Total++; if(condition){printf("  PASS  %s\n",(message));} \
-    else{printf("  FAIL  %s\n",(message)); g_Failures++;} }while(0)
 
 static BYTE g_GuestMemory[0x100000];
 static VDD_BUS g_Bus;
@@ -59,8 +61,6 @@ static BYTE SbTestRead(WORD port)
     VddBusIo(&g_Bus, port, 1, 1, &value);
     return (BYTE)value;
 }
-
-#define BASE    0x220
 
 /* The canonical SB detect, exactly as a DOS game performs it. */
 static INT SbTestDspReset(VOID)

@@ -20,35 +20,6 @@
 
 #include <windows.h>
 
-/* [CAUTION]: STDCALL. nt_vdd.h declares these with no convention, but NT and the DDK build
- * environment compile with __stdcall as the default (/Gz), so that is what NTVDM
- * calls. s91's first cut used cdecl: stock NTVDM died at the first IN to the hooked
- * port (its call popped 8 bytes the handler had not), while ours -- calling cdecl
- * too -- happened to agree with the mistake.
- */
-typedef VOID (WINAPI *PFNVDD_INB)(WORD, BYTE *);   typedef VOID (WINAPI *PFNVDD_INW)(WORD, WORD *);
-typedef VOID (WINAPI *PFNVDD_OUTB)(WORD, BYTE);    typedef VOID (WINAPI *PFNVDD_OUTW)(WORD, WORD);
-typedef struct { PFNVDD_INB inb;
-PFNVDD_INW inw;
-PVOID insb;
-PVOID insw;
-                 PFNVDD_OUTB outb;
-                 PFNVDD_OUTW outw;
-                 PVOID outsb, outsw; } VDD_IO_HANDLERS;
-typedef struct
-{
-    WORD First;
-    WORD Last;
-} VDD_IO_PORTRANGE;
-
-USHORT WINAPI getAX(VOID); VOID WINAPI setAX(USHORT);
-USHORT WINAPI getBX(VOID); USHORT WINAPI getCX(VOID); VOID WINAPI setCX(USHORT);
-USHORT WINAPI getDX(VOID); USHORT WINAPI getSI(VOID); USHORT WINAPI getDS(VOID);
-VOID WINAPI setCF(ULONG);
-BOOL WINAPI VDDInstallIOHook(HANDLE, WORD, VDD_IO_PORTRANGE *, VDD_IO_HANDLERS *);
-VOID WINAPI VDDDeInstallIOHook(HANDLE, WORD, VDD_IO_PORTRANGE *);
-PVOID WINAPI VdmMapFlat(USHORT, ULONG, ULONG);
-
 #define VDM_V86                     0       /* Vddsvc.h's VDM_MODE: a real-mode (V86) address */
 
 #define ISV_PORT_FIRST              0x2F0
@@ -61,8 +32,40 @@ PVOID WINAPI VdmMapFlat(USHORT, ULONG, ULONG);
 #define ISV_FUNCTION_LATCH          2       /* DX=2: CX = the last byte OUT */
 #define ISV_FUNCTION_SUM            3       /* DX=3: CX = the sum of CX bytes at DS:SI */
 
+/* [CAUTION]: STDCALL. nt_vdd.h declares these with no convention, but NT and the DDK build
+ * environment compile with __stdcall as the default (/Gz), so that is what NTVDM
+ * calls. s91's first cut used cdecl: stock NTVDM died at the first IN to the hooked
+ * port (its call popped 8 bytes the handler had not), while ours -- calling cdecl
+ * too -- happened to agree with the mistake.
+ */
+typedef VOID (WINAPI *PFNVDD_INB)(WORD, BYTE *);   typedef VOID (WINAPI *PFNVDD_INW)(WORD, WORD *);
+
+typedef VOID (WINAPI *PFNVDD_OUTB)(WORD, BYTE);    typedef VOID (WINAPI *PFNVDD_OUTW)(WORD, WORD);
+
+typedef struct { PFNVDD_INB inb;
+PFNVDD_INW inw;
+PVOID insb;
+PVOID insw;
+                 PFNVDD_OUTB outb;
+                 PFNVDD_OUTW outw;
+                 PVOID outsb, outsw; } VDD_IO_HANDLERS;
+
+typedef struct
+{
+    WORD First;
+    WORD Last;
+} VDD_IO_PORTRANGE;
+
 static HANDLE g_IsvModule;
 static BYTE   g_IsvLatch;
+
+USHORT WINAPI getAX(VOID); VOID WINAPI setAX(USHORT);
+USHORT WINAPI getBX(VOID); USHORT WINAPI getCX(VOID); VOID WINAPI setCX(USHORT);
+USHORT WINAPI getDX(VOID); USHORT WINAPI getSI(VOID); USHORT WINAPI getDS(VOID);
+VOID WINAPI setCF(ULONG);
+BOOL WINAPI VDDInstallIOHook(HANDLE, WORD, VDD_IO_PORTRANGE *, VDD_IO_HANDLERS *);
+VOID WINAPI VDDDeInstallIOHook(HANDLE, WORD, VDD_IO_PORTRANGE *);
+PVOID WINAPI VdmMapFlat(USHORT, ULONG, ULONG);
 
 static VOID WINAPI IsvPortInByte(WORD port, BYTE *data)
 {

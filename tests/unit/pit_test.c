@@ -16,14 +16,18 @@
 #include <stdio.h>
 #include <string.h>
 #include "vdd_pit.h"
-
-static INT g_Total = 0;
-static INT g_Failures = 0;
 #define CHECK(condition, message) do {                                  \
         g_Total++;                                               \
         if (condition) { printf("  PASS  %s\n", (message)); }           \
         else      { printf("  FAIL  %s\n", (message)); g_Failures++; }  \
     } while (0)
+
+static INT g_Total = 0;
+static INT g_Failures = 0;
+
+static INT g_Irq0Count = 0;
+
+static BYTE  g_GuestMemory[0x100000];          /* guest low memory (BDA at 0x400) */
 
 /* Read counter 0 the way a guest does: Counter Latch Command, then two INs.
  * Deliberately NOT a peek at PitCurrentCount -- that is static, and the port
@@ -56,7 +60,6 @@ static UINT PitTestLatchedCounter2(PVDD_BUS bus)
     return (UINT)((low & 0xFF) | ((high & 0xFF) << 8));
 }
 
-static INT g_Irq0Count = 0;
 static VOID PitTestIrqSink(PVOID context, BYTE irq)
 {
     (VOID)context;
@@ -64,7 +67,6 @@ static VOID PitTestIrqSink(PVOID context, BYTE irq)
         g_Irq0Count++;
 }
 
-static BYTE  g_GuestMemory[0x100000];          /* guest low memory (BDA at 0x400) */
 static PUINT32 PitTestBdaTick(VOID) /* 0040:006C */
 {
     return (PUINT32)(g_GuestMemory + 0x46C);

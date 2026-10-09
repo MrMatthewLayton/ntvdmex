@@ -156,8 +156,6 @@ UINT32 VddCmosPeriodicHz(PCCMOS_STATE state)
     return CMOS_TIME_BASE_HZ >> (rateSelect - 1);
 }
 
-static INT CmosClockRegister(PCMOS_STATE state, BYTE registerIndex, BYTE *value);
-
 /* THE ALARM MATCH RULE, WHICH IS NOT "EQUAL":
  * An alarm register whose top two bits are both set (>= 0xC0) is a DON'T CARE
  * and matches anything -- that is how "every minute at 30 seconds" is
@@ -167,6 +165,85 @@ static INT CmosClockRegister(PCMOS_STATE state, BYTE registerIndex, BYTE *value)
 static INT CmosAlarmFieldMatches(BYTE alarm, BYTE current)
 {
     return (alarm & CMOS_ALARM_DONT_CARE) == CMOS_ALARM_DONT_CARE || alarm == current;
+}
+
+/* THE CLOCK REGISTERS ARE DERIVED, NOT STORED:
+ * Keeping a copy and ticking it would be a second clock to drift from the one
+ * INT 1Ah reads. docs/ref/rtc.md 2: a PC BIOS leaves Status B with DM=0 and
+ * 24/12=1, i.e. **BCD, 24-hour**, and every DOS program that reads this chip
+ * by hand assumes exactly that -- so 0x12 in the hours register is twelve
+ * o'clock, not eighteen.
+ */
+static INT CmosClockRegister(PCMOS_STATE state, BYTE registerIndex, BYTE *value)
+{
+    PIT_RTC_READING reading;
+
+    if (!CmosReading(state, &reading))
+        return CMOS_NOT_A_CLOCK_REGISTER;
+    switch (registerIndex)
+    {
+    case CMOS_SECONDS:
+        *value = CmosClockValue(state, reading.Second);
+    return CMOS_CLOCK_REGISTER;
+
+    case CMOS_MINUTES:
+        *value = CmosClockValue(state, reading.Minute);
+    return CMOS_CLOCK_REGISTER;
+
+    case CMOS_HOURS:
+    {
+        /* [CAUTION]: 12-HOUR MODE IS NOT "SUBTRACT TWELVE". Status B bit 1 clear selects
+         * it, and then BIT 7 OF THIS REGISTER IS PM -- midnight is 12 AM and
+         * noon is 12 PM, neither of which is hour 0. A model that ignores the
+         * bit tells a 12-hour guest that 14:00 is 2 AM.
+         */
+        UINT hour = reading.Hour;
+        BYTE pmBit = 0;
+        if (!(state->StatusB & CMOS_B_24_HOUR))
+        {
+            pmBit = (BYTE)(hour >= CMOS_HOURS_PER_HALF_DAY ? CMOS_HOUR_PM_BIT : CMOS_HOUR_AM);
+            hour %= CMOS_HOURS_PER_HALF_DAY;
+            if (!hour)
+                hour = CMOS_HOURS_PER_HALF_DAY;
+        }
+        *value = (BYTE)(CmosClockValue(state, hour) | pmBit);
+        return CMOS_CLOCK_REGISTER; }
+
+    /* [CAUTION]: 01h, 03h and 05h -- the ALARM registers -- are deliberately NOT claimed
+     * here. They are storage the guest owns, not a view of the host clock, so
+     * they fall through to ram[] on both the read and the write paths.
+     */
+    case CMOS_DAY_OF_MONTH:
+        *value = CmosClockValue(state, reading.Day);
+    return CMOS_CLOCK_REGISTER;
+
+    case CMOS_MONTH:
+        *value = CmosClockValue(state, reading.Month);
+    return CMOS_CLOCK_REGISTER;
+
+    case CMOS_YEAR:
+        *value = CmosClockValue(state, reading.Year);
+    return CMOS_CLOCK_REGISTER;
+
+    case CMOS_CENTURY:
+        *value = CmosClockValue(state, reading.Century);
+    return CMOS_CLOCK_REGISTER;
+
+    /* -- THE DAY OF WEEK COMES FROM THE HOST, NOT A CALENDAR RULE. (s81, #182) It
+     * was fixed at 1 (Sunday) because the clock reading carried no weekday and a
+     * device model should not hold calendar arithmetic. Windows' GetLocalTime
+     * already knows it, so the host passes it through (1 = Sunday, the chip's
+     * numbering); a reader with no weekday (0) still falls back to ram[].
+     */
+    case CMOS_DAY_OF_WEEK:
+        if (!reading.DayOfWeek)
+            return CMOS_NOT_A_CLOCK_REGISTER;
+        *value = CmosClockValue(state, reading.DayOfWeek);
+        return CMOS_CLOCK_REGISTER;
+
+    default:
+        return CMOS_NOT_A_CLOCK_REGISTER;
+    }
 }
 
 /* One second has passed: raise the update-ended flag, and the alarm flag if the
@@ -262,85 +339,6 @@ VOID VddCmosAddClocks(PCMOS_STATE state, UINT32 clocks)
         state->PeriodicRaised++;
         if (state->Bus)
             VddRaiseIrq(state->Bus, CMOS_RTC_IRQ);
-    }
-}
-
-/* THE CLOCK REGISTERS ARE DERIVED, NOT STORED:
- * Keeping a copy and ticking it would be a second clock to drift from the one
- * INT 1Ah reads. docs/ref/rtc.md 2: a PC BIOS leaves Status B with DM=0 and
- * 24/12=1, i.e. **BCD, 24-hour**, and every DOS program that reads this chip
- * by hand assumes exactly that -- so 0x12 in the hours register is twelve
- * o'clock, not eighteen.
- */
-static INT CmosClockRegister(PCMOS_STATE state, BYTE registerIndex, BYTE *value)
-{
-    PIT_RTC_READING reading;
-
-    if (!CmosReading(state, &reading))
-        return CMOS_NOT_A_CLOCK_REGISTER;
-    switch (registerIndex)
-    {
-    case CMOS_SECONDS:
-        *value = CmosClockValue(state, reading.Second);
-    return CMOS_CLOCK_REGISTER;
-
-    case CMOS_MINUTES:
-        *value = CmosClockValue(state, reading.Minute);
-    return CMOS_CLOCK_REGISTER;
-
-    case CMOS_HOURS:
-    {
-        /* [CAUTION]: 12-HOUR MODE IS NOT "SUBTRACT TWELVE". Status B bit 1 clear selects
-         * it, and then BIT 7 OF THIS REGISTER IS PM -- midnight is 12 AM and
-         * noon is 12 PM, neither of which is hour 0. A model that ignores the
-         * bit tells a 12-hour guest that 14:00 is 2 AM.
-         */
-        UINT hour = reading.Hour;
-        BYTE pmBit = 0;
-        if (!(state->StatusB & CMOS_B_24_HOUR))
-        {
-            pmBit = (BYTE)(hour >= CMOS_HOURS_PER_HALF_DAY ? CMOS_HOUR_PM_BIT : CMOS_HOUR_AM);
-            hour %= CMOS_HOURS_PER_HALF_DAY;
-            if (!hour)
-                hour = CMOS_HOURS_PER_HALF_DAY;
-        }
-        *value = (BYTE)(CmosClockValue(state, hour) | pmBit);
-        return CMOS_CLOCK_REGISTER; }
-
-    /* [CAUTION]: 01h, 03h and 05h -- the ALARM registers -- are deliberately NOT claimed
-     * here. They are storage the guest owns, not a view of the host clock, so
-     * they fall through to ram[] on both the read and the write paths.
-     */
-    case CMOS_DAY_OF_MONTH:
-        *value = CmosClockValue(state, reading.Day);
-    return CMOS_CLOCK_REGISTER;
-
-    case CMOS_MONTH:
-        *value = CmosClockValue(state, reading.Month);
-    return CMOS_CLOCK_REGISTER;
-
-    case CMOS_YEAR:
-        *value = CmosClockValue(state, reading.Year);
-    return CMOS_CLOCK_REGISTER;
-
-    case CMOS_CENTURY:
-        *value = CmosClockValue(state, reading.Century);
-    return CMOS_CLOCK_REGISTER;
-
-    /* -- THE DAY OF WEEK COMES FROM THE HOST, NOT A CALENDAR RULE. (s81, #182) It
-     * was fixed at 1 (Sunday) because the clock reading carried no weekday and a
-     * device model should not hold calendar arithmetic. Windows' GetLocalTime
-     * already knows it, so the host passes it through (1 = Sunday, the chip's
-     * numbering); a reader with no weekday (0) still falls back to ram[].
-     */
-    case CMOS_DAY_OF_WEEK:
-        if (!reading.DayOfWeek)
-            return CMOS_NOT_A_CLOCK_REGISTER;
-        *value = CmosClockValue(state, reading.DayOfWeek);
-        return CMOS_CLOCK_REGISTER;
-
-    default:
-        return CMOS_NOT_A_CLOCK_REGISTER;
     }
 }
 

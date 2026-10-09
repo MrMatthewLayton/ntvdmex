@@ -20,8 +20,100 @@
 #include "host_mouse.h"
 #include "host_timing.h"
 #include "host_video.h"
-/* Used before their definitions below. */
-static VOID ExecMachineSave(INT depth);
+#define HMA_ERROR_PROTECTED         0xE1                /* g_HmaError: committed but not accessible */
+
+/* ---- INT 21h AH=4Bh EXEC.  GH #30. ------------------------------------------
+ *
+ * A parent calls EXEC, a child runs to completion, and the parent carries on at
+ * the instruction after its INT 21h with the child's exit code retrievable via
+ * AH=4Dh.  That is what turns COMMAND.COM from a prompt into a shell.
+ *
+ * The work is split: DosInt21 only RECORDS the request, because the loader, the
+ * file I/O and the guest's register frame all live out here.
+ *
+ * HOW THE RETURN WORKS, which is the part worth understanding.  The parent
+ * entered through `INT 21h`, so the CPU pushed FLAGS/CS/IP on the parent's stack
+ * and we are executing inside our BOP stub.  We snapshot the parent's ENTIRE
+ * register frame -- including CS:IP pointing AT the BOP and SS:SP pointing at
+ * that IRET frame -- then overwrite the frame with the child's entry state.
+ * When the child terminates we put the parent's frame back and step EIP past the
+ * BOP, so the stub's IRET pops the parent's own frame and lands exactly where it
+ * would have if EXEC had simply returned.  No stack is unwound by hand.
+ */
+#define EXEC_MAX_DEPTH              8
+
+#define EXEC_SHELL_BOP_SITES_MIN    8                   /* This many C4 C4 54 sites mark XP's COMMAND.COM (it has 15) */
+
+/* DISK IMAGES BEHIND INT 13h / INT 25h. (GH #44):
+ * A drive is an image FILE or it is absent -- see src/dos/dos_disk.h for why
+ * nothing is synthesised. Drive 0 (A:) comes from FLOPPY_IMG_PATH.
+ *
+ * [CAUTION]: OPENED LAZILY, ON THE FIRST DISK CALL, AND NEVER AT STARTUP. Opening media
+ * at startup is how the LPT1 spool wedged the rig this morning: a blocking
+ * Win32 call before the host has a window presents as a hang, not an error.
+ * SetErrorMode for the same reason. A guest that never touches INT 13h never
+ * pays for this and never risks it.
+ */
+#define FLOPPY_IMG_PATH             CFG_("FLOPPY.IMG")  /* Read, not written -> cfg */
+
+/* THE UNDOCUMENTED PAIR OF OFFSETS THIS ROUTE RESTS ON (x86):
+ * PEB                          +0x10  ProcessParameters
+ * RTL_USER_PROCESS_PARAMETERS  +0x18  StandardInput
+ *                              +0x1c  StandardOutput
+ *                              +0x20  StandardError
+ *
+ * [CAUTION]: NOT TRUSTED, CHECKED. StdioPebStdout() below reads them out of THIS
+ * process and compares with GetStdHandle before they are used on another.
+ */
+#define PEB_OFF_PROCESSPARAMS       0x10
+#define RUPP_OFF_STDIN              0x18
+#define RUPP_OFF_STDOUT             0x1c
+
+/* THE PARENT'S OWN STANDARD OUTPUT, DUPLICATED. (GH #131) (Importance = 5):
+ * Called only after the five earlier routes have failed. See the long note at
+ * the call site for why the handle is in the parent and not in us.
+ *
+ * [CAUTION]: THE OFFSETS ARE VALIDATED BY THE DATA THEY READ, which is the only form of
+ * proof available for an undocumented structure at run time -- and it is a
+ * STRONGER one than checking our own process, because it validates them on the
+ * EXACT process we are about to duplicate a handle out of. The parameters
+ * block carries the process's own IMAGE PATH; if reading it at the offset this
+ * code believes in produces a string whose file name is the one the process
+ * list reports for that pid, then this really is that structure. If it does
+ * not, we refuse and say so, so a wrong constant costs a log line rather than
+ * a handle to something else entirely.
+ *
+ * [CAUTION]: AND THE DUPLICATED HANDLE IS TYPE-CHECKED BEFORE IT IS ADOPTED. GetFileType
+ * is the test the rest of this file already uses: a handle whose type we can
+ * name is one we can write to.
+ *
+ * [CAUTION]: A CONSOLE HANDLE IS TAKEN TOO, and that is not a lesser answer -- a DOS
+ * program run at a prompt with no redirect should write to that prompt, which
+ * is the same defect wearing different clothes.
+ */
+#define RUPP_OFF_IMAGEPATH          0x38                /* UNICODE_STRING; Buffer at +4 */
+
+/* #153: TEXT THE HOST TYPES AT THE SHELL'S PROMPT (File > Open Executable):
+ * Characters queued here are read by the console input BEFORE the keyboard, so the
+ * shell's AH=0Ah line reader sees them exactly as if they had been typed -- echoed,
+ * with no length limit and no scancode translation. Only File > Open fills it, and
+ * only while the top-level shell is sitting in that line read (OpenAtPrompt).
+ * Head/tail under g_Lock.
+ */
+#define TYPEIN_CAP                  512
+
+enum
+{
+    EXEC_WINDOWS_POLL_MS = 100
+};   /* ExecWindows: waiting for a console child */
+
+enum
+{
+    DOS_TERMINATE_MCB_GUARD = 1024
+};   /* DosTerminate: blocks freed before giving up */
+
+typedef LONG (WINAPI *PFN_NT_QUERY_INFORMATION_PROCESS)(HANDLE, ULONG, PVOID,
+                                                     ULONG, PULONG);
 
 /* #208: A PROGRAM STARTED FROM WINDOWS RUNS UNDER XP's COMMAND.COM, AS STOCK DOES:
  * Stock ntvdm never loads the program itself: it starts COMMAND.COM /P and answers the
@@ -32,6 +124,240 @@ static VOID ExecMachineSave(INT depth);
  */
 INT   g_Routed;                  /* this run's program is handed over via sub 01 */
 INT   g_BackToPrompt;          /* Close Program ended it: next sub 01 = prompt */
+
+/* #233: the AWE32's EMU8000 at SB base + 400h/800h/C00h, fitted when the model is AWE32. */
+EMU8K_STATE  g_Emu8K;     NTVDD_DEVICE g_Emu8KDevice;
+INT          g_AweOn = 0;
+MPU_STATE    g_Mpu;       NTVDD_DEVICE g_MpuDevice;
+PVOID g_Hma;       /* the HMA at linear 0x100000, 0 = unavailable */
+DWORD        g_HmaError;   /* why not, when g_Hma == 0 */
+
+/* Make the HMA real: one committed 64KB range at linear 0x100000, which a guest
+ * reaches as FFFF:0010 because in this design a guest linear IS a host VA.
+ *
+ * [CAUTION]: Called ONCE and EARLY so the answer can ride the STAGE0 preamble, which is a
+ * single buffered flush. Logged as its own later append it simply VANISHED --
+ * LogAppend caches one handle per path with no lock, so a concurrent writer can
+ * lose or misplace a line. Chasing that cost a cycle here, and the same defect
+ * had already put a stray SysVars line at byte 0 of the log.
+ */
+/* what was already at 0x100000 */
+DWORD g_HmaState;
+DWORD g_HmaProtection;
+
+DOS_EMS_STATE    g_Ems;       /* M4: EMS expanded-memory manager */
+
+/* #167: Settings > General "behave like" = MS-DOS 6.22 (0 = Windows XP NTVDM, the default).
+ * Mirrored from g_Settings by SettingsApply, for the device code that runs before it.
+ */
+INT            g_BehaveDos622 = 0;
+
+/* AND THE DRIVES PAGE CAN POINT IT SOMEWHERE ELSE:
+ * SettingsApply() aims this at the FloppyAImage setting when one is stored.
+ *
+ * [CAUTION]: IT IS A POINTER, NOT A COPY, AND IT POINTS INTO g_Settings -- which lives for
+ * the process. A copy here would be a second place for the path to be, and
+ * the first thing a second place does is go stale.
+ *
+ * [CAUTION]: THE HARNESS PATH STAYS THE FALLBACK. The rig drops FLOPPY.IMG at the
+ * literal above and re-launches; if an empty setting overrode that, every
+ * headless disk measurement would start reporting "drive not ready" on a
+ * machine where nothing had changed.
+ */
+/* NULL = the harness fallback (FLOPPY_IMG_PATH), composed at use because the root is
+ * runtime-derived now; a settings value points this INTO g_Settings as before.
+ */
+PCSTR g_FloppyImage = NULL;
+
+/* THE REAL STANDARD OUTPUT, IF WE WERE LAUNCHED FROM ONE. (GH #131):
+ * Everything a DOS guest printed went to the video VDD and, at exit, to
+ * CONOUT$ -- so `myprog.exe > out.txt` from cmd.exe captured NOTHING, and
+ * nothing appeared until the program ended. That is the blocker on leaving
+ * NTVDMEX installed as the machine's VDM: anything script-driven changes
+ * behaviour.
+ * - THE IFEO HOOK IS WHY THIS CAN WORK AT ALL. Windows launches us IN PLACE of
+ *   ntvdm.exe, so our parent is whatever ran ntvdm -- cmd.exe -- and we inherit
+ *   ITS standard handles. If the user redirected, the inherited handle is
+ *   already the file: no console involved, and nothing to attach to.
+ * - TWO CASES, IN THIS ORDER:
+ *   1. an inherited handle that is a FILE or a PIPE -- redirection. Use it.
+ *   2. otherwise AttachConsole(ATTACH_PARENT_PROCESS) and open CONOUT$, so an
+ *      unredirected run prints inline in the console it was started from.
+ *   A GUI-subsystem process has no console of its own, which is exactly why (2)
+ *   is needed and why it must not be attempted before (1) -- attaching would
+ *   hand us a console handle and hide the redirect.
+ *
+ * [CAUTION]: BOTH OF THOSE ARE MEASURED DEAD (session 53), along with two more: CSRSS
+ * leaves StartupInfo.dwFlags at 0, and attaching to the REAL parent pid found
+ * by hand through Toolhelp fails the same way ATTACH_PARENT_PROCESS does.
+ * The premise above is simply wrong: an IFEO-substituted VDM is not created
+ * the way a child is, so there is nothing to inherit and nothing to attach to.
+ *
+ * [CAUTION]: AND THE FIFTH ROUTE IS DEAD TOO, MEASURED THE SAME DAY. VDM_COMMAND_INFO
+ * carries StdIn/StdOut/StdErr at +0x10, filled by GetNextVDMCommand and already
+ * duplicated into this process by CSRSS -- which is how stock ntvdm gets a
+ * console it never inherited. It is tried in StdioInitializeVdm() below and the
+ * three fields come back as NON-HANDLES: 0x02341fc0 / 0x7c867f23 / 0x65470000,
+ * the same values every run, all three FILE_TYPE_UNKNOWN.
+ *
+ * [INFO]: THE INSTRUMENT THAT SAID SO NAMED THE REAL BUG, AND IT IS NOT A STDIO BUG.
+ * Those fields are junk because the WHOLE STRUCT is: CreationFlags reads
+ * 0x4d445674 and CodePage 0x78654e74 -- ASCII, identical on every run --
+ * AppName is garbage, CmdLine is "\", and TaskId is 0. GetNextVDMCommand
+ * returns TRUE and populates nothing. We have never noticed because the launch
+ * does not depend on it: the program comes from target.txt or from our own
+ * command line.
+ *
+ * And the command line says why: `ntvdmhost.exe "...\ntvdm.exe" -f`. There is
+ * NO `-i<taskid>`, so CsrssParseTaskId() yields 0, so CSRSS cannot tell
+ * which queued task we are asking about, so it answers with nothing. The
+ * shape that DOES carry `-i` (anything launched through `start`, which is
+ * every run rt.bat has ever done) reports TaskId 0x18 -- and that is exactly
+ * the shape whose console we do inherit, which is how this stayed invisible.
+ *
+ * SO #131 IS THE SAME DEFECT AS THE M2.5 OPEN ITEM `recover the real command
+ * line from CSRSS's undocumented multi-call GetNextVDMCommand protocol`. Not a
+ * Win32 handle problem, not a subsystem problem: we are not participating in
+ * the VDM handshake, and the handles and the command line are both on the far
+ * side of it. Fixing one fixes the other.
+ *
+ * [CAUTION]: NOT a subsystem problem -- that hypothesis is REFUTED, not doubted. This
+ * binary is already CUI/console, pinned deliberately in CMakeLists.txt, exactly
+ * like ntvdm.exe.
+ * - And the target is known to be reachable, because stock ntvdm was asked on the
+ *   same box with the same program and the same command: `hello.com > out.txt`
+ *   under stock writes 136 bytes into the file and under NTVDMEX writes 0.
+ *   The code below stays: it costs nothing, it upgrades if a handle ever does
+ *   arrive, and the raw-handle line it prints at STAGE1 is the instrument that
+ *   turned four sessions of hypotheses into one located bug.
+ */
+HANDLE g_Stdio = INVALID_HANDLE_VALUE;
+static struct
+{
+    DWORD Eax;
+    DWORD Ebx;
+    DWORD Ecx;
+    DWORD Edx;
+    DWORD Esi;
+    DWORD Edi;
+    DWORD Ebp;
+    DWORD Esp;
+    DWORD Eip;
+    DWORD Eflags;
+    WORD Cs;
+    WORD Ss;
+    WORD Ds;
+    WORD Es;
+    WORD Psp;
+    WORD DtaSegment;
+    WORD DtaOffset;
+    WORD  ChildSegment;                  /* freed when the child terminates */
+    WORD  EnvironmentSegment;                    /* the env COPY we made for it, if any; freed with it */
+} g_Exec[EXEC_MAX_DEPTH];
+/* FILE > CLOSE PROGRAM ENDS A CHILD THAT NEVER ASKED TO END. (GH #152):
+ * A program that exits unhooks what it hooked; one we END does not. Its INT 08h/09h
+ * would go on pointing into the block DosTerminate frees, and the shell would die
+ * on the next tick or keypress -- so EXEC photographs what the child can break (the
+ * IVT, the PIC masks, the video mode, the PIT period) and a forced close puts it
+ * back before the ordinary child terminate runs. Only a FORCED close restores: a
+ * program's own exit is DOS's business, and DOS does not do this.
+ */
+static struct
+{
+    WORD  Ivt[IVT_SIZE / X86_WORD_SIZE];                   /* 0000:0000-03FF as the parent left it */
+    BYTE ImrMaster;
+    BYTE ImrSlave;
+    BYTE VideoMode;
+    DWORD Pit0;                       /* channel 0's effective reload */
+    CHAR  ProgramName[64];               /* the PARENT's status-strip name (user, s84) */
+} g_ExecMachine[EXEC_MAX_DEPTH];
+static BYTE g_ExecFileBuffer[0x80000];    /* child image; separate from the parent's */
+
+/* GH #34: INT 24h, THE CRITICAL-ERROR HANDLER (Importance = 1):
+ * A disk call that failed for a HARDWARE reason (extended error 13h-1Fh: write-
+ * protected, not ready, CRC, ... general failure) is not simply returned on DOS: DOS
+ * calls the program's INT 24h with AH = what it was doing and which answers are
+ * allowed, AL = the drive, DI = the error, BP:SI = the device header, and does what
+ * the handler says in AL -- 0 IGNORE, 1 RETRY, 2 ABORT, 3 FAIL. That is the "Not
+ * ready reading drive A / Abort, Retry, Fail?" prompt (COMMAND.COM's handler), and
+ * a program that installs its own (every editor that saves to floppy) decides for
+ * itself. Nothing of it existed: the error went straight back to the caller.
+ * - HOW: INT 21h is serviced here, host-side, so the call into the guest is made by
+ *   redirecting the guest. CriticalSnapshot keeps the INT 21h call's INPUT registers;
+ *   DosInt21 sets m->crit_pending instead of finishing; CriticalRaise points CS:IP at
+ *   DOS_CRIT_RAISE (`int 24h / bop 20h`) with the handler's registers loaded; the
+ *   handler IRETs onto the BOP and CriticalReturn puts the inputs back and acts:
+ *   RETRY  -> CS:IP back ON the INT 21h BOP, so the whole call is made again;
+ *   FAIL   -> the call returns CF=1 with the measured AX, 59h then says 53h;
+ *   IGNORE -> not allowed for a path call (AH bit 5 clear, measured), so FAIL;
+ *             allowed for 3Fh/40h on an open file (#275): the call "succeeds";
+ *   ABORT  -> the program ends (AH=4Dh AH=02h), through DosTerminate.
+ *   An answer the handler was not allowed to give is converted as DOS converts it:
+ *   ignore/retry -> fail, fail -> abort.
+ *
+ * [CAUTION]: MAIN V86 LOOP ONLY (m.crit_raise_ok, #275). A DPMI client's INT 21h is serviced
+ * with the client in protected mode, and the nested real-mode loops cannot redirect
+ * the guest the way this does; there a 3Fh/40h hardware error is answered as FAIL
+ * and a path call keeps the raw code (see the tail of DosInt21). And never while
+ * a handler is already running: DOS does not nest INT 24h.
+ */
+static struct
+{
+    DWORD Eax;
+    DWORD Ebx;
+    DWORD Ecx;
+    DWORD Edx;
+    DWORD Esi;
+    DWORD Edi;
+    DWORD Ebp;
+    DWORD Eip;
+    WORD Cs;
+    WORD Ds;
+    WORD Es;
+    BYTE  Ah;                                  /* what the handler was told it may answer */
+    BYTE  Function;                                  /* the INT 21h function that failed */
+} g_Critical;
+
+static HANDLE        g_DiskHandle[1] = { INVALID_HANDLE_VALUE };
+static DOS_DISK_GEOMETRY g_DiskGeometry[1];
+static INT           g_DiskTried[1];
+static CHAR   g_StdioBuffer[512];
+static UINT g_StdioLength = 0;
+
+/* THE INPUT SIDE, AND IT IS THE SAME DEFECT. (GH #131, session 57) (Importance = 2):
+ * `prog < file` is the mirror of `prog > file`: the handle is in the parent
+ * and not in us, for exactly the same reason. Adopted only when it is a FILE
+ * or a PIPE -- a character handle is a console, and a console's input is the
+ * keyboard, which this host already has a whole VDD for. Taking that would
+ * replace a working path with a worse one.
+ *
+ * [CAUTION]: AND AT END OF FILE, DOS SAYS Ctrl-Z. A redirected read that runs out does
+ * not block and does not fail: it returns 0x1A, which is what every DOS
+ * program written since 1981 tests for.
+ */
+static HANDLE g_StdinHandle = NULL;
+static INT    g_StdinEof = 0;
+static DWORD  g_StdinBytes = 0;
+
+/* DOS console input (INT 21h AH=01/07/08/0A) -> the keyboard VDD ring, blocking
+ * on the V86 thread until the UI thread pushes a key (or the window closes).
+ */
+/* HOW DOS HANDS OVER AN ARROW. A BIOS keycode is a PAIR (AH=scancode, AL=ascii), but every
+ * INT 21h console read returns ONE byte. For the keys with no ascii -- arrows, F-keys, the
+ * nav cluster, i.e. AL=0 -- DOS returns 0x00 first and the SCANCODE on the NEXT call, and a
+ * program reading arrows is written to expect exactly that. We returned `k & 0xFF` and threw
+ * the scancode away, so an arrow arrived as a lone NUL that never had a second half: every
+ * extended key was unreadable through DOS. That is the Skyroads menu, which sits in INT 21h
+ * (measured: the guest parks at DOS_HDLR_SEG:0000, the INT 21h BOP, for the whole run).
+ * g_ConsoleInPending holds that second byte between the two calls.
+ */
+static INT g_ConsoleInPending = -1;                /* scancode owed to the next read, or -1 */
+static CHAR g_TypeIn[TYPEIN_CAP];
+static INT g_TypeInHead;
+static INT g_TypeInTail;
+
+/* Used before their definitions below. */
+static VOID ExecMachineSave(INT depth);
 
 /* THE COMPILER VARIABLES REACH THE GUEST, WITHOUT MOVING THE MEMORY MAP. (s73) (Importance = 1):
  * A DOS build tool is configured through its environment -- LIB and INCLUDE for the
@@ -122,26 +448,6 @@ UINT LauncherCompilerVariables(
     return count;
 }
 
-/* #233: the AWE32's EMU8000 at SB base + 400h/800h/C00h, fitted when the model is AWE32. */
-EMU8K_STATE  g_Emu8K;     NTVDD_DEVICE g_Emu8KDevice;
-INT          g_AweOn = 0;
-MPU_STATE    g_Mpu;       NTVDD_DEVICE g_MpuDevice;
-PVOID g_Hma;       /* the HMA at linear 0x100000, 0 = unavailable */
-DWORD        g_HmaError;   /* why not, when g_Hma == 0 */
-#define HMA_ERROR_PROTECTED     0xE1    /* g_HmaError: committed but not accessible */
-
-/* Make the HMA real: one committed 64KB range at linear 0x100000, which a guest
- * reaches as FFFF:0010 because in this design a guest linear IS a host VA.
- *
- * [CAUTION]: Called ONCE and EARLY so the answer can ride the STAGE0 preamble, which is a
- * single buffered flush. Logged as its own later append it simply VANISHED --
- * LogAppend caches one handle per path with no lock, so a concurrent writer can
- * lose or misplace a line. Chasing that cost a cycle here, and the same defect
- * had already put a stray SysVars line at byte 0 of the log.
- */
-/* what was already at 0x100000 */
-DWORD g_HmaState;
-DWORD g_HmaProtection;
 VOID HmaTry(VOID)
 {
     MEMORY_BASIC_INFORMATION memoryInfo;
@@ -188,70 +494,6 @@ VOID HmaTry(VOID)
           hma[index] = 0; }
 }
 
-DOS_EMS_STATE    g_Ems;       /* M4: EMS expanded-memory manager */
-/* ---- INT 21h AH=4Bh EXEC.  GH #30. ------------------------------------------
- *
- * A parent calls EXEC, a child runs to completion, and the parent carries on at
- * the instruction after its INT 21h with the child's exit code retrievable via
- * AH=4Dh.  That is what turns COMMAND.COM from a prompt into a shell.
- *
- * The work is split: DosInt21 only RECORDS the request, because the loader, the
- * file I/O and the guest's register frame all live out here.
- *
- * HOW THE RETURN WORKS, which is the part worth understanding.  The parent
- * entered through `INT 21h`, so the CPU pushed FLAGS/CS/IP on the parent's stack
- * and we are executing inside our BOP stub.  We snapshot the parent's ENTIRE
- * register frame -- including CS:IP pointing AT the BOP and SS:SP pointing at
- * that IRET frame -- then overwrite the frame with the child's entry state.
- * When the child terminates we put the parent's frame back and step EIP past the
- * BOP, so the stub's IRET pops the parent's own frame and lands exactly where it
- * would have if EXEC had simply returned.  No stack is unwound by hand.
- */
-#define EXEC_MAX_DEPTH  8
-static struct
-{
-    DWORD Eax;
-    DWORD Ebx;
-    DWORD Ecx;
-    DWORD Edx;
-    DWORD Esi;
-    DWORD Edi;
-    DWORD Ebp;
-    DWORD Esp;
-    DWORD Eip;
-    DWORD Eflags;
-    WORD Cs;
-    WORD Ss;
-    WORD Ds;
-    WORD Es;
-    WORD Psp;
-    WORD DtaSegment;
-    WORD DtaOffset;
-    WORD  ChildSegment;                  /* freed when the child terminates */
-    WORD  EnvironmentSegment;                    /* the env COPY we made for it, if any; freed with it */
-} g_Exec[EXEC_MAX_DEPTH];
-/* FILE > CLOSE PROGRAM ENDS A CHILD THAT NEVER ASKED TO END. (GH #152):
- * A program that exits unhooks what it hooked; one we END does not. Its INT 08h/09h
- * would go on pointing into the block DosTerminate frees, and the shell would die
- * on the next tick or keypress -- so EXEC photographs what the child can break (the
- * IVT, the PIC masks, the video mode, the PIT period) and a forced close puts it
- * back before the ordinary child terminate runs. Only a FORCED close restores: a
- * program's own exit is DOS's business, and DOS does not do this.
- */
-static struct
-{
-    WORD  Ivt[IVT_SIZE / X86_WORD_SIZE];                   /* 0000:0000-03FF as the parent left it */
-    BYTE ImrMaster;
-    BYTE ImrSlave;
-    BYTE VideoMode;
-    DWORD Pit0;                       /* channel 0's effective reload */
-    CHAR  ProgramName[64];               /* the PARENT's status-strip name (user, s84) */
-} g_ExecMachine[EXEC_MAX_DEPTH];
-static BYTE g_ExecFileBuffer[0x80000];    /* child image; separate from the parent's */
-enum
-{
-    EXEC_WINDOWS_POLL_MS = 100
-};   /* ExecWindows: waiting for a console child */
 /* GH #255: EXEC OF A WINDOWS PROGRAM GOES TO WINDOWS, AS ON STOCK NTVDM (Importance = 1):
  * `kind` from DosExeKind. CreateProcess does what stock's EXEC does with a
  * non-DOS binary: Windows itself routes it -- a PE to Win32, an NE to WOW (which,
@@ -318,7 +560,17 @@ static INT ExecWindows(DOS_MACHINE *machine, INT kind, UINT subsystem, PSTR *log
     return 1;
 }
 
-#define EXEC_SHELL_BOP_SITES_MIN    8   /* This many C4 C4 54 sites mark XP's COMMAND.COM (it has 15) */
+static VOID ExecMachineSave(INT depth)
+{
+    UINT index;
+
+    for (index = 0; index < IVT_SIZE / X86_WORD_SIZE; ++index)
+        g_ExecMachine[depth].Ivt[index] = PeekWord(index * X86_WORD_SIZE);
+    g_ExecMachine[depth].ImrMaster = g_Pic.Master.Imr;
+    g_ExecMachine[depth].ImrSlave = g_Pic.Slave.Imr;
+    g_ExecMachine[depth].VideoMode = *(volatile BYTE *)(ULONG_PTR)(BIOS_BDA_BASE + BIOS_BDA_VIDEO_MODE);   /* BDA current mode */
+    g_ExecMachine[depth].Pit0  = VddPitEffectiveReload(&g_Pit);
+}
 
 /* Perform a recorded EXEC: load the child, snapshot the parent, hand over. */
 PSTR ExecBegin(DOS_MACHINE *machine, volatile BYTE *tib, PSTR cursor)
@@ -713,51 +965,6 @@ PSTR ExecBegin(DOS_MACHINE *machine, volatile BYTE *tib, PSTR cursor)
     return cursor;
 }
 
-/* GH #34: INT 24h, THE CRITICAL-ERROR HANDLER (Importance = 1):
- * A disk call that failed for a HARDWARE reason (extended error 13h-1Fh: write-
- * protected, not ready, CRC, ... general failure) is not simply returned on DOS: DOS
- * calls the program's INT 24h with AH = what it was doing and which answers are
- * allowed, AL = the drive, DI = the error, BP:SI = the device header, and does what
- * the handler says in AL -- 0 IGNORE, 1 RETRY, 2 ABORT, 3 FAIL. That is the "Not
- * ready reading drive A / Abort, Retry, Fail?" prompt (COMMAND.COM's handler), and
- * a program that installs its own (every editor that saves to floppy) decides for
- * itself. Nothing of it existed: the error went straight back to the caller.
- * - HOW: INT 21h is serviced here, host-side, so the call into the guest is made by
- *   redirecting the guest. CriticalSnapshot keeps the INT 21h call's INPUT registers;
- *   DosInt21 sets m->crit_pending instead of finishing; CriticalRaise points CS:IP at
- *   DOS_CRIT_RAISE (`int 24h / bop 20h`) with the handler's registers loaded; the
- *   handler IRETs onto the BOP and CriticalReturn puts the inputs back and acts:
- *   RETRY  -> CS:IP back ON the INT 21h BOP, so the whole call is made again;
- *   FAIL   -> the call returns CF=1 with the measured AX, 59h then says 53h;
- *   IGNORE -> not allowed for a path call (AH bit 5 clear, measured), so FAIL;
- *             allowed for 3Fh/40h on an open file (#275): the call "succeeds";
- *   ABORT  -> the program ends (AH=4Dh AH=02h), through DosTerminate.
- *   An answer the handler was not allowed to give is converted as DOS converts it:
- *   ignore/retry -> fail, fail -> abort.
- *
- * [CAUTION]: MAIN V86 LOOP ONLY (m.crit_raise_ok, #275). A DPMI client's INT 21h is serviced
- * with the client in protected mode, and the nested real-mode loops cannot redirect
- * the guest the way this does; there a 3Fh/40h hardware error is answered as FAIL
- * and a path call keeps the raw code (see the tail of DosInt21). And never while
- * a handler is already running: DOS does not nest INT 24h.
- */
-static struct
-{
-    DWORD Eax;
-    DWORD Ebx;
-    DWORD Ecx;
-    DWORD Edx;
-    DWORD Esi;
-    DWORD Edi;
-    DWORD Ebp;
-    DWORD Eip;
-    WORD Cs;
-    WORD Ds;
-    WORD Es;
-    BYTE  Ah;                                  /* what the handler was told it may answer */
-    BYTE  Function;                                  /* the INT 21h function that failed */
-} g_Critical;
-
 VOID CriticalSnapshot(volatile BYTE *tib)
 {
     g_Critical.Eax = VDM_REG(tib, VTIB_EAX);
@@ -934,14 +1141,6 @@ VOID DosAuxOut(PVOID context, BYTE character)
     HOST_UNLOCK();
 }
 
-/* #167: Settings > General "behave like" = MS-DOS 6.22 (0 = Windows XP NTVDM, the default).
- * Mirrored from g_Settings by SettingsApply, for the device code that runs before it.
- */
-INT            g_BehaveDos622 = 0;
-enum
-{
-    DOS_TERMINATE_MCB_GUARD = 1024
-};   /* DosTerminate: blocks freed before giving up */
 /* A GUEST ASKED TO TERMINATE. FOUR DOORS, ONE ANSWER. (GH #134):
  * AH=4Ch, AH=00h, INT 20h and INT 27h all end a program, and this decides
  * whether that ends the RUN or merely returns a child to its parent.
@@ -1152,34 +1351,6 @@ INT DosTerminate(DOS_MACHINE *machine, PVOID tib, PSTR *logCursor, PSTR base)
     return 0;                        /* top-level program: the run is over */
 }
 
-/* DISK IMAGES BEHIND INT 13h / INT 25h. (GH #44):
- * A drive is an image FILE or it is absent -- see src/dos/dos_disk.h for why
- * nothing is synthesised. Drive 0 (A:) comes from FLOPPY_IMG_PATH.
- *
- * [CAUTION]: OPENED LAZILY, ON THE FIRST DISK CALL, AND NEVER AT STARTUP. Opening media
- * at startup is how the LPT1 spool wedged the rig this morning: a blocking
- * Win32 call before the host has a window presents as a hang, not an error.
- * SetErrorMode for the same reason. A guest that never touches INT 13h never
- * pays for this and never risks it.
- */
-#define FLOPPY_IMG_PATH     CFG_("FLOPPY.IMG")  /* Read, not written -> cfg */
-
-/* AND THE DRIVES PAGE CAN POINT IT SOMEWHERE ELSE:
- * SettingsApply() aims this at the FloppyAImage setting when one is stored.
- *
- * [CAUTION]: IT IS A POINTER, NOT A COPY, AND IT POINTS INTO g_Settings -- which lives for
- * the process. A copy here would be a second place for the path to be, and
- * the first thing a second place does is go stale.
- *
- * [CAUTION]: THE HARNESS PATH STAYS THE FALLBACK. The rig drops FLOPPY.IMG at the
- * literal above and re-launches; if an empty setting overrode that, every
- * headless disk measurement would start reporting "drive not ready" on a
- * machine where nothing had changed.
- */
-/* NULL = the harness fallback (FLOPPY_IMG_PATH), composed at use because the root is
- * runtime-derived now; a settings value points this INTO g_Settings as before.
- */
-PCSTR g_FloppyImage = NULL;
 static PCSTR FloppyImagePath(VOID)
 {
     return g_FloppyImage ? g_FloppyImage : FLOPPY_IMG_PATH;
@@ -1212,9 +1383,6 @@ INT HostHasCdrom(VOID)
     return 0;
 }
 
-static HANDLE        g_DiskHandle[1] = { INVALID_HANDLE_VALUE };
-static DOS_DISK_GEOMETRY g_DiskGeometry[1];
-static INT           g_DiskTried[1];
 PDOS_DISK_GEOMETRY DiskFor(UINT drive)
 {
     BYTE boot[DOS_SECTOR_SIZE];
@@ -1292,72 +1460,6 @@ INT DiskIo(UINT drive, UINT32 lba, UINT count, BYTE *guest, INT write)
     return moved == want;
 }
 
-/* THE REAL STANDARD OUTPUT, IF WE WERE LAUNCHED FROM ONE. (GH #131):
- * Everything a DOS guest printed went to the video VDD and, at exit, to
- * CONOUT$ -- so `myprog.exe > out.txt` from cmd.exe captured NOTHING, and
- * nothing appeared until the program ended. That is the blocker on leaving
- * NTVDMEX installed as the machine's VDM: anything script-driven changes
- * behaviour.
- * - THE IFEO HOOK IS WHY THIS CAN WORK AT ALL. Windows launches us IN PLACE of
- *   ntvdm.exe, so our parent is whatever ran ntvdm -- cmd.exe -- and we inherit
- *   ITS standard handles. If the user redirected, the inherited handle is
- *   already the file: no console involved, and nothing to attach to.
- * - TWO CASES, IN THIS ORDER:
- *   1. an inherited handle that is a FILE or a PIPE -- redirection. Use it.
- *   2. otherwise AttachConsole(ATTACH_PARENT_PROCESS) and open CONOUT$, so an
- *      unredirected run prints inline in the console it was started from.
- *   A GUI-subsystem process has no console of its own, which is exactly why (2)
- *   is needed and why it must not be attempted before (1) -- attaching would
- *   hand us a console handle and hide the redirect.
- *
- * [CAUTION]: BOTH OF THOSE ARE MEASURED DEAD (session 53), along with two more: CSRSS
- * leaves StartupInfo.dwFlags at 0, and attaching to the REAL parent pid found
- * by hand through Toolhelp fails the same way ATTACH_PARENT_PROCESS does.
- * The premise above is simply wrong: an IFEO-substituted VDM is not created
- * the way a child is, so there is nothing to inherit and nothing to attach to.
- *
- * [CAUTION]: AND THE FIFTH ROUTE IS DEAD TOO, MEASURED THE SAME DAY. VDM_COMMAND_INFO
- * carries StdIn/StdOut/StdErr at +0x10, filled by GetNextVDMCommand and already
- * duplicated into this process by CSRSS -- which is how stock ntvdm gets a
- * console it never inherited. It is tried in StdioInitializeVdm() below and the
- * three fields come back as NON-HANDLES: 0x02341fc0 / 0x7c867f23 / 0x65470000,
- * the same values every run, all three FILE_TYPE_UNKNOWN.
- *
- * [INFO]: THE INSTRUMENT THAT SAID SO NAMED THE REAL BUG, AND IT IS NOT A STDIO BUG.
- * Those fields are junk because the WHOLE STRUCT is: CreationFlags reads
- * 0x4d445674 and CodePage 0x78654e74 -- ASCII, identical on every run --
- * AppName is garbage, CmdLine is "\", and TaskId is 0. GetNextVDMCommand
- * returns TRUE and populates nothing. We have never noticed because the launch
- * does not depend on it: the program comes from target.txt or from our own
- * command line.
- *
- * And the command line says why: `ntvdmhost.exe "...\ntvdm.exe" -f`. There is
- * NO `-i<taskid>`, so CsrssParseTaskId() yields 0, so CSRSS cannot tell
- * which queued task we are asking about, so it answers with nothing. The
- * shape that DOES carry `-i` (anything launched through `start`, which is
- * every run rt.bat has ever done) reports TaskId 0x18 -- and that is exactly
- * the shape whose console we do inherit, which is how this stayed invisible.
- *
- * SO #131 IS THE SAME DEFECT AS THE M2.5 OPEN ITEM `recover the real command
- * line from CSRSS's undocumented multi-call GetNextVDMCommand protocol`. Not a
- * Win32 handle problem, not a subsystem problem: we are not participating in
- * the VDM handshake, and the handles and the command line are both on the far
- * side of it. Fixing one fixes the other.
- *
- * [CAUTION]: NOT a subsystem problem -- that hypothesis is REFUTED, not doubted. This
- * binary is already CUI/console, pinned deliberately in CMakeLists.txt, exactly
- * like ntvdm.exe.
- * - And the target is known to be reachable, because stock ntvdm was asked on the
- *   same box with the same program and the same command: `hello.com > out.txt`
- *   under stock writes 136 bytes into the file and under NTVDMEX writes 0.
- *   The code below stays: it costs nothing, it upgrades if a handle ever does
- *   arrive, and the raw-handle line it prints at STAGE1 is the instrument that
- *   turned four sessions of hypotheses into one located bug.
- */
-HANDLE g_Stdio = INVALID_HANDLE_VALUE;
-static CHAR   g_StdioBuffer[512];
-static UINT g_StdioLength = 0;
-
 VOID StdioFlush(VOID)
 {
     DWORD bytesWritten = 0;
@@ -1366,37 +1468,6 @@ VOID StdioFlush(VOID)
         WriteFile(g_Stdio, g_StdioBuffer, g_StdioLength, &bytesWritten, NULL);
     g_StdioLength = 0;
 }
-
-/* THE UNDOCUMENTED PAIR OF OFFSETS THIS ROUTE RESTS ON (x86):
- * PEB                          +0x10  ProcessParameters
- * RTL_USER_PROCESS_PARAMETERS  +0x18  StandardInput
- *                              +0x1c  StandardOutput
- *                              +0x20  StandardError
- *
- * [CAUTION]: NOT TRUSTED, CHECKED. StdioPebStdout() below reads them out of THIS
- * process and compares with GetStdHandle before they are used on another.
- */
-#define PEB_OFF_PROCESSPARAMS   0x10
-#define RUPP_OFF_STDIN          0x18
-#define RUPP_OFF_STDOUT         0x1c
-
-typedef LONG (WINAPI *PFN_NT_QUERY_INFORMATION_PROCESS)(HANDLE, ULONG, PVOID,
-                                                     ULONG, PULONG);
-
-/* THE INPUT SIDE, AND IT IS THE SAME DEFECT. (GH #131, session 57) (Importance = 2):
- * `prog < file` is the mirror of `prog > file`: the handle is in the parent
- * and not in us, for exactly the same reason. Adopted only when it is a FILE
- * or a PIPE -- a character handle is a console, and a console's input is the
- * keyboard, which this host already has a whole VDD for. Taking that would
- * replace a working path with a worse one.
- *
- * [CAUTION]: AND AT END OF FILE, DOS SAYS Ctrl-Z. A redirected read that runs out does
- * not block and does not fail: it returns 0x1A, which is what every DOS
- * program written since 1981 tests for.
- */
-static HANDLE g_StdinHandle = NULL;
-static INT    g_StdinEof = 0;
-static DWORD  g_StdinBytes = 0;
 
 /* One byte from the redirected input, or -1 if there is none to be had. */
 static INT StdinReadByte(VOID)
@@ -1509,30 +1580,6 @@ static INT StdioPebLayoutOk(INT *sawNull)
         return 0;                                   /* nothing to compare -- unproven */
     return mine == pebStdout;
 }
-
-/* THE PARENT'S OWN STANDARD OUTPUT, DUPLICATED. (GH #131) (Importance = 5):
- * Called only after the five earlier routes have failed. See the long note at
- * the call site for why the handle is in the parent and not in us.
- *
- * [CAUTION]: THE OFFSETS ARE VALIDATED BY THE DATA THEY READ, which is the only form of
- * proof available for an undocumented structure at run time -- and it is a
- * STRONGER one than checking our own process, because it validates them on the
- * EXACT process we are about to duplicate a handle out of. The parameters
- * block carries the process's own IMAGE PATH; if reading it at the offset this
- * code believes in produces a string whose file name is the one the process
- * list reports for that pid, then this really is that structure. If it does
- * not, we refuse and say so, so a wrong constant costs a log line rather than
- * a handle to something else entirely.
- *
- * [CAUTION]: AND THE DUPLICATED HANDLE IS TYPE-CHECKED BEFORE IT IS ADOPTED. GetFileType
- * is the test the rest of this file already uses: a handle whose type we can
- * name is one we can write to.
- *
- * [CAUTION]: A CONSOLE HANDLE IS TAKEN TOO, and that is not a lesser answer -- a DOS
- * program run at a prompt with no redirect should write to that prompt, which
- * is the same defect wearing different clothes.
- */
-#define RUPP_OFF_IMAGEPATH  0x38    /* UNICODE_STRING; Buffer at +4 */
 
 static INT StdioParentIs(HANDLE proc, DWORD parentProcessId)
 {
@@ -1873,19 +1920,6 @@ VOID HostConsoleOut(PVOID context, BYTE ch)
     HOST_UNLOCK();
 }
 
-/* DOS console input (INT 21h AH=01/07/08/0A) -> the keyboard VDD ring, blocking
- * on the V86 thread until the UI thread pushes a key (or the window closes).
- */
-/* HOW DOS HANDS OVER AN ARROW. A BIOS keycode is a PAIR (AH=scancode, AL=ascii), but every
- * INT 21h console read returns ONE byte. For the keys with no ascii -- arrows, F-keys, the
- * nav cluster, i.e. AL=0 -- DOS returns 0x00 first and the SCANCODE on the NEXT call, and a
- * program reading arrows is written to expect exactly that. We returned `k & 0xFF` and threw
- * the scancode away, so an arrow arrived as a lone NUL that never had a second half: every
- * extended key was unreadable through DOS. That is the Skyroads menu, which sits in INT 21h
- * (measured: the guest parks at DOS_HDLR_SEG:0000, the INT 21h BOP, for the whole run).
- * g_ConsoleInPending holds that second byte between the two calls.
- */
-static INT g_ConsoleInPending = -1;                /* scancode owed to the next read, or -1 */
 INT HostConsoleIn(PVOID context)
 {
     WORD key;
@@ -1925,17 +1959,6 @@ INT HostConsoleIn(PVOID context)
     }
 }
 
-/* #153: TEXT THE HOST TYPES AT THE SHELL'S PROMPT (File > Open Executable):
- * Characters queued here are read by the console input BEFORE the keyboard, so the
- * shell's AH=0Ah line reader sees them exactly as if they had been typed -- echoed,
- * with no length limit and no scancode translation. Only File > Open fills it, and
- * only while the top-level shell is sitting in that line read (OpenAtPrompt).
- * Head/tail under g_Lock.
- */
-#define TYPEIN_CAP  512
-static CHAR g_TypeIn[TYPEIN_CAP];
-static INT g_TypeInHead;
-static INT g_TypeInTail;
 static INT TypeInPop(VOID)
 {
     INT character = -1;
@@ -2453,18 +2476,6 @@ VOID HostEms(volatile BYTE *tib)
     #undef E_SETAL
     #undef E_SETBX
     #undef E_SETDX
-}
-
-static VOID ExecMachineSave(INT depth)
-{
-    UINT index;
-
-    for (index = 0; index < IVT_SIZE / X86_WORD_SIZE; ++index)
-        g_ExecMachine[depth].Ivt[index] = PeekWord(index * X86_WORD_SIZE);
-    g_ExecMachine[depth].ImrMaster = g_Pic.Master.Imr;
-    g_ExecMachine[depth].ImrSlave = g_Pic.Slave.Imr;
-    g_ExecMachine[depth].VideoMode = *(volatile BYTE *)(ULONG_PTR)(BIOS_BDA_BASE + BIOS_BDA_VIDEO_MODE);   /* BDA current mode */
-    g_ExecMachine[depth].Pit0  = VddPitEffectiveReload(&g_Pit);
 }
 
 /* Put back what the ended child may have left broken. Called with the child still at

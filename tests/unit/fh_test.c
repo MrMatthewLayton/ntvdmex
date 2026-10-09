@@ -38,6 +38,9 @@
 static INT g_Checks;
 static INT g_Failures;
 
+/* Any non-NULL value stands for "bound to a Win32 handle". */
+static PVOID const g_Bound = (PVOID)(SIZE_T)FH_TEST_BOUND_VALUE;
+
 static VOID FhTestExpect(PCSTR description, LONG actual, LONG expected)
 {
     ++g_Checks;
@@ -55,9 +58,6 @@ static VOID FhTestStandardTable(PVOID fileHandles[DOS_MAX_FILES], PUINT deviceMa
     memset(fileHandles, 0, sizeof(PVOID) * DOS_MAX_FILES);
     *deviceMask = FH_TEST_ALL_STD_OPEN;                       /* bits 0-4: stdin..prn */
 }
-
-/* Any non-NULL value stands for "bound to a Win32 handle". */
-static PVOID const g_Bound = (PVOID)(SIZE_T)FH_TEST_BOUND_VALUE;
 
 INT main(VOID)
 {

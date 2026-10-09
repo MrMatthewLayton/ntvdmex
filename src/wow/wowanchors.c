@@ -24,16 +24,6 @@
 #include "wowgdi.h"
 #include "wowuser.h"
 
-INT WowAnchorHit(PCWOW_ANCHOR table, INT count, WORD id, WORD argumentBytes, WORD returnStub)
-{
-    INT index;
-
-    for (index = 0; index < count; ++index)
-        if (table[index].Id == id && table[index].ArgumentBytes == argumentBytes && table[index].ReturnStub == returnStub)
-            return 1;
-    return 0;
-}
-
 /* SHELL: every stub in the module, generated:
  * Regenerate with `tools/ne/wowthunks.py --anchor <the module>`.
  */
@@ -496,3 +486,13 @@ const WOW_ANCHOR g_WowSoundAnchors[] = {
 const WOW_ANCHOR g_WowMmediaAnchors[] = {
     { 0x002,  28, 0x061e }, { 0x001,   0, 0x062b },
 };
+
+INT WowAnchorHit(PCWOW_ANCHOR table, INT count, WORD id, WORD argumentBytes, WORD returnStub)
+{
+    INT index;
+
+    for (index = 0; index < count; ++index)
+        if (table[index].Id == id && table[index].ArgumentBytes == argumentBytes && table[index].ReturnStub == returnStub)
+            return 1;
+    return 0;
+}

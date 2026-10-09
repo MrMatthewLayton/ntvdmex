@@ -21,6 +21,83 @@
 #include "host_dos.h"
 #include "host_input.h"
 #include "host_timing.h"
+#define UITICK_CHOICES          5   /* The Settings combo's entries */
+
+/* fsinteger.flag -- SNAP FULLSCREEN TO WHOLE PIXEL MULTIPLES. OFF BY DEFAULT (Importance = 1):
+ * I added whole-multiple scaling to cure blurry fullscreen. It was never the cause
+ * (the DirectDraw stretch blt's filtering was), and once that was fixed the snapping
+ * had exactly one remaining effect: BARS. The user, with the desktop at 1680x1050:
+ *   "fullscreen now shows sharp pixels, but there is a letterbox around the output
+ *    which didn't happen before... it seems the desktop resolution needs to be
+ *    either 1:1 or 2:1 to see sharp pixels edge to edge. This still doesn't feel
+ *    right."
+ * Correct. 1680/320 = 5.25, so snapping drops to 5x = 1600x1000 and leaves 80x50 of
+ * black. At 2560x1600 (8x) and 1280x800 (4x) it divides exactly and the bars vanish
+ * -- which is the whole of the "1:1 or 2:1" pattern they spotted.
+ * - AND THE BARS BUY NOTHING THEY WANT, by their own evidence: the MAXIMIZED WINDOW is
+ *   a 5.25x non-integer scale and they call it sharp. Nearest-neighbour at a fractional
+ *   factor gives hard edges with occasional 6-pixel-wide columns among the 5s; that is
+ *   visibly fine, and it fills the screen. Even pixels are the purist's answer to a
+ *   question this user is not asking.
+ *
+ * DEFAULT IS FILL, exactly like the window. Same code path, same fit, same result at
+ * any resolution, and fullscreen keeps its zero user-facing settings. The flag exists
+ * because "every pixel identical" is a legitimate taste, not because anyone must
+ * choose.
+ */
+#define FSINT_FLAG              CFG_("fsinteger.flag")
+
+/* #321: THE TEXT-MODE FONT ROW:
+ * The list is every fixed-pitch font installed on this PC plus "(Default)", which
+ * stores as the empty string. Choosing one builds the tables it WOULD produce into a
+ * private copy -- the machine is untouched until OK/Apply -- and the page shows that
+ * copy: a line of text and a line of the DOS graphics characters, plus how many
+ * characters the font supplied and whether the default itself is degraded.
+ */
+#define TEXTFONT_DEFAULT_ITEM   "(Default: Fixedsys and Terminal)"
+
+enum
+{
+    TYPEMATIC_RATE_MIN = 2
+};   /* SettingsApply: below it, the BIOS default rate stands */
+
+enum
+{
+    SETTINGS_RATE_CHOICES = 3, SETTINGS_RATE_DEFAULT = 1
+};   /* SettingsOutputHz: 22050 / 44100 / 48000 */
+
+enum
+{
+    SETTINGS_COMBO_DROPPED_WIDTH = 130, SETTINGS_FONT_DROPPED_WIDTH = 240, SETTINGS_SLIDER_PAGE = 10, SETTINGS_ITEM_HEIGHT = 14, SETTINGS_ITEM_INSET = 3, LOGFONT_PITCH_MASK = 3
+};   /* the Settings dialog */
+
+enum
+{
+    SETTINGS_SHELL_XP = 0, SETTINGS_SHELL_OWN = 1
+};   /* the shell radios: XP's own COMMAND.COM, or a chosen one */
+
+enum
+{
+    FONT_PREVIEW_COLUMNS = 64, FONT_PREVIEW_ROWS = 2, FONT_PREVIEW_CELL_WIDTH = 8, FONT_PREVIEW_CELL_HEIGHT = 16, FONT_PREVIEW_WIDTH = 512, FONT_PREVIEW_HEIGHT = 32, FONT_PREVIEW_HIGH_FIRST = 0x80, FONT_PREVIEW_BOX_FIRST = 0xB0, FONT_PREVIEW_BOX_COUNT = 48, FONT_PREVIEW_GREEK_FIRST = 0xE0, FONT_PREVIEW_GREY = 0xAA
+};   /* the Settings font preview: two rows of 8x16 cells */
+
+/* EnableThemeDialogTexture is what stops a page rendering as a grey slab on the
+ * tab's themed background. It lives in uxtheme.dll (XP and later), so it is bound by
+ * name; a box with no theming simply gets the old grey rather than a dialog that
+ * fails to open. The module is loaded once and never freed -- the tab texture is
+ * drawn by uxtheme on every later WM_ERASEBKGND, not just at init.
+ */
+typedef HRESULT (WINAPI *PFN_ENABLE_THEME_DIALOG_TEXTURE)(HWND, DWORD);
+
+enum
+{
+    SETTINGS_DRIVE_IMAGE = 0, SETTINGS_DRIVE_PHYSICAL = 1
+};   /* SettingsFloppy/CdRadios: an image file, or the real drive */
+
+enum
+{
+    THEME_ETDT_ENABLE = 0x2, THEME_ETDT_USETABTEXTURE = 0x4
+};   /* uxtheme.h's EnableThemeDialogTexture flags */
 
 /* The reported DOS version, when something overrides the dialog's (s80): the XP shell's
  * 5.00, or cfg\dosver.txt. The dialog SHOWS it and does not push over it.
@@ -29,7 +106,8 @@ INT          g_DosVersionForced = 0;
 INT          g_JoystickPovMap;   /* JoystickGamepad: map the pad's D-pad
                                        (POV hat) onto axis A -- what a DOS
                                        platformer actually wants from a pad */
-#define UITICK_CHOICES  5   /* The Settings combo's entries */
+
+PCSTR g_ShellOverride;               /* #203: cfg\shell.txt beat DosPrompt */
 static const INT UITICK_MS[UITICK_CHOICES] = { UITICK_AUTO, 5, 10, 15, 20 };   /* Settings combo index -> ms */
 /* EVERY SETTING SAYS ITS VALUE AND WHERE IT CAME FROM. (GH #144):
  * See knob-with-two-sources: the reported DOS version sat at 5.00 on the rig from a
@@ -39,13 +117,6 @@ static const INT UITICK_MS[UITICK_CHOICES] = { UITICK_AUTO, 5, 10, 15, 20 };   /
  */
 static PCSTR g_SettingsOverrideBy[SET_COUNT];      /* what overrode the row, if anything */
 static DWORD       g_SettingsOverrideValue[SET_COUNT];    /* ...and the value it put in force */
-VOID SettingsNoteOverride(INT settingId, PCSTR source, DWORD value)
-{
-    g_SettingsOverrideBy[settingId] = source;
-    g_SettingsOverrideValue[settingId] = value;
-}
-
-PCSTR g_ShellOverride;               /* #203: cfg\shell.txt beat DosPrompt */
 
 /* [CAUTION]: THE ROWS SettingsApply() AND ITS NEIGHBOURS ACTUALLY READ. A row not in this
  * list is stored and shown in the dialog and changes nothing (GH #136), and the log
@@ -74,6 +145,32 @@ static const BYTE g_SettingsLiveIds[] = {
     SET_HOSTCURSOR, SET_FLOPPYPHYS, SET_CONVKB, SET_MIDI, SET_SEAMLESS,
     SET_FIT,                                     /* #325 */
 };
+
+static PCSTR const g_SettingsTabs[NTVDMEX_PAGE_COUNT] = {
+    "MS-DOS", "Machine", "Video", "Audio", "Input", "Drives"
+};
+static HWND g_SettingsPage[NTVDMEX_PAGE_COUNT];
+static SYSFONT_TABLES g_TextFontPreview;
+static SYSFONT_REPORT g_TextFontPreviewReport;
+static HMODULE   g_UxTheme;
+static PFN_ENABLE_THEME_DIALOG_TEXTURE  g_EnableThemeDialogTexture;
+
+/* Ctrl+Tab / Ctrl+Shift+Tab (and Ctrl+PgDn / Ctrl+PgUp) switch pages. (s81, #137):
+ * A modal dialog's own loop runs IsDialogMessage on every key, so a Ctrl+Tab never
+ * reaches SettingsDialogProcedure -- the dialog manager takes it as a plain Tab and moves
+ * focus. A property sheet gets this behaviour for free; a hand-built tab dialog has
+ * to ask for it, and a message-filter hook on this thread, for the dialog's lifetime,
+ * is the documented way to see a dialog's messages before the dialog manager does.
+ */
+static HWND  g_SettingsDialog;
+static HHOOK g_SettingsHook;
+
+VOID SettingsNoteOverride(INT settingId, PCSTR source, DWORD value)
+{
+    g_SettingsOverrideBy[settingId] = source;
+    g_SettingsOverrideValue[settingId] = value;
+}
+
 static INT SettingsIsLive(INT settingId)
 {
     UINT index;
@@ -171,10 +268,6 @@ VOID SettingsLogSources(VOID)
     LogAppend(LOG_PATH, buffer, cursor);
 }
 
-enum
-{
-    TYPEMATIC_RATE_MIN = 2
-};   /* SettingsApply: below it, the BIOS default rate stands */
 VOID SettingsApply(HWND window, const NTVDMEX_SETTINGS *settings, INT live)
 {
     g_MouseSensitivity        = (INT)settings->Values[SET_MSENS];
@@ -321,30 +414,6 @@ VOID SettingsApply(HWND window, const NTVDMEX_SETTINGS *settings, INT live)
      */
 }
 
-/* fsinteger.flag -- SNAP FULLSCREEN TO WHOLE PIXEL MULTIPLES. OFF BY DEFAULT (Importance = 1):
- * I added whole-multiple scaling to cure blurry fullscreen. It was never the cause
- * (the DirectDraw stretch blt's filtering was), and once that was fixed the snapping
- * had exactly one remaining effect: BARS. The user, with the desktop at 1680x1050:
- *   "fullscreen now shows sharp pixels, but there is a letterbox around the output
- *    which didn't happen before... it seems the desktop resolution needs to be
- *    either 1:1 or 2:1 to see sharp pixels edge to edge. This still doesn't feel
- *    right."
- * Correct. 1680/320 = 5.25, so snapping drops to 5x = 1600x1000 and leaves 80x50 of
- * black. At 2560x1600 (8x) and 1280x800 (4x) it divides exactly and the bars vanish
- * -- which is the whole of the "1:1 or 2:1" pattern they spotted.
- * - AND THE BARS BUY NOTHING THEY WANT, by their own evidence: the MAXIMIZED WINDOW is
- *   a 5.25x non-integer scale and they call it sharp. Nearest-neighbour at a fractional
- *   factor gives hard edges with occasional 6-pixel-wide columns among the 5s; that is
- *   visibly fine, and it fills the screen. Even pixels are the purist's answer to a
- *   question this user is not asking.
- *
- * DEFAULT IS FILL, exactly like the window. Same code path, same fit, same result at
- * any resolution, and fullscreen keeps its zero user-facing settings. The flag exists
- * because "every pixel identical" is a legitimate taste, not because anyone must
- * choose.
- */
-#define FSINT_FLAG  CFG_("fsinteger.flag")
-
 VOID SettingsApplyPresent(PRESENT_DDRAW *present, const NTVDMEX_SETTINGS *settings)
 {
     present->IsVsync  = (INT)(settings->Values[SET_VSYNC]  ? 1 : 0);
@@ -388,10 +457,6 @@ VOID SettingsApplyDevices(const NTVDMEX_SETTINGS *settings)
     SettingsApplyPresent(&g_PresentDdraw, settings);
 }
 
-enum
-{
-    SETTINGS_RATE_CHOICES = 3, SETTINGS_RATE_DEFAULT = 1
-};   /* SettingsOutputHz: 22050 / 44100 / 48000 */
 /* The output rate is a CONSTRUCTION parameter, not something to push: the mixer
  * and the waveOut device must be opened at the same rate or every sample is
  * resampled to a clock nothing is running at. One function so the two callers
@@ -441,11 +506,6 @@ VOID SettingsApplyLive(HWND window)
     MenuViewSync(window);
 }
 
-static PCSTR const g_SettingsTabs[NTVDMEX_PAGE_COUNT] = {
-    "MS-DOS", "Machine", "Video", "Audio", "Input", "Drives"
-};
-static HWND g_SettingsPage[NTVDMEX_PAGE_COUNT];
-
 /* Find a control by ID across every page. Control IDs are unique across the whole
  * dialog (see settings_ids.h) precisely so this can exist: the table then does not
  * have to carry a page column, and moving a control from one page to another is a
@@ -464,10 +524,6 @@ static HWND SettingsControl(INT controlId)
     return NULL;
 }
 
-enum
-{
-    SETTINGS_COMBO_DROPPED_WIDTH = 130, SETTINGS_FONT_DROPPED_WIDTH = 240, SETTINGS_SLIDER_PAGE = 10, SETTINGS_ITEM_HEIGHT = 14, SETTINGS_ITEM_INSET = 3, LOGFONT_PITCH_MASK = 3
-};   /* the Settings dialog */
 static VOID SettingsFillCombos(VOID)
 {
     static PCSTR const versions[] = { "6.22", "5.00", "4.01", "3.31", "7.10" };
@@ -505,10 +561,6 @@ static VOID SettingsFillCombos(VOID)
     }
 }
 
-enum
-{
-    SETTINGS_SHELL_XP = 0, SETTINGS_SHELL_OWN = 1
-};   /* the shell radios: XP's own COMMAND.COM, or a chosen one */
 /* #203: the DOS prompt's two radios, and the path box + Browse only live under "Another". */
 static VOID SettingsShellRadios(INT own)
 {
@@ -605,17 +657,6 @@ static VOID SettingsCdRadios(INT isPhysical)
                           IDC_S_CD_BROWSE, HostHasCdrom(), isPhysical);
 }
 
-/* #321: THE TEXT-MODE FONT ROW:
- * The list is every fixed-pitch font installed on this PC plus "(Default)", which
- * stores as the empty string. Choosing one builds the tables it WOULD produce into a
- * private copy -- the machine is untouched until OK/Apply -- and the page shows that
- * copy: a line of text and a line of the DOS graphics characters, plus how many
- * characters the font supplied and whether the default itself is degraded.
- */
-#define TEXTFONT_DEFAULT_ITEM   "(Default: Fixedsys and Terminal)"
-static SYSFONT_TABLES g_TextFontPreview;
-static SYSFONT_REPORT g_TextFontPreviewReport;
-
 static INT CALLBACK SettingsFontEnum(
     const LOGFONTA *logFont,
     const TEXTMETRICA *textMetric,
@@ -710,10 +751,6 @@ static VOID SettingsTextFontSelect(PCSTR face)
     SettingsTextFontPreview();
 }
 
-enum
-{
-    FONT_PREVIEW_COLUMNS = 64, FONT_PREVIEW_ROWS = 2, FONT_PREVIEW_CELL_WIDTH = 8, FONT_PREVIEW_CELL_HEIGHT = 16, FONT_PREVIEW_WIDTH = 512, FONT_PREVIEW_HEIGHT = 32, FONT_PREVIEW_HIGH_FIRST = 0x80, FONT_PREVIEW_BOX_FIRST = 0xB0, FONT_PREVIEW_BOX_COUNT = 48, FONT_PREVIEW_GREEK_FIRST = 0xE0, FONT_PREVIEW_GREY = 0xAA
-};   /* the Settings font preview: two rows of 8x16 cells */
 /* Two lines of 64 cells from the previewed 8x16 table, light grey on black, 1:1. */
 static VOID SettingsTextFontDraw(const DRAWITEMSTRUCT *drawItem)
 {
@@ -913,19 +950,6 @@ static VOID SettingsFromDialog(NTVDMEX_SETTINGS *settings)
     }
 }
 
-/* EnableThemeDialogTexture is what stops a page rendering as a grey slab on the
- * tab's themed background. It lives in uxtheme.dll (XP and later), so it is bound by
- * name; a box with no theming simply gets the old grey rather than a dialog that
- * fails to open. The module is loaded once and never freed -- the tab texture is
- * drawn by uxtheme on every later WM_ERASEBKGND, not just at init.
- */
-typedef HRESULT (WINAPI *PFN_ENABLE_THEME_DIALOG_TEXTURE)(HWND, DWORD);
-static HMODULE   g_UxTheme;
-static PFN_ENABLE_THEME_DIALOG_TEXTURE  g_EnableThemeDialogTexture;
-enum
-{
-    SETTINGS_DRIVE_IMAGE = 0, SETTINGS_DRIVE_PHYSICAL = 1
-};   /* SettingsFloppy/CdRadios: an image file, or the real drive */
 /* The Processor page says WHICH processor -- the user's own -- so fill the static
  * with its brand string. It is read from the same place a DOS tool or Windows shows
  * it (HKLM\HARDWARE\...\CentralProcessor\0\ProcessorNameString), trimmed of the
@@ -965,10 +989,6 @@ static VOID SettingsFillCpuInfo(HWND dialog)
     RegCloseKey(key);
 }
 
-enum
-{
-    THEME_ETDT_ENABLE = 0x2, THEME_ETDT_USETABTEXTURE = 0x4
-};   /* uxtheme.h's EnableThemeDialogTexture flags */
 INT_PTR CALLBACK SettingsPageProcedure(HWND dialog, UINT message, WPARAM wParam, LPARAM lParam)
 {
     (VOID)wParam;
@@ -1109,15 +1129,6 @@ static VOID SettingsShowPage(INT page)
             ShowWindow(g_SettingsPage[index], index == page ? SW_SHOW : SW_HIDE);
 }
 
-/* Ctrl+Tab / Ctrl+Shift+Tab (and Ctrl+PgDn / Ctrl+PgUp) switch pages. (s81, #137):
- * A modal dialog's own loop runs IsDialogMessage on every key, so a Ctrl+Tab never
- * reaches SettingsDialogProcedure -- the dialog manager takes it as a plain Tab and moves
- * focus. A property sheet gets this behaviour for free; a hand-built tab dialog has
- * to ask for it, and a message-filter hook on this thread, for the dialog's lifetime,
- * is the documented way to see a dialog's messages before the dialog manager does.
- */
-static HWND  g_SettingsDialog;
-static HHOOK g_SettingsHook;
 static LRESULT CALLBACK SettingsMessageFilter(INT code, WPARAM wParam, LPARAM lParam)
 {
     MSG *message = (MSG *)lParam;

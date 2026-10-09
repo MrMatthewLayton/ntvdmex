@@ -18,8 +18,6 @@
 #include "host_mouse.h"
 #include "host_window.h"
 #include "host_settings.h"
-/* Used before their definitions below. */
-static VOID ModifierTrack(BYTE rawScancode, INT extended, INT down);
 
 /* Scripted synthetic keystrokes, on the share so a test sequence can be changed between
  * runs without a rebuild. Whitespace-separated tokens, played once in order:
@@ -30,7 +28,7 @@ static VOID ModifierTrack(BYTE rawScancode, INT extended, INT down);
  * on a menu whose first item is already selected -- a probe that cannot tell success from
  * failure. A script can say "wait for the intro, Enter, DOWN, DOWN, Enter".
  */
-#define KEYS_PATH       CFG_("keys.txt")
+#define KEYS_PATH                   CFG_("keys.txt")
 
 /* MEASURE THE KEYSTROKE ITSELF, BECAUSE FOUR HYPOTHESES HAVE NOW MISSED:
  * Session 26: the user reports Skyroads key lag whenever the pacer runs, and it has
@@ -48,10 +46,86 @@ static VOID ModifierTrack(BYTE rawScancode, INT extended, INT down);
  * One producer (UI thread) and one consumer (exec thread), so the ring needs no lock --
  * a torn sample costs one bucket, not a wrong conclusion.
  */
-#define KEYLAT_RING     32
+#define KEYLAT_RING                 32
+
+#define KEY_TYPEMATIC_DELAY_US      g_TypematicDelayMicroseconds
+#define KEY_TYPEMATIC_PERIOD_US     g_TypematicPeriodMicroseconds
+#define LPARAM_KEY_PREVIOUS         0x40000000  /* bit 30: the key was already down (a repeat) */
+#define LPARAM_KEY_EXTENDED         0x01000000  /* WM_KEYDOWN lParam bit 24 */
+
+enum
+{
+    KEYBOARD_DELAY_MAX = 3, KEYBOARD_SPEED_MAX = 31, TYPEMATIC_DELAY_STEP_US = 250000, TYPEMATIC_PERIOD_SLOWEST_US = 400000, TYPEMATIC_PERIOD_STEP_US = 12000
+};   /* SPI_GETKEYBOARDDELAY 0-3 = 250-1000 ms; SPEED 0-31 = 400-28 ms */
+
+/* Defined with the rest of the mouse state, below. A scripted run needs it because
+ * a guest that finds an INT 33h driver asks for a CLICK and ignores the keyboard --
+ * Lemmings' level briefing says "Press mouse button to continue" to us and "Press
+ * Space" to a DOS with no driver, so without this the harness cannot get past it.
+ */
+enum
+{
+    SYNTHKEY_HOLD_MS = 60, SYNTHKEY_GAP_MS = 250, SYNTHKEY_TAP_MS = 40, SYNTHKEY_SLEEP_SLICE_MS = 100, SYNTHKEY_MENU_DELAY_MS = 9000, SYNTHKEY_MENU_ROUNDS = 400, SYNTHKEY_HEX_DIGITS_MAX = 2
+};   /* synthkey.txt's driver: hold, gap, tap, wait slice, menu walk; a scancode is up to two hex digits */
+
+enum
+{
+    JOYSTICK_ABSENT_POLL_MS = 250, JOYSTICK_API_RETRY_MS = 1000, JOYSTICK_POLL_MS = 15
+};   /* the poll thread: no stick configured, no joyGetPosEx, and the sample period */
+
+/* joyGetPosEx costs a driver round-trip, so it must NEVER run inside the port
+ * trap -- the guest polls 0x201 in a tight CLI loop precisely while measuring an
+ * axis. This thread samples at ~66 Hz into g_Joystick and the trap reads only the
+ * cached bytes. winmm binds dynamically like waveOut (audio_wave.c): no new
+ * import, and a machine with no multimedia stack still boots. XP-safe on
+ * purpose -- joyGetPosEx sees an Xbox 360 pad through xusb; XInput does not
+ * exist down-level and would be a new allowlist DLL.
+ */
+typedef DWORD (WINAPI *PFN_JOY_GET_POS_EX)(UINT, JOYINFOEX *);
+
+enum
+{
+    MODIFIER_LEFT_SHIFT = 0, MODIFIER_RIGHT_SHIFT = 1, MODIFIER_LEFT_CTRL = 2, MODIFIER_RIGHT_CTRL = 3, MODIFIER_LEFT_ALT = 4, MODIFIER_RIGHT_ALT = 5, MODIFIER_KEYS = 6
+};   /* g_ModifiersDown's bits */
+
+/* ours generated / OS ones suppressed */
+UINT32 g_TypematicSent;
+UINT32 g_TypematicOsRepeats;
+
+/* Spawn the joystick poll thread AT MOST ONCE, and only when a joystick is
+ * configured. Called from SettingsApply, which runs at startup and on every
+ * dialog OK. The default (JoystickType=None) never reaches the create, so a
+ * machine that has never enabled a gamepad has NO poll thread at all -- the
+ * whole point, so a non-joystick game (Skyroads and friends) keeps the exact
+ * thread landscape the s61 timing was tuned against. Once created the thread
+ * lives on and idles at 4 Hz if the type is later set back to None; recreating
+ * and joining a thread on a setting change is not worth the complexity when the
+ * idle cost is a Sleep.
+ */
+LONG g_JoystickThreadStarted = 0;
 static volatile LONGLONG g_KeyLatencyTimes[KEYLAT_RING];
 static volatile LONG g_KeyLatencyHead;
 static volatile LONG g_KeyLatencyTail;
+static BYTE g_TypematicScanCode;
+static BYTE g_TypematicExtended;
+static BYTE g_TypematicOn;
+static LONGLONG g_TypematicDue;
+
+static volatile LONG g_WindowsKeyDown;         /* Win held -- maintained by the hook, see below */
+
+/* LOSING FOCUS RELEASES THE MODIFIERS:
+ * Windows delivers a key's UP to whichever window has focus WHEN IT IS RELEASED. So
+ * Alt+Tab away from us sends the guest Alt's make and never its break: 0040:0017 says
+ * Alt is held for the rest of the run, and the first letter typed on return is an Alt
+ * accelerator -- or, for a game reading port 60h, Ctrl stays "fired". Tracked here
+ * from what we actually pushed (not from the BDA, which a guest hooking INT 09h never
+ * updates), and released as synthetic breaks on WM_KILLFOCUS.
+ */
+static BYTE g_ModifiersDown;                              /* bits: 0 LSh 1 RSh 2 LCtl 3 RCtl 4 LAlt 5 RAlt */
+
+/* Used before their definitions below. */
+static VOID ModifierTrack(BYTE rawScancode, INT extended, INT down);
+
 static VOID KeyLatencyBucket(DWORD *histogram, DWORD milliseconds)
 {
     UINT bucket = 0;
@@ -121,10 +195,6 @@ VOID HostKeyScancode(BYTE rawScancode, INT extended, INT isBreak)
         SetEvent(g_KeyEvent);
 }
 
-enum
-{
-    KEYBOARD_DELAY_MAX = 3, KEYBOARD_SPEED_MAX = 31, TYPEMATIC_DELAY_STEP_US = 250000, TYPEMATIC_PERIOD_SLOWEST_US = 400000, TYPEMATIC_PERIOD_STEP_US = 12000
-};   /* SPI_GETKEYBOARDDELAY 0-3 = 250-1000 ms; SPEED 0-31 = 400-28 ms */
 /* XP exposes the two values it programs into the keyboard controller:
  * SPI_GETKEYBOARDDELAY  0..3  -> 250, 500, 750, 1000 ms
  * SPI_GETKEYBOARDSPEED  0..31 -> about 2.5/s at 0 up to about 30/s at 31,
@@ -148,16 +218,6 @@ VOID HostKeyTypematicInitialize(VOID)
     g_TypematicDelayMicroseconds  = (delay + 1) * TYPEMATIC_DELAY_STEP_US;
     g_TypematicPeriodMicroseconds = TYPEMATIC_PERIOD_SLOWEST_US - (speed * TYPEMATIC_PERIOD_STEP_US);        /* 0 -> 400 ms, 31 -> 28 ms */
 }
-
-#define KEY_TYPEMATIC_DELAY_US      g_TypematicDelayMicroseconds
-#define KEY_TYPEMATIC_PERIOD_US     g_TypematicPeriodMicroseconds
-static BYTE g_TypematicScanCode;
-static BYTE g_TypematicExtended;
-static BYTE g_TypematicOn;
-static LONGLONG g_TypematicDue;
-/* ours generated / OS ones suppressed */
-UINT32 g_TypematicSent;
-UINT32 g_TypematicOsRepeats;
 
 static VOID HostKeyTypematicPress(BYTE scanCode, INT extended)
 {
@@ -209,15 +269,6 @@ VOID HostKeyTypematic(VOID)
     g_TypematicSent++;
 }
 
-/* Defined with the rest of the mouse state, below. A scripted run needs it because
- * a guest that finds an INT 33h driver asks for a CLICK and ignores the keyboard --
- * Lemmings' level briefing says "Press mouse button to continue" to us and "Press
- * Space" to a DOS with no driver, so without this the harness cannot get past it.
- */
-enum
-{
-    SYNTHKEY_HOLD_MS = 60, SYNTHKEY_GAP_MS = 250, SYNTHKEY_TAP_MS = 40, SYNTHKEY_SLEEP_SLICE_MS = 100, SYNTHKEY_MENU_DELAY_MS = 9000, SYNTHKEY_MENU_ROUNDS = 400, SYNTHKEY_HEX_DIGITS_MAX = 2
-};   /* synthkey.txt's driver: hold, gap, tap, wait slice, menu walk; a scancode is up to two hex digits */
 DWORD WINAPI SynthKeyThread(LPVOID parameter)
 {
     INT round;
@@ -377,7 +428,6 @@ DWORD WINAPI SynthKeyThread(LPVOID parameter)
     return 0;
 }
 
-static volatile LONG g_WindowsKeyDown;         /* Win held -- maintained by the hook, see below */
 LRESULT CALLBACK LowLevelKeyboardProcedure(INT code, WPARAM wParam, LPARAM lParam)
 {
     if (code == HC_ACTION && g_Captured && GetForegroundWindow() == g_Window)
@@ -478,19 +528,6 @@ UINT64 JoystickNowMicroseconds(PVOID context)
     return QpcMicroseconds64(now.QuadPart);
 }
 
-enum
-{
-    JOYSTICK_ABSENT_POLL_MS = 250, JOYSTICK_API_RETRY_MS = 1000, JOYSTICK_POLL_MS = 15
-};   /* the poll thread: no stick configured, no joyGetPosEx, and the sample period */
-/* joyGetPosEx costs a driver round-trip, so it must NEVER run inside the port
- * trap -- the guest polls 0x201 in a tight CLI loop precisely while measuring an
- * axis. This thread samples at ~66 Hz into g_Joystick and the trap reads only the
- * cached bytes. winmm binds dynamically like waveOut (audio_wave.c): no new
- * import, and a machine with no multimedia stack still boots. XP-safe on
- * purpose -- joyGetPosEx sees an Xbox 360 pad through xusb; XInput does not
- * exist down-level and would be a new allowlist DLL.
- */
-typedef DWORD (WINAPI *PFN_JOY_GET_POS_EX)(UINT, JOYINFOEX *);
 static DWORD WINAPI JoystickPollThread(LPVOID param)
 {
     HMODULE module = NULL;
@@ -569,17 +606,6 @@ static DWORD WINAPI JoystickPollThread(LPVOID param)
     }
 }
 
-/* Spawn the joystick poll thread AT MOST ONCE, and only when a joystick is
- * configured. Called from SettingsApply, which runs at startup and on every
- * dialog OK. The default (JoystickType=None) never reaches the create, so a
- * machine that has never enabled a gamepad has NO poll thread at all -- the
- * whole point, so a non-joystick game (Skyroads and friends) keeps the exact
- * thread landscape the s61 timing was tuned against. Once created the thread
- * lives on and idles at 4 Hz if the type is later set back to None; recreating
- * and joining a thread on a setting change is not worth the complexity when the
- * idle cost is a Sleep.
- */
-LONG g_JoystickThreadStarted = 0;
 VOID JoystickPollEnsure(VOID)
 {
     if (g_Joystick.Type == JOYSTICK_TYPE_NONE || g_Safe.Joystick)
@@ -592,13 +618,6 @@ VOID JoystickPollEnsure(VOID)
       else
           InterlockedExchange(&g_JoystickThreadStarted, 0); }       /* retry next apply */
 }
-
-enum
-{
-    MODIFIER_LEFT_SHIFT = 0, MODIFIER_RIGHT_SHIFT = 1, MODIFIER_LEFT_CTRL = 2, MODIFIER_RIGHT_CTRL = 3, MODIFIER_LEFT_ALT = 4, MODIFIER_RIGHT_ALT = 5, MODIFIER_KEYS = 6
-};   /* g_ModifiersDown's bits */
-#define LPARAM_KEY_PREVIOUS     0x40000000  /* bit 30: the key was already down (a repeat) */
-#define LPARAM_KEY_EXTENDED     0x01000000  /* WM_KEYDOWN lParam bit 24 */
 
 /* One keystroke, ONE path -- shared by WM_KEYDOWN and WM_SYSKEYDOWN, because F10 and
  * Alt arrive as SYSTEM keys and are just as much the guest's as any other.
@@ -651,6 +670,33 @@ static INT HostKeySpecial(BYTE rawScancode, INT extended, INT isBreak)
     return 1;
 }
 
+static VOID ModifierTrack(BYTE rawScancode, INT extended, INT down)
+{
+    INT bit = -1;
+
+    if (!extended) { if (rawScancode == INPUT_SCAN_LEFT_SHIFT)
+        bit = MODIFIER_LEFT_SHIFT;
+    else if (rawScancode == INPUT_SCAN_RIGHT_SHIFT)
+        bit = MODIFIER_RIGHT_SHIFT;
+                else if (rawScancode == INPUT_SCAN_CTRL)
+                    bit = MODIFIER_LEFT_CTRL;
+                else if (rawScancode == INPUT_SCAN_ALT)
+                    bit = MODIFIER_LEFT_ALT; }
+    else
+    {
+        if (rawScancode == INPUT_SCAN_CTRL)
+            bit = MODIFIER_RIGHT_CTRL;
+        else if (rawScancode == INPUT_SCAN_ALT)
+            bit = MODIFIER_RIGHT_ALT;
+    }
+    if (bit < 0)
+        return;
+    if (down)
+        g_ModifiersDown |= (BYTE)(1u << bit);
+    else
+        g_ModifiersDown &= (BYTE)~(1u << bit);
+}
+
 VOID KeyPushMake(LPARAM lParam)
 {
     BYTE rawScancode = (BYTE)((lParam >> WORD_SHIFT) & BYTE_MASK);
@@ -683,42 +729,6 @@ VOID KeyPushBreak(LPARAM lParam)
     if (rawScancode) { HostKeyTypematicRelease(rawScancode, extended);   /* stop repeating first */
                  HostKeyScancode(rawScancode, extended, INPUT_KEY_BREAK);
                  ModifierTrack(rawScancode, extended, INPUT_RELEASED); }
-}
-
-/* LOSING FOCUS RELEASES THE MODIFIERS:
- * Windows delivers a key's UP to whichever window has focus WHEN IT IS RELEASED. So
- * Alt+Tab away from us sends the guest Alt's make and never its break: 0040:0017 says
- * Alt is held for the rest of the run, and the first letter typed on return is an Alt
- * accelerator -- or, for a game reading port 60h, Ctrl stays "fired". Tracked here
- * from what we actually pushed (not from the BDA, which a guest hooking INT 09h never
- * updates), and released as synthetic breaks on WM_KILLFOCUS.
- */
-static BYTE g_ModifiersDown;                              /* bits: 0 LSh 1 RSh 2 LCtl 3 RCtl 4 LAlt 5 RAlt */
-static VOID ModifierTrack(BYTE rawScancode, INT extended, INT down)
-{
-    INT bit = -1;
-
-    if (!extended) { if (rawScancode == INPUT_SCAN_LEFT_SHIFT)
-        bit = MODIFIER_LEFT_SHIFT;
-    else if (rawScancode == INPUT_SCAN_RIGHT_SHIFT)
-        bit = MODIFIER_RIGHT_SHIFT;
-                else if (rawScancode == INPUT_SCAN_CTRL)
-                    bit = MODIFIER_LEFT_CTRL;
-                else if (rawScancode == INPUT_SCAN_ALT)
-                    bit = MODIFIER_LEFT_ALT; }
-    else
-    {
-        if (rawScancode == INPUT_SCAN_CTRL)
-            bit = MODIFIER_RIGHT_CTRL;
-        else if (rawScancode == INPUT_SCAN_ALT)
-            bit = MODIFIER_RIGHT_ALT;
-    }
-    if (bit < 0)
-        return;
-    if (down)
-        g_ModifiersDown |= (BYTE)(1u << bit);
-    else
-        g_ModifiersDown &= (BYTE)~(1u << bit);
 }
 
 VOID HostReleaseModifiers(VOID)

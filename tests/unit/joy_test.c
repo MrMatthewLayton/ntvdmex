@@ -17,15 +17,16 @@
 #include <stdio.h>
 #include <string.h>
 #include "vdd_joy.h"
+#define CHECK(condition,message) do{ g_Total++; if(condition){printf("  PASS  %s\n",(message));} \
+    else{printf("  FAIL  %s\n",(message)); g_Failures++;} }while(0)
 
 static INT g_Total = 0;
 static INT g_Failures = 0;
-#define CHECK(condition,message) do{ g_Total++; if(condition){printf("  PASS  %s\n",(message));} \
-    else{printf("  FAIL  %s\n",(message)); g_Failures++;} }while(0)
 
 static BYTE g_GuestMemory[0x100000];
 
 static UINT64 g_NowMicroseconds;
+
 static UINT64 JoyTestFakeClock(PVOID context)
 {
     (VOID)context;

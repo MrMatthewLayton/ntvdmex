@@ -21,6 +21,84 @@
 
 #define I33_SITE_CONTEXT_BEFORE     4   /* g_MouseI33Site: bytes kept from before the INT */
 
+/* [CAUTION]: 2 s WAS WRONG. "In flight" lasts until the handler's RETF reaches our stub, and the
+ * exec loop only notices that at its next pass -- for a guest that runs natively for
+ * seconds between traps that is seconds, not milliseconds. Timing out early marks the
+ * callback lost, so when the RETF does arrive the stub is "stray", steps over its BOP
+ * and IRETs on a stack that holds no frame: a jump into garbage.
+ */
+#define MS_CB_TIMEOUT_MS            30000u
+
+/* ONE CALLBACK PER EVENT, IN ORDER, WITH THE BUTTON STATE OF THAT MOMENT:
+ * The first cut OR-ed the event bits into one word and delivered them in a single
+ * call. A click is a press and a release; both bits arrived together with BX = the
+ * CURRENT state (released), so the handler saw "pressed" with no button down -- a
+ * click that never happened. The driver on real hardware calls the handler once
+ * per mouse packet, and that is what a program's own event queue expects. Ring of
+ * 32; motion is coalesced into a pending motion-only entry, buttons never are.
+ */
+#define MS_EVQ                      32
+
+/* 15h/16h/17h state block. The layout is OURS -- the guest is told the size by 15h
+ * and only ever hands the same buffer back to 17h, so nothing outside this file
+ * reads it. Versioned so a restore cannot be fed a block from an older build.
+ */
+#define I33_STATE_MAGIC 0x4133564EuL       /* 'NV3A' (#264/#265 added the cursor bitmap,
+                                              the alternate handlers and the profile) */
+
+/* 32h's ANSWER: WHICH OF 25h-34h THIS DRIVER REALLY SERVICES. (#249):
+ * Bit 15 = 25h ... bit 0 = 34h (RBIL INT 33h AX=0032h). We report 8.00 in 24h, so a
+ * guest may call any of them -- and 32h is the call a careful one makes FIRST. It
+ * used to fall into `default:` and hand the guest its own AX (0032h) back as the
+ * mask: "26h and 2Fh exist", from a driver that had neither. A bit is set ONLY where
+ * the arm below gives the documented answer:
+ * 25h 26h 27h 2Ah 2Fh 30h 31h 32h  -> set
+ * 28h/29h  answered ("cannot set" / "no modes to list"), but no mode list exists,
+ *          so not claimed;
+ * 2Bh-2Eh acceleration profiles, 33h switch settings, 34h MOUSE.INI -> set since
+ *          #265: answered with the documented shapes (the profiles are stored and
+ *          handed back, NOT applied -- see i33_driver.h). E43Ch -> E7FFh.
+ */
+#define I33_ACTIVE_FNS  (0x8000u | 0x4000u | 0x2000u | 0x0400u    /* 25h 26h 27h 2Ah */ \
+                       | 0x0200u | 0x0100u | 0x0080u | 0x0040u    /* 2Bh 2Ch 2Dh 2Eh */ \
+                       | 0x0020u | 0x0010u | 0x0008u | 0x0004u    /* 2Fh 30h 31h 32h */ \
+                       | 0x0002u | 0x0001u)                       /* 33h 34h */
+
+typedef struct
+{
+    DWORD Magic;
+    LONG X;
+    LONG Y;
+    LONG Hidden;
+    LONG MinimumX;
+    LONG MaximumX;
+    LONG MinimumY;
+    LONG MaximumY;
+    LONG MickeyX;
+    LONG MickeyY;
+    LONG Double;
+    LONG EventMask;
+    LONG EventSegment;
+    LONG EventOffset;
+    LONG SpeedX;
+    LONG SpeedY;
+    LONG SpeedDouble;
+    LONG HotX;
+    LONG HotY;
+    LONG Page;
+    LONG Rate;
+    LONG GraphicsCursorDefined;
+    LONG AccelerationCurrent;
+    WORD GraphicsCursorScreen[I33_GC_ROWS];
+    WORD GraphicsCursorCurrent[I33_GC_ROWS];
+    I33_ALTERNATE Alt[I33_ALT_N];
+} I33_STATE;
+
+enum
+{
+    OVERLAY_CURSOR_ROWS = 16, OVERLAY_CURSOR_OUTLINE = 0, OVERLAY_CURSOR_FILL = 15
+};   /* the host-drawn pointer: black outline, white fill */
+
 /* Mouse state shared UI thread -> V86 thread (INT 33h). Position is in guest
  * pixels (mapped from the window client); buttons: bit0 L, bit1 R, bit2 M.
  */
@@ -57,6 +135,159 @@ DWORD g_MouseI33Other;
 DWORD g_MouseI33AxOverflow;
 DWORD g_MouseI33SiteCount;
 DWORD g_MouseI33SiteOverflow;
+
+INT g_MouseAbsent = 0;          /* nomouse.flag: INT 33h 0000h answers "none" */
+volatile LONG g_MouseHidden = 1;       /* INT 33h cursor hide-count; 0 => visible */
+
+volatile LONG g_MousePressCount[MS_BTNS];
+volatile LONG g_MouseReleaseCount[MS_BTNS];
+DWORD         g_MouseEdges;            /* transitions seen -- STAGE2 evidence */
+DWORD         g_MouseEventInstalls;
+volatile LONG g_MouseEventPend;     /* event bits raised since the last callback (any-pending flag) */
+
+DWORD g_MouseShapeSets;      /* 09h (and 0Ah BX=1): cursor shapes defined */
+volatile LONG g_MouseGraphicsCursorDefined;      /* 0 = the host arrow; 1 = 09h's bitmap */
+DWORD         g_MouseGraphicsCursorBadPointer;       /* 09h ES:DX we refused to read */
+DWORD         g_MouseAccelerationCalls;       /* 2Bh-2Eh/33h/34h answered -- STAGE2 evidence */
+
+/* 0Ah BX=0: the text cursor's screen (AND) and cursor (XOR) masks over the cell's
+ * (char, attr) word. The driver's defaults invert the colours and leave the character.
+ */
+volatile LONG g_MouseTextCursorAnd = I33_DEFAULT_TEXT_AND;
+volatile LONG g_MouseTextCursorXor = I33_DEFAULT_TEXT_XOR;
+DWORD g_MouseStateBadPointer;    /* 16h/17h: ES:DX we refused to dereference */
+DWORD g_MouseI33Unimplemented;      /* calls that reached `default:` -- see there */
+static volatile LONG g_MousePressX[MS_BTNS];
+static volatile LONG g_MousePressY[MS_BTNS];
+static volatile LONG g_MouseReleaseX[MS_BTNS];
+static volatile LONG g_MouseReleaseY[MS_BTNS];
+
+/* 07h/08h cursor ranges, in VIRTUAL coordinates. -1 = the guest never set one, so the
+ * mode's own extent applies; a guest that sets a range while in one mode and then
+ * changes mode keeps its range, which is what the real driver does.
+ */
+static volatile LONG g_MouseMinimumX = -1;
+static volatile LONG g_MouseMaximumX = -1;
+static volatile LONG g_MouseMinimumY = -1;
+static volatile LONG g_MouseMaximumY = -1;
+/* 0Fh / 1Ah / 1Bh. The defaults are the real driver's: 8 mickeys per 8 pixels
+ * horizontally, 16 vertically (a mouse moves further across a screen than down it),
+ * and a 64 mickey/second double-speed threshold.
+ */
+static volatile LONG g_MouseMickeyX = I33_DEFAULT_MICKEYS_X;
+static volatile LONG g_MouseMickeyY = I33_DEFAULT_MICKEYS_Y;
+static volatile LONG g_MouseDoubleThreshold = I33_DEFAULT_DOUBLE_SPEED;
+/* 1Ah/1Bh SPEED IS NOT 0Fh's RATIO. (#249):
+ * 1Ah sets the horizontal/vertical SPEED (0-100, default 50) and the double-speed
+ * threshold ON THE SAME 0-100 SCALE (default 50); 0Fh sets the mickey-to-pixel
+ * RATIO and 13h the threshold in MICKEYS/SECOND (default 64). Every arm used to
+ * write the one set of variables, so a guest that set a speed and then a ratio read
+ * its ratio back from 1Bh. Measured (p_mouse2): MOUSE.COM 6.24 and DOSBox-X agree
+ * -- after a reset 1Bh says 50/50/50, after 1Ah 40/60/32 + 0Fh 8/16 it still says
+ * 40/60/32, and 13h DX=100 leaves 1Bh's DX at 32.
+ *
+ * [CAUTION]: None of them is APPLIED -- the pointer follows the host cursor and 0Bh reports
+ * device counts scaled by msens; see docs/inventory/mouse.md (N/A).
+ */
+static volatile LONG g_MouseSpeedX = I33_DEFAULT_SPEED;
+static volatile LONG g_MouseSpeedY = I33_DEFAULT_SPEED;
+static volatile LONG g_MouseSpeedDouble = I33_DEFAULT_SPEED;
+/* THE v7/v8 STATE THAT 25h-34h REPORT (#249):
+ * 09h's hot spot (2Ah reads it back), whether 0Ah asked for the HARDWARE text cursor
+ * and its scan lines (25h bits 13-12, 27h AX/BX), 1Dh's display page and 1Ch's
+ * report rate (25h bits 11-8). Each is reset by 00h/21h like the rest.
+ */
+static volatile LONG g_MouseHotX = 0;
+static volatile LONG g_MouseHotY = 0;
+static volatile LONG g_MouseTcHardware = 0;
+static volatile LONG g_MouseTcHardwareLow = 0;
+static volatile LONG g_MouseTcHardwareHigh = 0;
+static volatile LONG g_MousePage = 0;
+static volatile LONG g_MouseRate = I33_DEFAULT_RATE;     /* 1Ch code: 3 = 100 reports/s, the PS/2 aux default */
+static MOUSE_EVENT_ENTRY g_MouseEventQueue[MS_EVQ];
+/* UI pushes at head, exec pops at tail */
+static volatile LONG g_MouseEventQueueHead;
+static volatile LONG g_MouseEventQueueTail;
+static DWORD g_MouseEventQueueDropped;
+static DWORD  g_MouseCallbackSince;            /* GetTickCount()|1 when it went in flight */
+static struct
+{
+    DWORD Eax;
+    DWORD Ebx;
+    DWORD Ecx;
+    DWORD Edx;
+    DWORD Esi;
+    DWORD Edi;
+    DWORD Ebp;
+    DWORD Esp;
+    DWORD Eip;
+    DWORD Eflags;
+    DWORD Cs;
+    DWORD Ds;
+    DWORD Es;
+    DWORD Ss;
+} g_MouseCallbackSaved;
+/* 09h's BITMAP IS DRAWN NOW (#264) (Importance = 1):
+ * It used to be "accepted and discarded" and the host arrow drawn regardless, so a
+ * game's crosshair or hand was never seen. Now a defined shape replaces the arrow,
+ * applied with the driver's own arithmetic (i33_driver.h: AND the screen mask, XOR the
+ * cursor mask, hot spot on the pointer); a reset (00h/21h) puts the host arrow back,
+ * as a reset puts the real driver's default arrow back.
+ *
+ * [CAUTION]: DOUBLE-BUFFERED, because the exec thread writes it (09h) and the UI thread reads it
+ * (the present): 09h fills the buffer NOT being shown and then flips g_MouseGraphicsCursorBuffer,
+ * so a present never sees half of one shape and half of another.
+ */
+static WORD g_MouseGraphicsCursorScreen[2][I33_GC_ROWS];
+static WORD g_MouseGraphicsCursorCurrent[2][I33_GC_ROWS];
+static volatile LONG g_MouseGraphicsCursorBuffer;          /* which of the two the present reads */
+/* 2Bh-2Eh / 33h: THE ACCELERATION PROFILES, STORED, NOT APPLIED (#265):
+ * See i33_driver.h for the layout and for why the curves are never applied. Exec
+ * thread only.
+ */
+static BYTE       g_MouseAcceleration[I33_ACC_LEN];
+static LONG          g_MouseAccelerationCurrent = I33_ACC_DEFAULT;
+static INT           g_MouseAccelerationOk;          /* g_MouseAcceleration holds the defaults or a 2Bh load */
+/* 18h/19h: THE SHIFT-QUALIFIED HANDLERS, AND NOW THEY ARE CALLED (#265):
+ * They were refused (AX=FFFFh) because nothing delivered them. MouseEventQueueTake() now
+ * picks, per event, between these and 0Ch's handler by the BDA shift state -- the
+ * one picker both delivery paths (V86 MouseCallbackTry, PM DpmiInjectPmMouseCallback) use.
+ */
+static I33_ALTERNATE       g_MouseAlt[I33_ALT_N];
+/* Classic arrow cursor: 'o' = black outline (index 0), 'X' = white fill (15),
+ * ' ' = transparent; hotspot at the top-left tip. Drawn into the presenter's 8-bpp
+ * SNAPSHOT each present (#264) -- [WARNING] not the frame: in mode 13h the frame IS guest VRAM,
+ * so "re-rendered every tick, leaves no trail" was false there; see the present path.
+ */
+/* The INT 33h driver cursor. This was hand-drawn ASCII art until the demo sweep
+ * turned up its one cosmetic defect -- "the mouse cursor is not quite the right
+ * shape" -- so it is now DECODED FROM REAL ARTWORK and regenerated rather than
+ * remembered. 'o' = outline (palette index 0), 'X' = fill (index 15), ' ' =
+ * transparent; only the data changed, OverlayCursor() is untouched.
+ * Regenerate with:  python3 tools/gen/mkcursor.py cursors/cursor-pointer.cur
+ */
+/* Generated by tools/gen/mkcursor.py from cursors/cursor-pointer.cur -- 16x16, hotspot (0,0).
+ * Do not hand-edit: regenerate from the artwork instead.
+ */
+static PCSTR const g_MouseCursorShape[OVERLAY_CURSOR_ROWS] = {
+    "oo",
+    "oXo",
+    "oXXo",
+    "oXXXo",
+    "oXXXXo",
+    "oXXXXXo",
+    "oXXXXXXo",
+    "oXXXXXXXo",
+    "oXXXXXXXXo",
+    "oXXXXXooooo",
+    "oXXoXXo",
+    "oXo oXXo",
+    "oo  oXXo",
+    "o    oXXo",
+    "     oXXo",
+    "      oo",
+};
+
 /* An offset register from the caller: full-width from a 32-bit PM caller, a word from
  * V86, 16-bit PM, or a 0300 excursion (s74c, the 0Ch handler ZAR installs at
  * 0x347:0x0044xxxx).
@@ -67,17 +298,6 @@ static DWORD MouseI33Offset(volatile BYTE *tib, INT source, DWORD offset)
         return offset;
     return offset & WORD_MASK;
 }
-
-INT g_MouseAbsent = 0;          /* nomouse.flag: INT 33h 0000h answers "none" */
-volatile LONG g_MouseHidden = 1;       /* INT 33h cursor hide-count; 0 => visible */
-
-volatile LONG g_MousePressCount[MS_BTNS];
-volatile LONG g_MouseReleaseCount[MS_BTNS];
-static volatile LONG g_MousePressX[MS_BTNS];
-static volatile LONG g_MousePressY[MS_BTNS];
-static volatile LONG g_MouseReleaseX[MS_BTNS];
-static volatile LONG g_MouseReleaseY[MS_BTNS];
-DWORD         g_MouseEdges;            /* transitions seen -- STAGE2 evidence */
 
 /* THE DRIVER'S SCREEN IS NOT THE FRAME:
  * Every INT 33h coordinate is in the driver's VIRTUAL screen, and in a 320-wide mode
@@ -175,89 +395,6 @@ static LONG I33Snapshot(LONG value)
     return I33Text() ? (value & ~(LONG)I33_TEXT_CELL_MASK) : value;
 }
 
-/* 07h/08h cursor ranges, in VIRTUAL coordinates. -1 = the guest never set one, so the
- * mode's own extent applies; a guest that sets a range while in one mode and then
- * changes mode keeps its range, which is what the real driver does.
- */
-static volatile LONG g_MouseMinimumX = -1;
-static volatile LONG g_MouseMaximumX = -1;
-static volatile LONG g_MouseMinimumY = -1;
-static volatile LONG g_MouseMaximumY = -1;
-/* 0Fh / 1Ah / 1Bh. The defaults are the real driver's: 8 mickeys per 8 pixels
- * horizontally, 16 vertically (a mouse moves further across a screen than down it),
- * and a 64 mickey/second double-speed threshold.
- */
-static volatile LONG g_MouseMickeyX = I33_DEFAULT_MICKEYS_X;
-static volatile LONG g_MouseMickeyY = I33_DEFAULT_MICKEYS_Y;
-static volatile LONG g_MouseDoubleThreshold = I33_DEFAULT_DOUBLE_SPEED;
-/* 1Ah/1Bh SPEED IS NOT 0Fh's RATIO. (#249):
- * 1Ah sets the horizontal/vertical SPEED (0-100, default 50) and the double-speed
- * threshold ON THE SAME 0-100 SCALE (default 50); 0Fh sets the mickey-to-pixel
- * RATIO and 13h the threshold in MICKEYS/SECOND (default 64). Every arm used to
- * write the one set of variables, so a guest that set a speed and then a ratio read
- * its ratio back from 1Bh. Measured (p_mouse2): MOUSE.COM 6.24 and DOSBox-X agree
- * -- after a reset 1Bh says 50/50/50, after 1Ah 40/60/32 + 0Fh 8/16 it still says
- * 40/60/32, and 13h DX=100 leaves 1Bh's DX at 32.
- *
- * [CAUTION]: None of them is APPLIED -- the pointer follows the host cursor and 0Bh reports
- * device counts scaled by msens; see docs/inventory/mouse.md (N/A).
- */
-static volatile LONG g_MouseSpeedX = I33_DEFAULT_SPEED;
-static volatile LONG g_MouseSpeedY = I33_DEFAULT_SPEED;
-static volatile LONG g_MouseSpeedDouble = I33_DEFAULT_SPEED;
-/* THE v7/v8 STATE THAT 25h-34h REPORT (#249):
- * 09h's hot spot (2Ah reads it back), whether 0Ah asked for the HARDWARE text cursor
- * and its scan lines (25h bits 13-12, 27h AX/BX), 1Dh's display page and 1Ch's
- * report rate (25h bits 11-8). Each is reset by 00h/21h like the rest.
- */
-static volatile LONG g_MouseHotX = 0;
-static volatile LONG g_MouseHotY = 0;
-static volatile LONG g_MouseTcHardware = 0;
-static volatile LONG g_MouseTcHardwareLow = 0;
-static volatile LONG g_MouseTcHardwareHigh = 0;
-static volatile LONG g_MousePage = 0;
-static volatile LONG g_MouseRate = I33_DEFAULT_RATE;     /* 1Ch code: 3 = 100 reports/s, the PS/2 aux default */
-DWORD         g_MouseEventInstalls;
-/* [CAUTION]: 2 s WAS WRONG. "In flight" lasts until the handler's RETF reaches our stub, and the
- * exec loop only notices that at its next pass -- for a guest that runs natively for
- * seconds between traps that is seconds, not milliseconds. Timing out early marks the
- * callback lost, so when the RETF does arrive the stub is "stray", steps over its BOP
- * and IRETs on a stack that holds no frame: a jump into garbage.
- */
-#define MS_CB_TIMEOUT_MS    30000u
-volatile LONG g_MouseEventPend;     /* event bits raised since the last callback (any-pending flag) */
-/* ONE CALLBACK PER EVENT, IN ORDER, WITH THE BUTTON STATE OF THAT MOMENT:
- * The first cut OR-ed the event bits into one word and delivered them in a single
- * call. A click is a press and a release; both bits arrived together with BX = the
- * CURRENT state (released), so the handler saw "pressed" with no button down -- a
- * click that never happened. The driver on real hardware calls the handler once
- * per mouse packet, and that is what a program's own event queue expects. Ring of
- * 32; motion is coalesced into a pending motion-only entry, buttons never are.
- */
-#define MS_EVQ  32
-static MOUSE_EVENT_ENTRY g_MouseEventQueue[MS_EVQ];
-/* UI pushes at head, exec pops at tail */
-static volatile LONG g_MouseEventQueueHead;
-static volatile LONG g_MouseEventQueueTail;
-static DWORD g_MouseEventQueueDropped;
-static DWORD  g_MouseCallbackSince;            /* GetTickCount()|1 when it went in flight */
-static struct
-{
-    DWORD Eax;
-    DWORD Ebx;
-    DWORD Ecx;
-    DWORD Edx;
-    DWORD Esi;
-    DWORD Edi;
-    DWORD Ebp;
-    DWORD Esp;
-    DWORD Eip;
-    DWORD Eflags;
-    DWORD Cs;
-    DWORD Ds;
-    DWORD Es;
-    DWORD Ss;
-} g_MouseCallbackSaved;
 VOID MouseEventRaise(LONG bits)
 {
     LONG head = g_MouseEventQueueHead;
@@ -366,37 +503,6 @@ INT MouseGoesToGuest(VOID)
     return g_Captured || !CaptureAllowed();
 }
 
-DWORD g_MouseShapeSets;      /* 09h (and 0Ah BX=1): cursor shapes defined */
-/* 09h's BITMAP IS DRAWN NOW (#264) (Importance = 1):
- * It used to be "accepted and discarded" and the host arrow drawn regardless, so a
- * game's crosshair or hand was never seen. Now a defined shape replaces the arrow,
- * applied with the driver's own arithmetic (i33_driver.h: AND the screen mask, XOR the
- * cursor mask, hot spot on the pointer); a reset (00h/21h) puts the host arrow back,
- * as a reset puts the real driver's default arrow back.
- *
- * [CAUTION]: DOUBLE-BUFFERED, because the exec thread writes it (09h) and the UI thread reads it
- * (the present): 09h fills the buffer NOT being shown and then flips g_MouseGraphicsCursorBuffer,
- * so a present never sees half of one shape and half of another.
- */
-static WORD g_MouseGraphicsCursorScreen[2][I33_GC_ROWS];
-static WORD g_MouseGraphicsCursorCurrent[2][I33_GC_ROWS];
-static volatile LONG g_MouseGraphicsCursorBuffer;          /* which of the two the present reads */
-volatile LONG g_MouseGraphicsCursorDefined;      /* 0 = the host arrow; 1 = 09h's bitmap */
-DWORD         g_MouseGraphicsCursorBadPointer;       /* 09h ES:DX we refused to read */
-/* 2Bh-2Eh / 33h: THE ACCELERATION PROFILES, STORED, NOT APPLIED (#265):
- * See i33_driver.h for the layout and for why the curves are never applied. Exec
- * thread only.
- */
-static BYTE       g_MouseAcceleration[I33_ACC_LEN];
-static LONG          g_MouseAccelerationCurrent = I33_ACC_DEFAULT;
-static INT           g_MouseAccelerationOk;          /* g_MouseAcceleration holds the defaults or a 2Bh load */
-DWORD         g_MouseAccelerationCalls;       /* 2Bh-2Eh/33h/34h answered -- STAGE2 evidence */
-/* 18h/19h: THE SHIFT-QUALIFIED HANDLERS, AND NOW THEY ARE CALLED (#265):
- * They were refused (AX=FFFFh) because nothing delivered them. MouseEventQueueTake() now
- * picks, per event, between these and 0Ch's handler by the BDA shift state -- the
- * one picker both delivery paths (V86 MouseCallbackTry, PM DpmiInjectPmMouseCallback) use.
- */
-static I33_ALTERNATE       g_MouseAlt[I33_ALT_N];
 /* Fill the hidden buffer, then show it (see g_MouseGraphicsCursorBuffer). Does not set g_MouseGraphicsCursorDefined:
  * the caller decides whether the shape is the guest's (09h) or a restored one (17h).
  */
@@ -412,14 +518,6 @@ static VOID I33GraphicsCursorDefine(const WORD *screen, const WORD *current)
     }
     InterlockedExchange(&g_MouseGraphicsCursorBuffer, buffer);
 }
-
-/* 0Ah BX=0: the text cursor's screen (AND) and cursor (XOR) masks over the cell's
- * (char, attr) word. The driver's defaults invert the colours and leave the character.
- */
-volatile LONG g_MouseTextCursorAnd = I33_DEFAULT_TEXT_AND;
-volatile LONG g_MouseTextCursorXor = I33_DEFAULT_TEXT_XOR;
-DWORD g_MouseStateBadPointer;    /* 16h/17h: ES:DX we refused to dereference */
-DWORD g_MouseI33Unimplemented;      /* calls that reached `default:` -- see there */
 
 /* Range accessors. A guest range wins; otherwise the current mode's own extent, so a
  * mode change moves the limits with it rather than pinning the pointer to whatever
@@ -448,9 +546,11 @@ static LONG I33RangeYMaximum(VOID)
 LONG I33ClampX(LONG virtualX)
 { LONG low = I33RangeXMinimum(), high = I33RangeXMaximum();
   return virtualX < low ? low : (virtualX > high ? high : virtualX); }
+
 LONG I33ClampY(LONG virtualY)
 { LONG low = I33RangeYMinimum(), high = I33RangeYMaximum();
   return virtualY < low ? low : (virtualY > high ? high : virtualY); }
+
 /* 07h/08h hand over CX and DX and the driver takes them EITHER WAY ROUND -- passing
  * max first is common enough that a driver which honoured the order literally would
  * pin the pointer to a single coordinate. Swap rather than reject.
@@ -470,42 +570,6 @@ static VOID I33SetRange(volatile LONG *low, volatile LONG *high, LONG first, LON
     InterlockedExchange(low, first);
     InterlockedExchange(high, second);
 }
-
-/* 15h/16h/17h state block. The layout is OURS -- the guest is told the size by 15h
- * and only ever hands the same buffer back to 17h, so nothing outside this file
- * reads it. Versioned so a restore cannot be fed a block from an older build.
- */
-#define I33_STATE_MAGIC 0x4133564EuL       /* 'NV3A' (#264/#265 added the cursor bitmap,
-                                              the alternate handlers and the profile) */
-typedef struct
-{
-    DWORD Magic;
-    LONG X;
-    LONG Y;
-    LONG Hidden;
-    LONG MinimumX;
-    LONG MaximumX;
-    LONG MinimumY;
-    LONG MaximumY;
-    LONG MickeyX;
-    LONG MickeyY;
-    LONG Double;
-    LONG EventMask;
-    LONG EventSegment;
-    LONG EventOffset;
-    LONG SpeedX;
-    LONG SpeedY;
-    LONG SpeedDouble;
-    LONG HotX;
-    LONG HotY;
-    LONG Page;
-    LONG Rate;
-    LONG GraphicsCursorDefined;
-    LONG AccelerationCurrent;
-    WORD GraphicsCursorScreen[I33_GC_ROWS];
-    WORD GraphicsCursorCurrent[I33_GC_ROWS];
-    I33_ALTERNATE Alt[I33_ALT_N];
-} I33_STATE;
 
 static VOID I33StateSave(volatile BYTE *destination)
 {
@@ -724,24 +788,6 @@ static VOID I33TakeMotion(LONG positionX, LONG positionY, LONG *outDeltaX, LONG 
     *outDeltaX = deltaX;
     *outDeltaY = deltaY;
 }
-
-/* 32h's ANSWER: WHICH OF 25h-34h THIS DRIVER REALLY SERVICES. (#249):
- * Bit 15 = 25h ... bit 0 = 34h (RBIL INT 33h AX=0032h). We report 8.00 in 24h, so a
- * guest may call any of them -- and 32h is the call a careful one makes FIRST. It
- * used to fall into `default:` and hand the guest its own AX (0032h) back as the
- * mask: "26h and 2Fh exist", from a driver that had neither. A bit is set ONLY where
- * the arm below gives the documented answer:
- * 25h 26h 27h 2Ah 2Fh 30h 31h 32h  -> set
- * 28h/29h  answered ("cannot set" / "no modes to list"), but no mode list exists,
- *          so not claimed;
- * 2Bh-2Eh acceleration profiles, 33h switch settings, 34h MOUSE.INI -> set since
- *          #265: answered with the documented shapes (the profiles are stored and
- *          handed back, NOT applied -- see i33_driver.h). E43Ch -> E7FFh.
- */
-#define I33_ACTIVE_FNS  (0x8000u | 0x4000u | 0x2000u | 0x0400u    /* 25h 26h 27h 2Ah */ \
-                       | 0x0200u | 0x0100u | 0x0080u | 0x0040u    /* 2Bh 2Ch 2Dh 2Eh */ \
-                       | 0x0020u | 0x0010u | 0x0008u | 0x0004u    /* 2Fh 30h 31h 32h */ \
-                       | 0x0002u | 0x0001u)                       /* 33h 34h */
 
 /* -- WHERE A POINTER INTO THE DRIVER GOES (#265). 2Ch/2Dh/34h hand back ES:SI / ES:DX
  * at the driver's own bytes (VDD_MOUSE_SEG). A real-mode caller (V86, or a DPMI 0300h
@@ -1774,43 +1820,6 @@ VOID MouseCallbackReturn(volatile BYTE *tib)
     ++g_MouseCallbackDone;
 }
 
-enum
-{
-    OVERLAY_CURSOR_ROWS = 16, OVERLAY_CURSOR_OUTLINE = 0, OVERLAY_CURSOR_FILL = 15
-};   /* the host-drawn pointer: black outline, white fill */
-/* Classic arrow cursor: 'o' = black outline (index 0), 'X' = white fill (15),
- * ' ' = transparent; hotspot at the top-left tip. Drawn into the presenter's 8-bpp
- * SNAPSHOT each present (#264) -- [WARNING] not the frame: in mode 13h the frame IS guest VRAM,
- * so "re-rendered every tick, leaves no trail" was false there; see the present path.
- */
-/* The INT 33h driver cursor. This was hand-drawn ASCII art until the demo sweep
- * turned up its one cosmetic defect -- "the mouse cursor is not quite the right
- * shape" -- so it is now DECODED FROM REAL ARTWORK and regenerated rather than
- * remembered. 'o' = outline (palette index 0), 'X' = fill (index 15), ' ' =
- * transparent; only the data changed, OverlayCursor() is untouched.
- * Regenerate with:  python3 tools/gen/mkcursor.py cursors/cursor-pointer.cur
- */
-/* Generated by tools/gen/mkcursor.py from cursors/cursor-pointer.cur -- 16x16, hotspot (0,0).
- * Do not hand-edit: regenerate from the artwork instead.
- */
-static PCSTR const g_MouseCursorShape[OVERLAY_CURSOR_ROWS] = {
-    "oo",
-    "oXo",
-    "oXXo",
-    "oXXXo",
-    "oXXXXo",
-    "oXXXXXo",
-    "oXXXXXXo",
-    "oXXXXXXXo",
-    "oXXXXXXXXo",
-    "oXXXXXooooo",
-    "oXXoXXo",
-    "oXo oXXo",
-    "oo  oXXo",
-    "o    oXXo",
-    "     oXXo",
-    "      oo",
-};
 static VOID OverlayCursor(BYTE *pixels, INT width, INT height, INT stride, INT cursorX, INT cursorY)
 {
     INT row;

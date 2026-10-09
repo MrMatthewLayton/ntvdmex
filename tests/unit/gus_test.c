@@ -21,11 +21,13 @@
 #include <string.h>
 #include "vdd_gus.h"
 #include "vdd_mpu.h"
+#define CHECK(condition,message) do{ g_Total++; if(condition){printf("  PASS  %s\n",(message));} \
+    else{printf("  FAIL  %s\n",(message)); g_Failures++;} }while(0)
+
+#define B   0x240
 
 static INT g_Total = 0;
 static INT g_Failures = 0;
-#define CHECK(condition,message) do{ g_Total++; if(condition){printf("  PASS  %s\n",(message));} \
-    else{printf("  FAIL  %s\n",(message)); g_Failures++;} }while(0)
 
 static BYTE g_GuestMemory[0x100000];
 static BYTE g_Dram[GUS_DRAM_SIZE];
@@ -34,12 +36,6 @@ static DMA_STATE g_Dma;
 static GUS_STATE g_Gus;
 static INT g_IrqCount;
 static INT g_IrqLast;
-static VOID GusTestIrqSink(PVOID context, BYTE irq)
-{
-    (VOID)context;
-    g_IrqCount++;
-    g_IrqLast = irq;
-}
 
 /* #190: the host's wiring, reproduced -- the UART's bytes into a PRIVATE MPU assembler
  * whose sink is "the synth".
@@ -48,6 +44,14 @@ static BYTE   g_Transmitted[64];
 static INT       g_CapturedCount;
 static MPU_STATE g_Assembler;
 static UINT32  g_Message; static INT g_MessageCount;
+
+static VOID GusTestIrqSink(PVOID context, BYTE irq)
+{
+    (VOID)context;
+    g_IrqCount++;
+    g_IrqLast = irq;
+}
+
 static VOID GusTestMessageSink(PVOID context, UINT32 message)
 {
     (VOID)context;
@@ -64,7 +68,6 @@ static VOID GusTestCapture(PVOID context, BYTE byteValue)
     VddMpuFeed(&g_Assembler, byteValue);
 }
 
-#define B   0x240
 static VOID GusTestWrite(WORD port, BYTE byteValue)
 {
     UINT32 value = byteValue;

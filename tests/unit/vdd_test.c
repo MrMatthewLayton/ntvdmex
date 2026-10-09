@@ -17,9 +17,6 @@
 #include <stdio.h>
 #include <string.h>
 #include "vdd_bus.h"
-
-static INT g_Total = 0;
-static INT g_Failures = 0;
 #define CHECK(condition, message) do {                                  \
         g_Total++;                                               \
         if (condition) { printf("  PASS  %s\n", (message)); }           \
@@ -35,6 +32,17 @@ typedef struct
     INT      ResetCalls;
     BYTE  LastInPort;
 } FAKE_PIT;
+
+static INT g_Total = 0;
+static INT g_Failures = 0;
+
+/* ---- a fake video-ish device: claims a memory window at 0xB8000 ---------- */
+static BYTE g_FakeVram[0x8000];
+
+/* ---- host-injected sinks (count effects so the test can assert) ---------- */
+static INT  g_IrqCount = 0; static BYTE g_LastIrq = 0xFF;
+
+static INT  g_PresentCount = 0; static NTVDD_FRAME g_LastFrame;
 
 static VOID VddTestPitOut(PVOID self, WORD port, BYTE width, UINT32 value)
 {
@@ -97,8 +105,6 @@ static INT VddTestPitInit(PVDD_BUS bus, PVOID self)
     return 0;
 }
 
-/* ---- a fake video-ish device: claims a memory window at 0xB8000 ---------- */
-static BYTE g_FakeVram[0x8000];
 static BYTE VddTestMemoryRead(PVOID self, UINT32 offset)
 {
     (VOID)self;
@@ -111,8 +117,6 @@ static VOID    VddTestMemoryWrite(PVOID self, UINT32 offset, BYTE value)
     g_FakeVram[offset & 0x7FFF] = value;
 }
 
-/* ---- host-injected sinks (count effects so the test can assert) ---------- */
-static INT  g_IrqCount = 0; static BYTE g_LastIrq = 0xFF;
 static VOID VddTestIrqSink(PVOID context, BYTE irq)
 {
     (VOID)context;
@@ -120,7 +124,6 @@ static VOID VddTestIrqSink(PVOID context, BYTE irq)
     g_LastIrq = irq;
 }
 
-static INT  g_PresentCount = 0; static NTVDD_FRAME g_LastFrame;
 static VOID VddTestPresentSink(PVOID context, PCNTVDD_FRAME frame)
 {
     (VOID)context;

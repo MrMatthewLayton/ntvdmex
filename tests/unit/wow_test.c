@@ -48,23 +48,6 @@
 #include <string.h>
 #include "../../src/wow/wowconv.h"
 
-static INT g_Passes;
-static INT g_Failures;
-static INT g_Skips;
-static VOID WowTestCheck(INT condition, PCSTR description)
-{
-    if (condition)
-    {
-        ++g_Passes;
-        printf("  PASS  %s\n", description);
-    }
-    else
-    {
-        ++g_Failures;
-        printf("  FAIL  %s\n", description);
-    }
-}
-
 /* PART 1 + 2 SHARED: the macro table scanned out of the real headers: */
 /* [CAUTION]: THIS CAP SILENTLY FAILED 27 CHECKS FOR A WHOLE SESSION. (session 56)
  * The scanner's overflow arm was `continue`, so once the headers held more
@@ -80,6 +63,7 @@ static VOID WowTestCheck(INT condition, PCSTR description)
  * rule the bus applies to a refused port claim.
  */
 #define MAXDEF  2048
+
 typedef struct
 {
     CHAR Name[64];
@@ -87,6 +71,24 @@ typedef struct
     CHAR File[32];
     INT Line;
 } WOW_TEST_DEFINITION;
+
+/* PART 2: the offset tables must tile their declared width: */
+typedef struct
+{
+    PCSTR Macro;
+    INT Size;
+} WOW_TEST_FIELD;
+
+typedef struct
+{
+    PCSTR Service;    /* what it is, for the failure message */
+    INT         Width;      /* argument BYTES, from tools/ne/neneeds.py */
+    WOW_TEST_FIELD     Fields[14];
+} WOW_TEST_SERVICE;
+
+static INT g_Passes;
+static INT g_Failures;
+static INT g_Skips;
 static WOW_TEST_DEFINITION g_Definitions[MAXDEF];
 static INT   g_DefinitionCount;
 
@@ -94,6 +96,109 @@ static PCSTR g_Headers[] = {
     "src/wow/wowuser.h", "src/wow/wowuser_calls.h", "src/wow/wowgdi.h", "src/wow/wowgdi_calls.h", "src/wow/wow32.h",
     "src/wow/wowres.h",  "src/wow/wowcommdlg.h", "src/wow/wowshell.h",
 };
+
+/* [CAUTION]: EVERY `width` HERE CAME OUT OF A REAL BINARY, via
+ * `tools/ne/neneeds.py guest/win16/<prog>.exe --todo`, which reads the
+ * argument-byte count off the module's own thunk. None of them is a guess.
+ */
+static const WOW_TEST_SERVICE g_Services[] = {
+  /* --- the two that collided, and the reason part 1 exists --------------- */
+  { "USER InvalidateRect(hWnd, lpRect, bErase)", 8,
+    { {"WOWUSER_IR_ARG_ERASE",2}, {"WOWUSER_IR_ARG_RECT",4}, {"WOWUSER_IR_ARG_HWND",2}, {0,0} } },
+  { "USER InvertRect(hDC, lpRect)", 6,
+    { {"WOWUSER_INVR_ARG_RECT",4}, {"WOWUSER_INVR_ARG_HDC",2}, {0,0} } },
+  { "USER SetMenu(hWnd, hMenu)", 4,
+    { {"WOWUSER_SETMENU_ARG_MENU",2}, {"WOWUSER_SETMENU_ARG_HWND",2}, {0,0} } },
+
+  /* --- session 50's new services ---------------------------------------- */
+  { "USER SetTimer(hWnd, nIDEvent, wElapse, lpTimerFunc)", 10,
+    { {"WOWUSER_ST_ARG_PROC",4}, {"WOWUSER_ST_ARG_ELAPSE",2}, {"WOWUSER_ST_ARG_ID",2},
+      {"WOWUSER_ST_ARG_HWND",2}, {0,0} } },
+  { "USER KillTimer(hWnd, nIDEvent)", 4,
+    { {"WOWUSER_KT_ARG_ID",2}, {"WOWUSER_KT_ARG_HWND",2}, {0,0} } },
+  { "USER FindWindow(lpClassName, lpWindowName)", 8,
+    { {"WOWUSER_FW_ARG_NAME",4}, {"WOWUSER_FW_ARG_CLASS",4}, {0,0} } },
+  { "USER FrameRect(hDC, lpRect, hBrush)", 8,
+    { {"WOWUSER_FRAMER_ARG_BRUSH",2}, {"WOWUSER_FRAMER_ARG_RECT",4}, {"WOWUSER_FRAMER_ARG_HDC",2}, {0,0} } },
+  { "USER FillRect(hDC, lpRect, hBrush)", 8,
+    { {"WOWUSER_FR_ARG_BRUSH",2}, {"WOWUSER_FR_ARG_RECT",4}, {"WOWUSER_FR_ARG_HDC",2}, {0,0} } },
+  { "USER DrawText(hDC, lpString, nCount, lpRect, uFormat)", 14,
+    { {"WOWUSER_DT_ARG_FORMAT",2}, {"WOWUSER_DT_ARG_RECT",4}, {"WOWUSER_DT_ARG_COUNT",2},
+      {"WOWUSER_DT_ARG_STR",4}, {"WOWUSER_DT_ARG_HDC",2}, {0,0} } },
+  { "USER SetDlgItemText(hDlg, nIDDlgItem, lpString)", 8,
+    { {"WOWUSER_SDIT_ARG_TEXT",4}, {"WOWUSER_SDIT_ARG_ID",2}, {"WOWUSER_SDIT_ARG_HDLG",2}, {0,0} } },
+  { "USER GetDlgItemInt(hDlg, nID, lpTranslated, bSigned)", 10,
+    { {"WOWUSER_GDII_ARG_SIGNED",2}, {"WOWUSER_GDII_ARG_XLATED",4}, {"WOWUSER_GDII_ARG_ID",2},
+      {"WOWUSER_GDII_ARG_HDLG",2}, {0,0} } },
+  { "USER CheckRadioButton(hDlg, first, last, check)", 8,
+    { {"WOWUSER_CRB_ARG_CHECK",2}, {"WOWUSER_CRB_ARG_LAST",2}, {"WOWUSER_CRB_ARG_FIRST",2},
+      {"WOWUSER_CRB_ARG_HDLG",2}, {0,0} } },
+  { "USER CheckDlgButton(hDlg, nIDButton, uCheck)", 6,
+    { {"WOWUSER_CDB_ARG_CHECK",2}, {"WOWUSER_CDB_ARG_ID",2}, {"WOWUSER_CDB_ARG_HDLG",2}, {0,0} } },
+  { "USER IsDlgButtonChecked(hDlg, nIDButton)", 4,
+    { {"WOWUSER_IDBC_ARG_ID",2}, {"WOWUSER_IDBC_ARG_HDLG",2}, {0,0} } },
+  { "USER AdjustWindowRect(lpRect, dwStyle, bMenu)", 10,
+    { {"WOWUSER_AWR_ARG_MENU",2}, {"WOWUSER_AWR_ARG_STYLE",4}, {"WOWUSER_AWR_ARG_RECT",4}, {0,0} } },
+  { "USER LoadMenu downcall (0x96)", 16,
+    { {"WOWUSER_LOADMENU_ARG_LOCAL0",2}, {"WOWUSER_LOADMENU_ARG_LOCAL2",2},
+      {"WOWUSER_LOADMENU_ARG_LOCAL4",2}, {"WOWUSER_LOADMENU_ARG_RES",4},
+      {"WOWUSER_LOADMENU_ARG_NAME",4}, {"WOWUSER_LOADMENU_ARG_HINST",2}, {0,0} } },
+  { "USER GetLastActivePopup(hwndOwner)", 2,
+    { {"WOWUSER_GLAP_ARG_HWND",2}, {0,0} } },
+
+  /* --- long-standing ones, so the table is not only new code ------------- */
+  { "USER GetClientRect(hWnd, lpRect)", 6,
+    { {"WOWUSER_GCR_ARG_RECT",4}, {"WOWUSER_GCR_ARG_HWND",2}, {0,0} } },
+
+  /* --- GDI ---------------------------------------------------------------- */
+  { "GDI CreateDIBitmap(hDC, lpbmih, dwInit, lpbInit, lpbmi, wUsage)", 20,
+    { {"WOWGDI_CDIB_ARG_USAGE",2}, {"WOWGDI_CDIB_ARG_BMI",4}, {"WOWGDI_CDIB_ARG_BITS",4},
+      {"WOWGDI_CDIB_ARG_INIT",4}, {"WOWGDI_CDIB_ARG_BMIH",4}, {"WOWGDI_CDIB_ARG_HDC",2}, {0,0} } },
+  { "GDI SetDIBitsToDevice(...12 args...)", 28,
+    { {"WOWGDI_SDD_ARG_USAGE",2}, {"WOWGDI_SDD_ARG_BMI",4}, {"WOWGDI_SDD_ARG_BITS",4},
+      {"WOWGDI_SDD_ARG_NSCANS",2}, {"WOWGDI_SDD_ARG_START",2}, {"WOWGDI_SDD_ARG_SRCY",2},
+      {"WOWGDI_SDD_ARG_SRCX",2}, {"WOWGDI_SDD_ARG_H",2}, {"WOWGDI_SDD_ARG_W",2},
+      {"WOWGDI_SDD_ARG_DSTY",2}, {"WOWGDI_SDD_ARG_DSTX",2}, {"WOWGDI_SDD_ARG_HDC",2} } },
+  { "GDI SetDIBits/GetDIBits(hDC, hBM, start, lines, bits, bmi, usage)", 18,
+    { {"WOWGDI_DIB_ARG_USAGE",2}, {"WOWGDI_DIB_ARG_BMI",4}, {"WOWGDI_DIB_ARG_BITS",4},
+      {"WOWGDI_DIB_ARG_LINES",2}, {"WOWGDI_DIB_ARG_START",2}, {"WOWGDI_DIB_ARG_HBM",2},
+      {"WOWGDI_DIB_ARG_HDC",2}, {0,0} } },
+  { "GDI StretchDIBits(...)", 32,
+    { {"WOWGDI_SDI_ARG_ROP",4}, {"WOWGDI_SDI_ARG_USAGE",2}, {"WOWGDI_SDI_ARG_BMI",4},
+      {"WOWGDI_SDI_ARG_BITS",4}, {"WOWGDI_SDI_ARG_SRCH",2}, {"WOWGDI_SDI_ARG_SRCW",2},
+      {"WOWGDI_SDI_ARG_SRCY",2}, {"WOWGDI_SDI_ARG_SRCX",2}, {"WOWGDI_SDI_ARG_DSTH",2},
+      {"WOWGDI_SDI_ARG_DSTW",2}, {"WOWGDI_SDI_ARG_DSTY",2}, {"WOWGDI_SDI_ARG_DSTX",2},
+      {"WOWGDI_SDI_ARG_HDC",2} } },
+
+  /* --- #295: the metafile enumerator and its record player (12 bytes each, the
+   * thunk width in docs/inventory/win16-surface.md) ----------------------
+   */
+  { "GDI EnumMetaFile(hdc, hmf, lpfn, lParam)", 12,
+    { {"WOWGDI_EMF_ARG_LPARAM",4}, {"WOWGDI_EMF_ARG_PROC",4}, {"WOWGDI_EMF_ARG_HMF",2},
+      {"WOWGDI_EMF_ARG_HDC",2}, {0,0} } },
+  { "GDI PlayMetaFileRecord(hdc, lpht, lpmr, nHandles)", 12,
+    { {"WOWGDI_PMFR_ARG_NHANDLES",2}, {"WOWGDI_PMFR_ARG_MR",4}, {"WOWGDI_PMFR_ARG_HT",4},
+      {"WOWGDI_PMFR_ARG_HDC",2}, {0,0} } },
+
+  /* --- krnl386 ------------------------------------------------------------ */
+  { "krnl386 GetPrivateProfileInt(app, key, nDefault, file)", 14,
+    { {"WOW32_GETPRIVATEPROFILEINT_ARG_FILE",4}, {"WOW32_GETPRIVATEPROFILEINT_ARG_DEFAULT",2}, {"WOW32_GETPRIVATEPROFILEINT_ARG_KEY",4},
+      {"WOW32_GETPRIVATEPROFILEINT_ARG_APP",4}, {0,0} } },
+};
+
+static VOID WowTestCheck(INT condition, PCSTR description)
+{
+    if (condition)
+    {
+        ++g_Passes;
+        printf("  PASS  %s\n", description);
+    }
+    else
+    {
+        ++g_Failures;
+        printf("  FAIL  %s\n", description);
+    }
+}
 
 /* A `#define <NAME>_ARG_<X> <number>` line, and nothing else. Deliberately
  * strict: a macro defined to an expression is not an offset table entry and
@@ -211,108 +316,6 @@ static VOID WowTestMacroHygiene(VOID)
         WowTestCheck(1, description);
     }
 }
-
-/* PART 2: the offset tables must tile their declared width: */
-typedef struct
-{
-    PCSTR Macro;
-    INT Size;
-} WOW_TEST_FIELD;
-typedef struct
-{
-    PCSTR Service;    /* what it is, for the failure message */
-    INT         Width;      /* argument BYTES, from tools/ne/neneeds.py */
-    WOW_TEST_FIELD     Fields[14];
-} WOW_TEST_SERVICE;
-
-/* [CAUTION]: EVERY `width` HERE CAME OUT OF A REAL BINARY, via
- * `tools/ne/neneeds.py guest/win16/<prog>.exe --todo`, which reads the
- * argument-byte count off the module's own thunk. None of them is a guess.
- */
-static const WOW_TEST_SERVICE g_Services[] = {
-  /* --- the two that collided, and the reason part 1 exists --------------- */
-  { "USER InvalidateRect(hWnd, lpRect, bErase)", 8,
-    { {"WOWUSER_IR_ARG_ERASE",2}, {"WOWUSER_IR_ARG_RECT",4}, {"WOWUSER_IR_ARG_HWND",2}, {0,0} } },
-  { "USER InvertRect(hDC, lpRect)", 6,
-    { {"WOWUSER_INVR_ARG_RECT",4}, {"WOWUSER_INVR_ARG_HDC",2}, {0,0} } },
-  { "USER SetMenu(hWnd, hMenu)", 4,
-    { {"WOWUSER_SETMENU_ARG_MENU",2}, {"WOWUSER_SETMENU_ARG_HWND",2}, {0,0} } },
-
-  /* --- session 50's new services ---------------------------------------- */
-  { "USER SetTimer(hWnd, nIDEvent, wElapse, lpTimerFunc)", 10,
-    { {"WOWUSER_ST_ARG_PROC",4}, {"WOWUSER_ST_ARG_ELAPSE",2}, {"WOWUSER_ST_ARG_ID",2},
-      {"WOWUSER_ST_ARG_HWND",2}, {0,0} } },
-  { "USER KillTimer(hWnd, nIDEvent)", 4,
-    { {"WOWUSER_KT_ARG_ID",2}, {"WOWUSER_KT_ARG_HWND",2}, {0,0} } },
-  { "USER FindWindow(lpClassName, lpWindowName)", 8,
-    { {"WOWUSER_FW_ARG_NAME",4}, {"WOWUSER_FW_ARG_CLASS",4}, {0,0} } },
-  { "USER FrameRect(hDC, lpRect, hBrush)", 8,
-    { {"WOWUSER_FRAMER_ARG_BRUSH",2}, {"WOWUSER_FRAMER_ARG_RECT",4}, {"WOWUSER_FRAMER_ARG_HDC",2}, {0,0} } },
-  { "USER FillRect(hDC, lpRect, hBrush)", 8,
-    { {"WOWUSER_FR_ARG_BRUSH",2}, {"WOWUSER_FR_ARG_RECT",4}, {"WOWUSER_FR_ARG_HDC",2}, {0,0} } },
-  { "USER DrawText(hDC, lpString, nCount, lpRect, uFormat)", 14,
-    { {"WOWUSER_DT_ARG_FORMAT",2}, {"WOWUSER_DT_ARG_RECT",4}, {"WOWUSER_DT_ARG_COUNT",2},
-      {"WOWUSER_DT_ARG_STR",4}, {"WOWUSER_DT_ARG_HDC",2}, {0,0} } },
-  { "USER SetDlgItemText(hDlg, nIDDlgItem, lpString)", 8,
-    { {"WOWUSER_SDIT_ARG_TEXT",4}, {"WOWUSER_SDIT_ARG_ID",2}, {"WOWUSER_SDIT_ARG_HDLG",2}, {0,0} } },
-  { "USER GetDlgItemInt(hDlg, nID, lpTranslated, bSigned)", 10,
-    { {"WOWUSER_GDII_ARG_SIGNED",2}, {"WOWUSER_GDII_ARG_XLATED",4}, {"WOWUSER_GDII_ARG_ID",2},
-      {"WOWUSER_GDII_ARG_HDLG",2}, {0,0} } },
-  { "USER CheckRadioButton(hDlg, first, last, check)", 8,
-    { {"WOWUSER_CRB_ARG_CHECK",2}, {"WOWUSER_CRB_ARG_LAST",2}, {"WOWUSER_CRB_ARG_FIRST",2},
-      {"WOWUSER_CRB_ARG_HDLG",2}, {0,0} } },
-  { "USER CheckDlgButton(hDlg, nIDButton, uCheck)", 6,
-    { {"WOWUSER_CDB_ARG_CHECK",2}, {"WOWUSER_CDB_ARG_ID",2}, {"WOWUSER_CDB_ARG_HDLG",2}, {0,0} } },
-  { "USER IsDlgButtonChecked(hDlg, nIDButton)", 4,
-    { {"WOWUSER_IDBC_ARG_ID",2}, {"WOWUSER_IDBC_ARG_HDLG",2}, {0,0} } },
-  { "USER AdjustWindowRect(lpRect, dwStyle, bMenu)", 10,
-    { {"WOWUSER_AWR_ARG_MENU",2}, {"WOWUSER_AWR_ARG_STYLE",4}, {"WOWUSER_AWR_ARG_RECT",4}, {0,0} } },
-  { "USER LoadMenu downcall (0x96)", 16,
-    { {"WOWUSER_LOADMENU_ARG_LOCAL0",2}, {"WOWUSER_LOADMENU_ARG_LOCAL2",2},
-      {"WOWUSER_LOADMENU_ARG_LOCAL4",2}, {"WOWUSER_LOADMENU_ARG_RES",4},
-      {"WOWUSER_LOADMENU_ARG_NAME",4}, {"WOWUSER_LOADMENU_ARG_HINST",2}, {0,0} } },
-  { "USER GetLastActivePopup(hwndOwner)", 2,
-    { {"WOWUSER_GLAP_ARG_HWND",2}, {0,0} } },
-
-  /* --- long-standing ones, so the table is not only new code ------------- */
-  { "USER GetClientRect(hWnd, lpRect)", 6,
-    { {"WOWUSER_GCR_ARG_RECT",4}, {"WOWUSER_GCR_ARG_HWND",2}, {0,0} } },
-
-  /* --- GDI ---------------------------------------------------------------- */
-  { "GDI CreateDIBitmap(hDC, lpbmih, dwInit, lpbInit, lpbmi, wUsage)", 20,
-    { {"WOWGDI_CDIB_ARG_USAGE",2}, {"WOWGDI_CDIB_ARG_BMI",4}, {"WOWGDI_CDIB_ARG_BITS",4},
-      {"WOWGDI_CDIB_ARG_INIT",4}, {"WOWGDI_CDIB_ARG_BMIH",4}, {"WOWGDI_CDIB_ARG_HDC",2}, {0,0} } },
-  { "GDI SetDIBitsToDevice(...12 args...)", 28,
-    { {"WOWGDI_SDD_ARG_USAGE",2}, {"WOWGDI_SDD_ARG_BMI",4}, {"WOWGDI_SDD_ARG_BITS",4},
-      {"WOWGDI_SDD_ARG_NSCANS",2}, {"WOWGDI_SDD_ARG_START",2}, {"WOWGDI_SDD_ARG_SRCY",2},
-      {"WOWGDI_SDD_ARG_SRCX",2}, {"WOWGDI_SDD_ARG_H",2}, {"WOWGDI_SDD_ARG_W",2},
-      {"WOWGDI_SDD_ARG_DSTY",2}, {"WOWGDI_SDD_ARG_DSTX",2}, {"WOWGDI_SDD_ARG_HDC",2} } },
-  { "GDI SetDIBits/GetDIBits(hDC, hBM, start, lines, bits, bmi, usage)", 18,
-    { {"WOWGDI_DIB_ARG_USAGE",2}, {"WOWGDI_DIB_ARG_BMI",4}, {"WOWGDI_DIB_ARG_BITS",4},
-      {"WOWGDI_DIB_ARG_LINES",2}, {"WOWGDI_DIB_ARG_START",2}, {"WOWGDI_DIB_ARG_HBM",2},
-      {"WOWGDI_DIB_ARG_HDC",2}, {0,0} } },
-  { "GDI StretchDIBits(...)", 32,
-    { {"WOWGDI_SDI_ARG_ROP",4}, {"WOWGDI_SDI_ARG_USAGE",2}, {"WOWGDI_SDI_ARG_BMI",4},
-      {"WOWGDI_SDI_ARG_BITS",4}, {"WOWGDI_SDI_ARG_SRCH",2}, {"WOWGDI_SDI_ARG_SRCW",2},
-      {"WOWGDI_SDI_ARG_SRCY",2}, {"WOWGDI_SDI_ARG_SRCX",2}, {"WOWGDI_SDI_ARG_DSTH",2},
-      {"WOWGDI_SDI_ARG_DSTW",2}, {"WOWGDI_SDI_ARG_DSTY",2}, {"WOWGDI_SDI_ARG_DSTX",2},
-      {"WOWGDI_SDI_ARG_HDC",2} } },
-
-  /* --- #295: the metafile enumerator and its record player (12 bytes each, the
-   * thunk width in docs/inventory/win16-surface.md) ----------------------
-   */
-  { "GDI EnumMetaFile(hdc, hmf, lpfn, lParam)", 12,
-    { {"WOWGDI_EMF_ARG_LPARAM",4}, {"WOWGDI_EMF_ARG_PROC",4}, {"WOWGDI_EMF_ARG_HMF",2},
-      {"WOWGDI_EMF_ARG_HDC",2}, {0,0} } },
-  { "GDI PlayMetaFileRecord(hdc, lpht, lpmr, nHandles)", 12,
-    { {"WOWGDI_PMFR_ARG_NHANDLES",2}, {"WOWGDI_PMFR_ARG_MR",4}, {"WOWGDI_PMFR_ARG_HT",4},
-      {"WOWGDI_PMFR_ARG_HDC",2}, {0,0} } },
-
-  /* --- krnl386 ------------------------------------------------------------ */
-  { "krnl386 GetPrivateProfileInt(app, key, nDefault, file)", 14,
-    { {"WOW32_GETPRIVATEPROFILEINT_ARG_FILE",4}, {"WOW32_GETPRIVATEPROFILEINT_ARG_DEFAULT",2}, {"WOW32_GETPRIVATEPROFILEINT_ARG_KEY",4},
-      {"WOW32_GETPRIVATEPROFILEINT_ARG_APP",4}, {0,0} } },
-};
 
 static VOID WowTestOffsetTiling(VOID)
 {

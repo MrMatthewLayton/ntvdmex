@@ -22,19 +22,27 @@
 #include <stdio.h>
 #include <string.h>
 #include "vdd_mpu.h"
+#define CHECK(condition,message) do{ g_Total++; if(condition){printf("  PASS  %s\n",(message));} \
+    else{printf("  FAIL  %s\n",(message)); g_Failures++;} }while(0)
+
+#define CAP     32
+
+#define BASE    MPU_DEFAULT_BASE
 
 static INT g_Total = 0;
 static INT g_Failures = 0;
-#define CHECK(condition,message) do{ g_Total++; if(condition){printf("  PASS  %s\n",(message));} \
-    else{printf("  FAIL  %s\n",(message)); g_Failures++;} }while(0)
 
 static BYTE g_GuestMemory[0x10000];
 static VDD_BUS g_Bus;
 static MPU_STATE g_Mpu;
-
-#define CAP     32
 static UINT32 g_Messages[CAP];
 static INT      g_MessageCount;
+
+/* #136: the SysEx sink, for an external synth. */
+static BYTE  g_SysEx[MPU_SYSEX_MAX];
+static UINT32 g_SysExLength;
+static INT      g_SysExCount;
+
 static VOID MpuTestSink(PVOID context, UINT32 message)
 {
     (VOID)context;
@@ -42,10 +50,6 @@ static VOID MpuTestSink(PVOID context, UINT32 message)
         g_Messages[g_MessageCount++] = message;
 }
 
-/* #136: the SysEx sink, for an external synth. */
-static BYTE  g_SysEx[MPU_SYSEX_MAX];
-static UINT32 g_SysExLength;
-static INT      g_SysExCount;
 static VOID MpuTestSysExSink(PVOID context, PCBYTE bytes, UINT32 length)
 {
     (VOID)context;
@@ -54,7 +58,6 @@ static VOID MpuTestSysExSink(PVOID context, PCBYTE bytes, UINT32 length)
     g_SysExCount++;
 }
 
-#define BASE    MPU_DEFAULT_BASE
 static VOID MpuTestWrite(WORD port, BYTE byteValue)
 {
     UINT32 value=byteValue;

@@ -25,6 +25,27 @@
 #include "wowuser.h"
 #include "host_wow.h"
 
+CHAR g_WowCommandProgram[WOW32_COMMAND_PROGRAM_MAX] = { 0 };   /* full path of the Win16 program */
+CHAR g_WowCommandArguments[WOW32_COMMAND_ARGUMENTS_MAX] = { 0 };   /* its arguments, without a leading space */
+CHAR g_WowCommandDirectory[MAX_PATH] = { 0 }; /* #164: the launch directory, 8.3; "" = none */
+
+INT  g_WowCommandIsTaken     = 0;       /* delivered already -- deliver once */
+
+static const WOW32_DECLINE_SITE g_Wow32DeclineSites[] = {
+    { 0xb7,                0x52e5 },
+    { WOW32_FILE_SEEK,     0x549e },   /* 0x98 -> AH=42h */
+    { 0x77,                0x54d3 },
+    { WOW32_FILE_OPEN,     0x5507 },   /* 0xc1 -> AH=3Dh */
+    { WOW32_FILE_READ,     0x5573 },   /* 0x97 -> AH=3Fh */
+    { WOW32_FILE_CLOSE,    0x5592 },   /* 0xc2 -> AH=3Eh */
+    { WOW32_FILE_GETATTR,  0x55c7 },   /* 0xc7 -> AH=43h */
+    { WOW32_FILE_7E,       0x55e2 },   /* 0x7e */
+    { WOW32_FILE_GETDATE,  0x560c },   /* 0x89 -> AH=57h */
+    { 0x76,                0x5634 },
+    { 0x71,                0x565e },
+    { WOW32_FILE_WRITE,    0x56bf },   /* 0x6f -> AH=40h */
+};
+
 /* Forward declarations, from when this file was part of main.c's unit (they were in wow32.h). */
 VOID Wow32CurrentDirectorySet(PCSTR dir);  /* #164: main.c's per-task directory table */
 
@@ -360,11 +381,6 @@ PCSTR Wow32Name(WORD id)
     }
 }
 
-CHAR g_WowCommandProgram[WOW32_COMMAND_PROGRAM_MAX] = { 0 };   /* full path of the Win16 program */
-CHAR g_WowCommandArguments[WOW32_COMMAND_ARGUMENTS_MAX] = { 0 };   /* its arguments, without a leading space */
-CHAR g_WowCommandDirectory[MAX_PATH] = { 0 }; /* #164: the launch directory, 8.3; "" = none */
-
-INT  g_WowCommandIsTaken     = 0;       /* delivered already -- deliver once */
 /* WIN16 SEES 8.3 NAMES, AND ONLY 8.3 NAMES. (s73) (Importance = 1):
  * krnl386's loader opens the program through INT 21h, and a Win16 DOS world has no
  * long file names: "C:\Documents and Settings\...\notepad\notepad.EXE" fails at
@@ -388,21 +404,6 @@ VOID WowShorten(PSTR path, UINT capacity)
             path[index] = shortPath[index];
     }
 }
-
-static const WOW32_DECLINE_SITE g_Wow32DeclineSites[] = {
-    { 0xb7,                0x52e5 },
-    { WOW32_FILE_SEEK,     0x549e },   /* 0x98 -> AH=42h */
-    { 0x77,                0x54d3 },
-    { WOW32_FILE_OPEN,     0x5507 },   /* 0xc1 -> AH=3Dh */
-    { WOW32_FILE_READ,     0x5573 },   /* 0x97 -> AH=3Fh */
-    { WOW32_FILE_CLOSE,    0x5592 },   /* 0xc2 -> AH=3Eh */
-    { WOW32_FILE_GETATTR,  0x55c7 },   /* 0xc7 -> AH=43h */
-    { WOW32_FILE_7E,       0x55e2 },   /* 0x7e */
-    { WOW32_FILE_GETDATE,  0x560c },   /* 0x89 -> AH=57h */
-    { 0x76,                0x5634 },
-    { 0x71,                0x565e },
-    { WOW32_FILE_WRITE,    0x56bf },   /* 0x6f -> AH=40h */
-};
 
 INT Wow32MayDecline(WORD id, WORD callSite)
 {

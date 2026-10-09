@@ -25,6 +25,96 @@
  */
 #define VDM_ICA_BUFFER_SIZE         256
 #define VDM_ICA_BOP_TABLE_SIZE      1024
+
+/* Our own VDM_TIB (the kernel never sets TEB->Vdm; ntvdm self-allocates one).
+ * 0x674 bytes per ntvdm 0xf044374; rounded up, 16-aligned.
+ */
+#define VDM_TIB_BUFFER_SIZE         0x700
+#define VDM_TIB_ALIGNMENT           16
+
+/* The section and the four views of it (0xf00ea75). */
+#define VDM_SECTION_ACCESS          0xA             /* SECTION_MAP_WRITE | SECTION_MAP_EXECUTE */
+#define VDM_OBJECT_ATTRIBUTES_SIZE  0x18
+#define VDM_SECTION_SIZE            0x100000        /* Conv + video aperture + UMA (EMS frame, M4) */
+#define VDM_VIEW_UNMAP              2               /* SECTION_INHERIT ViewUnmap */
+#define VDM_LOW_BASE                1               /* Page 0 cannot be named: base 1 rounds down */
+#define VDM_LOW_RELEASE_SIZE        0x9FFFF
+#define VDM_FIRST_VIEW_SIZE         0xFFFF
+#define VDM_HMA_BASE                0x100000
+#define VDM_SEGMENT_SIZE            0x10000         /* 64KB */
+#define VDM_VIDEO_BASE              0xA0000
+#define VDM_VIDEO_SIZE              0x20000         /* A0000-BFFFF */
+#define VDM_CONVENTIONAL_REST_BASE  0x10000
+#define VDM_CONVENTIONAL_REST_SIZE  0x90000
+#define VDM_SECTION_START           0
+
+/* Conventional 64KB-aligned EMS page-frame segments, in preference order. E000 is
+ * tried last: post-init it typically has only 32KB free.
+ */
+#define VDM_EMS_FRAME_D000          0xD0000
+#define VDM_EMS_FRAME_C000          0xC0000
+#define VDM_EMS_FRAME_E000          0xE0000
+#define VDM_NO_EMS_FRAME            0
+
+/* A real PC's PICs: the master based at 08h, the slave at 70h, cascaded on line 2. */
+#define VDM_ICA_MASTER_VECTOR_BASE  0x08            /* IRQ0-7 -> INT 08h..0Fh */
+#define VDM_ICA_SLAVE_VECTOR_BASE   0x70            /* IRQ8-15 -> INT 70h..77h */
+#define VDM_ICA_VECTOR_BASE_HIGH    0x00            /* The high byte of the vector-base word */
+#define VDM_ICA_CASCADE_BIT         (1 << 2)        /* IRQ2 */
+#define VDM_ICA_LINES_PER_PIC       8
+#define VDM_ICA_LINE_MASK           7
+#define VDM_ICA_SINGLE_DISPATCH     1
+
+#define VDM_ICA_STATE_ISR_SHIFT     8
+#define VDM_ICA_STATE_IMR_SHIFT     16
+
+#define VDM_NO_NT_VDM_CONTROL       1               /* The status for "ntdll has no NtVdmControl" */
+
+/* The VDM_TIB fields ntvdm initialises when it allocates one (0xf044374). Only Size's
+ * meaning is recovered; the rest are set to ntvdm's values without a claim about what
+ * they are. (0x3B and 0x23 are the values of XP's TEB and flat user-data selectors.)
+ */
+#define VTIB_SIZE_FIELD             0x000
+#define VTIB_FIELD_098              0x098
+#define VTIB_FIELD_098_VALUE        0
+#define VTIB_FIELD_09C              0x09c
+#define VTIB_FIELD_09C_VALUE        0x3b
+#define VTIB_FIELD_0A0              0x0a0
+#define VTIB_FIELD_0A4              0x0a4
+#define VTIB_FIELD_0A0_VALUE        0x23            /* Both 0x0A0 and 0x0A4 */
+#define VTIB_FIELD_66C              0x66c
+#define VTIB_FIELD_66C_VALUE        0xffffffff
+#define VTIB_FLAG_5E4               0x5e4
+#define VTIB_FLAG_5E5               0x5e5
+#define VTIB_FLAG_5E6               0x5e6
+#define VTIB_FLAG_5E_VALUE          1               /* 0x5E4, 0x5E5 and 0x5E6 */
+#define VTIB_FLAG_670               0x670
+#define VTIB_FLAG_670_VALUE         0
+
+#define VDM_ENTRY_REGISTER_ZERO     0
+
+/* The NtSetLdtEntries block: two {selector, low, high} triples. */
+#define VDM_LDT_ENTRIES_DWORDS      6
+#define VDM_LDT_FIRST_SELECTOR      0
+#define VDM_LDT_FIRST_LOW           1
+#define VDM_LDT_FIRST_HIGH          2
+#define VDM_LDT_SECOND_SELECTOR     3
+#define VDM_LDT_SECOND_LOW          4
+#define VDM_LDT_SECOND_HIGH         5
+
+/* PROCESS_LDT_INFORMATION { ULONG Start; ULONG Length; LDT_ENTRY Entries[] }. */
+#define VDM_LDT_INFO_START          0
+#define VDM_LDT_INFO_LENGTH         1
+#define VDM_LDT_INFO_HEADER_DWORDS  2
+#define VDM_LDT_INFO_HEADER_BYTES   8               /* FIELD_OFFSET(Entries) */
+#define VDM_LDT_MAX_DESCRIPTORS     64
+#define VDM_LDT_DWORDS_PER_ENTRY    2
+#define VDM_LDT_BYTES_PER_ENTRY     8
+#define VDM_LDT_TABLE_TOO_LARGE     1               /* The status for a table past the buffer */
+#define VDM_LDT_SERVICE_BUFFER      0               /* ServiceData = { &buffer, size } */
+#define VDM_LDT_SERVICE_SIZE        1
+#define VDM_LDT_SERVICE_DWORDS      2
+
 static BYTE g_IcaLock[VDM_ICA_BUFFER_SIZE];
 static BYTE g_IcaMaster[VDM_ICA_BUFFER_SIZE];
 static BYTE g_IcaSlave[VDM_ICA_BUFFER_SIZE];
@@ -37,13 +127,6 @@ static DWORD g_IcaNinth;
 static VDMICAUSERDATA     g_IcaUserData;
 static VDM_INITIALIZE_DATA g_InitializeData;
 
-/* Our own VDM_TIB (the kernel never sets TEB->Vdm; ntvdm self-allocates one).
- * 0x674 bytes per ntvdm 0xf044374; rounded up, 16-aligned.
- */
-#define VDM_TIB_BUFFER_SIZE     0x700
-#define VDM_TIB_ALIGNMENT       16
-static BYTE g_VdmTib[VDM_TIB_BUFFER_SIZE] __attribute__((aligned(VDM_TIB_ALIGNMENT)));
-
 /* Cached NtVdmControl entry point (set by VdmRegisterWithKernel, used by VdmRunGuest). */
 static PFN_NtVdmControl g_NtVdmControl;
 
@@ -51,6 +134,8 @@ static PFN_NtVdmControl g_NtVdmControl;
  * AFTER VdmInitialize (see VdmMapEmsFrame).
  */
 static HANDLE g_V86Section;
+
+static BYTE g_VdmTib[VDM_TIB_BUFFER_SIZE] __attribute__((aligned(VDM_TIB_ALIGNMENT)));
 
 /* VDM "trap continue" handler = VDM_INITIALIZE_DATA.TrapcHandler. The kernel calls it
  * (ebx = VDM_TIB) to (re)enter the guest via a far return to the guest CS:EIP. ntvdm
@@ -66,22 +151,6 @@ PVOID VdmGetTeb(VOID)
     __asm__ volatile ("movl %%fs:0x18,%0" : "=r"(teb));
     return teb;
 }
-
-/* The section and the four views of it (0xf00ea75). */
-#define VDM_SECTION_ACCESS          0xA         /* SECTION_MAP_WRITE | SECTION_MAP_EXECUTE */
-#define VDM_OBJECT_ATTRIBUTES_SIZE  0x18
-#define VDM_SECTION_SIZE            0x100000    /* Conv + video aperture + UMA (EMS frame, M4) */
-#define VDM_VIEW_UNMAP              2           /* SECTION_INHERIT ViewUnmap */
-#define VDM_LOW_BASE                1           /* Page 0 cannot be named: base 1 rounds down */
-#define VDM_LOW_RELEASE_SIZE        0x9FFFF
-#define VDM_FIRST_VIEW_SIZE         0xFFFF
-#define VDM_HMA_BASE                0x100000
-#define VDM_SEGMENT_SIZE            0x10000     /* 64KB */
-#define VDM_VIDEO_BASE              0xA0000
-#define VDM_VIDEO_SIZE              0x20000     /* A0000-BFFFF */
-#define VDM_CONVENTIONAL_REST_BASE  0x10000
-#define VDM_CONVENTIONAL_REST_SIZE  0x90000
-#define VDM_SECTION_START           0
 
 LONG VdmSetupMemory(VOID)
 {
@@ -159,14 +228,6 @@ LONG VdmSetupMemory(VOID)
     return status;
 }
 
-/* Conventional 64KB-aligned EMS page-frame segments, in preference order. E000 is
- * tried last: post-init it typically has only 32KB free.
- */
-#define VDM_EMS_FRAME_D000  0xD0000
-#define VDM_EMS_FRAME_C000  0xC0000
-#define VDM_EMS_FRAME_E000  0xE0000
-#define VDM_NO_EMS_FRAME    0
-
 /* Map the EMS 64KB page frame as RAM, from the V86 section -- called AFTER
  * VdmRegisterWithKernel()/VdmInitialize (see the NOTE in VdmSetupMemory). EMS shadows
  * 16KB logical pages into this window via memcpy, so the guest's direct frame accesses
@@ -206,15 +267,6 @@ DWORD VdmMapEmsFrame(VOID)
     }
     return VDM_NO_EMS_FRAME;
 }
-
-/* A real PC's PICs: the master based at 08h, the slave at 70h, cascaded on line 2. */
-#define VDM_ICA_MASTER_VECTOR_BASE  0x08        /* IRQ0-7 -> INT 08h..0Fh */
-#define VDM_ICA_SLAVE_VECTOR_BASE   0x70        /* IRQ8-15 -> INT 70h..77h */
-#define VDM_ICA_VECTOR_BASE_HIGH    0x00        /* The high byte of the vector-base word */
-#define VDM_ICA_CASCADE_BIT         (1 << 2)    /* IRQ2 */
-#define VDM_ICA_LINES_PER_PIC       8
-#define VDM_ICA_LINE_MASK           7
-#define VDM_ICA_SINGLE_DISPATCH     1
 
 /* Program the virtual PIC the kernel emulates for us. Until now these buffers were
  * handed over zeroed -- "generous sizes so every probe lands in valid memory" -- which
@@ -278,9 +330,6 @@ VOID VdmIcaSetMask(UINT irq, INT isMasked)
         ica[ICA_IMR] &= (BYTE)~lineBit;
 }
 
-#define VDM_ICA_STATE_ISR_SHIFT     8
-#define VDM_ICA_STATE_IMR_SHIFT     16
-
 DWORD VdmIcaGetState(UINT irq)
 {
     const BYTE *ica = (irq < VDM_ICA_LINES_PER_PIC) ? g_IcaMaster : g_IcaSlave;
@@ -288,8 +337,6 @@ DWORD VdmIcaGetState(UINT irq)
     return ((DWORD)ica[ICA_IRR]) | ((DWORD)ica[ICA_ISR] << VDM_ICA_STATE_ISR_SHIFT) |
            ((DWORD)ica[ICA_IMR] << VDM_ICA_STATE_IMR_SHIFT);
 }
-
-#define VDM_NO_NT_VDM_CONTROL   1   /* The status for "ntdll has no NtVdmControl" */
 
 LONG VdmRegisterWithKernel(VOID)
 {
@@ -312,27 +359,6 @@ LONG VdmRegisterWithKernel(VOID)
         return VDM_NO_NT_VDM_CONTROL;
     return g_NtVdmControl(VDM_SVC_VdmInitialize, &g_InitializeData);
 }
-
-/* The VDM_TIB fields ntvdm initialises when it allocates one (0xf044374). Only Size's
- * meaning is recovered; the rest are set to ntvdm's values without a claim about what
- * they are. (0x3B and 0x23 are the values of XP's TEB and flat user-data selectors.)
- */
-#define VTIB_SIZE_FIELD         0x000
-#define VTIB_FIELD_098          0x098
-#define VTIB_FIELD_098_VALUE    0
-#define VTIB_FIELD_09C          0x09c
-#define VTIB_FIELD_09C_VALUE    0x3b
-#define VTIB_FIELD_0A0          0x0a0
-#define VTIB_FIELD_0A4          0x0a4
-#define VTIB_FIELD_0A0_VALUE    0x23    /* Both 0x0A0 and 0x0A4 */
-#define VTIB_FIELD_66C          0x66c
-#define VTIB_FIELD_66C_VALUE    0xffffffff
-#define VTIB_FLAG_5E4           0x5e4
-#define VTIB_FLAG_5E5           0x5e5
-#define VTIB_FLAG_5E6           0x5e6
-#define VTIB_FLAG_5E_VALUE      1       /* 0x5E4, 0x5E5 and 0x5E6 */
-#define VTIB_FLAG_670           0x670
-#define VTIB_FLAG_670_VALUE     0
 
 volatile BYTE *VdmGetTib(VOID)
 {
@@ -362,8 +388,6 @@ volatile BYTE *VdmGetTib(VOID)
     }
     return tib;
 }
-
-#define VDM_ENTRY_REGISTER_ZERO     0
 
 VOID VdmSetEntry(
     volatile BYTE *tib,
@@ -408,15 +432,6 @@ LONG VdmControl(ULONG service, PVOID serviceData)
     return g_NtVdmControl(service, serviceData);
 }
 
-/* The NtSetLdtEntries block: two {selector, low, high} triples. */
-#define VDM_LDT_ENTRIES_DWORDS      6
-#define VDM_LDT_FIRST_SELECTOR      0
-#define VDM_LDT_FIRST_LOW           1
-#define VDM_LDT_FIRST_HIGH          2
-#define VDM_LDT_SECOND_SELECTOR     3
-#define VDM_LDT_SECOND_LOW          4
-#define VDM_LDT_SECOND_HIGH         5
-
 LONG VdmInstallLdtEntries(
     WORD firstSelector,
     DWORD firstLow,
@@ -436,19 +451,6 @@ LONG VdmInstallLdtEntries(
     serviceData[VDM_LDT_SECOND_HIGH] = secondHigh;
     return VdmControl(VDM_SVC_VdmSetLdtEntries, serviceData);
 }
-
-/* PROCESS_LDT_INFORMATION { ULONG Start; ULONG Length; LDT_ENTRY Entries[] }. */
-#define VDM_LDT_INFO_START          0
-#define VDM_LDT_INFO_LENGTH         1
-#define VDM_LDT_INFO_HEADER_DWORDS  2
-#define VDM_LDT_INFO_HEADER_BYTES   8   /* FIELD_OFFSET(Entries) */
-#define VDM_LDT_MAX_DESCRIPTORS     64
-#define VDM_LDT_DWORDS_PER_ENTRY    2
-#define VDM_LDT_BYTES_PER_ENTRY     8
-#define VDM_LDT_TABLE_TOO_LARGE     1   /* The status for a table past the buffer */
-#define VDM_LDT_SERVICE_BUFFER      0   /* ServiceData = { &buffer, size } */
-#define VDM_LDT_SERVICE_SIZE        1
-#define VDM_LDT_SERVICE_DWORDS      2
 
 LONG VdmRegisterLdtTable(WORD startSelector, const DWORD *entries, INT count)
 {

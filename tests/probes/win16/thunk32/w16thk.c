@@ -25,17 +25,6 @@
 
 #include <windows.h>
 
-typedef BOOL   (WINAPI *PWOW_CALLBACK16_EX)(DWORD, DWORD, DWORD, PVOID, PDWORD);
-typedef DWORD  (WINAPI *PWOW_CALLBACK16)(DWORD, DWORD);
-typedef WORD   (WINAPI *PWOW_GLOBAL_ALLOC16)(WORD, DWORD);
-typedef WORD   (WINAPI *PWOW_GLOBAL_FREE16)(WORD);
-typedef DWORD  (WINAPI *PWOW_GLOBAL_LOCK16)(WORD);
-typedef BOOL   (WINAPI *PWOW_GLOBAL_UNLOCK16)(WORD);
-typedef DWORD  (WINAPI *PWOW_GLOBAL_ALLOC_LOCK16)(WORD, DWORD, WORD *);
-typedef WORD   (WINAPI *PWOW_GLOBAL_UNLOCK_FREE16)(DWORD);
-typedef DWORD  (WINAPI *PWOW_GLOBAL_LOCK_SIZE16)(WORD, PDWORD);
-typedef LPVOID (WINAPI *PWOW_GET_VDM_POINTER)(DWORD, DWORD, BOOL);
-
 #define WCB16_PASCAL                    0               /* wownt32.h */
 #define THUNK_NOT_FOUND                 0xDEAD0001u     /* WOW32.DLL or the export is missing */
 #define THUNK_CALL_FAILED               0xDEAD0002u
@@ -72,6 +61,26 @@ typedef LPVOID (WINAPI *PWOW_GET_VDM_POINTER)(DWORD, DWORD, BOOL);
 #define THUNK_ANSWER_OTHER              2               /* GlobalFree16 */
 #define THUNK_ANSWER_SELECTOR           2               /* GlobalUnlockFree16: the selector */
 #define THUNK_ANSWER_UNKNOWN            3               /* GlobalUnlockFree16: anything else */
+
+typedef BOOL   (WINAPI *PWOW_CALLBACK16_EX)(DWORD, DWORD, DWORD, PVOID, PDWORD);
+
+typedef DWORD  (WINAPI *PWOW_CALLBACK16)(DWORD, DWORD);
+
+typedef WORD   (WINAPI *PWOW_GLOBAL_ALLOC16)(WORD, DWORD);
+
+typedef WORD   (WINAPI *PWOW_GLOBAL_FREE16)(WORD);
+
+typedef DWORD  (WINAPI *PWOW_GLOBAL_LOCK16)(WORD);
+
+typedef BOOL   (WINAPI *PWOW_GLOBAL_UNLOCK16)(WORD);
+
+typedef DWORD  (WINAPI *PWOW_GLOBAL_ALLOC_LOCK16)(WORD, DWORD, WORD *);
+
+typedef WORD   (WINAPI *PWOW_GLOBAL_UNLOCK_FREE16)(DWORD);
+
+typedef DWORD  (WINAPI *PWOW_GLOBAL_LOCK_SIZE16)(WORD, PDWORD);
+
+typedef LPVOID (WINAPI *PWOW_GET_VDM_POINTER)(DWORD, DWORD, BOOL);
 
 static FARPROC ThunkWow32Procedure(const char *name)
 {

@@ -36,6 +36,7 @@
  * the day. See src/dos/dos_recovery.h.
  */
 #define STARTFAIL_PATH  OUT_("startfail.txt")
+
 UINT RecoveryRead(VOID)
 {
     CHAR buffer[16];

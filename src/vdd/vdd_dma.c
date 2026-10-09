@@ -76,6 +76,28 @@
 #define DMA_OK                          0
 #define DMA_FAILED                      (-1)
 
+/* THE 8237 AS ITS OWN BUS MASTER: SOFTWARE REQUESTS. (#246):
+ * Every transfer above is PULLED by a device. A request-register bit is a DREQ no
+ * device made, so the controller has to carry the cycles out itself -- and nothing
+ * is on the other end of DACK. What that means, per transfer type:
+ *   verify (00)  address and count walk; no memory cycle at all (the datasheet's
+ *                "pseudo transfers")
+ *   read   (10)  memory is read onto the bus for a device that is not listening:
+ *                nothing observable but the walk
+ *   write  (01)  memory is WRITTEN from a data bus nobody drives: the bytes are
+ *                FFh, the same float every unclaimed port reads on this host
+ *   11           illegal; treated as verify, which touches nothing
+ * The request stays asserted until TC ("cleared upon generation of a TC"), so in
+ * demand, single and block mode alike the channel runs to terminal count. A
+ * channel in CASCADE mode does no cycles of its own and ignores it.
+ *
+ * [CAUTION]: MEMORY OUTSIDE THE VDM IS NOT TOUCHED. A guest linear address is a host VA only
+ * for the V86 space (the first 1 MB + the HMA); the 8237's 24-bit physical address
+ * has no meaning beyond it here, and a write there could land anywhere in the host
+ * process. Cycles beyond 110000h walk and count, and move nothing.
+ */
+#define DMA_PHYSICAL_LIMIT              0x110000u
+
 /* Page register port -> channel. The mapping is not sequential; it is what IBM
  * wired, and getting it wrong silently corrupts the high address bits.
  */
@@ -332,28 +354,6 @@ UINT32 VddDmaWrite(
 {
     return DmaTransfer(state, channelNumber, 0, source, byteCount, isTerminalCount);
 }
-
-/* THE 8237 AS ITS OWN BUS MASTER: SOFTWARE REQUESTS. (#246):
- * Every transfer above is PULLED by a device. A request-register bit is a DREQ no
- * device made, so the controller has to carry the cycles out itself -- and nothing
- * is on the other end of DACK. What that means, per transfer type:
- *   verify (00)  address and count walk; no memory cycle at all (the datasheet's
- *                "pseudo transfers")
- *   read   (10)  memory is read onto the bus for a device that is not listening:
- *                nothing observable but the walk
- *   write  (01)  memory is WRITTEN from a data bus nobody drives: the bytes are
- *                FFh, the same float every unclaimed port reads on this host
- *   11           illegal; treated as verify, which touches nothing
- * The request stays asserted until TC ("cleared upon generation of a TC"), so in
- * demand, single and block mode alike the channel runs to terminal count. A
- * channel in CASCADE mode does no cycles of its own and ignores it.
- *
- * [CAUTION]: MEMORY OUTSIDE THE VDM IS NOT TOUCHED. A guest linear address is a host VA only
- * for the V86 space (the first 1 MB + the HMA); the 8237's 24-bit physical address
- * has no meaning beyond it here, and a write there could land anywhere in the host
- * process. Cycles beyond 110000h walk and count, and move nothing.
- */
-#define DMA_PHYSICAL_LIMIT  0x110000u
 
 static BYTE *DmaMemory(PDMA_STATE state, UINT32 physical)
 {

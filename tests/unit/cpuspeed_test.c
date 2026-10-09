@@ -20,6 +20,11 @@
 #include <stdio.h>
 #include <string.h>
 #include "cpuspeed.h"
+#define CHECK(condition,message) do{ g_Total++; if(condition){printf("  PASS  %s\n",(message));} \
+    else{printf("  FAIL  %s\n",(message)); g_Failures++;} }while(0)
+
+static INT g_Total = 0;
+static INT g_Failures = 0;
 
 /* [CAUTION]: FIND A SPEED BY ITS MHz, NEVER BY A HARD-CODED INDEX. The list is ordered and
  * extensible, so an index written into a test is a fact about today's table rather
@@ -35,11 +40,6 @@ static UINT CpuSpeedTestIndexOf(UINT mhz)
             return index;
     return CPUSPEED_COUNT;   /* not found: an off-end index, never a silent 0 */
 }
-
-static INT g_Total = 0;
-static INT g_Failures = 0;
-#define CHECK(condition,message) do{ g_Total++; if(condition){printf("  PASS  %s\n",(message));} \
-    else{printf("  FAIL  %s\n",(message)); g_Failures++;} }while(0)
 
 /* THE DETERMINISTIC HEART OF THE THROTTLE (Importance = 3):
  * CpuSpeedStep (cpuspeed.h) IS the whole control law, and here it is driven against

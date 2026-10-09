@@ -13,93 +13,98 @@
 #include "../dos/bios_bda_fields.h"     /* the BDA's fields */
 
 /* The counter modes (Intel 8254, 231164-005). Modes 6 and 7 are aliases of 2 and 3. */
-#define PIT_MODE_0                  0       /* Interrupt on terminal count */
-#define PIT_MODE_1                  1       /* Hardware retriggerable one-shot */
-#define PIT_MODE_2                  2       /* Rate generator */
-#define PIT_MODE_3                  3       /* Square wave */
-#define PIT_MODE_4                  4       /* Software-triggered strobe */
-#define PIT_MODE_5                  5       /* Hardware-triggered strobe */
-#define PIT_MODE_ALIAS_FIRST        6       /* 110 and 111 behave as 010 and 011 */
-#define PIT_MODE_ALIAS_OFFSET       4
+#define PIT_MODE_0                      0       /* Interrupt on terminal count */
+#define PIT_MODE_1                      1       /* Hardware retriggerable one-shot */
+#define PIT_MODE_2                      2       /* Rate generator */
+#define PIT_MODE_3                      3       /* Square wave */
+#define PIT_MODE_4                      4       /* Software-triggered strobe */
+#define PIT_MODE_5                      5       /* Hardware-triggered strobe */
+#define PIT_MODE_ALIAS_FIRST            6       /* 110 and 111 behave as 010 and 011 */
+#define PIT_MODE_ALIAS_OFFSET           4
 
 /* The Control Word (port 43h): SC1:0 | RW1:0 | M2:0 | BCD. */
-#define PIT_CW_COUNTER_SHIFT        6
-#define PIT_CW_ACCESS_SHIFT         4
-#define PIT_CW_ACCESS_MASK          3
-#define PIT_CW_MODE_SHIFT           1
-#define PIT_CW_MODE_MASK            7
-#define PIT_CW_BCD                  1
-#define PIT_SELECT_COUNTER1         1       /* SC1:0 */
-#define PIT_SELECT_COUNTER2         2
-#define PIT_SELECT_READ_BACK        3
+#define PIT_CW_COUNTER_SHIFT            6
+#define PIT_CW_ACCESS_SHIFT             4
+#define PIT_CW_ACCESS_MASK              3
+#define PIT_CW_MODE_SHIFT               1
+#define PIT_CW_MODE_MASK                7
+#define PIT_CW_BCD                      1
+#define PIT_SELECT_COUNTER1             1       /* SC1:0 */
+#define PIT_SELECT_COUNTER2             2
+#define PIT_SELECT_READ_BACK            3
 
 /* RW1:0, the access mode. */
-#define PIT_ACCESS_LATCH            0       /* counter latch command */
-#define PIT_ACCESS_LOW              1       /* LSB only */
-#define PIT_ACCESS_HIGH             2       /* MSB only */
-#define PIT_ACCESS_LOW_HIGH         3       /* LSB then MSB */
+#define PIT_ACCESS_LATCH                0       /* counter latch command */
+#define PIT_ACCESS_LOW                  1       /* LSB only */
+#define PIT_ACCESS_HIGH                 2       /* MSB only */
+#define PIT_ACCESS_LOW_HIGH             3       /* LSB then MSB */
 
 /* The Read-Back command (both latch bits ACTIVE LOW) and the status byte it latches. */
-#define PIT_READ_BACK_NO_STATUS     0x10    /* Bit 4 = 0 latches the status */
-#define PIT_READ_BACK_NO_COUNT      0x20    /* Bit 5 = 0 latches the count */
-#define PIT_STATUS_OUT              0x80
-#define PIT_STATUS_NULL_COUNT       0x40
-#define PIT_STATUS_ACCESS_SHIFT     4
-#define PIT_STATUS_MODE_SHIFT       1
-#define PIT_STATUS_LOW              0
+#define PIT_READ_BACK_NO_STATUS         0x10    /* Bit 4 = 0 latches the status */
+#define PIT_READ_BACK_NO_COUNT          0x20    /* Bit 5 = 0 latches the count */
+#define PIT_STATUS_OUT                  0x80
+#define PIT_STATUS_NULL_COUNT           0x40
+#define PIT_STATUS_ACCESS_SHIFT         4
+#define PIT_STATUS_MODE_SHIFT           1
+#define PIT_STATUS_LOW                  0
 
 /* Bytes of a 16-bit count. */
-#define PIT_LOW_BYTE                0xFF
+#define PIT_LOW_BYTE                    0xFF
 
 /* Ports. */
-#define PIT_COUNTER0_PORT           0x40
-#define PIT_COUNTER1_PORT           0x41
-#define PIT_COUNTER2_PORT           0x42
-#define PIT_CONTROL_PORT            0x43
-#define PIT_COUNTER0                0
-#define PIT_COUNTER1                1
-#define PIT_COUNTER2                2
-#define PIT_NO_COUNTER              (-1)
-#define PIT_UNDRIVEN_BUS            0xFF
+#define PIT_COUNTER0_PORT               0x40
+#define PIT_COUNTER1_PORT               0x41
+#define PIT_COUNTER2_PORT               0x42
+#define PIT_CONTROL_PORT                0x43
+#define PIT_COUNTER0                    0
+#define PIT_COUNTER1                    1
+#define PIT_COUNTER2                    2
+#define PIT_NO_COUNTER                  (-1)
+#define PIT_UNDRIVEN_BUS                0xFF
 
 /* Pacing. */
-#define PIT_CATCH_UP_GUARD          100000  /* Most IRQ0 periods caught up in one call */
-#define PIT_HALF                    2       /* mode 3 runs each half of the period */
-#define PIT_SQUARE_WAVE_STEP        2       /* mode 3 decrements by two */
+#define PIT_CATCH_UP_GUARD              100000  /* Most IRQ0 periods caught up in one call */
+#define PIT_HALF                        2       /* mode 3 runs each half of the period */
+#define PIT_SQUARE_WAVE_STEP            2       /* mode 3 decrements by two */
 
 /* POST's choices (see VddPitReset) and DRAM refresh. */
-#define PIT_REFRESH_DIVISOR         18
+#define PIT_REFRESH_DIVISOR             18
 
 /* The BIOS: data area, vectors, INT 1Ah. */
-#define PIT_BIOS_DATA_SEGMENT       0x40
-#define PIT_TIMER_VECTOR            0x08
-#define PIT_TIME_OF_DAY_VECTOR      0x1A
-#define PIT_1A_GET_TICKS            0x00
-#define PIT_1A_SET_TICKS            0x01
-#define PIT_1A_GET_TIME             0x02
-#define PIT_1A_SET_TIME             0x03
-#define PIT_1A_GET_DATE             0x04
-#define PIT_1A_SET_DATE             0x05
-#define PIT_TICKS_HIGH_SHIFT        16      /* CX:DX = the tick count */
-#define PIT_TICKS_LOW_MASK          0xFFFF
-#define PIT_DECIMAL_BASE            10
-#define PIT_BCD_TENS_WEIGHT         16
-#define PIT_BCD_FIELD_SHIFT         4
-#define PIT_BCD_UNITS_MASK          0x0F
-#define PIT_BCD_MAX_DIGIT           9
-#define PIT_DATE_FIELDS             4u      /* Century, year, month, day */
-#define PIT_TIME_FIELDS             3u      /* Hour, minute, second */
-#define PIT_FIELD_COUNT             4
-#define PIT_FIELD_0                 0
-#define PIT_FIELD_1                 1
-#define PIT_FIELD_2                 2
-#define PIT_FIELD_3                 3
-#define PIT_DEFAULT_CENTURY         20      /* The reading's defaults before the host fills it */
-#define PIT_MAX_HOUR                23
-#define PIT_MAX_MINUTE              59
-#define PIT_MAX_SECOND              59
-#define PIT_OK                      0
-#define PIT_FAILED                  (-1)
+#define PIT_BIOS_DATA_SEGMENT           0x40
+#define PIT_TIMER_VECTOR                0x08
+#define PIT_TIME_OF_DAY_VECTOR          0x1A
+#define PIT_1A_GET_TICKS                0x00
+#define PIT_1A_SET_TICKS                0x01
+#define PIT_1A_GET_TIME                 0x02
+#define PIT_1A_SET_TIME                 0x03
+#define PIT_1A_GET_DATE                 0x04
+#define PIT_1A_SET_DATE                 0x05
+#define PIT_TICKS_HIGH_SHIFT            16      /* CX:DX = the tick count */
+#define PIT_TICKS_LOW_MASK              0xFFFF
+#define PIT_DECIMAL_BASE                10
+#define PIT_BCD_TENS_WEIGHT             16
+#define PIT_BCD_FIELD_SHIFT             4
+#define PIT_BCD_UNITS_MASK              0x0F
+#define PIT_BCD_MAX_DIGIT               9
+#define PIT_DATE_FIELDS                 4u      /* Century, year, month, day */
+#define PIT_TIME_FIELDS                 3u      /* Hour, minute, second */
+#define PIT_FIELD_COUNT                 4
+#define PIT_FIELD_0                     0
+#define PIT_FIELD_1                     1
+#define PIT_FIELD_2                     2
+#define PIT_FIELD_3                     3
+#define PIT_DEFAULT_CENTURY             20      /* The reading's defaults before the host fills it */
+#define PIT_MAX_HOUR                    23
+#define PIT_MAX_MINUTE                  59
+#define PIT_MAX_SECOND                  59
+#define PIT_OK                          0
+#define PIT_FAILED                      (-1)
+
+/* See PIT_STATE.guard in the header: every touch of counter state from a caller
+ * the HOST does not already serialize against the pacer goes through this.
+ */
+#define PIT_GUARD(state, isEntering)    do { if ((state)->Guard) (state)->Guard((state)->GuardContext, (isEntering)); } while (0)
 
 /* THE COUNT STARTS WHEN THE GUEST LOADS IT (Importance = 4):
  * This used to be `R - (total_clocks % R)`: a free-running divider whose phase had
@@ -256,6 +261,43 @@ VOID VddPitCounter2Gate(PPIT_STATE state, INT isHigh)
     {
         counter->GateElapsed = PitCounterElapsed(state, counter);
         counter->Gate = 0;
+    }
+}
+
+/* THE OUT PIN, DERIVED RATHER THAN STORED:
+ * OUT is a function of the mode and how far the count has got, so there is no
+ * state to keep in step -- and keeping it derived means it cannot go stale the
+ * way a cached flag would. docs/ref/pit.md 5 is the table this implements.
+ */
+static INT PitOutPin(BYTE mode, UINT32 reload, UINT64 elapsed)
+{
+    UINT32 phase;
+
+    switch (mode)
+    {
+    case PIT_MODE_0:                         /* low while counting, high at TC */
+
+    case PIT_MODE_1:
+        return elapsed >= reload;
+
+    case PIT_MODE_2:                         /* high, low for ONE clock at 1 */
+        phase = (UINT32)(elapsed % reload);
+        return phase != (reload - 1);
+
+    case PIT_MODE_3:                         /* square wave: high half, low half */
+    {
+        UINT32 half = (reload + 1) / PIT_HALF;
+        phase = (UINT32)(elapsed % reload);
+        return phase < half;
+    }
+
+    case PIT_MODE_4:                         /* high, one-clock strobe at TC */
+
+    case PIT_MODE_5:
+        return elapsed != reload;
+
+    default:
+        return 1;
     }
 }
 
@@ -461,11 +503,6 @@ static VOID PitLoad(PPIT_STATE state, WORD written)
     state->Restarts++;
 }
 
-/* See PIT_STATE.guard in the header: every touch of counter state from a caller
- * the HOST does not already serialize against the pacer goes through this.
- */
-#define PIT_GUARD(state, isEntering)    do { if ((state)->Guard) (state)->Guard((state)->GuardContext, (isEntering)); } while (0)
-
 static VOID PitFrame(PVOID context)
 {
     PPIT_STATE state = (PPIT_STATE)context;
@@ -481,43 +518,6 @@ static VOID PitFrame(PVOID context)
     PIT_GUARD(state, 1);
     VddPitAddClocks(state, clocks);
     PIT_GUARD(state, 0);
-}
-
-/* THE OUT PIN, DERIVED RATHER THAN STORED:
- * OUT is a function of the mode and how far the count has got, so there is no
- * state to keep in step -- and keeping it derived means it cannot go stale the
- * way a cached flag would. docs/ref/pit.md 5 is the table this implements.
- */
-static INT PitOutPin(BYTE mode, UINT32 reload, UINT64 elapsed)
-{
-    UINT32 phase;
-
-    switch (mode)
-    {
-    case PIT_MODE_0:                         /* low while counting, high at TC */
-
-    case PIT_MODE_1:
-        return elapsed >= reload;
-
-    case PIT_MODE_2:                         /* high, low for ONE clock at 1 */
-        phase = (UINT32)(elapsed % reload);
-        return phase != (reload - 1);
-
-    case PIT_MODE_3:                         /* square wave: high half, low half */
-    {
-        UINT32 half = (reload + 1) / PIT_HALF;
-        phase = (UINT32)(elapsed % reload);
-        return phase < half;
-    }
-
-    case PIT_MODE_4:                         /* high, one-clock strobe at TC */
-
-    case PIT_MODE_5:
-        return elapsed != reload;
-
-    default:
-        return 1;
-    }
 }
 
 /* Status byte: b7 OUT, b6 null count, b5:4 access, b3:1 mode, b0 BCD.

@@ -26,15 +26,15 @@
 #include <stdio.h>
 #include <stdint.h>
 #include "../../src/host/dpmi_svc.h"
-
-static INT g_Total = 0;
-static INT g_Failures = 0;
 #define CHECK(condition,message) do{ g_Total++; if(condition){printf("  PASS  %s\n",(message));} \
     else{printf("  FAIL  %s\n",(message)); g_Failures++;} }while(0)
 
 #define HDLR    0x0050  /* DOS_HDLR_SEG -- passed in, so the test needs no layout header */
 #define CBBASE  0x0090  /* DPMI_CB_BASE_OFF in main.c */
 #define LDTMAX  2048
+
+static INT g_Total = 0;
+static INT g_Failures = 0;
 
 INT main(VOID)
 {

@@ -14,6 +14,48 @@
 #include "../ntvdmex_bits.h"
 #include "../ntvdmex_x86.h"
 
+/* LDT selector indices we hand the client. A ring-3 Win32 process has no LDT
+ * entries of its own, so starting at 1 is safe (index 0 would be selector 0x07).
+ */
+#define DPMI_IDX_CODE                       1
+#define DPMI_IDX_DATA                       2
+#define DPMI_IDX_STACK                      3
+
+/* The x86 segment descriptor's fields (Intel SDM vol. 3, "Segment Descriptors"). */
+#define DPMI_DESCRIPTOR_BASE_LOW_SHIFT      16      /* Low dword: base 15-0 in bits 31-16 */
+#define DPMI_DESCRIPTOR_BASE_MID_SHIFT      16      /* base 23-16 -> high dword bits 7-0 */
+#define DPMI_DESCRIPTOR_ACCESS_SHIFT        8       /* access byte -> high dword bits 15-8 */
+#define DPMI_DESCRIPTOR_LIMIT_HIGH_SHIFT    16      /* limit 19-16, in and out */
+#define DPMI_DESCRIPTOR_BASE_HIGH_SHIFT     24      /* base 31-24, in and out */
+
+#define DPMI_FAR_RETURN_CS_OFFSET           2       /* 16-bit FAR CALL frame: [SP]=IP, [SP+2]=CS */
+#define DPMI_FAR_RETURN_FRAME_SIZE          4
+#define DPMI_CODE_ACCESS                    0xFA    /* Present, DPL 3, code exec/read */
+#define DPMI_DATA_ACCESS                    0xF2    /* Present, DPL 3, data read/write */
+#define DPMI_FLAGS_16BIT_BYTE               0x0     /* G=0, D/B=0: 16-bit, byte-granular */
+#define DPMI_SEGMENT_LIMIT                  0xFFFF  /* 64KB */
+#define DPMI_LDT_TABLE_ENTRIES              4       /* Null, code, data, stack */
+#define DPMI_DWORDS_PER_DESCRIPTOR          2
+#define DPMI_DESCRIPTOR_HIGH                1       /* A descriptor's second dword */
+#define DPMI_IDX_NULL                       0
+#define DPMI_LDT_TABLE_DWORDS               (DPMI_DWORDS_PER_DESCRIPTOR * DPMI_LDT_TABLE_ENTRIES)
+#define DPMI_LDT_FIRST_SELECTOR             0
+#define DPMI_NULL_DESCRIPTOR                0
+#define DPMI_SWITCH_OK                      0
+#define DPMI_SWITCH_FAILED                  (-1)
+
+#define DPMI_NTDLL_NAME                     "ntdll.dll"
+#define DPMI_NT_CONTINUE                    "NtContinue"
+
+/* Run the guest in protected mode DIRECTLY in this host process, the way ntvdm does
+ * (0xf04483c iret's into the client -- PM is NOT run by the kernel monitor). We use
+ * NtContinue, the documented syscall that loads a full CONTEXT (incl. LDT selectors)
+ * and resumes at ring 3 -- the same effect as ntvdm's manual iretd. The guest runs
+ * in-process using the process LDT that svc 10/11 populated; its INT 31h / faults
+ * surface as Win32 exceptions the VEH catches. NtContinue does not return on success.
+ */
+typedef LONG (WINAPI *PFN_NtContinue)(CONTEXT *, BOOLEAN);
+
 /* Diagnostic snapshot of the last switch (read by the host log): ret_cs, ret_ip,
  * code descriptor lo, code descriptor hi. Localises base-0 faults (my descriptor
  * vs the monitor not loading the LDT).
@@ -28,20 +70,6 @@ DWORD g_DpmiSegmentBase[DPMI_INITIAL_SELECTORS] = {0,0,0};
  * DpmiSwitchToProtectedMode. It is the right input for DPMI API register widths, not for D/B.
  */
 INT g_DpmiIsClient32 = FALSE;
-
-/* LDT selector indices we hand the client. A ring-3 Win32 process has no LDT
- * entries of its own, so starting at 1 is safe (index 0 would be selector 0x07).
- */
-#define DPMI_IDX_CODE                       1
-#define DPMI_IDX_DATA                       2
-#define DPMI_IDX_STACK                      3
-
-/* The x86 segment descriptor's fields (Intel SDM vol. 3, "Segment Descriptors"). */
-#define DPMI_DESCRIPTOR_BASE_LOW_SHIFT      16  /* Low dword: base 15-0 in bits 31-16 */
-#define DPMI_DESCRIPTOR_BASE_MID_SHIFT      16  /* base 23-16 -> high dword bits 7-0 */
-#define DPMI_DESCRIPTOR_ACCESS_SHIFT        8   /* access byte -> high dword bits 15-8 */
-#define DPMI_DESCRIPTOR_LIMIT_HIGH_SHIFT    16  /* limit 19-16, in and out */
-#define DPMI_DESCRIPTOR_BASE_HIGH_SHIFT     24  /* base 31-24, in and out */
 
 VOID DpmiBuildDescriptor(
     DWORD base,
@@ -61,22 +89,6 @@ VOID DpmiBuildDescriptor(
         | (((DWORD)flags & NIBBLE_MASK) << X86_DESCRIPTOR_FLAGS_SHIFT)
         | (((base >> DPMI_DESCRIPTOR_BASE_HIGH_SHIFT) & BYTE_MASK) << DPMI_DESCRIPTOR_BASE_HIGH_SHIFT);
 }
-
-#define DPMI_FAR_RETURN_CS_OFFSET   2       /* 16-bit FAR CALL frame: [SP]=IP, [SP+2]=CS */
-#define DPMI_FAR_RETURN_FRAME_SIZE  4
-#define DPMI_CODE_ACCESS            0xFA    /* Present, DPL 3, code exec/read */
-#define DPMI_DATA_ACCESS            0xF2    /* Present, DPL 3, data read/write */
-#define DPMI_FLAGS_16BIT_BYTE       0x0     /* G=0, D/B=0: 16-bit, byte-granular */
-#define DPMI_SEGMENT_LIMIT          0xFFFF  /* 64KB */
-#define DPMI_LDT_TABLE_ENTRIES      4       /* Null, code, data, stack */
-#define DPMI_DWORDS_PER_DESCRIPTOR  2
-#define DPMI_DESCRIPTOR_HIGH        1       /* A descriptor's second dword */
-#define DPMI_IDX_NULL               0
-#define DPMI_LDT_TABLE_DWORDS       (DPMI_DWORDS_PER_DESCRIPTOR * DPMI_LDT_TABLE_ENTRIES)
-#define DPMI_LDT_FIRST_SELECTOR     0
-#define DPMI_NULL_DESCRIPTOR        0
-#define DPMI_SWITCH_OK              0
-#define DPMI_SWITCH_FAILED          (-1)
 
 INT DpmiSwitchToProtectedMode(
     volatile BYTE *tib,
@@ -236,18 +248,6 @@ INT DpmiSwitchToProtectedMode(
     VDM_SET16(tib, VTIB_GS,  dataSelector);
     return DPMI_SWITCH_OK;
 }
-
-/* Run the guest in protected mode DIRECTLY in this host process, the way ntvdm does
- * (0xf04483c iret's into the client -- PM is NOT run by the kernel monitor). We use
- * NtContinue, the documented syscall that loads a full CONTEXT (incl. LDT selectors)
- * and resumes at ring 3 -- the same effect as ntvdm's manual iretd. The guest runs
- * in-process using the process LDT that svc 10/11 populated; its INT 31h / faults
- * surface as Win32 exceptions the VEH catches. NtContinue does not return on success.
- */
-typedef LONG (WINAPI *PFN_NtContinue)(CONTEXT *, BOOLEAN);
-
-#define DPMI_NTDLL_NAME     "ntdll.dll"
-#define DPMI_NT_CONTINUE    "NtContinue"
 
 VOID DpmiRunProtectedMode(volatile BYTE *tib)
 {

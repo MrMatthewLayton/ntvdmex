@@ -68,6 +68,15 @@
 static INT g_Checks = 0;
 static INT g_Failures = 0;
 
+static BYTE g_Screen[PRTSC_TEST_SCREEN_ROWS][PRTSC_TEST_SCREEN_COLUMNS];
+static INT g_CellReads;
+
+/* Run a whole job; the printer answers PRTSC_TEST_PRINTER_READY for every byte except byte
+ * number `failAt` (1-based, 0 = never), which gets `failStatus`. Returns the final result.
+ */
+static BYTE g_Output[PRTSC_TEST_OUTPUT_SIZE];
+static INT g_OutputCount;
+
 static VOID PrintScreenTestCheck(BOOL passed, PCSTR message)
 {
     g_Checks++;
@@ -82,8 +91,6 @@ static VOID PrintScreenTestCheck(BOOL passed, PCSTR message)
     }
 }
 
-static BYTE g_Screen[PRTSC_TEST_SCREEN_ROWS][PRTSC_TEST_SCREEN_COLUMNS];
-static INT g_CellReads;
 static BYTE PrintScreenTestReadCell(PVOID context, BYTE row, BYTE column)
 {
     (VOID)context;
@@ -91,11 +98,6 @@ static BYTE PrintScreenTestReadCell(PVOID context, BYTE row, BYTE column)
     return g_Screen[row][column];
 }
 
-/* Run a whole job; the printer answers PRTSC_TEST_PRINTER_READY for every byte except byte
- * number `failAt` (1-based, 0 = never), which gets `failStatus`. Returns the final result.
- */
-static BYTE g_Output[PRTSC_TEST_OUTPUT_SIZE];
-static INT g_OutputCount;
 static INT PrintScreenTestRunJob(
     PBIOS_PRINT_SCREEN_JOB job,
     BYTE columns,

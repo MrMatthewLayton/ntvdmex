@@ -234,20 +234,189 @@
 #define DOS_INT21_PARSE_KEEP_NAME               0x04
 #define DOS_INT21_PARSE_KEEP_EXTENSION          0x08
 
+/* ---- INT 21h 4Eh/4Fh find-first/find-next.  GH #29. --------------------------
+ *
+ * DTA BLOCK LAYOUT, read off the oracle byte for byte (tests/probes/dos/p_find.asm).
+ * The dump cross-checks itself: the size field came back 0xD575 = 54645, which is
+ * COMMAND.COM's exact byte count.
+ *
+ *   [0]      drive number            [1-11]  11-byte search template
+ *   [12]     search attributes       [13-14] directory entry number
+ *   [15-16]  starting cluster        [17-20] reserved (DOS search state)
+ *   [21]     attribute of the file found
+ *   [22-23]  time      [24-25] date      [26-29] size (dword)
+ *   [30-42]  filename, ASCIIZ, 13 bytes
+ *
+ * The block is 43 bytes: byte 43 came back still poisoned, so nothing beyond it
+ * may be written.
+ *
+ * DOS keeps its own search state in the first 21 bytes.  We keep a Win32 handle
+ * instead and stash the slot number there, so a program that saves and restores
+ * its DTA between calls -- which real programs do -- resumes the right search.
+ */
+#define DOS_FIND_MAGIC                          0x4E
+
+/* ---- The FCB interface (AH=0Fh-24h, 27h-29h).  GH #36. ----------------------
+ *
+ * The pre-1983 file API.  Little 6.22-era software uses it, but TREE.COM does,
+ * and it is 19 of the 103 services 6.22 defines.
+ *
+ * MEASURED ON THE ORACLE (tests/probes/dos/p_fcb.asm), and the first fact matters
+ * more than the rest: **FCB calls report success in AL (00 ok, FF fail), and the
+ * CARRY FLAG IS UNDEFINED** -- a successful open came back with CF=1.  Anything
+ * that treats carry as the result here is reading noise.
+ *
+ * An opened FCB comes back with bytes 0-31 filled and the current-record and
+ * random-record fields (32-36) LEFT ALONE:
+ *   [0] drive  [1-8] name  [9-11] ext  [12-13] current block
+ *   [14-15] record size (128)  [16-19] file size  [20-21] date  [22-23] time
+ *   [24-31] DOS's own workspace -- we keep our handle slot there
+ *   [32] current record  [33-36] random record
+ *
+ * AH=11h/12h put a 33-byte directory entry in the DTA (that dump cross-checked
+ * itself: the size field read 54645, COMMAND.COM's exact length):
+ *   [0] drive  [1-11] name+ext  [12] attribute  [13-22] reserved
+ *   [23-24] time  [25-26] date  [27-28] starting cluster  [29-32] size
+ */
+#define DOS_FCB_MAGIC                           0x46
+
+/* #210: THE LONG-FILENAME API'S WIN32 HALF -- helpers for the AH=71h arm:
+ * The pure half (time conversion, the find record, short names, the action word) is
+ * dos_lfn.h; these only fetch what Win32 knows and hand it over.
+ *
+ * - LONG NAMES GO THROUGH THE SAME ...A FILE APIs AS EVERY OTHER DOS CALL HERE, i.e. the
+ *   ANSI code page: this host never calls SetFileApisToOEM, so 3Dh, 4Eh and 71xxh all
+ *   agree with each other about what a byte above 7Fh names. Stock NTVDM converts DOS
+ *   names with the OEM code page (its file APIs are set to OEM -- from the NT design, NOT
+ *   measured here). For ASCII the two are identical, and on the rig (CP437 OEM / 1252
+ *   ANSI) they differ only above 7Fh -- a non-ASCII long name is the place to look if a
+ *   program and stock disagree about one.
+ *
+ * - THE SEARCH TABLE. 714Eh hands the caller a HANDLE (AX) that it passes back to 714Fh
+ *   and closes with 71A1h -- unlike 4Eh, whose state rides in the DTA. Kept here, one
+ *   per VDM like g_DosSerialInfo; AX = slot + 1 so a handle is never 0.
+ *
+ * [CAUTION]: A program that never calls 71A1h leaks its slot until the table wraps: the 17th
+ * live search recycles the oldest (round robin), as 4Eh recycles its eighth. Windows
+ * 95 closes them when the PSP terminates; we have no per-PSP owner record yet.
+ *
+ * [CAUTION]: The handle VALUE is ours. Stock's numbering is not measured and p_lfn does not
+ * compare AX on 714Eh -- a program that treats the handle as opaque cannot tell.
+ */
+#define DOS_LFN_FIND_SLOTS                      16
+
+/* #275: WHICH DRIVE AN OPEN FILE IS ON, for INT 24h's AL on a 3Fh/40h failure:
+ * We keep no SFT, so the handle has to be asked. XP has no GetFinalPathNameByHandle;
+ * NtQueryObject(ObjectNameInformation) gives the file object's NT name
+ * ("\Device\Floppy0\X.TXT") and QueryDosDeviceA("A:") the drive's NT device, which
+ * works with no media in the drive -- the very case this is for. The match is the
+ * pure DosCritDriveFromNtName (dos_err.h, off-VM tested).
+ *
+ * [CAUTION]: Only ever called on a DISK file whose ReadFile/WriteFile just failed with a
+ * hardware error -- never on a pipe, where a name query can block.
+ * -1 = could not tell (the caller keeps the current drive, as #34 did).
+ */
+typedef struct
+{
+    USHORT Length;
+    USHORT MaximumLength;
+    PWSTR Buffer;
+} DOS_UNICODE_STRING;
+
+typedef LONG (WINAPI *DOS_NT_QUERY_OBJECT)(HANDLE, INT, PVOID, ULONG, PULONG);
+
 /* Set when the caller is servicing INT 21h for a client that is still in PROTECTED
  * mode (a DPMI client), so CF/ZF go to the live VTIB_EFLAGS instead of a pushed V86
  * FLAGS frame that does not exist there. See the pfl assignment below.
  */
 INT g_DosInt21IsProtectedMode = 0;
-VOID DosInt21SetProtectedMode(INT isOn)
-{
-    g_DosInt21IsProtectedMode = isOn ? 1 : 0;
-}
 
 /* -- THE VDM'S CLOCK (GH #250) -- see dos_clock.h. One per VDM, starts at the host's
  * time, moved only by a guest's own set calls.
  */
 DOS_CLOCK_STATE g_DosClock;
+
+/* GH #262: DOS'S CLOCK FOLLOWS THE TICK COUNT WHEN SOMEONE ELSE SET IT:
+ * The host wires g_DosTickTake to the PIT's witness (vdd_pit_tick_take, under the
+ * PIT's lock); NULL off-VM. DosClockSync is called before DOS's clock is read or
+ * set -- AH=2Ah/2Bh/2Ch/2Dh and every file stamp -- so a raw store to 0040:006C is
+ * seen by the next thing that asks DOS the time, as CLOCK$ would see it. With no
+ * store pending it is one compare under the lock and nothing else.
+ */
+INT (*g_DosTickTake)(UINT32 *ticks, UINT32 *wraps, UINT32 *since) = 0;
+
+/* INT 21h AH=53h private sub-functions, indexed by AL. See the handler for how each
+ * row was measured and why this is a table and not a switch. Defaults = the stock
+ * ntvdm measurement of 2026-09-25, which the host overrides from cfg\int53.txt.
+ *
+ * [CAUTION]: CHANGING A DEFAULT HERE IS A BEHAVIOUR CHANGE FOR EVERY GUEST -- the knob exists
+ * so an experiment does not have to be one.
+ */
+DOS_INT53_ANSWER g_DosInt53Answers[DOS_INT53_COUNT] = {
+    /* AL=00 */ { 0x0005, 0 },   /* documented form, asked with SI=BP=0 */
+    /* AL=01 */ { 0x0001, 1 },   /* genuinely unsupported: DOS "invalid function" */
+    /* AL=02 */ { 0x5300, 0 },   /* top of COMMAND.COM's main loop -- CF is the gate */
+    /* AL=03 */ { 0x0001, 1 },   /* genuinely unsupported */
+    /* AL=04 */ { 0x5300, 0 },
+    /* AL=05 */ { 0x5301, 0 },   /* [CAUTION] context-dependent, see the handler */
+    /* AL=06 */ { 0x5300, 0 },
+    /* AL=07 */ { 0x5301, 0 },
+};
+
+/* MS-DOS 6.22 country block for country 1 (USA), INT 21h AH=38h.  GH #38.
+ *
+ * TRANSCRIBED FROM THE ORACLE, byte for byte (tests/probes/dos/p_ctry.asm):
+ *   [0-1]  0000     date format, 0 = USA month/day/year
+ *   [2-6]  "$"      currency symbol, ASCIIZ in 5 bytes
+ *   [7-8]  ","      thousands separator      [9-10]  "."  decimal separator
+ *   [11-12] "-"     date separator           [13-14] ":"  time separator
+ *   [15]   00       currency format          [16]    02   digits after decimal
+ *   [17]   00       time format, 0 = 12-hour
+ *   [18-21]         FAR pointer to DOS's case-map routine -- filled in at run time
+ *   [22-23] ","     data-list separator
+ *
+ * THE LENGTH IS MEASURED, NOT ASSUMED. The probe poisoned the destination with
+ * 0xEE first: real DOS writes exactly 24 bytes and leaves everything past them
+ * alone. The commonly quoted "34-byte block" would have had us zeroing 10 bytes
+ * of the caller's memory that DOS never touches.
+ */
+static const BYTE g_DosCountryUs[24] = {
+    0x00, 0x00,
+    0x24, 0x00, 0x00, 0x00, 0x00,
+    0x2C, 0x00,   0x2E, 0x00,   0x2D, 0x00,   0x3A, 0x00,
+    0x00,   0x02,   0x00,
+    0x00, 0x00, 0x00, 0x00,               /* case-map FAR ptr, patched below */
+    0x2C, 0x00
+};
+
+/* FindFirstFileA + skip to the first DOS match; INVALID_HANDLE_VALUE if none (the
+ * handle is closed then, and *nodir says whether the DIRECTORY itself was missing).
+ */
+/* #34: the Win32 error of the last FindFirstFileA that failed outright, so a drive
+ * that is NOT READY (21) can be told from "no such file" -- the first is a critical
+ * error and goes to INT 24h, the second is an ordinary answer. 0 = it did not fail.
+ */
+static DWORD g_DosFindWin32Error;
+
+/* The drive DosHandleDrive found for THIS call's failed 3Fh/40h; -1 = none. Read by
+ * the INT 24h tail of DosInt21, reset at its entry (the g_DosFindWin32Error pattern).
+ */
+static INT g_DosReadWriteDrive = -1;
+
+/* #165: 6901h's serial, label and file-system type, per drive, for this session only
+ * (see the 6901h arm). 23 bytes = the 6900h/6901h block from offset 2.
+ */
+static BYTE g_DosSerialIsSet[DOS_DRIVE_LETTERS];
+static BYTE g_DosSerialInfo[DOS_DRIVE_LETTERS][DOS_INT21_SERIAL_INFO_SIZE];
+static HANDLE  g_DosLfnFinds[DOS_LFN_FIND_SLOTS];
+static BYTE g_DosLfnAllow[DOS_LFN_FIND_SLOTS];
+static BYTE g_DosLfnNeed[DOS_LFN_FIND_SLOTS];
+static UINT g_DosLfnNext;
+
+VOID DosInt21SetProtectedMode(INT isOn)
+{
+    g_DosInt21IsProtectedMode = isOn ? 1 : 0;
+}
 
 VOID DosClockHostNow(PDOS_CLOCK_TIME time)
 {
@@ -276,15 +445,6 @@ VOID DosClockRead(INT64 offset, PDOS_CLOCK_TIME out)
     }
     DosClockApplyOffset(&host, offset, out);
 }
-
-/* GH #262: DOS'S CLOCK FOLLOWS THE TICK COUNT WHEN SOMEONE ELSE SET IT:
- * The host wires g_DosTickTake to the PIT's witness (vdd_pit_tick_take, under the
- * PIT's lock); NULL off-VM. DosClockSync is called before DOS's clock is read or
- * set -- AH=2Ah/2Bh/2Ch/2Dh and every file stamp -- so a raw store to 0040:006C is
- * seen by the next thing that asks DOS the time, as CLOCK$ would see it. With no
- * store pending it is one compare under the lock and nothing else.
- */
-INT (*g_DosTickTake)(UINT32 *ticks, UINT32 *wraps, UINT32 *since) = 0;
 
 VOID DosClockFollow(UINT32 ticks, UINT32 wraps, UINT32 since)
 {
@@ -346,24 +506,6 @@ VOID DosStampVdmNow(HANDLE file)
     if (SystemTimeToFileTime(&systemTime, &localTime) && LocalFileTimeToFileTime(&localTime, &fileTime))
         SetFileTime(file, NULL, NULL, &fileTime);
 }
-
-/* INT 21h AH=53h private sub-functions, indexed by AL. See the handler for how each
- * row was measured and why this is a table and not a switch. Defaults = the stock
- * ntvdm measurement of 2026-09-25, which the host overrides from cfg\int53.txt.
- *
- * [CAUTION]: CHANGING A DEFAULT HERE IS A BEHAVIOUR CHANGE FOR EVERY GUEST -- the knob exists
- * so an experiment does not have to be one.
- */
-DOS_INT53_ANSWER g_DosInt53Answers[DOS_INT53_COUNT] = {
-    /* AL=00 */ { 0x0005, 0 },   /* documented form, asked with SI=BP=0 */
-    /* AL=01 */ { 0x0001, 1 },   /* genuinely unsupported: DOS "invalid function" */
-    /* AL=02 */ { 0x5300, 0 },   /* top of COMMAND.COM's main loop -- CF is the gate */
-    /* AL=03 */ { 0x0001, 1 },   /* genuinely unsupported */
-    /* AL=04 */ { 0x5300, 0 },
-    /* AL=05 */ { 0x5301, 0 },   /* [CAUTION] context-dependent, see the handler */
-    /* AL=06 */ { 0x5300, 0 },
-    /* AL=07 */ { 0x5301, 0 },
-};
 
 /* Does MS-DOS 6.22 provide a MEANINGFUL service at this AH?  GH #27.
  *
@@ -434,54 +576,6 @@ static HANDLE DosOpenStampable(
     return file;
 }
 
-/* MS-DOS 6.22 country block for country 1 (USA), INT 21h AH=38h.  GH #38.
- *
- * TRANSCRIBED FROM THE ORACLE, byte for byte (tests/probes/dos/p_ctry.asm):
- *   [0-1]  0000     date format, 0 = USA month/day/year
- *   [2-6]  "$"      currency symbol, ASCIIZ in 5 bytes
- *   [7-8]  ","      thousands separator      [9-10]  "."  decimal separator
- *   [11-12] "-"     date separator           [13-14] ":"  time separator
- *   [15]   00       currency format          [16]    02   digits after decimal
- *   [17]   00       time format, 0 = 12-hour
- *   [18-21]         FAR pointer to DOS's case-map routine -- filled in at run time
- *   [22-23] ","     data-list separator
- *
- * THE LENGTH IS MEASURED, NOT ASSUMED. The probe poisoned the destination with
- * 0xEE first: real DOS writes exactly 24 bytes and leaves everything past them
- * alone. The commonly quoted "34-byte block" would have had us zeroing 10 bytes
- * of the caller's memory that DOS never touches.
- */
-static const BYTE g_DosCountryUs[24] = {
-    0x00, 0x00,
-    0x24, 0x00, 0x00, 0x00, 0x00,
-    0x2C, 0x00,   0x2E, 0x00,   0x2D, 0x00,   0x3A, 0x00,
-    0x00,   0x02,   0x00,
-    0x00, 0x00, 0x00, 0x00,               /* case-map FAR ptr, patched below */
-    0x2C, 0x00
-};
-
-/* ---- INT 21h 4Eh/4Fh find-first/find-next.  GH #29. --------------------------
- *
- * DTA BLOCK LAYOUT, read off the oracle byte for byte (tests/probes/dos/p_find.asm).
- * The dump cross-checks itself: the size field came back 0xD575 = 54645, which is
- * COMMAND.COM's exact byte count.
- *
- *   [0]      drive number            [1-11]  11-byte search template
- *   [12]     search attributes       [13-14] directory entry number
- *   [15-16]  starting cluster        [17-20] reserved (DOS search state)
- *   [21]     attribute of the file found
- *   [22-23]  time      [24-25] date      [26-29] size (dword)
- *   [30-42]  filename, ASCIIZ, 13 bytes
- *
- * The block is 43 bytes: byte 43 came back still poisoned, so nothing beyond it
- * may be written.
- *
- * DOS keeps its own search state in the first 21 bytes.  We keep a Win32 handle
- * instead and stash the slot number there, so a program that saves and restores
- * its DTA between calls -- which real programs do -- resumes the right search.
- */
-#define DOS_FIND_MAGIC  0x4E
-
 static INT DosDtaMatchesAttributes(DWORD attributes, WORD mask)
 {
     /* DOS's rule is "normal files always match; these extras only if asked". */
@@ -522,30 +616,6 @@ static VOID DosDtaFill(volatile BYTE *dta, const WIN32_FIND_DATAA *findData)
     }
     dta[DOS_INT21_DTA_NAME + index] = 0;
 }
-
-/* ---- The FCB interface (AH=0Fh-24h, 27h-29h).  GH #36. ----------------------
- *
- * The pre-1983 file API.  Little 6.22-era software uses it, but TREE.COM does,
- * and it is 19 of the 103 services 6.22 defines.
- *
- * MEASURED ON THE ORACLE (tests/probes/dos/p_fcb.asm), and the first fact matters
- * more than the rest: **FCB calls report success in AL (00 ok, FF fail), and the
- * CARRY FLAG IS UNDEFINED** -- a successful open came back with CF=1.  Anything
- * that treats carry as the result here is reading noise.
- *
- * An opened FCB comes back with bytes 0-31 filled and the current-record and
- * random-record fields (32-36) LEFT ALONE:
- *   [0] drive  [1-8] name  [9-11] ext  [12-13] current block
- *   [14-15] record size (128)  [16-19] file size  [20-21] date  [22-23] time
- *   [24-31] DOS's own workspace -- we keep our handle slot there
- *   [32] current record  [33-36] random record
- *
- * AH=11h/12h put a 33-byte directory entry in the DTA (that dump cross-checked
- * itself: the size field read 54645, COMMAND.COM's exact length):
- *   [0] drive  [1-11] name+ext  [12] attribute  [13-22] reserved
- *   [23-24] time  [25-26] date  [27-28] starting cluster  [29-32] size
- */
-#define DOS_FCB_MAGIC   0x46
 
 static volatile BYTE *DosFcbAt(DWORD segment, DWORD offset)
 {
@@ -754,14 +824,6 @@ static VOID DosFindSplit(
     DosFcbPutName((volatile BYTE *)nameTemplate, pattern + cut);
 }
 
-/* FindFirstFileA + skip to the first DOS match; INVALID_HANDLE_VALUE if none (the
- * handle is closed then, and *nodir says whether the DIRECTORY itself was missing).
- */
-/* #34: the Win32 error of the last FindFirstFileA that failed outright, so a drive
- * that is NOT READY (21) can be told from "no such file" -- the first is a critical
- * error and goes to INT 24h, the second is an ordinary answer. 0 = it did not fail.
- */
-static DWORD g_DosFindWin32Error;
 static HANDLE DosFindFirst(
     PCSTR directoryPattern,
     const BYTE nameTemplate[DOS_FCB_NAME_SIZE],
@@ -788,24 +850,6 @@ static HANDLE DosFindFirst(
     return find;
 }
 
-/* #275: WHICH DRIVE AN OPEN FILE IS ON, for INT 24h's AL on a 3Fh/40h failure:
- * We keep no SFT, so the handle has to be asked. XP has no GetFinalPathNameByHandle;
- * NtQueryObject(ObjectNameInformation) gives the file object's NT name
- * ("\Device\Floppy0\X.TXT") and QueryDosDeviceA("A:") the drive's NT device, which
- * works with no media in the drive -- the very case this is for. The match is the
- * pure DosCritDriveFromNtName (dos_err.h, off-VM tested).
- *
- * [CAUTION]: Only ever called on a DISK file whose ReadFile/WriteFile just failed with a
- * hardware error -- never on a pipe, where a name query can block.
- * -1 = could not tell (the caller keeps the current drive, as #34 did).
- */
-typedef struct
-{
-    USHORT Length;
-    USHORT MaximumLength;
-    PWSTR Buffer;
-} DOS_UNICODE_STRING;
-typedef LONG (WINAPI *DOS_NT_QUERY_OBJECT)(HANDLE, INT, PVOID, ULONG, PULONG);
 static INT DosHandleDrive(HANDLE file)
 {
     static DOS_NT_QUERY_OBJECT queryObject;
@@ -847,11 +891,6 @@ static INT DosHandleDrive(HANDLE file)
     }
     return DosCritDriveFromNtName(name, devices);
 }
-
-/* The drive DosHandleDrive found for THIS call's failed 3Fh/40h; -1 = none. Read by
- * the INT 24h tail of DosInt21, reset at its entry (the g_DosFindWin32Error pattern).
- */
-static INT g_DosReadWriteDrive = -1;
 
 static INT DosFindNext(
     HANDLE find,
@@ -900,11 +939,6 @@ BYTE DosInt21CurrentDrive(PCDOS_MACHINE machine)
     return DosCurrentDrive(machine);
 }
 
-/* #165: 6901h's serial, label and file-system type, per drive, for this session only
- * (see the 6901h arm). 23 bytes = the 6900h/6901h block from offset 2.
- */
-static BYTE g_DosSerialIsSet[DOS_DRIVE_LETTERS];
-static BYTE g_DosSerialInfo[DOS_DRIVE_LETTERS][DOS_INT21_SERIAL_INFO_SIZE];
 /* BL as 69h takes it: 0 = the default drive, 1 = A:, ... -> 0-based, 26 if invalid. */
 static BYTE DosSerialDrive(PCDOS_MACHINE machine, BYTE driveNumber)
 {
@@ -1279,35 +1313,6 @@ VOID DosInt21SetVersion(PDOS_MACHINE machine, BYTE major, BYTE minor)
     machine->VersionMajor = major;
     machine->VersionMinor = minor;
 }
-
-/* #210: THE LONG-FILENAME API'S WIN32 HALF -- helpers for the AH=71h arm:
- * The pure half (time conversion, the find record, short names, the action word) is
- * dos_lfn.h; these only fetch what Win32 knows and hand it over.
- *
- * - LONG NAMES GO THROUGH THE SAME ...A FILE APIs AS EVERY OTHER DOS CALL HERE, i.e. the
- *   ANSI code page: this host never calls SetFileApisToOEM, so 3Dh, 4Eh and 71xxh all
- *   agree with each other about what a byte above 7Fh names. Stock NTVDM converts DOS
- *   names with the OEM code page (its file APIs are set to OEM -- from the NT design, NOT
- *   measured here). For ASCII the two are identical, and on the rig (CP437 OEM / 1252
- *   ANSI) they differ only above 7Fh -- a non-ASCII long name is the place to look if a
- *   program and stock disagree about one.
- *
- * - THE SEARCH TABLE. 714Eh hands the caller a HANDLE (AX) that it passes back to 714Fh
- *   and closes with 71A1h -- unlike 4Eh, whose state rides in the DTA. Kept here, one
- *   per VDM like g_DosSerialInfo; AX = slot + 1 so a handle is never 0.
- *
- * [CAUTION]: A program that never calls 71A1h leaks its slot until the table wraps: the 17th
- * live search recycles the oldest (round robin), as 4Eh recycles its eighth. Windows
- * 95 closes them when the PSP terminates; we have no per-PSP owner record yet.
- *
- * [CAUTION]: The handle VALUE is ours. Stock's numbering is not measured and p_lfn does not
- * compare AX on 714Eh -- a program that treats the handle as opaque cannot tell.
- */
-#define DOS_LFN_FIND_SLOTS  16
-static HANDLE  g_DosLfnFinds[DOS_LFN_FIND_SLOTS];
-static BYTE g_DosLfnAllow[DOS_LFN_FIND_SLOTS];
-static BYTE g_DosLfnNeed[DOS_LFN_FIND_SLOTS];
-static UINT g_DosLfnNext;
 
 static UINT64 DosFileTime64(const FILETIME *fileTime)
 {

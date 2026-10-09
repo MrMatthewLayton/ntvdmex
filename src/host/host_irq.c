@@ -21,38 +21,29 @@
 #include "host_bios.h"
 #include "host_input.h"
 
-static DWORD g_KeyIrqLogged = 0;           /* bounded KEYIRQ account; see HostIrqSink */
-DWORD    g_Irq1AsyncInjected;        /* IRQ1s placed on the ASYNC path (see above) */
-static DWORD          g_IrqNRefuseLog = 0; /* bounded refusal-log budget (see the gate) */
-VOID SkipIfSiteNote(DWORD codeSegment, DWORD instructionPointer, DWORD stub)
-{
-    INT index;
+#define ASYNC_SITE_MAX      96
 
-    for (index = 0; index < SKIPIF_SITES; ++index)
-    {
-        if (g_SkipIfSite[index].Count && g_SkipIfSite[index].Cs == codeSegment && g_SkipIfSite[index].Ip == instructionPointer)
-        {
-            g_SkipIfSite[index].Count++;
-            return;
-        }
-        if (!g_SkipIfSite[index].Count)
-        {
-            g_SkipIfSite[index].Cs = (WORD)codeSegment;
-            g_SkipIfSite[index].Ip = (WORD)instructionPointer;
-            g_SkipIfSite[index].Stub = (WORD)stub;
-            g_SkipIfSite[index].Count = 1;
-            return;
-        }
-    }
-}
-
-/* The PROTECTED-mode vector a DPMI client hooks for a line: DPMI 0.9 reflects hardware
- * interrupts at the PIC's own vector numbers, 08h-0Fh and 70h-77h.
+/* #206: OUR BIOS STUBS ARE OUR STUBS TOO:
+ * Inside one of our INT stubs the live IF is the stub's -- the INT that vectored in
+ * cleared it -- and the guest's own is the FLAGS the stub will IRET to, at SS:SP+4.
+ * That was honoured for DOS_HDLR_SEG only; the BIOS stubs (INT 11h-29h, at
+ * DOS_CTAB_SEG:DOS_BIOS_STUBS) read the live IF, i.e. always "off". Harmless while
+ * every BIOS call returned at once; not once INT 15h AH=86h waits by re-executing
+ * its BOP, because a real BIOS takes interrupts during that wait.
  */
-UINT IrqPmVector(UINT irq)
+#define DOS_BIOS_STUB_N     14  /* Entries in WinMain's bios_ints[] (s91: +2Ah, 5Ch) */
+
+enum
 {
-    return irq < PIC_LINES_PER_CHIP ? PIC_MASTER_VECTOR_BASE + irq : PIC_SLAVE_VECTOR_BASE + (irq - PIC_LINES_PER_CHIP);
-}
+    ASYNC_FIRST_DEVICE_IRQ = 2
+};   /* IRQ 0 and 1 (timer, keyboard) have their own paths */
+
+enum
+{
+    QIRQ_PROBE_IRQ = 5
+};   /* qimode bit 2: the device line the probe raises */
+
+DWORD    g_Irq1AsyncInjected;        /* IRQ1s placed on the ASYNC path (see above) */
 
 DWORD          g_IrqRaisedAny = 0;
 DWORD          g_QiBits       = 0;
@@ -108,12 +99,6 @@ volatile LONG  g_QiStatus     = 0;  /* NTSTATUS of the last queue call */
  * which also gets us IRQ masking.
  */
 DWORD          g_AsyncNestBlocked = 0;   /* refused: line masked or in service */
-static VOID AsyncWhyNote(UINT irq, UINT why)
-{
-    g_AsyncWhy = (LONG)why;
-    if (why < ASYNC_WHY_MAX)
-        g_AsyncWhyHistogram[irq & (PIC_LINES_PER_CHIP - 1)][why]++;
-}
 
 /* THE IF/VIF CENSUS (s81). MEASURES; DECIDES NOTHING:
  * `irq8.nested` (4 vs 0 on three oracles) is the gate asking "IF **or** VIF": a handler
@@ -142,7 +127,79 @@ DWORD g_IfvStarveT0;
 DWORD g_IfvStarveMaximumMs;
 DWORD g_IfvStarveCount;
 INT   g_IfvStarveOpen;
+
+DWORD g_AsyncPmInjected = 0;             /* delivered */
+DWORD g_AsyncInjectedLine[PIC_LINES];            /* ...and which IRQ line each one was */
+DWORD g_PmWatch[DPMI_WATCH_MAX];     /* linear addresses to watch (whitespace-separated) */
+/* A GUEST'S OWN OFFSETS ARE THE ONLY ONES WORTH WRITING DOWN (Importance = 3):
+ * pmwatch.txt took absolute linear addresses, and an extended guest IS NOT LOADED AT
+ * A FIXED ADDRESS: ZAR's LE code object came up at 0x03f70000 on one run and
+ * 0x03b70000 on the next, so an address read out of one run's log is wrong for the
+ * next one and the watch silently reports a neighbouring allocation instead. That is
+ * the "instrument that fails by printing a plausible wrong answer" this project has
+ * already been bitten by.
+ * - A LEADING `+` MEANS "RELATIVE TO THE GUEST'S CODE-OBJECT LOAD BASE" -- the address
+ *   the host itself prints as `[LE CODE OBJECT] -> mem 0x...`. That is stable across
+ *   runs and it is the form a disassembly gives you, so `+3c878` can be copied straight
+ *   out of a listing and stays right tomorrow.
+ *
+ * [CAUTION]: RESOLVED LAZILY, NOT AT PARSE TIME. pmwatch.txt is read during the mode switch and
+ * the client does not ask for its code object until AFTER that, so the base is still
+ * zero when the file is parsed. A watch whose base is not known yet reads as
+ * `????????` rather than as address 0x3c878, which would be a wrong answer wearing a
+ * right one's clothes.
+ */
+BYTE  g_PmWatchRel[DPMI_WATCH_MAX]; /* 1 = offset from g_LeLoadBase */
+
+DWORD g_PmInjectDecl[2];
+DWORD g_PmInjectDeclTl[IRQ0TL_SECS];
+INT   g_AsyncSiteCount = 0;
+INT   g_AsyncSiteFull = 0;
+
+static DWORD g_KeyIrqLogged = 0;           /* bounded KEYIRQ account; see HostIrqSink */
+static DWORD          g_IrqNRefuseLog = 0; /* bounded refusal-log budget (see the gate) */
 static INT   g_VifLiveSeen;   /* a live V86 frame has shown VIF set: VME is keeping it */
+static DWORD g_AsyncPmBail2 = 0;           /* PM async attempts that did not commit */
+static DWORD g_AsyncSiteEip[ASYNC_SITE_MAX];
+static WORD  g_AsyncSiteCs[ASYNC_SITE_MAX];
+
+VOID SkipIfSiteNote(DWORD codeSegment, DWORD instructionPointer, DWORD stub)
+{
+    INT index;
+
+    for (index = 0; index < SKIPIF_SITES; ++index)
+    {
+        if (g_SkipIfSite[index].Count && g_SkipIfSite[index].Cs == codeSegment && g_SkipIfSite[index].Ip == instructionPointer)
+        {
+            g_SkipIfSite[index].Count++;
+            return;
+        }
+        if (!g_SkipIfSite[index].Count)
+        {
+            g_SkipIfSite[index].Cs = (WORD)codeSegment;
+            g_SkipIfSite[index].Ip = (WORD)instructionPointer;
+            g_SkipIfSite[index].Stub = (WORD)stub;
+            g_SkipIfSite[index].Count = 1;
+            return;
+        }
+    }
+}
+
+/* The PROTECTED-mode vector a DPMI client hooks for a line: DPMI 0.9 reflects hardware
+ * interrupts at the PIC's own vector numbers, 08h-0Fh and 70h-77h.
+ */
+UINT IrqPmVector(UINT irq)
+{
+    return irq < PIC_LINES_PER_CHIP ? PIC_MASTER_VECTOR_BASE + irq : PIC_SLAVE_VECTOR_BASE + (irq - PIC_LINES_PER_CHIP);
+}
+
+static VOID AsyncWhyNote(UINT irq, UINT why)
+{
+    g_AsyncWhy = (LONG)why;
+    if (why < ASYNC_WHY_MAX)
+        g_AsyncWhyHistogram[irq & (PIC_LINES_PER_CHIP - 1)][why]++;
+}
+
 static DWORD IfvState(DWORD flags)
 {
     DWORD virtualIf = (*(volatile DWORD *)(ULONG_PTR)FIXED_NTVDMSTATE_LINEAR >> 9) & 1u;
@@ -196,29 +253,6 @@ static VOID IfvTrace(UINT irq, INT path, DWORD flags, DWORD codeSegment, DWORD i
     g_IfvTrace[index].Ip = (WORD)instructionPointer;
 }
 
-DWORD g_AsyncPmInjected = 0;             /* delivered */
-DWORD g_AsyncInjectedLine[PIC_LINES];            /* ...and which IRQ line each one was */
-static DWORD g_AsyncPmBail2 = 0;           /* PM async attempts that did not commit */
-DWORD g_PmWatch[DPMI_WATCH_MAX];     /* linear addresses to watch (whitespace-separated) */
-/* A GUEST'S OWN OFFSETS ARE THE ONLY ONES WORTH WRITING DOWN (Importance = 3):
- * pmwatch.txt took absolute linear addresses, and an extended guest IS NOT LOADED AT
- * A FIXED ADDRESS: ZAR's LE code object came up at 0x03f70000 on one run and
- * 0x03b70000 on the next, so an address read out of one run's log is wrong for the
- * next one and the watch silently reports a neighbouring allocation instead. That is
- * the "instrument that fails by printing a plausible wrong answer" this project has
- * already been bitten by.
- * - A LEADING `+` MEANS "RELATIVE TO THE GUEST'S CODE-OBJECT LOAD BASE" -- the address
- *   the host itself prints as `[LE CODE OBJECT] -> mem 0x...`. That is stable across
- *   runs and it is the form a disassembly gives you, so `+3c878` can be copied straight
- *   out of a listing and stays right tomorrow.
- *
- * [CAUTION]: RESOLVED LAZILY, NOT AT PARSE TIME. pmwatch.txt is read during the mode switch and
- * the client does not ask for its code object until AFTER that, so the base is still
- * zero when the file is parsed. A watch whose base is not known yet reads as
- * `????????` rather than as address 0x3c878, which would be a wrong answer wearing a
- * right one's clothes.
- */
-BYTE  g_PmWatchRel[DPMI_WATCH_MAX]; /* 1 = offset from g_LeLoadBase */
 DWORD PmWatchAddress(INT index)
 {
     if (!g_PmWatchRel[index])
@@ -226,8 +260,6 @@ DWORD PmWatchAddress(INT index)
     return g_LeLoadBase ? g_LeLoadBase + g_PmWatch[index] : 0;
 }
 
-DWORD g_PmInjectDecl[2];
-DWORD g_PmInjectDeclTl[IRQ0TL_SECS];
 VOID PmInjectDeclineNote(INT why, WORD cs, DWORD eip)
 {
     g_PmInjectDecl[why]++;
@@ -260,11 +292,6 @@ VOID PmInjectDeclineNote(INT why, WORD cs, DWORD eip)
     }
 }
 
-#define ASYNC_SITE_MAX  96
-static DWORD g_AsyncSiteEip[ASYNC_SITE_MAX];
-static WORD  g_AsyncSiteCs[ASYNC_SITE_MAX];
-INT   g_AsyncSiteCount = 0;
-INT   g_AsyncSiteFull = 0;
 /* 1 = not seen before (and now recorded). Runs on the timer/UI thread only, so the
  * table needs no lock: AsyncInjectIrq() bails at why=20 unless the CPU thread is
  * inside guest execution, which is precisely when it is not in here.
@@ -332,10 +359,6 @@ static VOID AsyncEarlyBail(UINT irq, UINT why)
     lineCursor = LogPut(lineCursor, "\r\n"); LogAppend(LOG_PATH, lineBuffer, lineCursor); SerialOut(lineBuffer, lineCursor);
 }
 
-enum
-{
-    ASYNC_FIRST_DEVICE_IRQ = 2
-};   /* IRQ 0 and 1 (timer, keyboard) have their own paths */
 INT AsyncInjectIrq(UINT irq)
 {
     if (irq >= PIC_LINES)
@@ -1071,15 +1094,6 @@ INT IfOrVif(DWORD flags)
     return (flags & (EFLAGS_IF_U | EFLAGS_VIF)) != 0;
 }
 
-/* #206: OUR BIOS STUBS ARE OUR STUBS TOO:
- * Inside one of our INT stubs the live IF is the stub's -- the INT that vectored in
- * cleared it -- and the guest's own is the FLAGS the stub will IRET to, at SS:SP+4.
- * That was honoured for DOS_HDLR_SEG only; the BIOS stubs (INT 11h-29h, at
- * DOS_CTAB_SEG:DOS_BIOS_STUBS) read the live IF, i.e. always "off". Harmless while
- * every BIOS call returned at once; not once INT 15h AH=86h waits by re-executing
- * its BOP, because a real BIOS takes interrupts during that wait.
- */
-#define DOS_BIOS_STUB_N     14  /* Entries in WinMain's bios_ints[] (s91: +2Ah, 5Ch) */
 INT IsOurStubCsIp(DWORD cs, DWORD ip)
 {
     if (cs == DOS_HDLR_SEG)
@@ -1164,10 +1178,6 @@ VOID InjectInt(volatile BYTE *tib, UINT vector)
     VDM_SET16(tib, VTIB_CS,  PeekWord(IVT_SEGMENT_ADDRESS(vector)));  /* IVT[vec].segment */
 }
 
-enum
-{
-    QIRQ_PROBE_IRQ = 5
-};   /* qimode bit 2: the device line the probe raises */
 DWORD WINAPI QueueIrqProbeThread(LPVOID parameter)
 {
     INT round;

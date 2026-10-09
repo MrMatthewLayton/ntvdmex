@@ -26,17 +26,6 @@
 #include "wowdlg.h"
 #include "wowenum.h"
 
-/* Forward declarations, from when this file was part of main.c's unit (they were in wowcall.h). */
-INT  WowEnumBusy(VOID);
-INT  WowEnumBegin(
-    INT kind,
-    DWORD procedure,
-    WORD dataSelector,
-    DWORD lParam,
-    DWORD returnLinear,
-    WORD parent);
-VOID WowEnumLine(INT startX, INT startY, INT endX, INT endY);
-
 /* s89: a SECOND far pointer into the same stack block. EnumFontFamilies' callback
  * takes two structures (ENUMLOGFONT, NEWTEXTMETRIC); they travel as one blob and
  * this names the argument (HIGH word index) that points `off` bytes into it. Set
@@ -69,7 +58,26 @@ VOID (*g_WowCallUntarget)(WORD previousTask) = 0;
 
 WOWCALL_FRAME g_WowCallFrames[WOWCALL_MAX_DEPTH];
 INT             g_WowCallDepth  = 0;
+
+/* The procedure returned. `result` is DX:AX, read by the caller before this.
+ * Puts the interrupted context back and hands the result to whoever asked.
+ * Returns the frame that was in flight, or NULL if there was none -- and "none"
+ * is not a curiosity, it means something executed our return stub that we did
+ * not send there, which is a fact worth printing rather than swallowing.
+ */
+DWORD g_WowCallLastResult;   /* the last nested call's DX:AX (sink keeps only AX) */
 static DWORD           g_WowCallCount  = 0;   /* how many 16-bit calls this run made */
+
+/* Forward declarations, from when this file was part of main.c's unit (they were in wowcall.h). */
+INT  WowEnumBusy(VOID);
+INT  WowEnumBegin(
+    INT kind,
+    DWORD procedure,
+    WORD dataSelector,
+    DWORD lParam,
+    DWORD returnLinear,
+    WORD parent);
+VOID WowEnumLine(INT startX, INT startY, INT endX, INT endY);
 
 /* Push one word onto the guest stack at ssbase:*sp, growing down. */
 static VOID WowCallPush(DWORD stackBase, PWORD stackPointer, WORD value)
@@ -244,13 +252,6 @@ INT WowCallEnter(
     return 1;
 }
 
-/* The procedure returned. `result` is DX:AX, read by the caller before this.
- * Puts the interrupted context back and hands the result to whoever asked.
- * Returns the frame that was in flight, or NULL if there was none -- and "none"
- * is not a curiosity, it means something executed our return stub that we did
- * not send there, which is a fact worth printing rather than swallowing.
- */
-DWORD g_WowCallLastResult;   /* the last nested call's DX:AX (sink keeps only AX) */
 PWOWCALL_FRAME WowCallLeave(volatile BYTE *tib, DWORD result)
 {
     PWOWCALL_FRAME frame;

@@ -22,14 +22,22 @@
 #include <stdio.h>
 #include <string.h>
 #include "vdd_cmos.h"
-
-static INT g_Total = 0;
-static INT g_Failures = 0;
 #define CHECK(condition, message) do {                                  \
         g_Total++;                                               \
         if (condition) { printf("  PASS  %s\n", (message)); }           \
         else      { printf("  FAIL  %s\n", (message)); g_Failures++; }  \
     } while (0)
+
+static INT g_Total = 0;
+static INT g_Failures = 0;
+
+/* GH #261: the host's side of a clock write, recorded rather than applied. */
+static PIT_RTC_READING g_SetReadings[4];
+static INT g_SetFields[4];
+static INT g_SetCount;
+
+static BYTE g_GuestMemory[0x1000];
+static INT g_Irq8Count;
 
 /* A fixed instant, so every expectation is exact: 2026-09-23, 14:07:42. */
 static VOID CmosTestFakeRtc(PVOID context, PPIT_RTC_READING output)
@@ -45,10 +53,6 @@ static VOID CmosTestFakeRtc(PVOID context, PPIT_RTC_READING output)
     output->DayOfWeek = 4;   /* 2026-09-23 was a Wednesday */
 }
 
-/* GH #261: the host's side of a clock write, recorded rather than applied. */
-static PIT_RTC_READING g_SetReadings[4];
-static INT g_SetFields[4];
-static INT g_SetCount;
 static INT CmosTestFakeSet(PVOID context, PCPIT_RTC_READING input, INT fields)
 {
     (VOID)context;
@@ -61,8 +65,6 @@ static INT CmosTestFakeSet(PVOID context, PCPIT_RTC_READING input, INT fields)
     return 1;
 }
 
-static BYTE g_GuestMemory[0x1000];
-static INT g_Irq8Count;
 static VOID CmosTestIrqSink(PVOID context, BYTE irq)
 {
     (VOID)context;

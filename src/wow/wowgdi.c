@@ -26,6 +26,17 @@
 #include "wowdlg.h"
 #include "wowenum.h"
 
+WOWGDI_OBJECT g_WowGdiObjects[WOWGDI_MAX];
+INT          g_WowGdiObjectCount = 0;
+
+WOWGDI_METAFILE g_WowGdiMetafile;
+BYTE        g_WowGdiMetafileBlob[WOWCALL_MAX_BLOB];
+
+static INT g_WowGdiFontIsPlain;
+
+static BYTE        g_WowGdiMetafileRecord[WOWGDI_MF_RECORD_MAX];
+static HGDIOBJ     g_WowGdiMetafileHandles[WOWMF_MAXOBJ];
+
 /* A little-endian WORD out of guest memory. wowuser.h has the same helper for
  * the USER side; this file is included independently, so it has its own.
  */
@@ -33,9 +44,6 @@ WORD WowGdiPeek(const volatile BYTE *bytes, INT offset)
 {
     return (WORD)(bytes[offset] | (bytes[offset + 1] << BYTE_SHIFT));
 }
-
-WOWGDI_OBJECT g_WowGdiObjects[WOWGDI_MAX];
-INT          g_WowGdiObjectCount = 0;
 
 /* One token per object. `kind` is kept because DeleteDC, DeleteObject and
  * ReleaseDC are three different calls with three different rules, and handing an
@@ -152,7 +160,6 @@ static VOID WowGdiPut16(PBYTE bytes, INT offset, LONG value)
     bytes[offset + 1] = (BYTE)(value >> BYTE_SHIFT);
 }
 
-static INT g_WowGdiFontIsPlain;
 static INT CALLBACK WowGdiFontCollect(
     const LOGFONTA *logFont,
     const TEXTMETRICA *textMetric,
@@ -262,12 +269,6 @@ static INT CALLBACK WowGdiObjectCollect(LPVOID logObject, LPARAM type)
     ++g_WowEnumFontCount;
     return 1;
 }
-
-WOWGDI_METAFILE g_WowGdiMetafile;
-BYTE        g_WowGdiMetafileBlob[WOWCALL_MAX_BLOB];
-
-static BYTE        g_WowGdiMetafileRecord[WOWGDI_MF_RECORD_MAX];
-static HGDIOBJ     g_WowGdiMetafileHandles[WOWMF_MAXOBJ];
 
 /* After a callback: what the guest's table says now. Only 0 and tokens that name
  * an object (not a DC) are believed; anything else keeps the previous entry and is

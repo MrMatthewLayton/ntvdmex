@@ -35,6 +35,7 @@
 static INT g_Passes = 0;
 static INT g_Failures = 0;
 static INT g_Skips = 0;
+
 static VOID VgaRomTestCheck(INT condition, PCSTR description)
 {
     if (condition)

@@ -41,7 +41,7 @@
  * LogAppend opens with FILE_SHARE_READ|FILE_SHARE_WRITE and appends, so this was
  * never likely; "never likely" is not the same as ruled out.
  */
-#define WDLOG_PATH      OUT_("wdprobe.log")
+#define WDLOG_PATH                  OUT_("wdprobe.log")
 
 /* dsprobe.txt: GUEST DATA WORDS TO DUMP AT EVERY #GP (Importance = 1):
  * Whitespace-separated hex offsets; four bytes of DS: are printed for each.
@@ -52,14 +52,54 @@
  * name the offsets in a file and they come back in the fault report, with no
  * guest-specific code in the host and nothing to rebuild between guesses.
  */
-#define DSPROBE_PATH    CFG_("dsprobe.txt")
+#define DSPROBE_PATH                CFG_("dsprobe.txt")
 
 /* csprobe.txt is the same knob against CS: the guest's CODE. It exists because a
  * guest's dispatch can be PATCHED AT RUNTIME -- ZAR's DOS/16M reaches a routine the
  * file on disk has no call to, so what matters is the bytes in memory, not the bytes
  * in the image. Comparing the two is the whole point.
  */
-#define CSPROBE_PATH    CFG_("csprobe.txt")
+#define CSPROBE_PATH                CFG_("csprobe.txt")
+
+#define FATAL_DUMP_EXIT_CODE        0xDE0   /* HostFatalDump: a clean exit after the dump */
+
+#define VEH_LOW_MEMORY_EIP_LIMIT_U  0x00200000u
+#define DPMI_SPIKE_BASE_SELECTOR    0x001F  /* The spike's 0000h answer */
+
+enum
+{
+    DPMI_WATCHDOG_TICK_MS = 250, DPMI_WATCHDOG_EXIT_CODE = 0xDD0, DPMI_WATCHDOG_FROZEN_TICKS = 12, DPMI_WATCHDOG_FROZEN_TICKS_WOW = 600
+};   /* DpmiWatchdog: frozen 3 s, or 150 s on WOW (krnl386 is watched BECAUSE it stops) */
+
+INT g_PmVehPass = 0;   /* pmvehpass.flag: let a non-INT PM fault fall THROUGH the VEH */
+/* [WARNING]: A CLIENT THAT RETURNS TO ITS PARENT NEVER SET g_DpmiDone -- the run is not over --
+ * so its watchdog stayed armed over the shell. An idle prompt does not bump
+ * g_DpmiIteration and V86 code never counts as "moving", so quitting Doom to the prompt
+ * got the host TerminateProcess'd 3 s later (found s81 testing #152). Each watchdog
+ * now owns a generation and stands down when the client it watched is gone.
+ */
+volatile LONG  g_DpmiWatchdogGeneration   = 0;
+volatile DWORD g_DpmiEnterCs = 0;  /* guest CS handed to the last DpmiEnterProtectedMode */
+volatile DWORD g_DpmiEnterEip= 0;  /* guest EIP handed to the last DpmiEnterProtectedMode */
+volatile DWORD g_DpmiLastEvent  = 0;  /* VTIB_EVENT reported by the last return */
+volatile DWORD g_DpmiLastVector = 0;  /* vector serviced on the last iteration */
+LONG g_IfvTraceCount;
+DWORD g_IfvReenter[PIC_LINES];
+DWORD g_AsyncEarlyBailLogged = 0;
+static volatile LONG  g_VehAny       = 0;  /* # PM-context exceptions delivered to the VEH */
+static volatile LONG  g_VehFatal     = 0;  /* # of those that took the non-reflect fatal path */
+
+/* Crash diagnostic (DPMI spike): the PM switch works but VdmStartExecution faults
+ * inside the monitor when it runs PM, crashing the host with no info. This VEH
+ * catches the fault, dumps the exception (code/addr/params) + the host CONTEXT +
+ * the guest PM CONTEXT to the log, then exits CLEANLY (no WER dialog) so the batch
+ * still prints the log. Only meaningful once g_DpmiPm is set.
+ */
+static INT g_VehCount = 0;
+
+/* First-chance sightings of real-mode/host faults -- see the arm in the VEH below. */
+static LONG g_RmFaultSeen = 0;
+
 static VOID ProbeLoadInto(PCSTR path, WORD *out, INT *outCount)
 {
     CHAR buffer[256];
@@ -144,23 +184,6 @@ VOID DsProbeLoad(VOID)
     }
 }
 
-INT g_PmVehPass = 0;   /* pmvehpass.flag: let a non-INT PM fault fall THROUGH the VEH */
-/* [WARNING]: A CLIENT THAT RETURNS TO ITS PARENT NEVER SET g_DpmiDone -- the run is not over --
- * so its watchdog stayed armed over the shell. An idle prompt does not bump
- * g_DpmiIteration and V86 code never counts as "moving", so quitting Doom to the prompt
- * got the host TerminateProcess'd 3 s later (found s81 testing #152). Each watchdog
- * now owns a generation and stands down when the client it watched is gone.
- */
-volatile LONG  g_DpmiWatchdogGeneration   = 0;
-volatile DWORD g_DpmiEnterCs = 0;  /* guest CS handed to the last DpmiEnterProtectedMode */
-volatile DWORD g_DpmiEnterEip= 0;  /* guest EIP handed to the last DpmiEnterProtectedMode */
-volatile DWORD g_DpmiLastEvent  = 0;  /* VTIB_EVENT reported by the last return */
-volatile DWORD g_DpmiLastVector = 0;  /* vector serviced on the last iteration */
-static volatile LONG  g_VehAny       = 0;  /* # PM-context exceptions delivered to the VEH */
-static volatile LONG  g_VehFatal     = 0;  /* # of those that took the non-reflect fatal path */
-LONG g_IfvTraceCount;
-DWORD g_IfvReenter[PIC_LINES];
-DWORD g_AsyncEarlyBailLogged = 0;
 /* - WHICH CLAUSE SAID NO, PER LINE. `attempts` and `delivered` give the shortfall as one
  * subtraction and no reason for it; this names every refusal. Read bucket 14 (the CPU
  * thread was in HOST code) against 10 (an injection still in flight) and 7/8 (the client
@@ -274,16 +297,6 @@ VOID IfvReport(VOID)
       SerialOut(base, cursor);
       cursor = base; } }
 }
-
-#define FATAL_DUMP_EXIT_CODE    0xDE0   /* HostFatalDump: a clean exit after the dump */
-
-/* Crash diagnostic (DPMI spike): the PM switch works but VdmStartExecution faults
- * inside the monitor when it runs PM, crashing the host with no info. This VEH
- * catches the fault, dumps the exception (code/addr/params) + the host CONTEXT +
- * the guest PM CONTEXT to the log, then exits CLEANLY (no WER dialog) so the batch
- * still prints the log. Only meaningful once g_DpmiPm is set.
- */
-static INT g_VehCount = 0;
 
 /* THE FATAL DUMP, SHARED. (session 62):
  * Factored out of the VEH's fatalDump arm so the LAST-CHANCE filter below can
@@ -431,11 +444,6 @@ static VOID HostFatalDump(EXCEPTION_RECORD *record, CONTEXT *context)
     ExitProcess(FATAL_DUMP_EXIT_CODE);                                 /* clean exit; batch dumps the log */
 }
 
-#define VEH_LOW_MEMORY_EIP_LIMIT_U  0x00200000u
-
-/* First-chance sightings of real-mode/host faults -- see the arm in the VEH below. */
-static LONG g_RmFaultSeen = 0;
-#define DPMI_SPIKE_BASE_SELECTOR    0x001F  /* The spike's 0000h answer */
 LONG CALLBACK DpmiCrashVeh(EXCEPTION_POINTERS *pointers)
 {
     static CHAR lineBuffer[1024];
@@ -748,10 +756,6 @@ LONG WINAPI HostUnhandledFilter(EXCEPTION_POINTERS *pointers)
     return EXCEPTION_EXECUTE_HANDLER;                   /* not reached */
 }
 
-enum
-{
-    DPMI_WATCHDOG_TICK_MS = 250, DPMI_WATCHDOG_EXIT_CODE = 0xDD0, DPMI_WATCHDOG_FROZEN_TICKS = 12, DPMI_WATCHDOG_FROZEN_TICKS_WOW = 600
-};   /* DpmiWatchdog: frozen 3 s, or 150 s on WOW (krnl386 is watched BECAUSE it stops) */
 /* DPMI test watchdog: if the PM guest neither faults to the VEH nor exits within a few
  * seconds (the kernel skip+resumes PM faults, so the guest spins), terminate cleanly so
  * the batch dumps the log and locks release. Makes every DPMI run self-terminating.

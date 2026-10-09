@@ -119,23 +119,12 @@
 #define SYSVARS_TEST_PARAGRAPH                  16u
 #define SYSVARS_TEST_MCB_HEAD_BYTES             2u
 
+/* g_OracleRaw starts at ES:BX-2: SysVars+offset is two bytes further on. */
+#define SYSVARS_TEST_RAW_START                  2
+#define SYSVARS_TEST_BYTE(offset)               (g_OracleRaw[(offset) + SYSVARS_TEST_RAW_START]) /* SysVars+offset */
+
 static INT g_Checks;
 static INT g_Failures;
-
-static VOID SysVarsTestExpect(PCSTR description, LONG actual, LONG expected)
-{
-    ++g_Checks;
-    if (actual == expected)
-        return;
-    ++g_Failures;
-    printf("  FAIL %-54s got 0x%lX, want 0x%lX\n", description, (long)actual, (long)expected);
-}
-
-static VOID SysVarsTestFail(PCSTR description)
-{
-    ++g_Failures;
-    printf("  FAIL %-54s\n", description);
-}
 
 /* THE ORACLE'S OWN BYTES:
  * BUF=sysvars.raw, starting two bytes BEFORE what AH=52h returned in ES:BX.
@@ -163,9 +152,20 @@ static const BYTE g_OracleDpb[] = {
  0x01,0x01,0x00,0x02,0xFE,0x00,0x01,0x00,0x02,0x40,0x00,0x09,0x00,0x60,0x01,
 };
 
-/* g_OracleRaw starts at ES:BX-2: SysVars+offset is two bytes further on. */
-#define SYSVARS_TEST_RAW_START      2
-#define SYSVARS_TEST_BYTE(offset)   (g_OracleRaw[(offset) + SYSVARS_TEST_RAW_START])    /* SysVars+offset */
+static VOID SysVarsTestExpect(PCSTR description, LONG actual, LONG expected)
+{
+    ++g_Checks;
+    if (actual == expected)
+        return;
+    ++g_Failures;
+    printf("  FAIL %-54s got 0x%lX, want 0x%lX\n", description, (long)actual, (long)expected);
+}
+
+static VOID SysVarsTestFail(PCSTR description)
+{
+    ++g_Failures;
+    printf("  FAIL %-54s\n", description);
+}
 
 static UINT SysVarsTestWordAt(PCBYTE bytes)
 {

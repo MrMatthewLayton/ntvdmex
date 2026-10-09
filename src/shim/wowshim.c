@@ -36,6 +36,64 @@
 #include "../ntvdmex_x86.h"
 #include "shim_api.h"   /* SHIM_API_VERSION: host + bin\wowshim\ must agree */
 
+#define SHIM_MISSING_CALLBACK16EX       "WOWCallback16Ex: no host entry"
+#define SHIM_MISSING_GLOBAL16           "WOWGlobal*16: no host entry"
+#define SHIM_MISSING_IO_HOOK            "VDDInstallIOHook: no host entry"
+#define SHIM_TERMINATE_VDM              "VDDTerminateVDM: the VDD asked to end the VDM"
+#define SHIM_NO_HANDLE16                0
+#define SHIM_NO_RESULT                  0
+
+#define SHIM_WCB16_PASCAL               0   /* wownt32.h: WCB16_PASCAL */
+#define SHIM_ONE_DWORD_ARGUMENT         4   /* Bytes */
+
+/* s91 (#309): krnl386's own global heap, through the host (shim_global16). Ops:
+ * 0 GlobalAlloc(flags, cb) 1 GlobalFree(h) 2 GlobalLock(h) 3 GlobalUnlock(h)
+ * 4 GlobalSize(h) 5 GlobalHandle(sel) -- answers exactly as the 16-bit calls do.
+ * The operation codes are the host's too: SHIM_GLOBAL_* in shim_api.h.
+ */
+#define SHIM_NO_ARGUMENT                0
+#define SHIM_GLOBAL_FREED               0   /* Win16 GlobalFree: 0 = freed */
+#define SHIM_SELECTOR_SHIFT             16  /* A 16:16 pointer's selector */
+#define SHIM_KEEP_HIGH_WORD             0xFFFF0000u
+#define SHIM_KEEP_ALL_BUT_LOW_BYTE      0xFFFFFF00u
+#define SHIM_KEEP_ALL_BUT_HIGH_BYTE     0xFFFF00FFu
+#define SHIM_FLAG_MASK                  1
+#define SHIM_FLAG_BIT                   1u
+#define SHIM_CARRY_FLAG                 0   /* EFLAGS bit numbers */
+#define SHIM_PARITY_FLAG                2
+#define SHIM_AUXILIARY_FLAG             4
+#define SHIM_ZERO_FLAG                  6
+#define SHIM_SIGN_FLAG                  7
+#define SHIM_INTERRUPT_FLAG             9
+#define SHIM_DIRECTION_FLAG             10
+#define SHIM_OVERFLOW_FLAG              11
+
+/* The accessor pairs the VDD API exports, generated per register: getAX/setAX, ... */
+#define SHIM_WORD_REGISTER(name, registerIndex) \
+    __declspec(dllexport) USHORT WINAPI get##name(VOID) { return (USHORT)ShimGetRegister(registerIndex); } \
+    __declspec(dllexport) VOID WINAPI set##name(USHORT value) { ShimSetRegister(registerIndex, (ShimGetRegister(registerIndex) & SHIM_KEEP_HIGH_WORD) | value); }
+
+#define SHIM_DWORD_REGISTER(name, registerIndex) \
+    __declspec(dllexport) ULONG WINAPI get##name(VOID) { return ShimGetRegister(registerIndex); } \
+    __declspec(dllexport) VOID WINAPI set##name(ULONG value) { ShimSetRegister(registerIndex, value); }
+
+#define SHIM_LOW_BYTE_REGISTER(name, registerIndex) \
+    __declspec(dllexport) UCHAR WINAPI get##name(VOID) { return (UCHAR)ShimGetRegister(registerIndex); } \
+    __declspec(dllexport) VOID WINAPI set##name(UCHAR value) { ShimSetRegister(registerIndex, (ShimGetRegister(registerIndex) & SHIM_KEEP_ALL_BUT_LOW_BYTE) | value); }
+
+#define SHIM_HIGH_BYTE_REGISTER(name, registerIndex) \
+    __declspec(dllexport) UCHAR WINAPI get##name(VOID) { return (UCHAR)(ShimGetRegister(registerIndex) >> BYTE_SHIFT); } \
+    __declspec(dllexport) VOID WINAPI set##name(UCHAR value) { ShimSetRegister(registerIndex, (ShimGetRegister(registerIndex) & SHIM_KEEP_ALL_BUT_HIGH_BYTE) | ((DWORD)value << BYTE_SHIFT)); }
+
+#define SHIM_FLAG(name, bit) \
+    __declspec(dllexport) ULONG WINAPI get##name(VOID) { return (ShimGetRegister(SHIM_EFLAGS) >> bit) & SHIM_FLAG_MASK; } \
+    __declspec(dllexport) VOID WINAPI set##name(ULONG value) { ShimSetRegister(SHIM_EFLAGS, (ShimGetRegister(SHIM_EFLAGS) & ~(SHIM_FLAG_BIT << bit)) | ((value & SHIM_FLAG_MASK) << bit)); }
+
+/* PVOID VdmMapFlat(USHORT seg, ULONG off, VDM_MODE mode): VDM_V86 = 0, VDM_PM = 1 */
+#define SHIM_VDM_PM                 1
+
+#define SHIM_TERMINATE_EXIT_CODE    0
+
 /* The table the host hands over in NtvdmexShimInit. Its LAYOUT is the contract (the
  * host's copy in main.c must match it field for field); the names are ours.
  */
@@ -62,6 +120,17 @@ typedef struct _NTVDMEX_SHIM_API
 
 typedef const NTVDMEX_SHIM_API *PCNTVDMEX_SHIM_API;
 
+/* THE VDD SERVICE API (s91, the SDK's binary-compatibility veneer, #11):
+ * What nt_vdd.h / vddsvc.h declare and NTVDM.EXE exports: a Microsoft-ABI VDD
+ * imports these BY NAME from NTVDM.EXE, and this module IS the NTVDM.EXE in our
+ * process, so its imports resolve here. Register accessors read and write the
+ * guest's context at the moment the VDD runs (a RegisterModule init, a
+ * DispatchCall, an I/O hook) -- WINAPI, as declared. Index order = SHIM_R_* in
+ * main.c.
+ */
+enum { SHIM_EAX, SHIM_EBX, SHIM_ECX, SHIM_EDX, SHIM_ESI, SHIM_EDI, SHIM_EBP, SHIM_ESP, SHIM_EIP,
+       SHIM_CS, SHIM_DS, SHIM_ES, SHIM_SS, SHIM_FS, SHIM_GS, SHIM_EFLAGS, SHIM_MSW };
+
 static NTVDMEX_SHIM_API g_ShimApi;
 static INT g_HasShimApi;
 
@@ -79,13 +148,6 @@ static VOID ShimReportMissing(PCSTR message)
     if (g_HasShimApi && g_ShimApi.Log)
         g_ShimApi.Log(message);
 }
-
-#define SHIM_MISSING_CALLBACK16EX   "WOWCallback16Ex: no host entry"
-#define SHIM_MISSING_GLOBAL16       "WOWGlobal*16: no host entry"
-#define SHIM_MISSING_IO_HOOK        "VDDInstallIOHook: no host entry"
-#define SHIM_TERMINATE_VDM          "VDDTerminateVDM: the VDD asked to end the VDM"
-#define SHIM_NO_HANDLE16            0
-#define SHIM_NO_RESULT              0
 
 /* WOW32.DLL: */
 __declspec(dllexport) LPVOID WINAPI WOWGetVDMPointer(
@@ -132,9 +194,6 @@ __declspec(dllexport) BOOL WINAPI WOWCallback16Ex(
     return FALSE;
 }
 
-#define SHIM_WCB16_PASCAL           0   /* wownt32.h: WCB16_PASCAL */
-#define SHIM_ONE_DWORD_ARGUMENT     4   /* Bytes */
-
 __declspec(dllexport) DWORD WINAPI WOWCallback16(DWORD segmentedFunction, DWORD argument)
 {
     DWORD returnValue = SHIM_NO_RESULT;
@@ -156,15 +215,6 @@ __declspec(dllexport) VOID WINAPI WOWDirectedYield16(WORD task16)
     (VOID)task16;
     WOWYield16();
 }
-
-/* s91 (#309): krnl386's own global heap, through the host (shim_global16). Ops:
- * 0 GlobalAlloc(flags, cb) 1 GlobalFree(h) 2 GlobalLock(h) 3 GlobalUnlock(h)
- * 4 GlobalSize(h) 5 GlobalHandle(sel) -- answers exactly as the 16-bit calls do.
- * The operation codes are the host's too: SHIM_GLOBAL_* in shim_api.h.
- */
-#define SHIM_NO_ARGUMENT        0
-#define SHIM_GLOBAL_FREED       0   /* Win16 GlobalFree: 0 = freed */
-#define SHIM_SELECTOR_SHIFT     16  /* A 16:16 pointer's selector */
 
 static DWORD ShimGlobal16(INT operation, DWORD firstArgument, DWORD secondArgument)
 {
@@ -240,30 +290,6 @@ __declspec(dllexport) VOID WINAPI call_ica_hw_interrupt(INT picAdapter, BYTE lin
         g_ShimApi.IcaInterrupt(picAdapter, line, count);
 }
 
-/* THE VDD SERVICE API (s91, the SDK's binary-compatibility veneer, #11):
- * What nt_vdd.h / vddsvc.h declare and NTVDM.EXE exports: a Microsoft-ABI VDD
- * imports these BY NAME from NTVDM.EXE, and this module IS the NTVDM.EXE in our
- * process, so its imports resolve here. Register accessors read and write the
- * guest's context at the moment the VDD runs (a RegisterModule init, a
- * DispatchCall, an I/O hook) -- WINAPI, as declared. Index order = SHIM_R_* in
- * main.c.
- */
-enum { SHIM_EAX, SHIM_EBX, SHIM_ECX, SHIM_EDX, SHIM_ESI, SHIM_EDI, SHIM_EBP, SHIM_ESP, SHIM_EIP,
-       SHIM_CS, SHIM_DS, SHIM_ES, SHIM_SS, SHIM_FS, SHIM_GS, SHIM_EFLAGS, SHIM_MSW };
-#define SHIM_KEEP_HIGH_WORD             0xFFFF0000u
-#define SHIM_KEEP_ALL_BUT_LOW_BYTE      0xFFFFFF00u
-#define SHIM_KEEP_ALL_BUT_HIGH_BYTE     0xFFFF00FFu
-#define SHIM_FLAG_MASK                  1
-#define SHIM_FLAG_BIT                   1u
-#define SHIM_CARRY_FLAG                 0   /* EFLAGS bit numbers */
-#define SHIM_PARITY_FLAG                2
-#define SHIM_AUXILIARY_FLAG             4
-#define SHIM_ZERO_FLAG                  6
-#define SHIM_SIGN_FLAG                  7
-#define SHIM_INTERRUPT_FLAG             9
-#define SHIM_DIRECTION_FLAG             10
-#define SHIM_OVERFLOW_FLAG              11
-
 static DWORD ShimGetRegister(INT registerIndex)
 {
     return (g_HasShimApi && g_ShimApi.GetRegister) ? g_ShimApi.GetRegister(registerIndex) : SHIM_NO_RESULT;
@@ -275,22 +301,6 @@ static VOID  ShimSetRegister(INT registerIndex, DWORD value)
         g_ShimApi.SetRegister(registerIndex, value);
 }
 
-/* The accessor pairs the VDD API exports, generated per register: getAX/setAX, ... */
-#define SHIM_WORD_REGISTER(name, registerIndex) \
-    __declspec(dllexport) USHORT WINAPI get##name(VOID) { return (USHORT)ShimGetRegister(registerIndex); } \
-    __declspec(dllexport) VOID WINAPI set##name(USHORT value) { ShimSetRegister(registerIndex, (ShimGetRegister(registerIndex) & SHIM_KEEP_HIGH_WORD) | value); }
-#define SHIM_DWORD_REGISTER(name, registerIndex) \
-    __declspec(dllexport) ULONG WINAPI get##name(VOID) { return ShimGetRegister(registerIndex); } \
-    __declspec(dllexport) VOID WINAPI set##name(ULONG value) { ShimSetRegister(registerIndex, value); }
-#define SHIM_LOW_BYTE_REGISTER(name, registerIndex) \
-    __declspec(dllexport) UCHAR WINAPI get##name(VOID) { return (UCHAR)ShimGetRegister(registerIndex); } \
-    __declspec(dllexport) VOID WINAPI set##name(UCHAR value) { ShimSetRegister(registerIndex, (ShimGetRegister(registerIndex) & SHIM_KEEP_ALL_BUT_LOW_BYTE) | value); }
-#define SHIM_HIGH_BYTE_REGISTER(name, registerIndex) \
-    __declspec(dllexport) UCHAR WINAPI get##name(VOID) { return (UCHAR)(ShimGetRegister(registerIndex) >> BYTE_SHIFT); } \
-    __declspec(dllexport) VOID WINAPI set##name(UCHAR value) { ShimSetRegister(registerIndex, (ShimGetRegister(registerIndex) & SHIM_KEEP_ALL_BUT_HIGH_BYTE) | ((DWORD)value << BYTE_SHIFT)); }
-#define SHIM_FLAG(name, bit) \
-    __declspec(dllexport) ULONG WINAPI get##name(VOID) { return (ShimGetRegister(SHIM_EFLAGS) >> bit) & SHIM_FLAG_MASK; } \
-    __declspec(dllexport) VOID WINAPI set##name(ULONG value) { ShimSetRegister(SHIM_EFLAGS, (ShimGetRegister(SHIM_EFLAGS) & ~(SHIM_FLAG_BIT << bit)) | ((value & SHIM_FLAG_MASK) << bit)); }
 SHIM_WORD_REGISTER(AX, SHIM_EAX) SHIM_WORD_REGISTER(BX, SHIM_EBX) SHIM_WORD_REGISTER(CX, SHIM_ECX) SHIM_WORD_REGISTER(DX, SHIM_EDX)
 SHIM_WORD_REGISTER(SI, SHIM_ESI) SHIM_WORD_REGISTER(DI, SHIM_EDI) SHIM_WORD_REGISTER(BP, SHIM_EBP) SHIM_WORD_REGISTER(SP, SHIM_ESP) SHIM_WORD_REGISTER(IP, SHIM_EIP)
 SHIM_WORD_REGISTER(CS, SHIM_CS) SHIM_WORD_REGISTER(DS, SHIM_DS) SHIM_WORD_REGISTER(ES, SHIM_ES) SHIM_WORD_REGISTER(SS, SHIM_SS) SHIM_WORD_REGISTER(FS, SHIM_FS) SHIM_WORD_REGISTER(GS, SHIM_GS)
@@ -309,9 +319,6 @@ __declspec(dllexport) VOID WINAPI setMSW(USHORT value) /* not settable here */
 {
     (VOID)value;
 }
-
-/* PVOID VdmMapFlat(USHORT seg, ULONG off, VDM_MODE mode): VDM_V86 = 0, VDM_PM = 1 */
-#define SHIM_VDM_PM     1
 
 __declspec(dllexport) PVOID WINAPI VdmMapFlat(USHORT segment, ULONG offset, ULONG mode)
 {
@@ -374,8 +381,6 @@ __declspec(dllexport) VOID WINAPI VDDSimulateInterrupt(INT picAdapter, BYTE line
     if (g_HasShimApi && g_ShimApi.IcaInterrupt)
         g_ShimApi.IcaInterrupt(picAdapter, line, count);
 }
-
-#define SHIM_TERMINATE_EXIT_CODE    0
 
 __declspec(dllexport) VOID WINAPI VDDTerminateVDM(VOID)
 {

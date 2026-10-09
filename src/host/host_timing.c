@@ -21,11 +21,9 @@
 #include "host_diag.h"
 #include "host_audio.h"
 #include "host_irq.h"
-/* Used before their definitions below. */
-static VOID HostPitDeliver(VOID);
 
-#define MEMDUMP_PATH    OUT_("memdump.bin")
-CMOS_STATE   g_Cmos;      NTVDD_DEVICE g_CmosDevice;
+#define MEMDUMP_PATH                OUT_("memdump.bin")
+
 /* PENDING TIMER TICKS, as a saturating COUNT rather than a flag. A boolean coalesces: every
  * tick that falls while the guest has interrupts off -- and Skyroads spends most of its time
  * in exactly that state, CLI'd around its 256-colour palette writes -- was silently thrown
@@ -34,7 +32,7 @@ CMOS_STATE   g_Cmos;      NTVDD_DEVICE g_CmosDevice;
  * that fidelity without letting a long CLI region accumulate a burst that would then flood
  * the guest with back-to-back timer interrupts.
  */
-#define IRQ0_PENDING_MAX    4
+#define IRQ0_PENDING_MAX            4
 
 /* HOW MANY TIMER TICKS DOES THE PROTECTED-MODE CLIENT ACTUALLY OWE?:
  * Separate from g_Irq0Pending, which SATURATES AT FOUR on purpose (see above) and so
@@ -50,7 +48,248 @@ CMOS_STATE   g_Cmos;      NTVDD_DEVICE g_CmosDevice;
  * stall this host produces and still short enough that the tempo cannot lurch a
  * visible amount.
  */
-#define PM_TICK_OWED_MAX    64
+#define PM_TICK_OWED_MAX            64
+#define KEYIRQ_MAX_YIELD            3
+
+#define HOST_LOCK_TRY()             HostLockTry(__LINE__)
+#define PM_HEADLESS_GRACE_MS        3000 /* Grace for a clean wind-down before the hard backstop forces exit */
+
+/* True when a line's vector still points at one of our own do-nothing stubs (the shared
+ * device IRET at DOS_HDLR_SEG:0x66, or the default INT 09h at 0x4C). Those never send an
+ * EOI, so anything delivered through them must be auto-EOI'd or the line latches.
+ */
+/* IRQ0 IS HELD IN SERVICE UNTIL THE GUEST EOIs -- LIKE EVERY OTHER LINE (Importance = 5):
+ * Since ba927ac the timer was the ONE line the host auto-EOI'd on delivery, "gated by
+ * the guest's own IF discipline". That discipline is not enough, and Lemmings is the
+ * proof (s69/s70): its High-Performance-PC timer ISR does `sti` and then SPINS on
+ * 0x3DA for the vertical retrace before it reprograms the PIT and does its work
+ * (guest CS:17C7..18B1). On a real PC the 8259's in-service bit keeps the next IRQ0
+ * out until the `out 20h,20h` at the end. With auto-EOI, a tick raised during that
+ * spin RE-ENTERED the handler; the inner instance took the retrace the outer one was
+ * waiting for, and from then on every tick nested one level deeper, forever: no ISR
+ * body ever ran (no music), the game loop never ran (black screen, "stuck fade"),
+ * and the stack grew ~30 bytes a tick until it overran the data segment (the
+ * sprite-blitter AV with es=0xD000). The heartbeat's tell: irq0/s == flips/s == 70
+ * with the guest 100% inside the 0x3DA poll (p3da 3.3M reads/s) -- everything
+ * "ticking" and nothing finishing. It only surfaced once the PIT was corrected: the
+ * old random reload happened to be slow enough for the nesting to unwind.
+ * - So IRQ0 is acknowledged like any line and released by the guest's EOI -- or by our
+ *   own INT 08h BOP, which EOIs where the BIOS handler would (the Skyroads case that
+ *   motivated the deviation: it chains to the BIOS on the ticks it does not EOI).
+ *
+ * [CAUTION]: TWO SAFETY NETS, both counted in STAGE2 (`irq0_isr=`):
+ *   1. A handler that never EOIs and never chains cannot exist on real hardware (the
+ *      timer would stop dead), but a guest that dies inside its handler can. If IRQ0
+ *      sits in service for IRQ0_ISR_TIMEOUT_MS it is released and counted; after
+ *      IRQ0_ISR_TIMEOUTS_MAX of those the guest is judged not to EOI its timer and
+ *      the old auto-EOI behaviour comes back for the rest of the run, logged.
+ *   2. `g_Irq0Pending` still saturates at four, so a long handler is followed by a
+ *      short burst; a real PIC latches one. Left as is: our delivery latency is what
+ *      the backlog compensates for.
+ */
+#define IRQ0_ISR_TIMEOUT_MS         250u
+#define IRQ0_ISR_TIMEOUTS_MAX       3u
+
+#define TSC_RESYNC_INTERVAL_ULL     2000ull                 /* ~2 ms of ticks between re-anchors */
+#define IRQ0_NOTE_ASYNC_CS          0xFFFF /* g_Irq0NoteCs: the tick was delivered async, no CS:IP to note */
+#define COURIER_NORMAL_BUDGET_US    300u
+
+/* THE TICK COURIER: A RETRY THAT IS NOT TIED TO THE RAISE CADENCE. (s61) (Importance = 3):
+ * MEASURED, in-game, 45 s, Unlimited, synthetic keys (the fair A/B is in
+ * docs/STATE.md SESSION 61). Across the 75 gaps where Skyroads missed at least one
+ * of its own 180 Hz ticks:
+ *
+ *     IRQ0s the 8254 generated                192
+ *     injection attempts actually made         76
+ *     attempts NEVER MADE                     116   <-- and yields = 116, exactly
+ *     attempts that bailed not_in_exec          1
+ *
+ * Every tick that lost its injection attempt lost it to the KEYBOARD YIELD in
+ * HostIrqSink: when a key is pending, the timer's one async opportunity per raise
+ * is handed to IRQ1 instead. That is not a bug in the yield -- turning it off
+ * (keyirq.txt = 0) is measured to put HALF of all keystrokes past 64 ms, worst
+ * 1864 ms, which is the "loses keys" result this file already records twice. The
+ * yield is load-bearing for input.
+ *
+ * - SO THE FAULT IS NOT WHO WINS, IT IS THAT WINNING COSTS THE LOSER A WHOLE PERIOD.
+ *   IRQ0 and IRQ1 compete for one scarce thing: a moment when the guest is in exec
+ *   with interrupts on. HostIrqSink offers exactly ONE such moment per raise, so a
+ *   tick that loses waits 5.56 ms for the next one -- and KEYIRQ_MAX_YIELD allows
+ *   three losses in a row, which is 16.7 ms. The worst gap measured is 20 ms and its
+ *   account reads raise=3, yld=2, att=1: three ticks generated, two given to keys,
+ *   one attempted. That is the wobble, in four numbers.
+ *
+ * - AND AN IMMEDIATE SECOND ATTEMPT CANNOT WORK, which is why this is a thread and
+ *   not two lines in the sink. Injecting IRQ1 leaves the guest entering its INT 09h
+ *   with interrupts off, so a retry in the same breath is refused on IF -- correctly.
+ *   The tick has to wait for the guest's key handler to IRET, which is microseconds
+ *   away, not milliseconds. Nothing in the old structure could wait that long or that
+ *   precisely: the sink is called from the PIT and only from the PIT.
+ *
+ * [CAUTION]: WHY IT MUST NOT TAKE g_Lock, and why that is safe HERE and was not before.
+ * HostIrqSink's long note is right: holding g_Lock across a suspend is what
+ * guarantees the thread being suspended is not a lock holder, and simply moving the
+ * call outside was tried and made things worse. This is the "separate suspend-safe
+ * handshake" that note names as the prerequisite -- the same one the CPU throttle
+ * already uses and has shipped with for a session: confirm g_InExec AFTER the
+ * suspend has landed (GetThreadContext is what makes "landed" true), and resume
+ * instantly if it reads 0. g_InExec is set only around VdmRunGuest, where the thread
+ * holds nothing, and is cleared before any HOST_LOCK. See AsyncInjectIrq's
+ * re-check, which is where that handshake actually lives.
+ * Taking g_Lock would also defeat the purpose: the measured worst lock WAIT is
+ * 17 ms, which is longer than the gap being repaired.
+ *
+ * [CAUTION]: V86 ONLY, ON PURPOSE. A protected-mode client is fed almost entirely by the async
+ * path and is deliberately throttled to one attempt per sync; session 23 measured
+ * that buying more attempts there tripled the cost and moved delivery by nothing.
+ * This is a different mechanism aimed at a different fault, and gating it on
+ * !g_DpmiPm means it CANNOT regress Doom -- the one guest that throttle protects.
+ *
+ * [CAUTION]: ONE TICK PER WAKE. The backlog is not drained in a burst: g_Irq0Pending is a
+ * saturating latch precisely so a stall is not repaid as a flood, and session 22
+ * proved that compressing game time is catastrophic. Placing one tick and going
+ * back to sleep keeps the guest's clock monotonic.
+ *
+ * [CAUTION]: BOUNDED IN TIME, NOT JUST IN SPINS. Each retry is a full suspend round trip
+ * (~tens of us), so an unbounded spin against a guest that keeps interrupts off
+ * would burn a core to no purpose. It gives up after COURIER_BUDGET_US and lets the
+ * next raise re-arm it -- which is exactly the old behaviour, so the worst case is
+ * no worse than today.
+ */
+#define COURIER_BUDGET_US           3000u
+
+#define CPU_MHZ_UNKNOWN_U           0xFFFFFFFFu             /* HostCpuMhz: not read yet */
+#define CPUSPD_RUN_MIN_US           100ul                   /* #225: shortest spun run slice */
+
+/* Perform ONE decoded port access on the bus and write an IN result back into
+ * the guest's EAX at the right width. Factored out of the three I/O servicers
+ * (V86 / retro / PM) so the burst fast path below can repeat an access without
+ * re-decoding it.
+ */
+/* THE GUEST'S CLOCK. Skyroads -- like a lot of DOS games -- does not ask the BIOS what time
+ * it is; it latches PIT counter 0 and reads it, over and over (`out 43h,al; in al,40h; in
+ * al,40h`, its hot loop at 0110:5a85). So the guest's ENTIRE sense of elapsed time is
+ * whatever that counter says. Until now the counter was advanced by the UI thread's frame
+ * loop, once per presented frame -- and that thread is starved precisely when the guest is
+ * hammering I/O, which is exactly when the game is asking. The guest therefore saw time
+ * crawl, and everything it paces on time crawled with it: the palette fade, the music tempo
+ * (pitch was right -- that is the OPL, which is correct -- only the sequencer was slow), and
+ * the rate it fed PCM (slow AND pitched down). None of that was a sound bug.
+ *
+ * A real 8254 is a free-running counter, so model it as one: derive elapsed clocks from a
+ * high-resolution host clock at the moment the guest looks. QueryPerformanceCounter is
+ * KERNEL32, so it stays inside the no-CRT import rules.
+ */
+/* [INFO]: A MEASUREMENT THRESHOLD, NOT A LIMIT. NOTHING IS CLAMPED TO IT. READ THIS
+ * BEFORE "fixing" the catch-up burst, because I already tried and it was worse.
+ * - THE SYMPTOM (user, 2026-08-21): the music "speeds up for a few milliseconds and
+ *   then returns to normal", dropping a few notes. That is a real CATCH-UP BURST:
+ *   Skyroads runs its timer at about 16x the BIOS 18.2 Hz and advances its
+ *   sequencer one step per tick, so a host stall hands it dozens of ticks at once.
+ *   The tempo lurches, and a note whose on AND off both land inside the burst never
+ *   sounds at all.
+ * - WHAT I DID, AND WHY IT WAS A REGRESSION. I capped delivery at 10 ms and
+ *   DISCARDED the excess. The user's verdict was immediate: "speed is all over the
+ *   place now -- slow, normal, fast, normal, fast, slow". The reasoning behind the
+ *   cap contained an assumption I never measured: that syncs are always much closer
+ *   together than 10 ms because the UI tick is 5 ms. They are not. HostPitSync
+ *   takes g_Lock, and a heavy I/O-trap loop starves the UI thread (that is what the
+ *   comment above the exec-loop call at the bottom of this file is about) -- so gaps
+ *   past 10 ms are ORDINARY, and the cap threw away real time on every one of them.
+ * - THE LESSON, which is this project's own cardinal rule wearing a new hat: the old
+ *   burst was at least CORRECT ON AVERAGE. Discarding time is not a smaller version
+ *   of that error, it is a bigger and more constant one. Do not trade an occasional
+ *   artefact for a permanent one.
+ * - IF YOU PICK THIS UP: never discard. Keep the total exact and SMOOTH the
+ *   delivery -- carry the backlog and release it at a bounded rate over the next few
+ *   syncs, so the average tempo is preserved and only the lurch is removed. And
+ *   measure the real gap distribution FIRST: that is what g_PitGapMaximum and the
+ *   counter below exist for. A second, independent cause is also in play -- with no
+ *   CPU affinity set anywhere, a TSC-backed QueryPerformanceCounter can JUMP FORWARD
+ *   when a thread migrates cores, which is indistinguishable from a stall in here.
+ */
+#define PIT_CATCHUP_MAX             (PIT_INPUT_HZ / 100u)   /* 10 ms: the reporting threshold */
+
+#define RTIDLE_OFF_FLAG             CFG_("rtidle.off")
+#define RETRACE_IDLE_MIN_US         1500u                   /* Shorter waits are not worth idling for */
+
+enum
+{
+    IRQ0_ISR_GAP_RESET_MS = 100
+};   /* Irq0CanDeliver: a stall this long restarts the ISR clock */
+
+enum
+{
+    TSC_RESYNC_MIN_US = 500
+};   /* HostTimeMicroseconds: an interval long enough to re-derive the rate */
+
+/* -- #183: THE BEAM CLOCK WITHOUT A SYSCALL PER READ. Every 3DAh status read asks this
+ * for the time, and a retrace-wait loop reads 3DAh flat out: s82's profiler put 40%
+ * of Wolf3D's exec-thread samples in ntdll, i.e. QueryPerformanceCounter, which is a
+ * system call on XP, plus a 64-bit divide. Now: the CPU's own time-stamp counter,
+ * interpolated between QPC ANCHORS taken at most every ~2 ms, with the divide turned
+ * into a multiply. Per thread (__thread), so no lock and no torn shared state; the
+ * rate is re-derived at every anchor, so a CPU that changes its clock cannot drift
+ * us more than one anchor interval; and it never runs backwards within a thread.
+ * Falls back to plain QPC until the first two anchors have given it a rate.
+ */
+typedef struct
+{
+    UINT64 TscBase;
+    UINT64 MicrosecondsBase;
+    UINT64 Last;
+    UINT64 Resync;
+    UINT32 Multiplier;
+} HOST_CLOCK;
+
+enum
+{
+    PIT_PACE_WAIT_PERIODS = 4
+};   /* PitPacerThread: the event wait, in pacer periods */
+
+typedef MMRESULT (WINAPI *PFN_TIME_SET_EVENT)(UINT, UINT, LPTIMECALLBACK, DWORD_PTR, UINT);
+
+enum
+{
+    COURIER_OFF = 0, COURIER_ON = 1, COURIER_NORMAL_PRIORITY = 2, COURIER_WAIT_MS = 50, COURIER_NORMAL_TRIES = 2, COURIER_TRIES_MAX = 1000000
+};   /* courier.txt's modes; the courier's wait and tries */
+
+enum
+{
+    CPUSPEED_RELEASE_WAIT_MS = 5, CPUSPEED_CATCH_GRACE_MS = 250
+};   /* the cooperative park */
+
+enum
+{
+    CPUSPEED_IDLE_SLEEP_MS = 4, CPUSPEED_CATCH_TIMEOUT_MS = 400, CPUSPEED_CATCH_NONE = 0, CPUSPEED_CATCH_CONTEXT = 1, CPUSPEED_CATCH_COOPERATIVE = 2
+};   /* CpuSpeedThread */
+
+enum
+{
+    HEARTBEAT_MS = 500
+};   /* HeartbeatThread: one line this often */
+
+enum
+{
+    HEADLESS_EXIT_CODE = 3
+};   /* the deadline ended the run */
+
+enum
+{
+    EXEC_PRIORITY_UNSET = 0x7FFF, BACKGROUND_PRIORITY_TICK_MS = 500
+};   /* BackgroundPriorityTick */
+
+enum
+{
+    INT10_WAIT_MAX_MS = 50
+};   /* Int10WaitAfter: never hold a video call longer */
+
+enum
+{
+    RETRACE_IDLE_PATTERN_LENGTH = 4, RETRACE_IDLE_BACK_MAX = 3
+};   /* RetraceIdle: test/and al ; jcc back to the IN */
+
+CMOS_STATE   g_Cmos;      NTVDD_DEVICE g_CmosDevice;
 
 /* WHERE THE TIMER GOES FROM 140 Hz TO 55 Hz:
  * Doom programs 140 Hz and gets 55 delivered (39%), and DMX mixes PCM in the timer
@@ -78,49 +317,6 @@ LONG     g_PmTickOwedMaximum;
  * So sample the DEPTH at every sync. Nine buckets, one increment, no lock.
  */
 UINT32 g_PmOwedHistogram[9];
-static VOID PmOwedSample(LONG owed)
-{
-    UINT bucket = 0;
-
-    if      (owed <= 0)
-        bucket = 0;
-    else if (owed <  4)
-        bucket = (UINT)owed;                           /* 1, 2, 3 exactly */
-    else if (owed <  8)
-        bucket = 4;
-    else if (owed < 16)
-        bucket = 5;
-    else if (owed < 32)
-        bucket = 6;
-    else if (owed < 64)
-        bucket = 7;
-    else
-        bucket = 8;
-    g_PmOwedHistogram[bucket]++;
-}
-
-VOID Irq0Latch(VOID)
-{
-    if (g_Irq0Pending < IRQ0_PENDING_MAX)
-        InterlockedIncrement(&g_Irq0Pending);
-    if (g_PmTickOwed < PM_TICK_OWED_MAX)
-        InterlockedIncrement(&g_PmTickOwed);
-    if (g_PmTickOwed > g_PmTickOwedMaximum)
-        g_PmTickOwedMaximum = g_PmTickOwed;
-}
-
-/* Consume one owed tick. Returns 0 if none is owed, i.e. "the client is up to date --
- * do not manufacture time it has not been billed for".
- */
-INT PmTickTake(VOID)
-{
-    if (g_PmTickOwed <= 0)
-        return 0;
-    InterlockedDecrement(&g_PmTickOwed);
-    return 1;
-}
-
-static INT   g_AsyncTriedThisSync = 0;   /* see HostIrqSink: one attempt per PIT sync */
 /* HOW EVENLY DO IRQ0s ACTUALLY LAND?:
  * DMX's mixer is armed by the SB block IRQ (next_due = NOW) and SERVICED on the next
  * timer interrupt. A block is 11.6 ms; a tick period at the 135/s we deliver is
@@ -136,35 +332,6 @@ static INT   g_AsyncTriedThisSync = 0;   /* see HostIrqSink: one attempt per PIT
 DWORD g_TickGap[12];
 DWORD g_TickGapMaximumMicroseconds;
 DWORD g_TickGapOver;
-VOID TickDeliveredNote(VOID)
-{
-    static LARGE_INTEGER frequency;
-    static LARGE_INTEGER prev;
-    LARGE_INTEGER now;
-
-    if (!frequency.QuadPart && !QueryPerformanceFrequency(&frequency))
-        return;
-    if (!QueryPerformanceCounter(&now))
-        return;
-    if (prev.QuadPart)
-    {
-        LONGLONG microseconds = ((now.QuadPart - prev.QuadPart) * MICROSECONDS_PER_SECOND) / frequency.QuadPart;
-        UINT bucket = 0;
-        while (bucket < 11 && microseconds >= (LONGLONG)500 << bucket)
-            ++bucket;                                                                 /* 0.5,1,2,4..512 ms */
-        g_TickGap[bucket]++;
-        if (microseconds > (LONGLONG)g_TickGapMaximumMicroseconds)
-            g_TickGapMaximumMicroseconds = (DWORD)microseconds;
-        if (microseconds > 11600)
-            g_TickGapOver++;                         /* longer than one 128-byte block at 11111 Hz */
-    }
-    prev = now;
-}
-
-static INT      g_Irq0Yielded;
-#define KEYIRQ_MAX_YIELD    3
-
-#define HOST_LOCK_TRY()     HostLockTry(__LINE__)
 
 /* THE CRYSTAL'S OWN LOCK. (s61) (Importance = 3):
  * A real 8254 counts on a crystal that cannot be made to wait. Ours counted only
@@ -236,10 +403,357 @@ DWORD g_Irq0RaiseCount;
 DWORD g_Irq0AttemptsCount;
 DWORD g_Irq0NieCount;
 DWORD g_Irq0YieldCount;
+
+DWORD          g_Irq0Skip     = 0;  /* IRQ0 delivery gated off (IF=0 etc.) */
+DWORD          g_Irq0SkipIf  = 0;  /* ...because the guest had interrupts off */
+DWORD          g_Irq0SkipStub= 0;  /* ...because we were inside our INT 08h stub */
+DWORD          g_EventIntPending    = 0;  /* event-3 interrupt-pending notifications */
+DWORD          g_IrqNInjected      = 0;  /* device IRQs (2-7) injected into the guest */
+DWORD          g_IrqNRefuseTotal = 0;
+DWORD g_EventHistogram[EV_HIST_MAX];
+/* #238: WHERE THE CPU THREAD IS WHEN IT IS NOT IN THE GUEST. (s85):
+ * 3DBench's 1 kHz timer: 84% of async attempts bailed `not_in_exec`, with only ~410
+ * traps a second -- so the thread was somewhere in the host between v86_runs most of
+ * the time. Split the wall clock: microseconds inside VdmRunGuest, and the host time
+ * between one VdmRunGuest's return and the next's entry, charged to the event that
+ * returned (whatever the loop did to service it, interpreter slices included).
+ */
+DWORD g_V86MicrosecondsTotal;
+DWORD g_HostMicrosecondsEvent[EV_HIST_MAX];
+DWORD g_BopHistogram[BYTE_VALUES];            /* V86 BOP events by number (the busiest are printed) */
+DWORD g_PitPaceCalls;              /* PitPacerThread wakes (declared here for g_XsSnapshot) */
+DWORD g_XsStart;
+DWORD g_XsSeconds;
+DWORD g_XsSnapshot[XS_SECS][XS_N];
+
+/* Retry accounting for the one-attempt-per-sync device-IRQ offer in HostPitSync.
+ * `try` counts syncs where something was pending and we spent a round trip on it;
+ * `ok` counts the ones that landed. try==ok==0 is the healthy steady state -- it
+ * means every device IRQ was placed at its raise instant and this cost nothing.
+ */
+DWORD g_IrqNRetryTry = 0;
+DWORD g_IrqNRetryOk = 0;
+DWORD g_IrqNRetryWhy = 0;
+DWORD g_Irq0IsrSince    = 0;   /* GetTickCount()|1 when IRQ0 went in service; 0 = not */
+DWORD g_Irq0IsrBlocks   = 0;   /* deliveries refused because IRQ0 was in service */
+DWORD g_Irq0IsrTimeouts = 0;   /* in-service bits released by the timeout */
+DWORD g_Irq0IsrStrict   = 0;   /* acknowledges that HELD the line (guest EOIs) */
+DWORD g_Irq0IsrAuto     = 0;   /* acknowledges that auto-EOI'd (stub or fallback) */
+INT   g_Irq0AutoEoi      = 0;   /* fallback engaged: this guest does not EOI IRQ0 */
+
+/* TWO LEVERS, BECAUSE THE PERIOD IS NOT ONE:
+ * Session 26, user-confirmed on bare metal: the pacer costs SKYROADS its input --
+ * "pressing left/right arrows throws you off the road", gone the moment pitpace=0.
+ * It is NOT the clock (three port-profile-matched runs: 183.6 pre-pacer, 185.0, 184.1
+ * raises/s, within 0.8%) and it is NOT the pacer's CALL RATE either: 4 ms felt exactly
+ * like 1 ms. What does not change with the period is the number of RAISES, and a raise
+ * is where HostIrqSink does a SuspendThread/SetThreadContext round trip on the guest
+ * **while holding g_Lock** -- deliberately, because the lock is the interlock that
+ * stops us suspending a lock holder (see the note in HostIrqSink).
+ * Before the pacer, the UI thread called HostPitSync itself and therefore DID that
+ * suspend inline and carried on. Now the pacer does it and the UI thread BLOCKS on the
+ * lock instead -- and the UI thread is the one that turns WM_KEYUP into a break code,
+ * so a key stays down. That is rate-independent, which is exactly the shape measured.
+ * - So make the two candidate mechanisms separately testable, from the share, without a
+ *   rebuild -- this is an empirical loop with a human as the instrument and each round
+ *   costs the user a play session:
+ *   pitprio.txt  0-4  pacer thread priority (idle/below/normal/above/HIGHEST=default)
+ *   pitinj.txt   0/1  may the PACER perform the async injection? 1 = as shipped.
+ *                     0 = the pacer only ADVANCES THE CLOCK and leaves delivery to the
+ *                         UI and exec threads, exactly as before the pacer existed.
+ *
+ * [CAUTION]: Both default to the shipped behaviour, so an absent file changes nothing.
+ */
+/* NORMAL, NOT HIGHEST -- and the reason is the s61 crystal split (Importance = 3):
+ * The pacer was HIGHEST because in the OLD design it fought the renderer for
+ * g_Lock every millisecond and had to win to keep the clock moving. Now generation
+ * runs under its own micro-lock (g_PitCs, see HostPitGenerate) and never blocks
+ * on g_Lock at all -- so the pacer no longer NEEDS to outrank anything, and at
+ * HIGHEST it did active harm: on the single-core rig it starved the ~64 Hz present
+ * thread, which the user saw as stepped palette fades and dropped in-game frames.
+ * Dropped to NORMAL, the run was user-confirmed "absolutely perfect".
+ *
+ * [CAUTION]: It only needs to WAKE ~1000/s (timeBeginPeriod(1) + Sleep(1)); NORMAL does that
+ * fine, and the crystal is covered by cooperative delivery if a wake is ever late.
+ * pitprio.txt still overrides for A/B (0=idle..4=highest) but the default is the
+ * validated one.
+ */
+INT  g_PitPacePriority = THREAD_PRIORITY_NORMAL;
+INT  g_PitPaceInject = 1;
+
+DWORD  g_CpuSpeedDebtMaximumMicroseconds;   /*   the largest debt it was cut from */
+/* [INFO]: THE MEASURED RUN PHASE, in microseconds, and it is the number that made this
+ * feature work. We ASK for a 1 ms run; what the guest actually gets is that plus
+ * Sleep's inaccuracy plus whatever it costs the kernel to stop a thread inside
+ * VdmStartExecution -- and the hold is priced off this, not off the 1 ms.
+ */
+DWORD  g_CpuSpeedRanMicroseconds;
+/* The same window measured as WALL CLOCK. Printed next to ran_us so the gap between
+ * them -- our own servicing overhead, the thing the guest is no longer billed for --
+ * is a number in the log rather than an inference.
+ */
+DWORD  g_CpuSpeedWallMicroseconds;
+/* THE GRANULARITY SLIDER AND ITS AUTO-DETECT. See cpuspeed.h (Importance = 1):
+ * g_CpuSpeedGranularityMs is the TARGET PERIOD: 0 = auto (measure and choose). The
+ * measured round-trip cost is what auto is derived from, and it is reported so a
+ * surprising period can be traced to the machine rather than guessed at.
+ */
+UINT g_CpuSpeedGranularityMs  = CPUSPEED_GRAN_AUTO;   /* 0=auto; cpugran.txt knob */
+DWORD    g_CpuSpeedRoundTripMicroseconds;        /* measured suspend round trip, microseconds */
+DWORD    g_CpuSpeedPeriodMs;    /* what auto actually chose, or the setting */
+HANDLE        g_CpuSpeedRelease;     /* auto-reset: wakes the park early */
+
+/* PIN THE GUEST TO ONE CORE. (user request, 2026-09-09) (Importance = 2):
+ * The rig is an Intel Core 2 Duo E8600 -- TWO cores -- and this host runs at least
+ * five threads across them: the exec thread in V86, the UI thread, the PIT pacer at
+ * 1 kHz, the audio pump, and the throttle. Three reasons that matters here:
+ *
+ * 1. THE CLOCK. Every number the throttle computes comes from
+ *    QueryPerformanceCounter, and on XP QPC can be backed by the TSC -- which is
+ *    PER CORE. A thread migrating between cores can therefore see time move
+ *    unevenly or backwards, and a negative interval silently becomes a garbage
+ *    hold. Pinning the exec thread removes the migration entirely.
+ * 2. THE SUSPEND. The throttle catches the guest by suspending it; measured, the
+ *    round trip is ~1 us when it lands and the cost is all in CATCHING it. Keeping
+ *    the guest on its own core and the throttle off that core means the two are
+ *    never competing for the same one.
+ * 3. THE GUEST IS SINGLE-THREADED BY CONSTRUCTION. A DOS program cannot use a
+ *    second core, so nothing is lost by confining it to one.
+ *
+ * [CAUTION]: THE GUEST GETS A CORE TO ITSELF; EVERYTHING ELSE GETS THE REST. Pinning them all
+ * to the same core would be worse than not pinning at all -- the pacer alone wakes
+ * 1000 times a second and would preempt the guest constantly. On a single-core box
+ * this does nothing at all, correctly, and says so rather than pretending.
+ *
+ * [CAUTION]: NOT DEFAULT. This changes scheduling for every guest on the machine and its
+ * benefit is unmeasured; a knob that alters timing must be opt-in until there is a
+ * number attached to it. cpuaff.txt = 1 to try it.
+ */
+INT   g_CpuAffinityOn;              /* cpuaff.txt = 1 (file knob only): pin the guest */
+/* what we chose */
+DWORD g_CpuAffinityGuest;
+DWORD g_CpuAffinityRest;
+DWORD g_CpuAffinityCpuCount;
+UINT32 g_PitCatchupClamped;             /* gaps past it (STAGE2) */
+UINT32 g_PitGapMaximum;                     /* the worst one, in 8254 clocks */
+
+/* Decode + service a V86 IN/OUT that #GP-faulted (event 2), dispatch it to the
+ * bus, and advance EIP past the instruction so the guest resumes. Returns 1 if
+ * the faulting instruction was a (supported) I/O op we handled, 0 if it was a
+ * genuine GP fault the caller should stop on. No per-call logging -- I/O traps
+ * are hot (a palette set is ~768 OUTs); flushing the trace file each one stalls.
+ */
+/* -- #183: A RETRACE WAIT SLEEPS INSTEAD OF SPINNING. The standing decision: make the
+ * waits cheaper. A guest waiting for vertical retrace spins `in al,dx / test al,8 /
+ * jz back` against 3DAh, trapping every iteration -- 3M traps a second, a whole core,
+ * and (#172) the timer's pacer starved of CPU on a small machine. The handler notes
+ * the read here (under the lock); after the lock is dropped RetraceIdle() decodes the
+ * guest's OWN next instructions, and if they are exactly that loop and the edge it is
+ * waiting for is more than 1.5 ms away, sleeps ONE millisecond. The guest then loops
+ * once and traps again: interrupts are still delivered between iterations (Lemmings'
+ * timer ISR spins here with IF on; Skyroads ticks at 180 Hz), and once the edge is
+ * close it spins as before, so the edge is caught exactly. V86 only; cfg\rtidle.off
+ * turns it off.
+ */
+/* -- #226: VBE 4F07h BL=80h/82h "set display start DURING VERTICAL RETRACE". The
+ * video device answers the call and records when it may complete; the host waits
+ * that out here, after dropping the lock -- sleeping while the retrace is more than
+ * 1.5 ms away, spinning for the last stretch -- so a guest that flips pages with it
+ * gets at most one flip per frame, as on a real card. Bounded at 50 ms.
+ */
+DWORD g_VbeWaits;
+volatile DWORD g_RetracePending;
+volatile DWORD g_RetraceCs;
+volatile DWORD g_RetraceIp;
+volatile DWORD g_RetraceAl;
+volatile DWORD g_RetraceCx;
+volatile DWORD g_RetraceIdles;
+
+static INT   g_AsyncTriedThisSync = 0;   /* see HostIrqSink: one attempt per PIT sync */
+
+static INT      g_Irq0Yielded;
 static DWORD g_Irq0PrRaise;
 static DWORD g_Irq0PrAttempts;
 static DWORD g_Irq0PrNie;
 static DWORD g_Irq0PrYield;
+static DWORD          g_PitLatchDumps = 0;   /* PIT-LATCH poll-ring dumps printed (max 2) */
+
+static UINT32 g_PitRestartsSeen = 0;
+/* Can IRQ0 be delivered now? The PIC's answer, plus safety net 1. Called at both
+ * delivery sites (cooperative exec loop and the async courier).
+ */
+static DWORD g_Irq0LastAttempt = 0;   /* GetTickCount()|1 at the last delivery attempt */
+static DWORD g_ClockTls = TLS_OUT_OF_INDEXES;
+static HANDLE   g_PitPaceEvent;
+static MMRESULT g_PitPaceTimer;
+
+/* THE GUEST IS ONLY CHARGED FOR TIME IT WAS ACTUALLY EXECUTING (Importance = 3):
+ *
+ * [CAUTION]: THE BUG THIS FIXES, MEASURED ON THE RIG 2026-09-09 WITH tests/probes/dos/mixbench:
+ *  at index 11 -- the menu says 66 MHz -- five shapes of work were delivered at
+ *      ALU 68   MEM 209   VID13 92   VID12 23   PORT 1     (MHz apparent)
+ *  The ALU figure is right because ALU code is what CPUSPEED_REF_MHZ was
+ *  calibrated from (cpubench.asm: "NO REGISTER IN THE LOOP TOUCHES MEMORY"). The
+ *  PORT figure is 66x LOW, and port I/O is not a corner case: Doom's mode-Y
+ *  drawing does ~43,000 port writes a second and Skyroads' AdLib helper spends 43
+ *  port accesses per OPL register. The user's report was "66 MHz is unplayably
+ *  slow; my real 486 DX2-66 played these fine", and this is why.
+ *
+ * - THE CAUSE IS WHAT `ran_us` MEASURED. It was wall clock from the moment we let
+ *   the guest go to the moment a suspend landed -- and a DOS guest spends much of
+ *   that window NOT EXECUTING but trapped inside US, being serviced. Every port
+ *   write is an IOPL-0 #GP reflected out to host code and costs 2.33 us of wall
+ *   clock (measured: iobench case 3, 117,920 accesses in 5 ticks = 429,400/s).
+ *   Charging that to the guest bills it for our own overhead at the guest's rate,
+ *   and then the duty cycle multiplies the bill: at a 1.8% duty the guest is held
+ *   fifty-four times as long as it "ran", so every microsecond we mis-attribute
+ *   costs it fifty-four more. Hardware-touching code is therefore penalised in
+ *   proportion to how slow WE are at servicing it, which is precisely backwards.
+ *
+ * So count only the time the guest was inside VdmRunGuest/DpmiEnterProtectedMode, which is
+ * exactly what g_InExec already brackets, and price the hold off THAT. Our
+ * servicing time is simply not the guest's to pay for.
+ *
+ * [CAUTION]: 32 BITS OF MICROSECONDS, ON PURPOSE. A 64-bit accumulator cannot be read
+ * atomically on 32-bit x86, and the throttle samples it while the exec thread is
+ * RUNNING (right after ResumeThread), so a torn read is a real possibility and
+ * would produce a garbage hold. A uint32 of microseconds wraps every ~71 minutes
+ * and unsigned subtraction gives the correct delta across the wrap, which is all
+ * this is ever used for -- differences of milliseconds.
+ *
+ * [CAUTION]: AND IT IS READABLE MID-INTERVAL. The whole point is to sample it at the instant
+ * the guest is suspended, which is INSIDE a VdmRunGuest that has not returned yet, so
+ * the accumulated total alone would be stale by exactly the interval that matters.
+ * ExecMicrosecondsNow() adds the open interval. Safe when the target is suspended (nothing
+ * can change under us) and harmlessly approximate when it is not.
+ *
+ * [CAUTION]: GATED ON THROTTLING BEING ON. Two QueryPerformanceCounter calls per trap is
+ * nothing next to a 2.33 us trap, but at Unlimited -- the default, and how every
+ * measurement in this project was taken -- it buys nothing, so it is not paid.
+ */
+static volatile LONG g_ExecMicrosecondsAccumulated;      /* completed guest-execution time, us */
+/* [CAUTION]: THE OPEN INTERVAL IS ONE 32-BIT VALUE, AND THE FIRST CUT GOT THIS WRONG (Importance =
+ * 2): It stored the entry QueryPerformanceCounter as TWO LONGs, hi and lo, and reassembled them in
+ * the reader -- which is the identical torn-read hazard the comment above rejects for the
+ * accumulator, reintroduced on the very next line. The reader runs on the throttle thread while the
+ * exec thread is RUNNING, so an entry landing between the two reads yields a value from neither
+ * sample: a garbage interval, a garbage `ran_us`, and a hold computed from it. Measured symptom:
+ * `ran_us` stayed ~1500 us with no sleep in the run phase at all, and ALU delivered 123 MHz against
+ * accounting that said 64.
+ *
+ * Store MICROSECONDS SINCE A SESSION BASE in a single LONG. 32 bits of
+ * microseconds wraps every ~71 minutes and unsigned subtraction spans the wrap,
+ * which is all this is used for. One aligned 32-bit store is atomic on x86, so
+ * the reader cannot see half of it. 0 is the "no interval open" sentinel.
+ */
+static LARGE_INTEGER g_ExecQpcBase;    /* fixed at first use; never moves */
+static volatile LONG g_ExecEnterMicroseconds;    /* open interval start, us since base; 0=none */
+static volatile LONG g_ExecTimingOn;   /* only while a throttle is actually set */
+/* -- #225: THE COOPERATIVE CATCH. (user, round 11: "slow at busy times -- the
+ * crossfade, keyboard input") The throttle catches the guest by suspending it
+ * INSIDE VdmRunGuest; a guest that is in OUR servicing (a port trap, a BOP) cannot be
+ * suspended, so it ran free -- 56,820 missed catches in one Skyroads run at
+ * 486DX2-66 -- and the debt came back as one hold of up to a second. A 178 ms hold
+ * overflows the four-tick IRQ0 latch (22 ms at 180 Hz), so game time was thrown
+ * away: IRQ0 fell from 180/s to 91..170/s exactly when the game was busiest.
+ * - So when the throttle wants the guest and finds it outside VdmRunGuest, it RAISES
+ *   g_CpuSpeedCatchRequest, and the exec thread parks here at its next re-entry -- the
+ *   spot the #219 pause already parks at, where it holds no lock -- until the
+ *   throttle has taken its hold and lowers the request. The guest never runs free for
+ *   more than one trap, so the holds stay at their normal size.
+ * - Only a throttle raises the request, so at Unlimited this is one volatile read.
+ *
+ * [CAUTION]: BOUNDED: a throttle that stops answering (its thread wedged, g_Running falling)
+ * cannot park the guest for longer than the longest legal hold plus slack.
+ */
+static volatile LONG g_CpuSpeedCatchRequest;   /* throttle -> exec: park at the re-entry */
+static volatile LONG g_CpuSpeedParked;      /* exec -> throttle: parked, not in exec */
+
+/* -- #225: WHAT THE THROTTLE DID, SECOND BY SECOND, on IRQ0TL's time base, so a
+ * dip in the guest's clock can be read against exec / hold / missed catches /
+ * port traps / timer raises in that same second. Written by the throttle thread
+ * only (the io and raise columns are snapshots of counters owned elsewhere).
+ */
+static DWORD g_ControlExecMicroseconds[IRQ0TL_SECS];
+static DWORD g_ControlHoldMicroseconds[IRQ0TL_SECS];
+static DWORD g_ControlMissed[IRQ0TL_SECS];
+static DWORD g_ControlCooperative[IRQ0TL_SECS];
+static DWORD g_ControlIo[IRQ0TL_SECS];
+static DWORD g_ControlRaise[IRQ0TL_SECS];
+static DWORD g_ControlRunMicroseconds[IRQ0TL_SECS];
+static INT    g_ExecPriorityNow = EXEC_PRIORITY_UNSET;       /* what BackgroundPriorityTick last set */
+static INT g_RetraceOffset = -1;
+
+/* Used before their definitions below. */
+static VOID HostPitDeliver(VOID);
+
+static VOID PmOwedSample(LONG owed)
+{
+    UINT bucket = 0;
+
+    if      (owed <= 0)
+        bucket = 0;
+    else if (owed <  4)
+        bucket = (UINT)owed;                           /* 1, 2, 3 exactly */
+    else if (owed <  8)
+        bucket = 4;
+    else if (owed < 16)
+        bucket = 5;
+    else if (owed < 32)
+        bucket = 6;
+    else if (owed < 64)
+        bucket = 7;
+    else
+        bucket = 8;
+    g_PmOwedHistogram[bucket]++;
+}
+
+VOID Irq0Latch(VOID)
+{
+    if (g_Irq0Pending < IRQ0_PENDING_MAX)
+        InterlockedIncrement(&g_Irq0Pending);
+    if (g_PmTickOwed < PM_TICK_OWED_MAX)
+        InterlockedIncrement(&g_PmTickOwed);
+    if (g_PmTickOwed > g_PmTickOwedMaximum)
+        g_PmTickOwedMaximum = g_PmTickOwed;
+}
+
+/* Consume one owed tick. Returns 0 if none is owed, i.e. "the client is up to date --
+ * do not manufacture time it has not been billed for".
+ */
+INT PmTickTake(VOID)
+{
+    if (g_PmTickOwed <= 0)
+        return 0;
+    InterlockedDecrement(&g_PmTickOwed);
+    return 1;
+}
+
+VOID TickDeliveredNote(VOID)
+{
+    static LARGE_INTEGER frequency;
+    static LARGE_INTEGER prev;
+    LARGE_INTEGER now;
+
+    if (!frequency.QuadPart && !QueryPerformanceFrequency(&frequency))
+        return;
+    if (!QueryPerformanceCounter(&now))
+        return;
+    if (prev.QuadPart)
+    {
+        LONGLONG microseconds = ((now.QuadPart - prev.QuadPart) * MICROSECONDS_PER_SECOND) / frequency.QuadPart;
+        UINT bucket = 0;
+        while (bucket < 11 && microseconds >= (LONGLONG)500 << bucket)
+            ++bucket;                                                                 /* 0.5,1,2,4..512 ms */
+        g_TickGap[bucket]++;
+        if (microseconds > (LONGLONG)g_TickGapMaximumMicroseconds)
+            g_TickGapMaximumMicroseconds = (DWORD)microseconds;
+        if (microseconds > 11600)
+            g_TickGapOver++;                         /* longer than one 128-byte block at 11111 Hz */
+    }
+    prev = now;
+}
+
 VOID Irq0DeliveredNote(VOID)
 {
     LARGE_INTEGER now;
@@ -320,81 +834,6 @@ VOID Irq0DeliveredNote(VOID)
     }
 }
 
-DWORD          g_Irq0Skip     = 0;  /* IRQ0 delivery gated off (IF=0 etc.) */
-DWORD          g_Irq0SkipIf  = 0;  /* ...because the guest had interrupts off */
-DWORD          g_Irq0SkipStub= 0;  /* ...because we were inside our INT 08h stub */
-static DWORD          g_PitLatchDumps = 0;   /* PIT-LATCH poll-ring dumps printed (max 2) */
-DWORD          g_EventIntPending    = 0;  /* event-3 interrupt-pending notifications */
-DWORD          g_IrqNInjected      = 0;  /* device IRQs (2-7) injected into the guest */
-DWORD          g_IrqNRefuseTotal = 0;
-DWORD g_EventHistogram[EV_HIST_MAX];
-/* #238: WHERE THE CPU THREAD IS WHEN IT IS NOT IN THE GUEST. (s85):
- * 3DBench's 1 kHz timer: 84% of async attempts bailed `not_in_exec`, with only ~410
- * traps a second -- so the thread was somewhere in the host between v86_runs most of
- * the time. Split the wall clock: microseconds inside VdmRunGuest, and the host time
- * between one VdmRunGuest's return and the next's entry, charged to the event that
- * returned (whatever the loop did to service it, interpreter slices included).
- */
-DWORD g_V86MicrosecondsTotal;
-DWORD g_HostMicrosecondsEvent[EV_HIST_MAX];
-DWORD g_BopHistogram[BYTE_VALUES];            /* V86 BOP events by number (the busiest are printed) */
-DWORD g_PitPaceCalls;              /* PitPacerThread wakes (declared here for g_XsSnapshot) */
-DWORD g_XsStart;
-DWORD g_XsSeconds;
-DWORD g_XsSnapshot[XS_SECS][XS_N];
-#define PM_HEADLESS_GRACE_MS    3000    /* Grace for a clean wind-down before the hard backstop forces exit */
-
-/* Retry accounting for the one-attempt-per-sync device-IRQ offer in HostPitSync.
- * `try` counts syncs where something was pending and we spent a round trip on it;
- * `ok` counts the ones that landed. try==ok==0 is the healthy steady state -- it
- * means every device IRQ was placed at its raise instant and this cost nothing.
- */
-DWORD g_IrqNRetryTry = 0;
-DWORD g_IrqNRetryOk = 0;
-DWORD g_IrqNRetryWhy = 0;
-/* True when a line's vector still points at one of our own do-nothing stubs (the shared
- * device IRET at DOS_HDLR_SEG:0x66, or the default INT 09h at 0x4C). Those never send an
- * EOI, so anything delivered through them must be auto-EOI'd or the line latches.
- */
-/* IRQ0 IS HELD IN SERVICE UNTIL THE GUEST EOIs -- LIKE EVERY OTHER LINE (Importance = 5):
- * Since ba927ac the timer was the ONE line the host auto-EOI'd on delivery, "gated by
- * the guest's own IF discipline". That discipline is not enough, and Lemmings is the
- * proof (s69/s70): its High-Performance-PC timer ISR does `sti` and then SPINS on
- * 0x3DA for the vertical retrace before it reprograms the PIT and does its work
- * (guest CS:17C7..18B1). On a real PC the 8259's in-service bit keeps the next IRQ0
- * out until the `out 20h,20h` at the end. With auto-EOI, a tick raised during that
- * spin RE-ENTERED the handler; the inner instance took the retrace the outer one was
- * waiting for, and from then on every tick nested one level deeper, forever: no ISR
- * body ever ran (no music), the game loop never ran (black screen, "stuck fade"),
- * and the stack grew ~30 bytes a tick until it overran the data segment (the
- * sprite-blitter AV with es=0xD000). The heartbeat's tell: irq0/s == flips/s == 70
- * with the guest 100% inside the 0x3DA poll (p3da 3.3M reads/s) -- everything
- * "ticking" and nothing finishing. It only surfaced once the PIT was corrected: the
- * old random reload happened to be slow enough for the nesting to unwind.
- * - So IRQ0 is acknowledged like any line and released by the guest's EOI -- or by our
- *   own INT 08h BOP, which EOIs where the BIOS handler would (the Skyroads case that
- *   motivated the deviation: it chains to the BIOS on the ticks it does not EOI).
- *
- * [CAUTION]: TWO SAFETY NETS, both counted in STAGE2 (`irq0_isr=`):
- *   1. A handler that never EOIs and never chains cannot exist on real hardware (the
- *      timer would stop dead), but a guest that dies inside its handler can. If IRQ0
- *      sits in service for IRQ0_ISR_TIMEOUT_MS it is released and counted; after
- *      IRQ0_ISR_TIMEOUTS_MAX of those the guest is judged not to EOI its timer and
- *      the old auto-EOI behaviour comes back for the rest of the run, logged.
- *   2. `g_Irq0Pending` still saturates at four, so a long handler is followed by a
- *      short burst; a real PIC latches one. Left as is: our delivery latency is what
- *      the backlog compensates for.
- */
-#define IRQ0_ISR_TIMEOUT_MS     250u
-#define IRQ0_ISR_TIMEOUTS_MAX   3u
-DWORD g_Irq0IsrSince    = 0;   /* GetTickCount()|1 when IRQ0 went in service; 0 = not */
-DWORD g_Irq0IsrBlocks   = 0;   /* deliveries refused because IRQ0 was in service */
-DWORD g_Irq0IsrTimeouts = 0;   /* in-service bits released by the timeout */
-DWORD g_Irq0IsrStrict   = 0;   /* acknowledges that HELD the line (guest EOIs) */
-DWORD g_Irq0IsrAuto     = 0;   /* acknowledges that auto-EOI'd (stub or fallback) */
-INT   g_Irq0AutoEoi      = 0;   /* fallback engaged: this guest does not EOI IRQ0 */
-
-static UINT32 g_PitRestartsSeen = 0;
 VOID HostPitResyncCheck(VOID)
 {
     UINT32 restarts = g_Pit.Restarts;             /* monotonic; a stale read only defers us */
@@ -413,14 +852,6 @@ VOID HostPitResyncCheck(VOID)
     }
 }
 
-enum
-{
-    IRQ0_ISR_GAP_RESET_MS = 100
-};   /* Irq0CanDeliver: a stall this long restarts the ISR clock */
-/* Can IRQ0 be delivered now? The PIC's answer, plus safety net 1. Called at both
- * delivery sites (cooperative exec loop and the async courier).
- */
-static DWORD g_Irq0LastAttempt = 0;   /* GetTickCount()|1 at the last delivery attempt */
 INT Irq0CanDeliver(VOID)
 {
     DWORD now = GetTickCount() | 1;
@@ -546,8 +977,6 @@ VOID Irq0PmUnclaim(VOID)
     g_Irq0IsrStrict--;
 }
 
-#define TSC_RESYNC_INTERVAL_ULL     2000ull     /* ~2 ms of ticks between re-anchors */
-
 /* Advance the OPL timers from the real clock. The AdLib detect measures an 80us
  * timer and games pace music on timer overflow, so the ~16ms bus frame tick is far
  * too coarse -- the status register has to be current the moment the guest reads
@@ -579,29 +1008,6 @@ static UINT64 HostTimeMicrosecondsQpc(VOID)
     return (UINT64)(((now.QuadPart - base.QuadPart) * MICROSECONDS_PER_SECOND) / frequency.QuadPart);
 }
 
-enum
-{
-    TSC_RESYNC_MIN_US = 500
-};   /* HostTimeMicroseconds: an interval long enough to re-derive the rate */
-/* -- #183: THE BEAM CLOCK WITHOUT A SYSCALL PER READ. Every 3DAh status read asks this
- * for the time, and a retrace-wait loop reads 3DAh flat out: s82's profiler put 40%
- * of Wolf3D's exec-thread samples in ntdll, i.e. QueryPerformanceCounter, which is a
- * system call on XP, plus a 64-bit divide. Now: the CPU's own time-stamp counter,
- * interpolated between QPC ANCHORS taken at most every ~2 ms, with the divide turned
- * into a multiply. Per thread (__thread), so no lock and no torn shared state; the
- * rate is re-derived at every anchor, so a CPU that changes its clock cannot drift
- * us more than one anchor interval; and it never runs backwards within a thread.
- * Falls back to plain QPC until the first two anchors have given it a rate.
- */
-typedef struct
-{
-    UINT64 TscBase;
-    UINT64 MicrosecondsBase;
-    UINT64 Last;
-    UINT64 Resync;
-    UINT32 Multiplier;
-} HOST_CLOCK;
-static DWORD g_ClockTls = TLS_OUT_OF_INDEXES;
 UINT64 HostTimeMicroseconds(VOID)
 {
     UINT32 low;
@@ -666,52 +1072,6 @@ UINT64 HostTimeMicroseconds(VOID)
     return microseconds;
 }
 
-enum
-{
-    PIT_PACE_WAIT_PERIODS = 4
-};   /* PitPacerThread: the event wait, in pacer periods */
-#define IRQ0_NOTE_ASYNC_CS          0xFFFF  /* g_Irq0NoteCs: the tick was delivered async, no CS:IP to note */
-#define COURIER_NORMAL_BUDGET_US    300u
-
-/* TWO LEVERS, BECAUSE THE PERIOD IS NOT ONE:
- * Session 26, user-confirmed on bare metal: the pacer costs SKYROADS its input --
- * "pressing left/right arrows throws you off the road", gone the moment pitpace=0.
- * It is NOT the clock (three port-profile-matched runs: 183.6 pre-pacer, 185.0, 184.1
- * raises/s, within 0.8%) and it is NOT the pacer's CALL RATE either: 4 ms felt exactly
- * like 1 ms. What does not change with the period is the number of RAISES, and a raise
- * is where HostIrqSink does a SuspendThread/SetThreadContext round trip on the guest
- * **while holding g_Lock** -- deliberately, because the lock is the interlock that
- * stops us suspending a lock holder (see the note in HostIrqSink).
- * Before the pacer, the UI thread called HostPitSync itself and therefore DID that
- * suspend inline and carried on. Now the pacer does it and the UI thread BLOCKS on the
- * lock instead -- and the UI thread is the one that turns WM_KEYUP into a break code,
- * so a key stays down. That is rate-independent, which is exactly the shape measured.
- * - So make the two candidate mechanisms separately testable, from the share, without a
- *   rebuild -- this is an empirical loop with a human as the instrument and each round
- *   costs the user a play session:
- *   pitprio.txt  0-4  pacer thread priority (idle/below/normal/above/HIGHEST=default)
- *   pitinj.txt   0/1  may the PACER perform the async injection? 1 = as shipped.
- *                     0 = the pacer only ADVANCES THE CLOCK and leaves delivery to the
- *                         UI and exec threads, exactly as before the pacer existed.
- *
- * [CAUTION]: Both default to the shipped behaviour, so an absent file changes nothing.
- */
-/* NORMAL, NOT HIGHEST -- and the reason is the s61 crystal split (Importance = 3):
- * The pacer was HIGHEST because in the OLD design it fought the renderer for
- * g_Lock every millisecond and had to win to keep the clock moving. Now generation
- * runs under its own micro-lock (g_PitCs, see HostPitGenerate) and never blocks
- * on g_Lock at all -- so the pacer no longer NEEDS to outrank anything, and at
- * HIGHEST it did active harm: on the single-core rig it starved the ~64 Hz present
- * thread, which the user saw as stepped palette fades and dropped in-game frames.
- * Dropped to NORMAL, the run was user-confirmed "absolutely perfect".
- *
- * [CAUTION]: It only needs to WAKE ~1000/s (timeBeginPeriod(1) + Sleep(1)); NORMAL does that
- * fine, and the crystal is covered by cooperative delivery if a wake is ever late.
- * pitprio.txt still overrides for A/B (0=idle..4=highest) but the default is the
- * validated one.
- */
-INT  g_PitPacePriority = THREAD_PRIORITY_NORMAL;
-INT  g_PitPaceInject = 1;
 LONGLONG Int15QpcAfterMicroseconds(DWORD microseconds)
 {
     LARGE_INTEGER now;
@@ -738,9 +1098,6 @@ static VOID Int15EventPoll(VOID)            /* pacer thread */
     ++g_Int15Posted;
 }
 
-typedef MMRESULT (WINAPI *PFN_TIME_SET_EVENT)(UINT, UINT, LPTIMECALLBACK, DWORD_PTR, UINT);
-static HANDLE   g_PitPaceEvent;
-static MMRESULT g_PitPaceTimer;
 VOID PitPacerTimerStart(HMODULE winmmModule)
 {
     PFN_TIME_SET_EVENT timeSetEvent = winmmModule ? (PFN_TIME_SET_EVENT)GetProcAddress(winmmModule, HOST_EXPORT_TIME_SET_EVENT) : NULL;
@@ -757,6 +1114,153 @@ VOID PitPacerTimerStart(HMODULE winmmModule)
         CloseHandle(g_PitPaceEvent);
         g_PitPaceEvent = NULL;
     }
+}
+
+/* DELIVERY: one bounded pass of attempts, and only if g_Lock is FREE (Importance = 3):
+ * The old shape held g_Lock across generation AND attempts, which was load-bearing
+ * in one way (holding g_Lock guarantees the thread we suspend is not holding it)
+ * and disastrous in another (the clock queued behind the renderer to tick). The
+ * split keeps the guarantee -- attempts still happen ONLY under g_Lock -- and
+ * deletes the queueing: HOST_LOCK_TRY means a busy lock skips the attempt, and the
+ * tick is already LATCHED, so the cooperative path delivers it at the guest's next
+ * trap (~68,000/s on Skyroads). A skip costs latency bounded by the next trap or
+ * the next pacer round; the old cost was unbounded clock stall. The s61 suspend
+ * handshake (post-suspend g_InExec re-check, ctx-writer interlock) additionally
+ * protects the suspend itself; both layers stay.
+ */
+static VOID HostPitDeliver(VOID)
+{
+    if (!HOST_LOCK_TRY())
+    {
+        ++g_PitDeliverSkipped;
+        return;
+    }
+    if (g_Irq0Pending > 0 && g_QiSuspended && (!g_DpmiPm || !g_AsyncTriedThisSync))
+    {
+            g_AsyncTriedThisSync = 1;
+            /* A PENDING KEY IS A STATE, NOT A MOMENT. IRQ1 gets ONE async attempt, at the
+             * raise; if the guest had interrupts off (96% of gameplay) it falls to the
+             * exec loop, which can only place it on a pass where they are back on. This is
+             * the retry, and it is free: AsyncInjectIrq VERIFIES IF/VIF before it
+             * injects, so an IRQ0 opportunity IS a proven enabled moment, ~184/s. The key
+             * takes it and the tick waits -- g_Irq0Pending is not decremented, so the
+             * tick is not lost, just delivered on the next raise. Bounded so a key that
+             * can never be placed cannot stop the clock.
+             */
+            /* keyirq = 2: YIELD ONLY WHILE THE CLOCK IS ON SCHEDULE (Importance = 3):
+             * USER-CONFIRMED SYMPTOM (2026-09-09, in-game, at the box): "butter
+             * smooth, until you start pressing keys, then it lags. When you release
+             * the keys, it eventually goes smooth again." That is this branch, felt
+             * rather than measured -- and it matches the measurement exactly, where
+             * `raises - attempts == yields` in every run taken.
+             * - The yield itself is NOT the mistake: turning it off (keyirq = 0) is
+             *   measured to put 51 of 102 keystrokes past 64 ms, worst 1864 ms. Keys
+             *   and the timer are competing for one scarce thing -- a moment when the
+             *   guest is in exec with interrupts on -- and somebody has to lose.
+             *
+             * So lose the slot only when losing it is FREE. g_Irq0Pending is the
+             * saturating tick latch and Irq0Latch() has already counted this raise,
+             * so <= 1 means "nothing is owed but the tick we just made": the clock is
+             * on schedule and can afford to wait one period. Above that the timer is
+             * already behind, which is exactly when a further 5.56 ms of delay is
+             * what the player feels, so the key waits instead -- for ONE period, not
+             * the three KEYIRQ_MAX_YIELD would allow.
+             * 0 = never yield (measured: loses keys), 1 = always (the old default,
+             * what the user felt), 2 = only when not behind.
+             */
+            /* [CAUTION]: keyirq = 2 IS REFUTED, USER-CONFIRMED. DO NOT RETRY IT (Importance = 2):
+             * "Now it reads too many keys in a row and doesn't stop reading them
+             * when the key is released. I flew straight off the road. Twice."
+             * Making the KEY wait strands its BREAK code: g_Irq1Pending is one
+             * deep, so a make code still queued when the release arrives coalesces
+             * the release away and the guest never sees the key come up. This file
+             * already recorded that shape once ("the earlier cap-with-a-backlog is
+             * what stranded break codes and killed the arrow keys") and I walked
+             * into it anyway. => ANY FIX THAT DELAYS THE KEY IS OFF THE TABLE.
+             * - keyirq = 3 is the survivor of that: never delay a key, but allow only
+             *   ONE yield in a row instead of KEYIRQ_MAX_YIELD's three. The key is
+             *   served instantly exactly as in mode 1, and the clock's worst-case
+             *   loss falls from three periods (16.7 ms at 180 Hz) to one. It cannot
+             *   strand a break code, because a key is never made to wait.
+             */
+            {   INT maximumYields = (g_KeyIrqRetry == KEYIRQ_RETRY_ONE_YIELD) ? 1 : KEYIRQ_MAX_YIELD;
+            if (g_KeyIrqRetry && !g_DpmiPm && g_Irq1Pending > 0
+                && (g_KeyIrqRetry != KEYIRQ_RETRY_CLOCK_ON_SCHEDULE || g_Irq0Pending <= 1)
+                && g_Irq0Yielded < maximumYields
+                && VddPicCanDeliver(&g_Pic, PIC_IRQ_KEYBOARD) && AsyncInjectIrq(PIC_IRQ_KEYBOARD))
+            {
+                InterlockedDecrement(&g_Irq1Pending);
+                ++g_Irq0Yielded;
+                ++g_Irq1AsyncRetry;
+                ++g_Irq0YieldCount;   /* A/B/C discriminator: the key took the clock's turn */
+            }
+            else
+            {
+                g_Irq0Yielded = 0;
+                ++g_PitAsyncAttempts;
+                ++g_Irq0AttemptsCount;     /* A/B/C discriminator: an attempt was actually made */
+                if (AsyncInjectIrq(PIC_IRQ_TIMER))
+                {
+                    InterlockedDecrement(&g_Irq0Pending);
+                    PmTickTake();
+                    /* [CAUTION]: BOTH DELIVERY PATHS, OR THE TIMELINE IS A LIE. A PM guest
+                     * is fed almost entirely from here and a V86 one from the
+                     * cooperative site; counting one would show a clock stopping
+                     * exactly where the other took over.
+                     */
+                    g_Irq0NoteCs = IRQ0_NOTE_ASYNC_CS;
+                    g_Irq0NoteIp = 0;  /* delivered async */
+                    Irq0DeliveredNote();
+                }
+            } }
+        }
+    /* -- A DEVICE IRQ GETS EXACTLY ONE ASYNCHRONOUS ATTEMPT, AT THE INSTANT IT IS
+     * RAISED -- AND THAT IS NOT ENOUGH FOR A ONE-SHOT INTERRUPT. --------------------
+     * HostIrqSink tries once when the device raises, and if the CPU thread happens
+     * to be in HOST code at that microsecond the attempt bails (why=0x14) and nothing
+     * ever offers it again. For a line that re-raises (Doom's auto-init SB fires 86
+     * times a second) that is invisible. For a ONE-SHOT it is fatal.
+     *
+     * [INFO]: MEASURED ON ZAR (#23): its Miles driver's init-time DMA/IRQ self-test is an
+     * 8-bit SINGLE-CYCLE transfer, so the SB raises IRQ 5 exactly ONCE. The block
+     * drains, the IRQ is raised, `ASYNC-EARLY bail irq=05 why=0x14`, and the driver
+     * then waits for ever on a MEMORY flag its ISR would have set -- so it never traps
+     * again and no cooperative path can reach it either (measured: zero IRQN-REFUSE).
+     * - The latch already persists (g_IrqNPending, cleared only on delivery), so the
+     *   missing piece is merely to OFFER IT AGAIN. Here, because this already runs on
+     *   the pacer thread and already holds g_Lock -- and holding the lock is precisely
+     *   what guarantees the thread we are about to suspend is not holding it (see the
+     *   long note in HostIrqSink; do not move this outside).
+     *
+     * [CAUTION]: ONE ATTEMPT PER SYNC, AND ONLY WHILE SOMETHING IS ACTUALLY PENDING. Session
+     * 22's disaster was ~800 unbounded SuspendThread round trips per sync under this
+     * lock, and the throttle written to stop it later cost SKYROADS a fifth of its
+     * clock. So: at most one retry per sync, the first pending hooked line only, and
+     * nothing at all in the overwhelmingly common case where no device IRQ is
+     * outstanding -- which is a single predictable branch, not a syscall.
+     */
+    { INT index, irq;
+      for (index = 0; index < (INT)sizeof g_IrqOrder; ++index)
+      {
+          irq = g_IrqOrder[index];
+          if (!g_IrqNPending[irq])
+              continue;
+          if (!VddPicCanDeliver(&g_Pic, (BYTE)irq))
+              break;
+          ++g_IrqNRetryTry;
+          if (g_QiSuspended && AsyncInjectIrq((UINT)irq))
+          {
+              InterlockedExchange(&g_IrqNPending[irq], 0);
+              ++g_IrqNRetryOk;
+          }
+          /* WHICH CLAUSE SAID NO. 1597 refusals with no reason is not a measurement;
+           * AsyncInjectIrq already records one, so keep the last of them.
+           */
+          else
+              g_IrqNRetryWhy = g_AsyncWhy;
+          break;                  /* one per sync, pending or not: see the note above */
+      } }
+    HOST_UNLOCK();
 }
 
 DWORD WINAPI PitPacerThread(LPVOID param)
@@ -785,73 +1289,6 @@ DWORD WINAPI PitPacerThread(LPVOID param)
     return 0;
 }
 
-enum
-{
-    COURIER_OFF = 0, COURIER_ON = 1, COURIER_NORMAL_PRIORITY = 2, COURIER_WAIT_MS = 50, COURIER_NORMAL_TRIES = 2, COURIER_TRIES_MAX = 1000000
-};   /* courier.txt's modes; the courier's wait and tries */
-/* THE TICK COURIER: A RETRY THAT IS NOT TIED TO THE RAISE CADENCE. (s61) (Importance = 3):
- * MEASURED, in-game, 45 s, Unlimited, synthetic keys (the fair A/B is in
- * docs/STATE.md SESSION 61). Across the 75 gaps where Skyroads missed at least one
- * of its own 180 Hz ticks:
- *
- *     IRQ0s the 8254 generated                192
- *     injection attempts actually made         76
- *     attempts NEVER MADE                     116   <-- and yields = 116, exactly
- *     attempts that bailed not_in_exec          1
- *
- * Every tick that lost its injection attempt lost it to the KEYBOARD YIELD in
- * HostIrqSink: when a key is pending, the timer's one async opportunity per raise
- * is handed to IRQ1 instead. That is not a bug in the yield -- turning it off
- * (keyirq.txt = 0) is measured to put HALF of all keystrokes past 64 ms, worst
- * 1864 ms, which is the "loses keys" result this file already records twice. The
- * yield is load-bearing for input.
- *
- * - SO THE FAULT IS NOT WHO WINS, IT IS THAT WINNING COSTS THE LOSER A WHOLE PERIOD.
- *   IRQ0 and IRQ1 compete for one scarce thing: a moment when the guest is in exec
- *   with interrupts on. HostIrqSink offers exactly ONE such moment per raise, so a
- *   tick that loses waits 5.56 ms for the next one -- and KEYIRQ_MAX_YIELD allows
- *   three losses in a row, which is 16.7 ms. The worst gap measured is 20 ms and its
- *   account reads raise=3, yld=2, att=1: three ticks generated, two given to keys,
- *   one attempted. That is the wobble, in four numbers.
- *
- * - AND AN IMMEDIATE SECOND ATTEMPT CANNOT WORK, which is why this is a thread and
- *   not two lines in the sink. Injecting IRQ1 leaves the guest entering its INT 09h
- *   with interrupts off, so a retry in the same breath is refused on IF -- correctly.
- *   The tick has to wait for the guest's key handler to IRET, which is microseconds
- *   away, not milliseconds. Nothing in the old structure could wait that long or that
- *   precisely: the sink is called from the PIT and only from the PIT.
- *
- * [CAUTION]: WHY IT MUST NOT TAKE g_Lock, and why that is safe HERE and was not before.
- * HostIrqSink's long note is right: holding g_Lock across a suspend is what
- * guarantees the thread being suspended is not a lock holder, and simply moving the
- * call outside was tried and made things worse. This is the "separate suspend-safe
- * handshake" that note names as the prerequisite -- the same one the CPU throttle
- * already uses and has shipped with for a session: confirm g_InExec AFTER the
- * suspend has landed (GetThreadContext is what makes "landed" true), and resume
- * instantly if it reads 0. g_InExec is set only around VdmRunGuest, where the thread
- * holds nothing, and is cleared before any HOST_LOCK. See AsyncInjectIrq's
- * re-check, which is where that handshake actually lives.
- * Taking g_Lock would also defeat the purpose: the measured worst lock WAIT is
- * 17 ms, which is longer than the gap being repaired.
- *
- * [CAUTION]: V86 ONLY, ON PURPOSE. A protected-mode client is fed almost entirely by the async
- * path and is deliberately throttled to one attempt per sync; session 23 measured
- * that buying more attempts there tripled the cost and moved delivery by nothing.
- * This is a different mechanism aimed at a different fault, and gating it on
- * !g_DpmiPm means it CANNOT regress Doom -- the one guest that throttle protects.
- *
- * [CAUTION]: ONE TICK PER WAKE. The backlog is not drained in a burst: g_Irq0Pending is a
- * saturating latch precisely so a stall is not repaid as a flood, and session 22
- * proved that compressing game time is catastrophic. Placing one tick and going
- * back to sleep keeps the guest's clock monotonic.
- *
- * [CAUTION]: BOUNDED IN TIME, NOT JUST IN SPINS. Each retry is a full suspend round trip
- * (~tens of us), so an unbounded spin against a guest that keeps interrupts off
- * would burn a core to no purpose. It gives up after COURIER_BUDGET_US and lets the
- * next raise re-arm it -- which is exactly the old behaviour, so the worst case is
- * no worse than today.
- */
-#define COURIER_BUDGET_US   3000u
 DWORD WINAPI TickCourierThread(LPVOID parameter)
 {
     (VOID)parameter;
@@ -936,8 +1373,6 @@ DWORD WINAPI TickCourierThread(LPVOID parameter)
     return 0;
 }
 
-#define CPU_MHZ_UNKNOWN_U   0xFFFFFFFFu     /* HostCpuMhz: not read yet */
-
 /* #224: THIS PC's own clock in MHz (0 = unknown), from the CPU's ~MHz registry value
  * -- what Windows itself shows in System Properties. Rungs at or above it are greyed.
  */
@@ -964,26 +1399,6 @@ UINT HostCpuMhz(VOID)
     return mhz;
 }
 
-DWORD  g_CpuSpeedDebtMaximumMicroseconds;   /*   the largest debt it was cut from */
-/* [INFO]: THE MEASURED RUN PHASE, in microseconds, and it is the number that made this
- * feature work. We ASK for a 1 ms run; what the guest actually gets is that plus
- * Sleep's inaccuracy plus whatever it costs the kernel to stop a thread inside
- * VdmStartExecution -- and the hold is priced off this, not off the 1 ms.
- */
-DWORD  g_CpuSpeedRanMicroseconds;
-/* The same window measured as WALL CLOCK. Printed next to ran_us so the gap between
- * them -- our own servicing overhead, the thing the guest is no longer billed for --
- * is a number in the log rather than an inference.
- */
-DWORD  g_CpuSpeedWallMicroseconds;
-/* THE GRANULARITY SLIDER AND ITS AUTO-DETECT. See cpuspeed.h (Importance = 1):
- * g_CpuSpeedGranularityMs is the TARGET PERIOD: 0 = auto (measure and choose). The
- * measured round-trip cost is what auto is derived from, and it is reported so a
- * surprising period can be traced to the machine rather than guessed at.
- */
-UINT g_CpuSpeedGranularityMs  = CPUSPEED_GRAN_AUTO;   /* 0=auto; cpugran.txt knob */
-DWORD    g_CpuSpeedRoundTripMicroseconds;        /* measured suspend round trip, microseconds */
-DWORD    g_CpuSpeedPeriodMs;    /* what auto actually chose, or the setting */
 /* THE ROUND TRIP IS MEASURED WHERE IT HAPPENS, NOT IN A SYNTHETIC BURST (Importance = 2):
  *
  * [CAUTION]: THE FIRST CUT DID IT AT STARTUP and the number was meaningless: it reported
@@ -1018,69 +1433,6 @@ static VOID CpuSpeedNoteRoundTrip(DWORD microseconds)
         g_CpuSpeedPeriodMs = 0;          /* re-derive auto from the better estimate */
     }
 }
-
-/* THE GUEST IS ONLY CHARGED FOR TIME IT WAS ACTUALLY EXECUTING (Importance = 3):
- *
- * [CAUTION]: THE BUG THIS FIXES, MEASURED ON THE RIG 2026-09-09 WITH tests/probes/dos/mixbench:
- *  at index 11 -- the menu says 66 MHz -- five shapes of work were delivered at
- *      ALU 68   MEM 209   VID13 92   VID12 23   PORT 1     (MHz apparent)
- *  The ALU figure is right because ALU code is what CPUSPEED_REF_MHZ was
- *  calibrated from (cpubench.asm: "NO REGISTER IN THE LOOP TOUCHES MEMORY"). The
- *  PORT figure is 66x LOW, and port I/O is not a corner case: Doom's mode-Y
- *  drawing does ~43,000 port writes a second and Skyroads' AdLib helper spends 43
- *  port accesses per OPL register. The user's report was "66 MHz is unplayably
- *  slow; my real 486 DX2-66 played these fine", and this is why.
- *
- * - THE CAUSE IS WHAT `ran_us` MEASURED. It was wall clock from the moment we let
- *   the guest go to the moment a suspend landed -- and a DOS guest spends much of
- *   that window NOT EXECUTING but trapped inside US, being serviced. Every port
- *   write is an IOPL-0 #GP reflected out to host code and costs 2.33 us of wall
- *   clock (measured: iobench case 3, 117,920 accesses in 5 ticks = 429,400/s).
- *   Charging that to the guest bills it for our own overhead at the guest's rate,
- *   and then the duty cycle multiplies the bill: at a 1.8% duty the guest is held
- *   fifty-four times as long as it "ran", so every microsecond we mis-attribute
- *   costs it fifty-four more. Hardware-touching code is therefore penalised in
- *   proportion to how slow WE are at servicing it, which is precisely backwards.
- *
- * So count only the time the guest was inside VdmRunGuest/DpmiEnterProtectedMode, which is
- * exactly what g_InExec already brackets, and price the hold off THAT. Our
- * servicing time is simply not the guest's to pay for.
- *
- * [CAUTION]: 32 BITS OF MICROSECONDS, ON PURPOSE. A 64-bit accumulator cannot be read
- * atomically on 32-bit x86, and the throttle samples it while the exec thread is
- * RUNNING (right after ResumeThread), so a torn read is a real possibility and
- * would produce a garbage hold. A uint32 of microseconds wraps every ~71 minutes
- * and unsigned subtraction gives the correct delta across the wrap, which is all
- * this is ever used for -- differences of milliseconds.
- *
- * [CAUTION]: AND IT IS READABLE MID-INTERVAL. The whole point is to sample it at the instant
- * the guest is suspended, which is INSIDE a VdmRunGuest that has not returned yet, so
- * the accumulated total alone would be stale by exactly the interval that matters.
- * ExecMicrosecondsNow() adds the open interval. Safe when the target is suspended (nothing
- * can change under us) and harmlessly approximate when it is not.
- *
- * [CAUTION]: GATED ON THROTTLING BEING ON. Two QueryPerformanceCounter calls per trap is
- * nothing next to a 2.33 us trap, but at Unlimited -- the default, and how every
- * measurement in this project was taken -- it buys nothing, so it is not paid.
- */
-static volatile LONG g_ExecMicrosecondsAccumulated;      /* completed guest-execution time, us */
-/* [CAUTION]: THE OPEN INTERVAL IS ONE 32-BIT VALUE, AND THE FIRST CUT GOT THIS WRONG (Importance =
- * 2): It stored the entry QueryPerformanceCounter as TWO LONGs, hi and lo, and reassembled them in
- * the reader -- which is the identical torn-read hazard the comment above rejects for the
- * accumulator, reintroduced on the very next line. The reader runs on the throttle thread while the
- * exec thread is RUNNING, so an entry landing between the two reads yields a value from neither
- * sample: a garbage interval, a garbage `ran_us`, and a hold computed from it. Measured symptom:
- * `ran_us` stayed ~1500 us with no sleep in the run phase at all, and ALU delivered 123 MHz against
- * accounting that said 64.
- *
- * Store MICROSECONDS SINCE A SESSION BASE in a single LONG. 32 bits of
- * microseconds wraps every ~71 minutes and unsigned subtraction spans the wrap,
- * which is all this is used for. One aligned 32-bit store is atomic on x86, so
- * the reader cannot see half of it. 0 is the "no interval open" sentinel.
- */
-static LARGE_INTEGER g_ExecQpcBase;    /* fixed at first use; never moves */
-static volatile LONG g_ExecEnterMicroseconds;    /* open interval start, us since base; 0=none */
-static volatile LONG g_ExecTimingOn;   /* only while a throttle is actually set */
 
 static LONG ExecClockMicroseconds(VOID)
 {
@@ -1128,30 +1480,6 @@ static LONG ExecMicrosecondsNow(VOID)
     return accumulated;
 }
 
-enum
-{
-    CPUSPEED_RELEASE_WAIT_MS = 5, CPUSPEED_CATCH_GRACE_MS = 250
-};   /* the cooperative park */
-/* -- #225: THE COOPERATIVE CATCH. (user, round 11: "slow at busy times -- the
- * crossfade, keyboard input") The throttle catches the guest by suspending it
- * INSIDE VdmRunGuest; a guest that is in OUR servicing (a port trap, a BOP) cannot be
- * suspended, so it ran free -- 56,820 missed catches in one Skyroads run at
- * 486DX2-66 -- and the debt came back as one hold of up to a second. A 178 ms hold
- * overflows the four-tick IRQ0 latch (22 ms at 180 Hz), so game time was thrown
- * away: IRQ0 fell from 180/s to 91..170/s exactly when the game was busiest.
- * - So when the throttle wants the guest and finds it outside VdmRunGuest, it RAISES
- *   g_CpuSpeedCatchRequest, and the exec thread parks here at its next re-entry -- the
- *   spot the #219 pause already parks at, where it holds no lock -- until the
- *   throttle has taken its hold and lowers the request. The guest never runs free for
- *   more than one trap, so the holds stay at their normal size.
- * - Only a throttle raises the request, so at Unlimited this is one volatile read.
- *
- * [CAUTION]: BOUNDED: a throttle that stops answering (its thread wedged, g_Running falling)
- * cannot park the guest for longer than the longest legal hold plus slack.
- */
-static volatile LONG g_CpuSpeedCatchRequest;   /* throttle -> exec: park at the re-entry */
-static volatile LONG g_CpuSpeedParked;      /* exec -> throttle: parked, not in exec */
-HANDLE        g_CpuSpeedRelease;     /* auto-reset: wakes the park early */
 VOID CpuSpeedCooperativePark(VOID)
 {
     DWORD start;
@@ -1175,18 +1503,6 @@ VOID CpuSpeedCooperativePark(VOID)
     InterlockedExchange(&g_CpuSpeedParked, 0);
 }
 
-/* -- #225: WHAT THE THROTTLE DID, SECOND BY SECOND, on IRQ0TL's time base, so a
- * dip in the guest's clock can be read against exec / hold / missed catches /
- * port traps / timer raises in that same second. Written by the throttle thread
- * only (the io and raise columns are snapshots of counters owned elsewhere).
- */
-static DWORD g_ControlExecMicroseconds[IRQ0TL_SECS];
-static DWORD g_ControlHoldMicroseconds[IRQ0TL_SECS];
-static DWORD g_ControlMissed[IRQ0TL_SECS];
-static DWORD g_ControlCooperative[IRQ0TL_SECS];
-static DWORD g_ControlIo[IRQ0TL_SECS];
-static DWORD g_ControlRaise[IRQ0TL_SECS];
-static DWORD g_ControlRunMicroseconds[IRQ0TL_SECS];
 static INT CpuSpeedTimelineSeconds(VOID)
 {
     LARGE_INTEGER now;
@@ -1282,37 +1598,6 @@ VOID CpuSpeedRecompute(VOID)
     g_CpuSpeedPeriodMs = 0;
 }
 
-/* PIN THE GUEST TO ONE CORE. (user request, 2026-09-09) (Importance = 2):
- * The rig is an Intel Core 2 Duo E8600 -- TWO cores -- and this host runs at least
- * five threads across them: the exec thread in V86, the UI thread, the PIT pacer at
- * 1 kHz, the audio pump, and the throttle. Three reasons that matters here:
- *
- * 1. THE CLOCK. Every number the throttle computes comes from
- *    QueryPerformanceCounter, and on XP QPC can be backed by the TSC -- which is
- *    PER CORE. A thread migrating between cores can therefore see time move
- *    unevenly or backwards, and a negative interval silently becomes a garbage
- *    hold. Pinning the exec thread removes the migration entirely.
- * 2. THE SUSPEND. The throttle catches the guest by suspending it; measured, the
- *    round trip is ~1 us when it lands and the cost is all in CATCHING it. Keeping
- *    the guest on its own core and the throttle off that core means the two are
- *    never competing for the same one.
- * 3. THE GUEST IS SINGLE-THREADED BY CONSTRUCTION. A DOS program cannot use a
- *    second core, so nothing is lost by confining it to one.
- *
- * [CAUTION]: THE GUEST GETS A CORE TO ITSELF; EVERYTHING ELSE GETS THE REST. Pinning them all
- * to the same core would be worse than not pinning at all -- the pacer alone wakes
- * 1000 times a second and would preempt the guest constantly. On a single-core box
- * this does nothing at all, correctly, and says so rather than pretending.
- *
- * [CAUTION]: NOT DEFAULT. This changes scheduling for every guest on the machine and its
- * benefit is unmeasured; a knob that alters timing must be opt-in until there is a
- * number attached to it. cpuaff.txt = 1 to try it.
- */
-INT   g_CpuAffinityOn;              /* cpuaff.txt = 1 (file knob only): pin the guest */
-/* what we chose */
-DWORD g_CpuAffinityGuest;
-DWORD g_CpuAffinityRest;
-DWORD g_CpuAffinityCpuCount;
 static VOID CpuAffinityApply(VOID)
 {
     SYSTEM_INFO systemInfo;
@@ -1342,11 +1627,6 @@ static VOID CpuAffinityApply(VOID)
     }
 }
 
-enum
-{
-    CPUSPEED_IDLE_SLEEP_MS = 4, CPUSPEED_CATCH_TIMEOUT_MS = 400, CPUSPEED_CATCH_NONE = 0, CPUSPEED_CATCH_CONTEXT = 1, CPUSPEED_CATCH_COOPERATIVE = 2
-};   /* CpuSpeedThread */
-#define CPUSPD_RUN_MIN_US   100ul   /* #225: shortest spun run slice */
 DWORD WINAPI CpuSpeedThread(LPVOID param)
 {
     /* -- THE CLOSED-LOOP THROTTLE. The whole control law is CpuSpeedStep (the
@@ -1664,10 +1944,6 @@ DWORD WINAPI CpuSpeedThread(LPVOID param)
     return 0;
 }
 
-enum
-{
-    HEARTBEAT_MS = 500
-};   /* HeartbeatThread: one line this often */
 /* Headless heartbeat (session 11). Both qirq runs stopped logging mid-run and reached
  * NO exit path -- not the guest's 4Ch flush, not the deadline backstop's report -- which
  * means the process died without user-mode notice. A once-per-500ms beat carrying the
@@ -1914,10 +2190,6 @@ VOID ExecShareReport(VOID)
     LogAppend(LOG_PATH, base, cursor); SerialOut(base, cursor);
 }
 
-enum
-{
-    HEADLESS_EXIT_CODE = 3
-};   /* the deadline ended the run */
 /* Headless deadline watchdog (session-9). A headless run must self-bound even when the
  * guest blocks INSIDE a host INT handler -- e.g. a blocking INT 16h/21h key read at a
  * "press any key" prompt or a game menu (HostConsoleIn + the INT 16h loops spin until
@@ -2138,11 +2410,6 @@ DWORD WINAPI HeadlessDeadlineThread(LPVOID parameter)
     return 0;
 }
 
-enum
-{
-    EXEC_PRIORITY_UNSET = 0x7FFF, BACKGROUND_PRIORITY_TICK_MS = 500
-};   /* BackgroundPriorityTick */
-static INT    g_ExecPriorityNow = EXEC_PRIORITY_UNSET;       /* what BackgroundPriorityTick last set */
 /* See OtherHostsRunning. From the UI timer, at most twice a second.
  * - PRIORITY ALONE WAS MEASURED NOT TO BE ENOUGH (s81 rig, interleaved A/B): with QBasic
  *   idling in a background host at BELOW_NORMAL, the foreground Skyroads went from
@@ -2191,57 +2458,6 @@ VOID BackgroundPriorityTick(HWND window)
         LogAppend(LOG_PATH, buffer, cursor);
     }
 }
-
-/* Perform ONE decoded port access on the bus and write an IN result back into
- * the guest's EAX at the right width. Factored out of the three I/O servicers
- * (V86 / retro / PM) so the burst fast path below can repeat an access without
- * re-decoding it.
- */
-/* THE GUEST'S CLOCK. Skyroads -- like a lot of DOS games -- does not ask the BIOS what time
- * it is; it latches PIT counter 0 and reads it, over and over (`out 43h,al; in al,40h; in
- * al,40h`, its hot loop at 0110:5a85). So the guest's ENTIRE sense of elapsed time is
- * whatever that counter says. Until now the counter was advanced by the UI thread's frame
- * loop, once per presented frame -- and that thread is starved precisely when the guest is
- * hammering I/O, which is exactly when the game is asking. The guest therefore saw time
- * crawl, and everything it paces on time crawled with it: the palette fade, the music tempo
- * (pitch was right -- that is the OPL, which is correct -- only the sequencer was slow), and
- * the rate it fed PCM (slow AND pitched down). None of that was a sound bug.
- *
- * A real 8254 is a free-running counter, so model it as one: derive elapsed clocks from a
- * high-resolution host clock at the moment the guest looks. QueryPerformanceCounter is
- * KERNEL32, so it stays inside the no-CRT import rules.
- */
-/* [INFO]: A MEASUREMENT THRESHOLD, NOT A LIMIT. NOTHING IS CLAMPED TO IT. READ THIS
- * BEFORE "fixing" the catch-up burst, because I already tried and it was worse.
- * - THE SYMPTOM (user, 2026-08-21): the music "speeds up for a few milliseconds and
- *   then returns to normal", dropping a few notes. That is a real CATCH-UP BURST:
- *   Skyroads runs its timer at about 16x the BIOS 18.2 Hz and advances its
- *   sequencer one step per tick, so a host stall hands it dozens of ticks at once.
- *   The tempo lurches, and a note whose on AND off both land inside the burst never
- *   sounds at all.
- * - WHAT I DID, AND WHY IT WAS A REGRESSION. I capped delivery at 10 ms and
- *   DISCARDED the excess. The user's verdict was immediate: "speed is all over the
- *   place now -- slow, normal, fast, normal, fast, slow". The reasoning behind the
- *   cap contained an assumption I never measured: that syncs are always much closer
- *   together than 10 ms because the UI tick is 5 ms. They are not. HostPitSync
- *   takes g_Lock, and a heavy I/O-trap loop starves the UI thread (that is what the
- *   comment above the exec-loop call at the bottom of this file is about) -- so gaps
- *   past 10 ms are ORDINARY, and the cap threw away real time on every one of them.
- * - THE LESSON, which is this project's own cardinal rule wearing a new hat: the old
- *   burst was at least CORRECT ON AVERAGE. Discarding time is not a smaller version
- *   of that error, it is a bigger and more constant one. Do not trade an occasional
- *   artefact for a permanent one.
- * - IF YOU PICK THIS UP: never discard. Keep the total exact and SMOOTH the
- *   delivery -- carry the backlog and release it at a bounded rate over the next few
- *   syncs, so the average tempo is preserved and only the lurch is removed. And
- *   measure the real gap distribution FIRST: that is what g_PitGapMaximum and the
- *   counter below exist for. A second, independent cause is also in play -- with no
- *   CPU affinity set anywhere, a TSC-backed QueryPerformanceCounter can JUMP FORWARD
- *   when a thread migrates cores, which is indistinguishable from a stall in here.
- */
-#define PIT_CATCHUP_MAX     (PIT_INPUT_HZ / 100u)   /* 10 ms: the reporting threshold */
-UINT32 g_PitCatchupClamped;             /* gaps past it (STAGE2) */
-UINT32 g_PitGapMaximum;                     /* the worst one, in 8254 clocks */
 
 /* Wired onto g_Pit at startup; see g_PitCs and PIT_STATE.guard. */
 /* THE MACHINE'S CLOCK, for INT 1Ah AH=02h/04h:
@@ -2451,153 +2667,6 @@ VOID HostPitGenerate(VOID)
     LeaveCriticalSection(&g_PitCs);
 }
 
-/* DELIVERY: one bounded pass of attempts, and only if g_Lock is FREE (Importance = 3):
- * The old shape held g_Lock across generation AND attempts, which was load-bearing
- * in one way (holding g_Lock guarantees the thread we suspend is not holding it)
- * and disastrous in another (the clock queued behind the renderer to tick). The
- * split keeps the guarantee -- attempts still happen ONLY under g_Lock -- and
- * deletes the queueing: HOST_LOCK_TRY means a busy lock skips the attempt, and the
- * tick is already LATCHED, so the cooperative path delivers it at the guest's next
- * trap (~68,000/s on Skyroads). A skip costs latency bounded by the next trap or
- * the next pacer round; the old cost was unbounded clock stall. The s61 suspend
- * handshake (post-suspend g_InExec re-check, ctx-writer interlock) additionally
- * protects the suspend itself; both layers stay.
- */
-static VOID HostPitDeliver(VOID)
-{
-    if (!HOST_LOCK_TRY())
-    {
-        ++g_PitDeliverSkipped;
-        return;
-    }
-    if (g_Irq0Pending > 0 && g_QiSuspended && (!g_DpmiPm || !g_AsyncTriedThisSync))
-    {
-            g_AsyncTriedThisSync = 1;
-            /* A PENDING KEY IS A STATE, NOT A MOMENT. IRQ1 gets ONE async attempt, at the
-             * raise; if the guest had interrupts off (96% of gameplay) it falls to the
-             * exec loop, which can only place it on a pass where they are back on. This is
-             * the retry, and it is free: AsyncInjectIrq VERIFIES IF/VIF before it
-             * injects, so an IRQ0 opportunity IS a proven enabled moment, ~184/s. The key
-             * takes it and the tick waits -- g_Irq0Pending is not decremented, so the
-             * tick is not lost, just delivered on the next raise. Bounded so a key that
-             * can never be placed cannot stop the clock.
-             */
-            /* keyirq = 2: YIELD ONLY WHILE THE CLOCK IS ON SCHEDULE (Importance = 3):
-             * USER-CONFIRMED SYMPTOM (2026-09-09, in-game, at the box): "butter
-             * smooth, until you start pressing keys, then it lags. When you release
-             * the keys, it eventually goes smooth again." That is this branch, felt
-             * rather than measured -- and it matches the measurement exactly, where
-             * `raises - attempts == yields` in every run taken.
-             * - The yield itself is NOT the mistake: turning it off (keyirq = 0) is
-             *   measured to put 51 of 102 keystrokes past 64 ms, worst 1864 ms. Keys
-             *   and the timer are competing for one scarce thing -- a moment when the
-             *   guest is in exec with interrupts on -- and somebody has to lose.
-             *
-             * So lose the slot only when losing it is FREE. g_Irq0Pending is the
-             * saturating tick latch and Irq0Latch() has already counted this raise,
-             * so <= 1 means "nothing is owed but the tick we just made": the clock is
-             * on schedule and can afford to wait one period. Above that the timer is
-             * already behind, which is exactly when a further 5.56 ms of delay is
-             * what the player feels, so the key waits instead -- for ONE period, not
-             * the three KEYIRQ_MAX_YIELD would allow.
-             * 0 = never yield (measured: loses keys), 1 = always (the old default,
-             * what the user felt), 2 = only when not behind.
-             */
-            /* [CAUTION]: keyirq = 2 IS REFUTED, USER-CONFIRMED. DO NOT RETRY IT (Importance = 2):
-             * "Now it reads too many keys in a row and doesn't stop reading them
-             * when the key is released. I flew straight off the road. Twice."
-             * Making the KEY wait strands its BREAK code: g_Irq1Pending is one
-             * deep, so a make code still queued when the release arrives coalesces
-             * the release away and the guest never sees the key come up. This file
-             * already recorded that shape once ("the earlier cap-with-a-backlog is
-             * what stranded break codes and killed the arrow keys") and I walked
-             * into it anyway. => ANY FIX THAT DELAYS THE KEY IS OFF THE TABLE.
-             * - keyirq = 3 is the survivor of that: never delay a key, but allow only
-             *   ONE yield in a row instead of KEYIRQ_MAX_YIELD's three. The key is
-             *   served instantly exactly as in mode 1, and the clock's worst-case
-             *   loss falls from three periods (16.7 ms at 180 Hz) to one. It cannot
-             *   strand a break code, because a key is never made to wait.
-             */
-            {   INT maximumYields = (g_KeyIrqRetry == KEYIRQ_RETRY_ONE_YIELD) ? 1 : KEYIRQ_MAX_YIELD;
-            if (g_KeyIrqRetry && !g_DpmiPm && g_Irq1Pending > 0
-                && (g_KeyIrqRetry != KEYIRQ_RETRY_CLOCK_ON_SCHEDULE || g_Irq0Pending <= 1)
-                && g_Irq0Yielded < maximumYields
-                && VddPicCanDeliver(&g_Pic, PIC_IRQ_KEYBOARD) && AsyncInjectIrq(PIC_IRQ_KEYBOARD))
-            {
-                InterlockedDecrement(&g_Irq1Pending);
-                ++g_Irq0Yielded;
-                ++g_Irq1AsyncRetry;
-                ++g_Irq0YieldCount;   /* A/B/C discriminator: the key took the clock's turn */
-            }
-            else
-            {
-                g_Irq0Yielded = 0;
-                ++g_PitAsyncAttempts;
-                ++g_Irq0AttemptsCount;     /* A/B/C discriminator: an attempt was actually made */
-                if (AsyncInjectIrq(PIC_IRQ_TIMER))
-                {
-                    InterlockedDecrement(&g_Irq0Pending);
-                    PmTickTake();
-                    /* [CAUTION]: BOTH DELIVERY PATHS, OR THE TIMELINE IS A LIE. A PM guest
-                     * is fed almost entirely from here and a V86 one from the
-                     * cooperative site; counting one would show a clock stopping
-                     * exactly where the other took over.
-                     */
-                    g_Irq0NoteCs = IRQ0_NOTE_ASYNC_CS;
-                    g_Irq0NoteIp = 0;  /* delivered async */
-                    Irq0DeliveredNote();
-                }
-            } }
-        }
-    /* -- A DEVICE IRQ GETS EXACTLY ONE ASYNCHRONOUS ATTEMPT, AT THE INSTANT IT IS
-     * RAISED -- AND THAT IS NOT ENOUGH FOR A ONE-SHOT INTERRUPT. --------------------
-     * HostIrqSink tries once when the device raises, and if the CPU thread happens
-     * to be in HOST code at that microsecond the attempt bails (why=0x14) and nothing
-     * ever offers it again. For a line that re-raises (Doom's auto-init SB fires 86
-     * times a second) that is invisible. For a ONE-SHOT it is fatal.
-     *
-     * [INFO]: MEASURED ON ZAR (#23): its Miles driver's init-time DMA/IRQ self-test is an
-     * 8-bit SINGLE-CYCLE transfer, so the SB raises IRQ 5 exactly ONCE. The block
-     * drains, the IRQ is raised, `ASYNC-EARLY bail irq=05 why=0x14`, and the driver
-     * then waits for ever on a MEMORY flag its ISR would have set -- so it never traps
-     * again and no cooperative path can reach it either (measured: zero IRQN-REFUSE).
-     * - The latch already persists (g_IrqNPending, cleared only on delivery), so the
-     *   missing piece is merely to OFFER IT AGAIN. Here, because this already runs on
-     *   the pacer thread and already holds g_Lock -- and holding the lock is precisely
-     *   what guarantees the thread we are about to suspend is not holding it (see the
-     *   long note in HostIrqSink; do not move this outside).
-     *
-     * [CAUTION]: ONE ATTEMPT PER SYNC, AND ONLY WHILE SOMETHING IS ACTUALLY PENDING. Session
-     * 22's disaster was ~800 unbounded SuspendThread round trips per sync under this
-     * lock, and the throttle written to stop it later cost SKYROADS a fifth of its
-     * clock. So: at most one retry per sync, the first pending hooked line only, and
-     * nothing at all in the overwhelmingly common case where no device IRQ is
-     * outstanding -- which is a single predictable branch, not a syscall.
-     */
-    { INT index, irq;
-      for (index = 0; index < (INT)sizeof g_IrqOrder; ++index)
-      {
-          irq = g_IrqOrder[index];
-          if (!g_IrqNPending[irq])
-              continue;
-          if (!VddPicCanDeliver(&g_Pic, (BYTE)irq))
-              break;
-          ++g_IrqNRetryTry;
-          if (g_QiSuspended && AsyncInjectIrq((UINT)irq))
-          {
-              InterlockedExchange(&g_IrqNPending[irq], 0);
-              ++g_IrqNRetryOk;
-          }
-          /* WHICH CLAUSE SAID NO. 1597 refusals with no reason is not a measurement;
-           * AsyncInjectIrq already records one, so keep the last of them.
-           */
-          else
-              g_IrqNRetryWhy = g_AsyncWhy;
-          break;                  /* one per sync, pending or not: see the note above */
-      } }
-    HOST_UNLOCK();
-}
-
 /* One clock, two concerns: callers that used to call HostPitSync still can. */
 VOID HostPitSync(VOID)
 {
@@ -2657,38 +2726,6 @@ VOID PitLatchNote(BYTE command)
     }
 }
 
-#define RTIDLE_OFF_FLAG     CFG_("rtidle.off")
-enum
-{
-    INT10_WAIT_MAX_MS = 50
-};   /* Int10WaitAfter: never hold a video call longer */
-#define RETRACE_IDLE_MIN_US     1500u   /* Shorter waits are not worth idling for */
-
-/* Decode + service a V86 IN/OUT that #GP-faulted (event 2), dispatch it to the
- * bus, and advance EIP past the instruction so the guest resumes. Returns 1 if
- * the faulting instruction was a (supported) I/O op we handled, 0 if it was a
- * genuine GP fault the caller should stop on. No per-call logging -- I/O traps
- * are hot (a palette set is ~768 OUTs); flushing the trace file each one stalls.
- */
-/* -- #183: A RETRACE WAIT SLEEPS INSTEAD OF SPINNING. The standing decision: make the
- * waits cheaper. A guest waiting for vertical retrace spins `in al,dx / test al,8 /
- * jz back` against 3DAh, trapping every iteration -- 3M traps a second, a whole core,
- * and (#172) the timer's pacer starved of CPU on a small machine. The handler notes
- * the read here (under the lock); after the lock is dropped RetraceIdle() decodes the
- * guest's OWN next instructions, and if they are exactly that loop and the edge it is
- * waiting for is more than 1.5 ms away, sleeps ONE millisecond. The guest then loops
- * once and traps again: interrupts are still delivered between iterations (Lemmings'
- * timer ISR spins here with IF on; Skyroads ticks at 180 Hz), and once the edge is
- * close it spins as before, so the edge is caught exactly. V86 only; cfg\rtidle.off
- * turns it off.
- */
-/* -- #226: VBE 4F07h BL=80h/82h "set display start DURING VERTICAL RETRACE". The
- * video device answers the call and records when it may complete; the host waits
- * that out here, after dropping the lock -- sleeping while the retrace is more than
- * 1.5 ms away, spinning for the last stretch -- so a guest that flips pages with it
- * gets at most one flip per frame, as on a real card. Bounded at 50 ms.
- */
-DWORD g_VbeWaits;
 VOID Int10WaitAfter(VOID)
 {
     DWORD start = GetTickCount();
@@ -2709,17 +2746,6 @@ VOID Int10WaitAfter(VOID)
         ++g_VbeWaits;
 }
 
-enum
-{
-    RETRACE_IDLE_PATTERN_LENGTH = 4, RETRACE_IDLE_BACK_MAX = 3
-};   /* RetraceIdle: test/and al ; jcc back to the IN */
-volatile DWORD g_RetracePending;
-volatile DWORD g_RetraceCs;
-volatile DWORD g_RetraceIp;
-volatile DWORD g_RetraceAl;
-volatile DWORD g_RetraceCx;
-volatile DWORD g_RetraceIdles;
-static INT g_RetraceOffset = -1;
 VOID RetraceNote(volatile BYTE *tib, WORD port, INT isIn, DWORD cs, DWORD ipAfter)
 {
     if (!isIn || port != VIDEO_PORT_STATUS1_COLOUR)

@@ -24,6 +24,11 @@
 
 #include "ntvdmex_types.h"
 
+/* Real-mode-DOS host, but first a window: hand off to WinMain, then exit.
+ * Named WinMainCRTStartup so the linker picks it as the default GUI entry.
+ */
+extern int WINAPI WinMain(HINSTANCE, HINSTANCE, LPSTR, int);
+
 /* The three mem* functions keep the C library's names and exact signatures (void *,
  * int, size_t): the compiler emits calls to them by those names and checks the
  * declarations against its built-in ones. Only their insides follow the style.
@@ -62,11 +67,6 @@ void *memcpy(void *destinationBuffer, const void *sourceBuffer, size_t byteCount
 {
     return memmove(destinationBuffer, sourceBuffer, byteCount);
 }
-
-/* Real-mode-DOS host, but first a window: hand off to WinMain, then exit.
- * Named WinMainCRTStartup so the linker picks it as the default GUI entry.
- */
-extern int WINAPI WinMain(HINSTANCE, HINSTANCE, LPSTR, int);
 
 VOID WinMainCRTStartup(VOID)
 {

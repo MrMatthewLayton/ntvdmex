@@ -26,12 +26,6 @@
 #include "wowuser.h"
 #include "host_wow.h"
 
-/* Forward declarations, from when this file was part of main.c's unit (they were in wowdlg.h). */
-/* Defined in main.c, which owns the LDT: is this code selector NOT PRESENT?
- * See the call site, and WOWCALL_RETF_OFF in wowcall.h for what it decides.
- */
-INT WowDlgIsSelectorAbsent(WORD selector);
-
 /* s88: per callback depth -- did the modal loop's call go to the dialog's own
  * DLGPROC, and with which message. Read when the call returns (main.c).
  */
@@ -42,6 +36,12 @@ static WOWDLG_MODAL g_WowDlgModals[WOWDLG_MAX_MODAL];
 static INT   g_WowDlgDepth   = 0;
 static DWORD g_WowDlgRan     = 0;   /* modal dialogs run to completion this run */
 static DWORD g_WowDlgRefused = 0;   /* ...and ones the host could not drive */
+
+/* Forward declarations, from when this file was part of main.c's unit (they were in wowdlg.h). */
+/* Defined in main.c, which owns the LDT: is this code selector NOT PRESENT?
+ * See the call site, and WOWCALL_RETF_OFF in wowcall.h for what it decides.
+ */
+INT WowDlgIsSelectorAbsent(WORD selector);
 
 static INT WowDlgPump(INT budget, PINT traceBudget)
 {

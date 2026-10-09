@@ -59,6 +59,24 @@
 #define PIC_OK                              0
 #define PIC_FAILED                          (-1)
 
+/* IN-SERVICE UPDATES ARE ATOMIC:
+ * The host acknowledges IRQ0 from its tick courier, which by design runs with the
+ * guest thread frozen and NO device lock held, while the guest's own EOIs (and every
+ * other line's acknowledge) arrive under that lock. A plain `isr |= bit` / `isr &=
+ * ~bit` is a byte read-modify-write, and two of them racing lose one bit -- IRQ1's
+ * in-service bit IS the keyboard re-entrancy guard, so losing it is "press a key and
+ * everything hangs" all over again. The host already OR's IRR atomically for the
+ * same reason (host_irq_sink); ISR gets the same treatment here so that IRQ0 can be
+ * held in service across threads. GCC/Clang builtins, so this file stays portable C.
+ */
+#define PIC_ISR_SET(chip, bit)              ((VOID)__sync_fetch_and_or (&(chip)->Isr, (BYTE)(bit)))
+#define PIC_ISR_CLEAR(chip, bit)            ((VOID)__sync_fetch_and_and(&(chip)->Isr, (BYTE)~(BYTE)(bit)))
+
+/* IRR likewise: the host raises with an atomic OR from the PIT's lock, so the clear
+ * at acknowledge must be atomic too or a raise can be lost under it.
+ */
+#define PIC_IRR_CLEAR(chip, bit)            ((VOID)__sync_fetch_and_and(&(chip)->Irr, (BYTE)~(BYTE)(bit)))
+
 /* PRIORITY IS A RING, NOT A BIT NUMBER. (#174):
  * The 8259A's priorities rotate: OCW2 can name any IR line the LOWEST, and the one
  * after it (mod 8) becomes the highest. `LowestPriority` = 7 is the fixed order every PC
@@ -146,24 +164,6 @@ static VOID PicChipReset(PPIC_CHIP chip, BYTE base)
     chip->IsSpecialMaskMode = FALSE;
     chip->IsSpecialFullyNested = FALSE;   /* a BIOS's chip */
 }
-
-/* IN-SERVICE UPDATES ARE ATOMIC:
- * The host acknowledges IRQ0 from its tick courier, which by design runs with the
- * guest thread frozen and NO device lock held, while the guest's own EOIs (and every
- * other line's acknowledge) arrive under that lock. A plain `isr |= bit` / `isr &=
- * ~bit` is a byte read-modify-write, and two of them racing lose one bit -- IRQ1's
- * in-service bit IS the keyboard re-entrancy guard, so losing it is "press a key and
- * everything hangs" all over again. The host already OR's IRR atomically for the
- * same reason (host_irq_sink); ISR gets the same treatment here so that IRQ0 can be
- * held in service across threads. GCC/Clang builtins, so this file stays portable C.
- */
-#define PIC_ISR_SET(chip, bit)      ((VOID)__sync_fetch_and_or (&(chip)->Isr, (BYTE)(bit)))
-#define PIC_ISR_CLEAR(chip, bit)    ((VOID)__sync_fetch_and_and(&(chip)->Isr, (BYTE)~(BYTE)(bit)))
-
-/* IRR likewise: the host raises with an atomic OR from the PIT's lock, so the clear
- * at acknowledge must be atomic too or a raise can be lost under it.
- */
-#define PIC_IRR_CLEAR(chip, bit)    ((VOID)__sync_fetch_and_and(&(chip)->Irr, (BYTE)~(BYTE)(bit)))
 
 /* The in-service half of an acknowledge cycle, on one chip: ISR set -- or, in AEOI,
  * the automatic EOI, which in ROTATE-IN-AEOI mode also makes this line the lowest

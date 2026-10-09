@@ -53,15 +53,9 @@ INT   g_WowMsgIsWaitAnnounced    = 0;   /* the setting is announced once, at fir
  * host put it there and can simply say so.
  */
 volatile LONG g_WowMsgInWait = 0;
-
-static WOWMSG g_WowMsgRing[WOWMSG_MAX];
-static INT      g_WowMsgHead = 0;      /* next to take */
-static INT      g_WowMsgTail = 0;      /* next to fill */
 INT      g_WowMsgCount = 0;
 DWORD    g_WowMsgPosted = 0;    /* how many went in, for the run summary */
 DWORD    g_WowMsgTaken  = 0;    /* ...and how many came out */
-static DWORD    g_WowMsgDropped = 0;   /* ring full -- LOUD, see WOWMSG_MAX */
-static INT      g_WowMsgIsQuit = 0;      /* PostQuitMessage was called */
 WORD     g_WowMsgQuitCode = 0;
 /* s92 (#306): ONE RING, BUT EVERY TASK SEES ONLY ITS OWN MESSAGES:
  * The note at the top came true: with the run queue, Calc's GetMessage took a
@@ -75,6 +69,23 @@ WORD     g_WowMsgQuitCode = 0;
  */
 WORD     g_WowMsgTaker = 0;
 WORD   (*g_WowMsgOwner)(WORD window) = 0;
+
+/* [INFO]: WHO A KEYSTROKE IS FOR. Win16 sends keyboard input to the focus window, and
+ * SYSEDIT sets one (USER 0x16 SETFOCUS, four times in a launch). With no
+ * focus the target is 0, and USER's own DispatchMessage `jcxz`es a null hwnd
+ * -- so a key with nowhere to go is discarded BY THE GUEST, correctly, and
+ * this host does not have to invent a destination.
+ */
+WORD     g_WowMsgFocus = 0;
+
+INT      g_WowMsgIsReplayDue = 0;
+WOWMSG g_WowMsgReplay;
+
+static WOWMSG g_WowMsgRing[WOWMSG_MAX];
+static INT      g_WowMsgHead = 0;      /* next to take */
+static INT      g_WowMsgTail = 0;      /* next to fill */
+static DWORD    g_WowMsgDropped = 0;   /* ring full -- LOUD, see WOWMSG_MAX */
+static INT      g_WowMsgIsQuit = 0;      /* PostQuitMessage was called */
 
 static WOWMSG_QUIT g_WowMsgQuits[WOWMSG_MAXQUIT];
 static INT      g_WowMsgQuitCount = 0;
@@ -138,14 +149,6 @@ WORD WowMsgTakeQuit(INT quitNumber)
     g_WowMsgIsQuit = g_WowMsgQuitCount > 0;
     return code;
 }
-
-/* [INFO]: WHO A KEYSTROKE IS FOR. Win16 sends keyboard input to the focus window, and
- * SYSEDIT sets one (USER 0x16 SETFOCUS, four times in a launch). With no
- * focus the target is 0, and USER's own DispatchMessage `jcxz`es a null hwnd
- * -- so a key with nowhere to go is discarded BY THE GUEST, correctly, and
- * this host does not have to invent a destination.
- */
-WORD     g_WowMsgFocus = 0;
 
 /* Put one message in the queue. [CAUTION] CALLED FROM THE UI THREAD as well as the exec
  * thread (a keystroke arrives on whichever thread owns the host window), so
@@ -224,9 +227,6 @@ INT WowMsgPostMove(
     }
     return 0;
 }
-
-INT      g_WowMsgIsReplayDue = 0;
-WOWMSG g_WowMsgReplay;
 
 INT WowMsgTake(WORD window, WORD filterMin, WORD filterMax, INT isRemove, PWOWMSG output)
 {

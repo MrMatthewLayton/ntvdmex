@@ -237,6 +237,12 @@
 #define GUS_ACIA_RECEIVE_IRQ                0x80
 #define GUS_ACIA_CONTROL_POWER_UP           0x00
 
+/* ---- the latches (ref section 5) ---------------------------------------------------------- */
+
+/* The two 3-bit codes of the 2XB latches. Code 0 is "no line" in both tables. */
+static const BYTE g_GusIrqMap[GUS_LATCH_CODES] = { 0, 2, 5, 3, 7, 11, 12, 15 };
+static const BYTE g_GusDmaMap[GUS_LATCH_CODES] = { 0, 1, 3, 5, 6, 7, 0, 0 };
+
 /* ---- register-file helpers -------------------------------------------------------- */
 
 /* Which registers are 16 bits wide (ref section 2.1, section 2.2). Everything else is 8 and lives at 3X5. */
@@ -283,11 +289,6 @@ static WORD GusPositionGetLow(UINT32 position, INT isNineBitFraction)
     return (WORD)(lowWord | (isNineBitFraction ? (position & GUS_POSITION_FRACTION_MASK) : (position & GUS_POSITION_FOUR_BIT_FRACTION)));
 }
 
-/* ---- the latches (ref section 5) ---------------------------------------------------------- */
-
-/* The two 3-bit codes of the 2XB latches. Code 0 is "no line" in both tables. */
-static const BYTE g_GusIrqMap[GUS_LATCH_CODES] = { 0, 2, 5, 3, 7, 11, 12, 15 };
-static const BYTE g_GusDmaMap[GUS_LATCH_CODES] = { 0, 1, 3, 5, 6, 7, 0, 0 };
 static BYTE GusCodeOf(const BYTE *map, BYTE line)
 {
     BYTE code;

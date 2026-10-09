@@ -15,11 +15,11 @@
 #include <stdio.h>
 #include <string.h>
 #include "vdd_input.h"
+#define CHECK(condition,message) do{ g_Total++; if(condition){printf("  PASS  %s\n",(message));} \
+    else{printf("  FAIL  %s\n",(message)); g_Failures++;} }while(0)
 
 static INT g_Total = 0;
 static INT g_Failures = 0;
-#define CHECK(condition,message) do{ g_Total++; if(condition){printf("  PASS  %s\n",(message));} \
-    else{printf("  FAIL  %s\n",(message)); g_Failures++;} }while(0)
 
 /* Stand-in for guest segment 0x40. The ring lives in the GUEST's BIOS data area now, so a
  * test that leaves this NULL is testing nothing at all -- every push would be discarded.
@@ -28,12 +28,14 @@ static INT g_Failures = 0;
 static BYTE g_BiosDataArea[0x10000];
 /* A fake clock for the keyboard transfer-time tests (T11), and an IRQ counter. */
 static UINT64 g_FakeMicroseconds = 0;
+
+static UINT32 g_Irq1Count = 0;
+
 static UINT64 InputTestFakeClock(VOID)
 {
     return g_FakeMicroseconds;
 }
 
-static UINT32 g_Irq1Count = 0;
 static VOID InputTestCountIrq(PVOID context, BYTE irq)
 {
     if (irq == 1)

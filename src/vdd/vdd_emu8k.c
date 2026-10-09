@@ -44,6 +44,260 @@
 #define EMU8K_LOG2_OF_ZERO_OCTAVES      32                  /* log2(0) answered as -32 octaves */
 #define EMU8K_RATE_CODES                128                 /* A 7-bit rate code: 00h..7Fh */
 
+/* Q16 dB of attenuation -> Q16 linear gain. 20-log10(2) = 6.0206 dB per octave, so
+ * octaves = dB x 0.166096 = dB x 10885 / 65536.
+ */
+#define EMU8K_OCTAVES_PER_DB_Q16        10885               /* 0.166096 in Q16 */
+#define EMU8K_SILENCE_DB                100u                /* 100 dB down: treated as silence */
+
+#define EMU8K_TICK_US_X10               7256u               /* 32 / 44100 s = 725.6 us */
+#define EMU8K_TICK_US_SCALE             10u                 /* ...the X10 above */
+
+/* The slewing current volume is held as CV << 14: CV is 16 bits, so << 16 would reach the
+ * sign bit of an INT32 at full volume.
+ */
+#define EMU8K_CURRENT_VOLUME_SHIFT      14
+
+/* The attack and decay scales (p.15-16): rate code 01h is the slowest, 7Fh the fastest, 00h
+ * never. Between the ends the scale is logarithmic (ours -- the guide gives only the ends):
+ * 126 steps across log2(fastest / slowest), in Q16.
+ */
+#define EMU8K_RATE_CODE_MASK            0x7F
+#define EMU8K_RATE_CODE_SLOWEST         1
+#define EMU8K_RATE_CODE_SPAN            126                 /* 01h..7Fh */
+#define EMU8K_ATTACK_SLOWEST_US         11880000u           /* 01h: 11.88 s */
+#define EMU8K_ATTACK_LOG2_SPAN_Q16      717709ll            /* -log2(6 ms / 11.88 s) = 10.9513, Q16 */
+#define EMU8K_DECAY_SLOWEST_US_PER_DB   470000u             /* 01h: 470 ms/dB */
+#define EMU8K_DECAY_LOG2_SPAN_Q16       716669ll            /* -log2(240 us / 470 ms) = 10.9354, Q16 */
+#define EMU8K_MINIMUM_STEP              1                   /* A step that rounds to 0 would never move */
+
+/* Is any channel allocated to DMA stream `stream` (0 LR, 1 RR, 2 LW, 3 RW)? CCCA bit 26 =
+ * DMA, bit 25 = write, bit 24 = right (p.9-10) -- so bits 25-24 ARE the stream number.
+ */
+#define EMU8K_CCCA_DMA                  0x04000000u
+#define EMU8K_CCCA_STREAM_SHIFT         24
+#define EMU8K_CCCA_STREAM_MASK          3
+#define EMU8K_FIRST_WRITE_STREAM        2                   /* Streams 2, 3 write; 0, 1 read */
+#define EMU8K_ADDRESS_STEP              1                   /* A stream advances one word per transfer */
+
+/* WC counts at 44.1 kHz: microseconds x 441 / 10000 = samples. */
+#define EMU8K_WALL_CLOCK_NUMERATOR      441u
+#define EMU8K_WALL_CLOCK_DENOMINATOR    10000u
+
+/* ---- the envelope engine (p.14-18, the diagram on p.19) ---------------------------------- */
+
+#define EMU8K_DB_PER_OCTAVE_Q16         394566              /* 6.0206 dB in Q16 */
+#define EMU8K_DELAY_NONE                0x8000              /* P.14: 8000h = no delay; below, 725 us units */
+#define EMU8K_HOLD_NONE_CODE            0x7Fu               /* P.16: 7Fh = no hold */
+#define EMU8K_HOLD_CODE_MASK            0x7F
+#define EMU8K_HOLD_STEP_US_X10          920000u             /* 92 ms per hold step, x10 */
+#define EMU8K_SUSTAIN_TOP_CODE          0x7Fu               /* P.14: 7Fh = 0 dB below peak */
+#define EMU8K_SUSTAIN_CODE_MASK         0x7F
+#define EMU8K_SUSTAIN_STEP_DB_Q16       49152u              /* 0.75 dB per sustain step, Q16 */
+#define EMU8K_RELEASE_FLOOR_DB          96u                 /* A release that falls 96 dB is done */
+
+/* A triangle LFO (p.18: FRQ in 0.042 Hz steps, FFh = 10.72 Hz). Starts at zero going up.
+ * Returns -65536..65536.
+ */
+#define EMU8K_LFO_PHASE_STEP            131008u             /* 2^32 x (10.72/255 Hz) x 725.6 us, per FRQ */
+#define EMU8K_LFO_QUARTER_CYCLE         16384u              /* Of the 16-bit phase */
+#define EMU8K_LFO_THREE_QUARTERS        49152u
+#define EMU8K_LFO_SLOPE                 4u                  /* 16384 phase units rise 65536 */
+#define EMU8K_LFO_HALF_CYCLE_LEVEL      131072
+#define EMU8K_LFO_FULL_CYCLE_LEVEL      262144
+
+/* ---- the low-pass filter (CCCA Q, IFATN cutoff: p.9, p.17) --------------------------- */
+
+/* sin/cos by series, in double: only ever called when a channel's cutoff or Q CHANGES. The
+ * divisors are the series' successive n(n+1): 2-3, 4-5, ... and 1-2, 3-4, ...
+ */
+#define EMU8K_SERIES_2X3                6
+#define EMU8K_SERIES_4X5                20
+#define EMU8K_SERIES_6X7                42
+#define EMU8K_SERIES_8X9                72
+#define EMU8K_SERIES_10X11              110
+#define EMU8K_SERIES_1X2                2
+#define EMU8K_SERIES_3X4                12
+#define EMU8K_SERIES_5X6                30
+#define EMU8K_SERIES_7X8                56
+#define EMU8K_SERIES_9X10               90
+#define EMU8K_SERIES_11X12              132
+
+/* The cutoff scale. p.17 puts IFATN's cutoff byte at "quarter semitones, 00h = 125 Hz,
+ * FFh = 8 kHz" -- but 255 quarter-semitones is 5.3 octaves and 125 Hz -> 8 kHz is 6. The
+ * END POINTS are what a program sets, so they win: six octaves across 0000h..FF00h of the
+ * 16-bit cutoff, i.e. one octave = FF00h / 6 = 2A80h units.
+ */
+#define EMU8K_CUTOFF_OCTAVE             0x2A80
+#define EMU8K_CUTOFF_BASE_HZ            125.0               /* cutoff 0000h */
+#define EMU8K_CUTOFF_MAX_FRACTION       0.45                /* Of the sample rate: below Nyquist */
+#define EMU8K_RADIANS_PER_CYCLE         (2.0 * 3.14159265358979)
+#define EMU8K_FILTER_FLAT_Q             0                   /* P.17: Q 0 and cutoff FFh = unaltered */
+#define EMU8K_FILTER_OPEN_CUTOFF        0xFF00
+#define EMU8K_BUTTERWORTH_Q             0.70710678
+#define EMU8K_RESONANCE_STEP_DB_Q16     117965u             /* Per Q step, Q16 */
+#define EMU8K_FILTER_HEADROOM_MAX       262143              /* resonance headroom: 18 bits */
+#define EMU8K_FILTER_HEADROOM_MIN       (-262144)
+
+/* The per-channel engine tick: the envelope generator (unless DCYSUSV bit 7 has turned it
+ * off) recomputes the TARGETS, then the sound generator takes them up.
+ */
+#define EMU8K_DCYSUSV_ENGINE_OFF        0x80                /* P.14: bit 7 */
+#define EMU8K_PITCH_UNITY               0xE000              /* P.16: IP E000h = unity */
+#define EMU8K_PITCH_TO_Q16_OCTAVES      16                  /* 1000h per octave -> 65536 per octave */
+#define EMU8K_MODULATION_FULL_SCALE     127                 /* A signed depth byte's full scale */
+#define EMU8K_CP_UNITY                  0x4000u             /* P.7: CP 4000h = one word per sample */
+#define EMU8K_PITCH_MAX_OCTAVES         2                   /* CP saturates two octaves up */
+#define EMU8K_CUTOFF_ENVELOPE_OCTAVES   6                   /* ENV1 x PEFE lo: up to +/-6 octaves */
+#define EMU8K_CUTOFF_LFO_OCTAVES        3                   /* LFO1 x FMMOD lo: up to +/-3 octaves */
+#define EMU8K_ATTENUATION_STEP_DB_Q16   24576               /* IFATN lo: 0.375 dB steps */
+#define EMU8K_TREMOLO_DB                12                  /* LFO1 x TREMFRQ hi: up to +/-12 dB */
+#define EMU8K_TICK_ROUNDING             (EMU8K_TICK - 1u)   /* Rounds a step away from zero */
+#define EMU8K_PAN_SHIFT                 24                  /* PSST bits 31-24 */
+#define EMU8K_PAN_FULL                  255u                /* FFh = extreme left */
+#define EMU8K_GAIN_UNITY                256u                /* Q8 */
+
+/* ---- the register file (section 3) ------------------------------------------------------------- */
+
+/* The Pointer register (section 2): bits 7-5 select the register, bits 4-0 the channel. */
+#define EMU8K_POINTER_REGISTER_SHIFT    5
+#define EMU8K_POINTER_REGISTER_MASK     7
+#define EMU8K_POINTER_CHANNEL_MASK      0x1F
+
+/* The four data ports, as the register file numbers them. */
+#define EMU8K_DATA0                     0
+#define EMU8K_DATA1                     1
+#define EMU8K_DATA2                     2
+#define EMU8K_DATA3                     3
+
+/* The registers behind each data port (p.6-7). */
+#define EMU8K_DATA0_CPF                 0
+#define EMU8K_DATA0_PTRX                1
+#define EMU8K_DATA0_CVCF                2
+#define EMU8K_DATA0_VTFT                3
+#define EMU8K_DATA0_R4                  4
+#define EMU8K_DATA0_R5                  5
+#define EMU8K_DATA0_PSST                6
+#define EMU8K_DATA0_CSL                 7
+#define EMU8K_DATA1_CCCA                0
+#define EMU8K_DATA1_R1                  1                   /* HWCF4-6, the sound-memory addresses, SMLD, HWCF1-3 */
+#define EMU8K_DATA1_INIT1               2
+#define EMU8K_DATA1_INIT3               3
+#define EMU8K_DATA1_ENVVOL              4
+#define EMU8K_DATA1_DCYSUSV             5
+#define EMU8K_DATA1_ENVVAL              6
+#define EMU8K_DATA1_DCYSUS              7
+#define EMU8K_DATA2_R1                  1                   /* SMRD, WC, and words the map does not name */
+#define EMU8K_DATA2_INIT2               2
+#define EMU8K_DATA2_INIT4               3
+#define EMU8K_DATA2_ATKHLDV             4
+#define EMU8K_DATA2_LFO1VAL             5
+#define EMU8K_DATA2_ATKHLD              6
+#define EMU8K_DATA2_LFO2VAL             7
+#define EMU8K_DATA3_IP                  0
+#define EMU8K_DATA3_IFATN               1
+#define EMU8K_DATA3_PEFE                2
+#define EMU8K_DATA3_FMMOD               3
+#define EMU8K_DATA3_TREMFRQ             4
+#define EMU8K_DATA3_FM2FRQ2             5
+#define EMU8K_DATA3_R6                  6
+#define EMU8K_DATA3_R7                  7
+
+/* The global registers at Data1/Data2 r1, by channel number (p.10-13). */
+#define EMU8K_CHANNEL_HWCF4             9
+#define EMU8K_CHANNEL_HWCF5             10
+#define EMU8K_CHANNEL_HWCF6             13
+#define EMU8K_CHANNEL_SMALR             20                  /* The four sound-memory addresses: 20-23 */
+#define EMU8K_CHANNEL_SMARR             21
+#define EMU8K_CHANNEL_SMALW             22
+#define EMU8K_CHANNEL_SMARW             23
+#define EMU8K_CHANNEL_SMLD              26                  /* Data1 r1: SMLD; Data2 r1: SMRD */
+#define EMU8K_CHANNEL_WC                27                  /* Data2 r1: the sample counter, read-only */
+#define EMU8K_CHANNEL_HWCF1             29
+#define EMU8K_CHANNEL_HWCF2             30
+#define EMU8K_CHANNEL_HWCF3             31
+
+/* Which half of a doubleword register a word access is, and which stereo side. */
+#define EMU8K_LOW_HALF                  0
+#define EMU8K_HIGH_HALF                 1
+#define EMU8K_LEFT                      0
+#define EMU8K_RIGHT                     1
+
+/* The four INIT effects programs, as EffectsInit's first index. */
+#define EMU8K_INIT1                     0
+#define EMU8K_INIT2                     1
+#define EMU8K_INIT3                     2
+#define EMU8K_INIT4                     3
+
+#define EMU8K_DCYSUSV_RELEASE           0x8000              /* P.14: bit 15 = these are RELEASE values */
+#define EMU8K_ALWAYS_ZERO_BIT           0x80u               /* Bit 7 of ATKHLD(V) and DCYSUS reads zero */
+#define EMU8K_SMA_FLAG                  0x80000000u         /* SMAxR bit 31 = EMPTY, SMAxW bit 31 = FULL */
+#define EMU8K_HWCF1_READ_MASK           0x7E                /* The VLSI read error's shape, as drivers probe */
+#define EMU8K_HWCF2_READ_SET            0x0003
+
+/* ---- ports (section 2) ------------------------------------------------------------------- */
+
+/* The port offsets from the base E (section 2). */
+#define EMU8K_PORT_DATA0_LOW            0x000
+#define EMU8K_PORT_DATA0_HIGH           0x002
+#define EMU8K_PORT_DATA1_LOW            0x400
+#define EMU8K_PORT_DATA1_HIGH_DATA2     0x402
+#define EMU8K_PORT_DATA3                0x800
+#define EMU8K_PORT_POINTER              0x802
+#define EMU8K_POINTER_READ_MASK         0x00FF              /* P.5: the MS byte reads "random"; we answer 0 */
+#define EMU8K_FLOATING_BUS              0xFFFF              /* An unclaimed offset */
+
+/* The bus's access widths, and how a byte access finds its port group (offsets 000h,
+ * 400h, 800h: bits 11-10). The bus's handler types still use its own integer names
+ * (VDD_BUS has not migrated -- #333), so the 32-bit value here is UINT32, the same type.
+ */
+#define EMU8K_DOUBLEWORD_ACCESS         4
+#define EMU8K_WORD_ACCESS               2
+#define EMU8K_HIGH_WORD_PORT            2                   /* A doubleword's MS word is two ports up */
+#define EMU8K_ODD_PORT                  1
+#define EMU8K_PORT_GROUP_SHIFT          10
+
+/* ---- the render ------------------------------------------------------------------------- */
+
+#define EMU8K_HWCF3_AUDIO_ENABLE        0x0004              /* Section 4: HWCF3 enables audio output */
+#define EMU8K_INTERPOLATOR_TAP0         1                   /* P.10: CA is one word below the audio; the */
+#define EMU8K_INTERPOLATOR_TAP1         2                   /* Interpolator reads CA+1 and CA+2 */
+#define EMU8K_CCCA_Q_SHIFT              28                  /* CCCA bits 31-28: the filter's Q */
+#define EMU8K_GAIN_SHIFT                8                   /* The pan gains are Q8 */
+#define EMU8K_CP_TO_STEP_SHIFT          2                   /* CP 4000h = one word: the step is CP x 4 */
+#define EMU8K_CCCA_CONTROL_MASK         0xFF000000u
+#define EMU8K_SAMPLE_MAX                32767
+#define EMU8K_SAMPLE_MIN                (-32768)
+
+/* ---- the bus ------------------------------------------------------------------------------ */
+
+/* -- THE RESET STATE IS THE INITIALISED CHIP, NOT POWER-UP NOISE. section 4: at power-up "most
+ * registers contain random data" and HWCF3's audio-enable is clear; a real machine ran
+ * AWEUTIL /S from AUTOEXEC.BAT to run the section 4 procedure before any game started, and most
+ * games rely on that having happened. We have no AUTOEXEC to run it from, so reset leaves
+ * the chip exactly as section 4 leaves it: every channel's engine off and silent, the sound-memory
+ * addresses zero, HWCF1/2/3 = 0059h/0020h/0004h and HWCF4/5/6 = 0/83h/8000h. The INIT
+ * arrays hold zero -- they only program the reverb/chorus/EQ effects, which are not
+ * modelled. A guest that runs the section 4 procedure itself gets the same state again.
+ */
+#define EMU8K_RESET_DCYSUSV             0x0080              /* Section 4 step 1: engine off */
+#define EMU8K_GAIN_CENTRE               128                 /* Half of Q8 unity: both sides equal */
+#define EMU8K_RESET_HWCF1               0x0059
+#define EMU8K_RESET_HWCF2               0x0020
+#define EMU8K_RESET_HWCF3               0x0004
+#define EMU8K_RESET_HWCF4               0
+#define EMU8K_RESET_HWCF5               0x83
+#define EMU8K_RESET_HWCF6               0x8000
+
+/* section 2: three groups of four ports, at E, E+400h and E+800h. */
+#define EMU8K_GROUP_LAST_PORT           3
+#define EMU8K_DATA1_GROUP               0x400
+#define EMU8K_DATA1_GROUP_LAST          0x403
+#define EMU8K_DATA3_GROUP               0x800
+#define EMU8K_DATA3_GROUP_LAST          0x803
+#define EMU8K_INITIALIZE_OK             0                   /* The bus's init contract: 0 = ok */
+#define EMU8K_INITIALIZE_FAILED         (-1)
+
 static DWORD g_Emu8kExp2Table[EMU8K_EXP2_STEPS + 1];   /* 2^(i/256), Q16: 65536 .. 131072 */
 static DWORD g_Emu8kAttackStep[EMU8K_RATE_CODES];     /* attack: Q16 of full level per tick */
 static INT32 g_Emu8kDecayStep[EMU8K_RATE_CODES];      /* decay/release: Q16 dB per tick */
@@ -105,12 +359,6 @@ static INT32 Emu8kLog2(DWORD value)
                    / (g_Emu8kExp2Table[tableIndex + 1] - g_Emu8kExp2Table[tableIndex]));
 }
 
-/* Q16 dB of attenuation -> Q16 linear gain. 20-log10(2) = 6.0206 dB per octave, so
- * octaves = dB x 0.166096 = dB x 10885 / 65536.
- */
-#define EMU8K_OCTAVES_PER_DB_Q16    10885   /* 0.166096 in Q16 */
-#define EMU8K_SILENCE_DB            100u    /* 100 dB down: treated as silence */
-
 static DWORD Emu8kDbToGain(INT32 attenuationQ16)
 {
     if (attenuationQ16 <= 0)
@@ -119,27 +367,6 @@ static DWORD Emu8kDbToGain(INT32 attenuationQ16)
         return 0;
     return Emu8kExp2(-(INT32)(((INT64)attenuationQ16 * EMU8K_OCTAVES_PER_DB_Q16) >> EMU8K_Q16_SHIFT));
 }
-
-#define EMU8K_TICK_US_X10               7256u       /* 32 / 44100 s = 725.6 us */
-#define EMU8K_TICK_US_SCALE             10u         /* ...the X10 above */
-
-/* The slewing current volume is held as CV << 14: CV is 16 bits, so << 16 would reach the
- * sign bit of an INT32 at full volume.
- */
-#define EMU8K_CURRENT_VOLUME_SHIFT      14
-
-/* The attack and decay scales (p.15-16): rate code 01h is the slowest, 7Fh the fastest, 00h
- * never. Between the ends the scale is logarithmic (ours -- the guide gives only the ends):
- * 126 steps across log2(fastest / slowest), in Q16.
- */
-#define EMU8K_RATE_CODE_MASK            0x7F
-#define EMU8K_RATE_CODE_SLOWEST         1
-#define EMU8K_RATE_CODE_SPAN            126         /* 01h..7Fh */
-#define EMU8K_ATTACK_SLOWEST_US         11880000u   /* 01h: 11.88 s */
-#define EMU8K_ATTACK_LOG2_SPAN_Q16      717709ll    /* -log2(6 ms / 11.88 s) = 10.9513, Q16 */
-#define EMU8K_DECAY_SLOWEST_US_PER_DB   470000u     /* 01h: 470 ms/dB */
-#define EMU8K_DECAY_LOG2_SPAN_Q16       716669ll    /* -log2(240 us / 470 ms) = 10.9354, Q16 */
-#define EMU8K_MINIMUM_STEP              1           /* A step that rounds to 0 would never move */
 
 DWORD VddEmu8kAttackMicroseconds(BYTE rateCode)
 {
@@ -224,15 +451,6 @@ static VOID Emu8kWriteMemory(PEMU8K_STATE state, DWORD address, WORD value)
         state->Dram[address] = value;
 }
 
-/* Is any channel allocated to DMA stream `stream` (0 LR, 1 RR, 2 LW, 3 RW)? CCCA bit 26 =
- * DMA, bit 25 = write, bit 24 = right (p.9-10) -- so bits 25-24 ARE the stream number.
- */
-#define EMU8K_CCCA_DMA              0x04000000u
-#define EMU8K_CCCA_STREAM_SHIFT     24
-#define EMU8K_CCCA_STREAM_MASK      3
-#define EMU8K_FIRST_WRITE_STREAM    2   /* Streams 2, 3 write; 0, 1 read */
-#define EMU8K_ADDRESS_STEP          1   /* A stream advances one word per transfer */
-
 static BOOL Emu8kIsStreamAllocated(PCEMU8K_STATE state, UINT stream)
 {
     UINT voiceIndex;
@@ -309,10 +527,6 @@ static WORD Emu8kSoundMemoryRead(PEMU8K_STATE state, UINT side)
     return heldWord;
 }
 
-/* WC counts at 44.1 kHz: microseconds x 441 / 10000 = samples. */
-#define EMU8K_WALL_CLOCK_NUMERATOR      441u
-#define EMU8K_WALL_CLOCK_DENOMINATOR    10000u
-
 static WORD Emu8kGetWallClock(PCEMU8K_STATE state)
 {
     /* p.13: "continuously incrementing at the sample rate ... no mechanism to reset". */
@@ -320,18 +534,6 @@ static WORD Emu8kGetWallClock(PCEMU8K_STATE state)
         return (WORD)((state->Clock(state->ClockContext) * EMU8K_WALL_CLOCK_NUMERATOR) / EMU8K_WALL_CLOCK_DENOMINATOR);
     return (WORD)state->WallClock;
 }
-
-/* ---- the envelope engine (p.14-18, the diagram on p.19) ---------------------------------- */
-
-#define EMU8K_DB_PER_OCTAVE_Q16     394566      /* 6.0206 dB in Q16 */
-#define EMU8K_DELAY_NONE            0x8000      /* P.14: 8000h = no delay; below, 725 us units */
-#define EMU8K_HOLD_NONE_CODE        0x7Fu       /* P.16: 7Fh = no hold */
-#define EMU8K_HOLD_CODE_MASK        0x7F
-#define EMU8K_HOLD_STEP_US_X10      920000u     /* 92 ms per hold step, x10 */
-#define EMU8K_SUSTAIN_TOP_CODE      0x7Fu       /* P.14: 7Fh = 0 dB below peak */
-#define EMU8K_SUSTAIN_CODE_MASK     0x7F
-#define EMU8K_SUSTAIN_STEP_DB_Q16   49152u      /* 0.75 dB per sustain step, Q16 */
-#define EMU8K_RELEASE_FLOOR_DB      96u         /* A release that falls 96 dB is done */
 
 static VOID Emu8kEnvelopeStart(PEMU8K_ENVELOPE envelope)
 {
@@ -443,16 +645,6 @@ static DWORD Emu8kEnvelopeTick(
     }
 }
 
-/* A triangle LFO (p.18: FRQ in 0.042 Hz steps, FFh = 10.72 Hz). Starts at zero going up.
- * Returns -65536..65536.
- */
-#define EMU8K_LFO_PHASE_STEP        131008u     /* 2^32 x (10.72/255 Hz) x 725.6 us, per FRQ */
-#define EMU8K_LFO_QUARTER_CYCLE     16384u      /* Of the 16-bit phase */
-#define EMU8K_LFO_THREE_QUARTERS    49152u
-#define EMU8K_LFO_SLOPE             4u          /* 16384 phase units rise 65536 */
-#define EMU8K_LFO_HALF_CYCLE_LEVEL  131072
-#define EMU8K_LFO_FULL_CYCLE_LEVEL  262144
-
 static INT32 Emu8kLfoTick(PDWORD phase, PDWORD delay, BYTE frequency)
 {
     DWORD phaseHigh;
@@ -477,43 +669,11 @@ static DWORD Emu8kLfoDelayTicks(WORD delayRegister)
     return delayRegister >= EMU8K_DELAY_NONE ? 0 : (DWORD)EMU8K_DELAY_NONE - delayRegister;
 }
 
-/* ---- the low-pass filter (CCCA Q, IFATN cutoff: p.9, p.17) --------------------------- */
-
-/* sin/cos by series, in double: only ever called when a channel's cutoff or Q CHANGES. The
- * divisors are the series' successive n(n+1): 2-3, 4-5, ... and 1-2, 3-4, ...
- */
-#define EMU8K_SERIES_2X3    6
-#define EMU8K_SERIES_4X5    20
-#define EMU8K_SERIES_6X7    42
-#define EMU8K_SERIES_8X9    72
-#define EMU8K_SERIES_10X11  110
-#define EMU8K_SERIES_1X2    2
-#define EMU8K_SERIES_3X4    12
-#define EMU8K_SERIES_5X6    30
-#define EMU8K_SERIES_7X8    56
-#define EMU8K_SERIES_9X10   90
-#define EMU8K_SERIES_11X12  132
-
 static double Emu8kSin(double angle) { double angleSquared = angle * angle;
     return angle * (1 - angleSquared / EMU8K_SERIES_2X3 * (1 - angleSquared / EMU8K_SERIES_4X5 * (1 - angleSquared / EMU8K_SERIES_6X7 * (1 - angleSquared / EMU8K_SERIES_8X9 * (1 - angleSquared / EMU8K_SERIES_10X11))))); }
+
 static double Emu8kCos(double angle) { double angleSquared = angle * angle;
     return 1 - angleSquared / EMU8K_SERIES_1X2 * (1 - angleSquared / EMU8K_SERIES_3X4 * (1 - angleSquared / EMU8K_SERIES_5X6 * (1 - angleSquared / EMU8K_SERIES_7X8 * (1 - angleSquared / EMU8K_SERIES_9X10 * (1 - angleSquared / EMU8K_SERIES_11X12))))); }
-
-/* The cutoff scale. p.17 puts IFATN's cutoff byte at "quarter semitones, 00h = 125 Hz,
- * FFh = 8 kHz" -- but 255 quarter-semitones is 5.3 octaves and 125 Hz -> 8 kHz is 6. The
- * END POINTS are what a program sets, so they win: six octaves across 0000h..FF00h of the
- * 16-bit cutoff, i.e. one octave = FF00h / 6 = 2A80h units.
- */
-#define EMU8K_CUTOFF_OCTAVE             0x2A80
-#define EMU8K_CUTOFF_BASE_HZ            125.0       /* cutoff 0000h */
-#define EMU8K_CUTOFF_MAX_FRACTION       0.45        /* Of the sample rate: below Nyquist */
-#define EMU8K_RADIANS_PER_CYCLE         (2.0 * 3.14159265358979)
-#define EMU8K_FILTER_FLAT_Q             0           /* P.17: Q 0 and cutoff FFh = unaltered */
-#define EMU8K_FILTER_OPEN_CUTOFF        0xFF00
-#define EMU8K_BUTTERWORTH_Q             0.70710678
-#define EMU8K_RESONANCE_STEP_DB_Q16     117965u     /* Per Q step, Q16 */
-#define EMU8K_FILTER_HEADROOM_MAX       262143      /* resonance headroom: 18 bits */
-#define EMU8K_FILTER_HEADROOM_MIN       (-262144)
 
 static VOID Emu8kFilterSetup(PEMU8K_VOICE voice, WORD cutoff, BYTE resonance)
 {
@@ -578,24 +738,6 @@ static INT32 Emu8kFilterRun(PEMU8K_VOICE voice, INT32 input)
     return output;
 }
 
-/* The per-channel engine tick: the envelope generator (unless DCYSUSV bit 7 has turned it
- * off) recomputes the TARGETS, then the sound generator takes them up.
- */
-#define EMU8K_DCYSUSV_ENGINE_OFF        0x80                /* P.14: bit 7 */
-#define EMU8K_PITCH_UNITY               0xE000              /* P.16: IP E000h = unity */
-#define EMU8K_PITCH_TO_Q16_OCTAVES      16                  /* 1000h per octave -> 65536 per octave */
-#define EMU8K_MODULATION_FULL_SCALE     127                 /* A signed depth byte's full scale */
-#define EMU8K_CP_UNITY                  0x4000u             /* P.7: CP 4000h = one word per sample */
-#define EMU8K_PITCH_MAX_OCTAVES         2                   /* CP saturates two octaves up */
-#define EMU8K_CUTOFF_ENVELOPE_OCTAVES   6                   /* ENV1 x PEFE lo: up to +/-6 octaves */
-#define EMU8K_CUTOFF_LFO_OCTAVES        3                   /* LFO1 x FMMOD lo: up to +/-3 octaves */
-#define EMU8K_ATTENUATION_STEP_DB_Q16   24576               /* IFATN lo: 0.375 dB steps */
-#define EMU8K_TREMOLO_DB                12                  /* LFO1 x TREMFRQ hi: up to +/-12 dB */
-#define EMU8K_TICK_ROUNDING             (EMU8K_TICK - 1u)   /* Rounds a step away from zero */
-#define EMU8K_PAN_SHIFT                 24                  /* PSST bits 31-24 */
-#define EMU8K_PAN_FULL                  255u                /* FFh = extreme left */
-#define EMU8K_GAIN_UNITY                256u                /* Q8 */
-
 static VOID Emu8kVoiceTick(PEMU8K_VOICE voice)
 {
     INT32 currentVolume;
@@ -658,84 +800,6 @@ static VOID Emu8kVoiceTick(PEMU8K_VOICE voice)
       voice->GainLeft = (INT32)((pan * EMU8K_GAIN_UNITY) / EMU8K_PAN_FULL);
       voice->GainRight = (INT32)(((EMU8K_PAN_FULL - pan) * EMU8K_GAIN_UNITY) / EMU8K_PAN_FULL); }
 }
-
-/* ---- the register file (section 3) ------------------------------------------------------------- */
-
-/* The Pointer register (section 2): bits 7-5 select the register, bits 4-0 the channel. */
-#define EMU8K_POINTER_REGISTER_SHIFT    5
-#define EMU8K_POINTER_REGISTER_MASK     7
-#define EMU8K_POINTER_CHANNEL_MASK      0x1F
-
-/* The four data ports, as the register file numbers them. */
-#define EMU8K_DATA0                     0
-#define EMU8K_DATA1                     1
-#define EMU8K_DATA2                     2
-#define EMU8K_DATA3                     3
-
-/* The registers behind each data port (p.6-7). */
-#define EMU8K_DATA0_CPF                 0
-#define EMU8K_DATA0_PTRX                1
-#define EMU8K_DATA0_CVCF                2
-#define EMU8K_DATA0_VTFT                3
-#define EMU8K_DATA0_R4                  4
-#define EMU8K_DATA0_R5                  5
-#define EMU8K_DATA0_PSST                6
-#define EMU8K_DATA0_CSL                 7
-#define EMU8K_DATA1_CCCA                0
-#define EMU8K_DATA1_R1                  1               /* HWCF4-6, the sound-memory addresses, SMLD, HWCF1-3 */
-#define EMU8K_DATA1_INIT1               2
-#define EMU8K_DATA1_INIT3               3
-#define EMU8K_DATA1_ENVVOL              4
-#define EMU8K_DATA1_DCYSUSV             5
-#define EMU8K_DATA1_ENVVAL              6
-#define EMU8K_DATA1_DCYSUS              7
-#define EMU8K_DATA2_R1                  1               /* SMRD, WC, and words the map does not name */
-#define EMU8K_DATA2_INIT2               2
-#define EMU8K_DATA2_INIT4               3
-#define EMU8K_DATA2_ATKHLDV             4
-#define EMU8K_DATA2_LFO1VAL             5
-#define EMU8K_DATA2_ATKHLD              6
-#define EMU8K_DATA2_LFO2VAL             7
-#define EMU8K_DATA3_IP                  0
-#define EMU8K_DATA3_IFATN               1
-#define EMU8K_DATA3_PEFE                2
-#define EMU8K_DATA3_FMMOD               3
-#define EMU8K_DATA3_TREMFRQ             4
-#define EMU8K_DATA3_FM2FRQ2             5
-#define EMU8K_DATA3_R6                  6
-#define EMU8K_DATA3_R7                  7
-
-/* The global registers at Data1/Data2 r1, by channel number (p.10-13). */
-#define EMU8K_CHANNEL_HWCF4             9
-#define EMU8K_CHANNEL_HWCF5             10
-#define EMU8K_CHANNEL_HWCF6             13
-#define EMU8K_CHANNEL_SMALR             20              /* The four sound-memory addresses: 20-23 */
-#define EMU8K_CHANNEL_SMARR             21
-#define EMU8K_CHANNEL_SMALW             22
-#define EMU8K_CHANNEL_SMARW             23
-#define EMU8K_CHANNEL_SMLD              26              /* Data1 r1: SMLD; Data2 r1: SMRD */
-#define EMU8K_CHANNEL_WC                27              /* Data2 r1: the sample counter, read-only */
-#define EMU8K_CHANNEL_HWCF1             29
-#define EMU8K_CHANNEL_HWCF2             30
-#define EMU8K_CHANNEL_HWCF3             31
-
-/* Which half of a doubleword register a word access is, and which stereo side. */
-#define EMU8K_LOW_HALF                  0
-#define EMU8K_HIGH_HALF                 1
-#define EMU8K_LEFT                      0
-#define EMU8K_RIGHT                     1
-
-/* The four INIT effects programs, as EffectsInit's first index. */
-#define EMU8K_INIT1                     0
-#define EMU8K_INIT2                     1
-#define EMU8K_INIT3                     2
-#define EMU8K_INIT4                     3
-
-#define EMU8K_DCYSUSV_RELEASE           0x8000          /* P.14: bit 15 = these are RELEASE values */
-#define EMU8K_ALWAYS_ZERO_BIT           0x80u           /* Bit 7 of ATKHLD(V) and DCYSUS reads zero */
-#define EMU8K_SMA_FLAG                  0x80000000u     /* SMAxR bit 31 = EMPTY, SMAxW bit 31 = FULL */
-#define EMU8K_HWCF1_READ_MASK           0x7E            /* The VLSI read error's shape, as drivers probe */
-#define EMU8K_HWCF2_READ_SET            0x0003
 
 /* Data1's MS word and Data2 share E+402h. It is Data1's MS word exactly when the register
  * selected is a Data1 DOUBLEWORD (p.6-7): CCCA (r0, every channel) and, in r1, HWCF4/5/6
@@ -1160,18 +1224,6 @@ static WORD Emu8kDataRead(PEMU8K_STATE state, INT dataPort, INT isHighHalf)
     }
 }
 
-/* ---- ports (section 2) ------------------------------------------------------------------- */
-
-/* The port offsets from the base E (section 2). */
-#define EMU8K_PORT_DATA0_LOW            0x000
-#define EMU8K_PORT_DATA0_HIGH           0x002
-#define EMU8K_PORT_DATA1_LOW            0x400
-#define EMU8K_PORT_DATA1_HIGH_DATA2     0x402
-#define EMU8K_PORT_DATA3                0x800
-#define EMU8K_PORT_POINTER              0x802
-#define EMU8K_POINTER_READ_MASK         0x00FF  /* P.5: the MS byte reads "random"; we answer 0 */
-#define EMU8K_FLOATING_BUS              0xFFFF  /* An unclaimed offset */
-
 /* A word transfer at offset `portOffset` from the base (000h/002h, 400h/402h, 800h/802h). */
 static VOID Emu8kWordOut(PEMU8K_STATE state, WORD portOffset, WORD value)
 {
@@ -1245,16 +1297,6 @@ static WORD Emu8kWordIn(PEMU8K_STATE state, WORD portOffset)
     }
 }
 
-/* The bus's access widths, and how a byte access finds its port group (offsets 000h,
- * 400h, 800h: bits 11-10). The bus's handler types still use its own integer names
- * (VDD_BUS has not migrated -- #333), so the 32-bit value here is UINT32, the same type.
- */
-#define EMU8K_DOUBLEWORD_ACCESS     4
-#define EMU8K_WORD_ACCESS           2
-#define EMU8K_HIGH_WORD_PORT        2   /* A doubleword's MS word is two ports up */
-#define EMU8K_ODD_PORT              1
-#define EMU8K_PORT_GROUP_SHIFT      10
-
 static VOID Emu8kPortOut(PVOID context, WORD port, BYTE accessWidth, UINT32 value)
 {
     PEMU8K_STATE state = (PEMU8K_STATE)context;
@@ -1313,18 +1355,6 @@ static VOID Emu8kPortIn(PVOID context, WORD port, BYTE accessWidth, UINT32 *valu
         }
     }
 }
-
-/* ---- the render ------------------------------------------------------------------------- */
-
-#define EMU8K_HWCF3_AUDIO_ENABLE    0x0004  /* Section 4: HWCF3 enables audio output */
-#define EMU8K_INTERPOLATOR_TAP0     1       /* P.10: CA is one word below the audio; the */
-#define EMU8K_INTERPOLATOR_TAP1     2       /* Interpolator reads CA+1 and CA+2 */
-#define EMU8K_CCCA_Q_SHIFT          28      /* CCCA bits 31-28: the filter's Q */
-#define EMU8K_GAIN_SHIFT            8       /* The pan gains are Q8 */
-#define EMU8K_CP_TO_STEP_SHIFT      2       /* CP 4000h = one word: the step is CP x 4 */
-#define EMU8K_CCCA_CONTROL_MASK     0xFF000000u
-#define EMU8K_SAMPLE_MAX            32767
-#define EMU8K_SAMPLE_MIN            (-32768)
 
 VOID VddEmu8kRenderStereo(PEMU8K_STATE state, PINT16 output, DWORD frameCount)
 {
@@ -1414,26 +1444,6 @@ VOID VddEmu8kRenderStereo(PEMU8K_STATE state, PINT16 output, DWORD frameCount)
     state->SamplesOut += frameCount;
 }
 
-/* ---- the bus ------------------------------------------------------------------------------ */
-
-/* -- THE RESET STATE IS THE INITIALISED CHIP, NOT POWER-UP NOISE. section 4: at power-up "most
- * registers contain random data" and HWCF3's audio-enable is clear; a real machine ran
- * AWEUTIL /S from AUTOEXEC.BAT to run the section 4 procedure before any game started, and most
- * games rely on that having happened. We have no AUTOEXEC to run it from, so reset leaves
- * the chip exactly as section 4 leaves it: every channel's engine off and silent, the sound-memory
- * addresses zero, HWCF1/2/3 = 0059h/0020h/0004h and HWCF4/5/6 = 0/83h/8000h. The INIT
- * arrays hold zero -- they only program the reverb/chorus/EQ effects, which are not
- * modelled. A guest that runs the section 4 procedure itself gets the same state again.
- */
-#define EMU8K_RESET_DCYSUSV     0x0080  /* Section 4 step 1: engine off */
-#define EMU8K_GAIN_CENTRE       128     /* Half of Q8 unity: both sides equal */
-#define EMU8K_RESET_HWCF1       0x0059
-#define EMU8K_RESET_HWCF2       0x0020
-#define EMU8K_RESET_HWCF3       0x0004
-#define EMU8K_RESET_HWCF4       0
-#define EMU8K_RESET_HWCF5       0x83
-#define EMU8K_RESET_HWCF6       0x8000
-
 VOID VddEmu8kReset(PVOID context)
 {
     PEMU8K_STATE state = (PEMU8K_STATE)context;
@@ -1472,15 +1482,6 @@ VOID VddEmu8kReset(PVOID context)
     state->TickPosition = 0;
     /* WC is NOT reset: p.13 "there is no mechanism to reset this counter". */
 }
-
-/* section 2: three groups of four ports, at E, E+400h and E+800h. */
-#define EMU8K_GROUP_LAST_PORT       3
-#define EMU8K_DATA1_GROUP           0x400
-#define EMU8K_DATA1_GROUP_LAST      0x403
-#define EMU8K_DATA3_GROUP           0x800
-#define EMU8K_DATA3_GROUP_LAST      0x803
-#define EMU8K_INITIALIZE_OK         0   /* The bus's init contract: 0 = ok */
-#define EMU8K_INITIALIZE_FAILED     (-1)
 
 INT VddEmu8kInitialize(VDD_BUS *bus, PVOID context)
 {

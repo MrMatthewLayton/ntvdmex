@@ -13,15 +13,6 @@
 
 #include "log.h"
 
-/* Runaway-log guard. An infinite guest loop that logs each serviced INT can grow
- * the log without bound -- a headless pm32irq (an infinite mode-13h animation demo)
- * flooded 148 MB, thrashed the disk, and wedged the SMB result-copy. Cap the total
- * appended bytes; past the cap LogAppend silently drops (writing one truncation
- * marker). LogWrite (the STAGE0 truncate that starts a fresh run) resets the count.
- */
-static unsigned long g_LogTotal  = 0;
-static INT           g_LogIsCapped = 0;
-
 /* -- ONE HANDLE, KEPT OPEN -- AND THIS IS A PERFORMANCE FIX, NOT TIDYING.
  * LogAppend used to CreateFile + WriteFile + CloseHandle on EVERY line. An
  * open/close pair is two kernel transitions plus filesystem metadata work, and
@@ -59,9 +50,69 @@ static INT           g_LogIsCapped = 0;
 #define LOG_ROTATION_SLACK      16
 #define LOG_ROTATION_SUFFIX     8               /* "-k" and the rest */
 #define LOG_EXTENSION_LENGTH    4               /* ".log" */
+
+/* KEEP THE LAST FEW RUNS. (2026-09-22, the first field report):
+ * The zip went to a machine we cannot reach. Its first session was broken -- every
+ * DOS/4GW game crawled and stalled -- and its second was fine, and by the time the
+ * report arrived the only log on the box was the LAST run's, because every start
+ * truncates ntvdmhost.log. The one file that explains a failure had been overwritten
+ * by the runs that worked. So the first truncate of a process first shifts what is
+ * there: ntvdmhost.log -> ntvdmhost-1.log -> ... -> ntvdmhost-LOG_KEEP.log, the
+ * oldest dropped. A field machine then holds the last LOG_KEEP+1 runs for someone to
+ * copy back by hand; nothing here can read them for us.
+ *
+ * [CAUTION]: ONCE PER PROCESS. LogWrite is called more than once in a run (the STAGE0 line,
+ * then the preamble re-truncates), and a rotation on each would shift one run into
+ * several files. The flag is per-process, which is per-run.
+ *
+ * [CAUTION]: MoveFileEx over an existing target: on a share the target can be open elsewhere
+ * (the rig's watcher tails the log), in which case the shift fails and the run
+ * simply overwrites as it always did -- rotation is best-effort and must never
+ * stop the log itself from being written.
+ */
+#define LOG_KEEP                5
+
+/* Append [buf..end) to `path` -- used inside the service loop so a host crash still
+ * leaves the trace-so-far on disk and the in-memory buffer can be reset each pass.
+ * Bounded by LOG_MAX_BYTES so a runaway guest can never flood the disk.
+ */
+/* THE A/B SWITCH FOR "IS THE INSTRUMENT THE PROBLEM?" (Importance = 2):
+ * Set from `wowquiet.txt` on the share (see main.c). It silences the trace
+ * ENTIRELY, which is the point: this project cannot measure feel from the dev
+ * machine -- the headless rig cannot see input lag -- so the only honest
+ * instrument for "does it feel slow" is a one-file A/B in the user's hands.
+ *
+ * [CAUTION]: IT IS A MEASUREMENT MODE, NOT A PRODUCT MODE. Every session's debugging
+ * rests on the trace, so this is opt-in and off by default. If it turns out to
+ * be the whole difference, the ANSWER is not to ship it on -- it is to stop
+ * writing a kilobyte per BOP in the first place.
+ */
+INT g_LogIsQuiet = 0;
+
+/* THE COST OF THE INSTRUMENT, MEASURED BY THE INSTRUMENT (Importance = 1):
+ * Two sessions have now blamed the trace for the guests feeling slow, and both
+ * times it was a guess. These are the numbers that settle it: ticks spent
+ * inside LogAppend, and how many calls and bytes that was. QPC, not
+ * GetTickCount -- a 15 ms clock cannot see a call that costs microseconds, and
+ * summing 15 ms quanta over 100k calls is how a measurement invents a
+ * bottleneck.
+ */
+LONGLONG g_LogQpc = 0;
+DWORD g_LogCalls = 0;
+DWORD g_LogBytes = 0;
+
+/* Runaway-log guard. An infinite guest loop that logs each serviced INT can grow
+ * the log without bound -- a headless pm32irq (an infinite mode-13h animation demo)
+ * flooded 148 MB, thrashed the disk, and wedged the SMB result-copy. Cap the total
+ * appended bytes; past the cap LogAppend silently drops (writing one truncation
+ * marker). LogWrite (the STAGE0 truncate that starts a fresh run) resets the count.
+ */
+static unsigned long g_LogTotal  = 0;
+static INT           g_LogIsCapped = 0;
 static HANDLE g_LogHandle = INVALID_HANDLE_VALUE;
 static CHAR   g_LogHandlePathBuffer[MAX_PATH + LOG_PATH_SLACK];
 static PCSTR g_LogHandlePath = 0;        /* -> g_LogHandlePathBuffer when a handle is open */
+static INT g_LogIsRotated = 0;
 
 static INT LogIsSamePath(PCSTR first, PCSTR second)
 {
@@ -124,28 +175,6 @@ static INT LogIsBadRange(PCSTR path, PCSTR buffer, PCSTR end)
     }
     return 1;
 }
-
-/* KEEP THE LAST FEW RUNS. (2026-09-22, the first field report):
- * The zip went to a machine we cannot reach. Its first session was broken -- every
- * DOS/4GW game crawled and stalled -- and its second was fine, and by the time the
- * report arrived the only log on the box was the LAST run's, because every start
- * truncates ntvdmhost.log. The one file that explains a failure had been overwritten
- * by the runs that worked. So the first truncate of a process first shifts what is
- * there: ntvdmhost.log -> ntvdmhost-1.log -> ... -> ntvdmhost-LOG_KEEP.log, the
- * oldest dropped. A field machine then holds the last LOG_KEEP+1 runs for someone to
- * copy back by hand; nothing here can read them for us.
- *
- * [CAUTION]: ONCE PER PROCESS. LogWrite is called more than once in a run (the STAGE0 line,
- * then the preamble re-truncates), and a rotation on each would shift one run into
- * several files. The flag is per-process, which is per-run.
- *
- * [CAUTION]: MoveFileEx over an existing target: on a share the target can be open elsewhere
- * (the rig's watcher tails the log), in which case the shift fails and the run
- * simply overwrites as it always did -- rotation is best-effort and must never
- * stop the log itself from being written.
- */
-#define LOG_KEEP    5
-static INT g_LogIsRotated = 0;
 
 /* "<stem>.log" + k -> "<stem>-k.log" (a name without .log gets the suffix at its end). */
 static VOID LogRotationName(PSTR out, PCSTR path, INT length, INT stem, INT number)
@@ -214,35 +243,6 @@ VOID LogWrite(PCSTR path, PCSTR buffer, PCSTR end)
         CloseHandle(file);
     }
 }
-
-/* Append [buf..end) to `path` -- used inside the service loop so a host crash still
- * leaves the trace-so-far on disk and the in-memory buffer can be reset each pass.
- * Bounded by LOG_MAX_BYTES so a runaway guest can never flood the disk.
- */
-/* THE A/B SWITCH FOR "IS THE INSTRUMENT THE PROBLEM?" (Importance = 2):
- * Set from `wowquiet.txt` on the share (see main.c). It silences the trace
- * ENTIRELY, which is the point: this project cannot measure feel from the dev
- * machine -- the headless rig cannot see input lag -- so the only honest
- * instrument for "does it feel slow" is a one-file A/B in the user's hands.
- *
- * [CAUTION]: IT IS A MEASUREMENT MODE, NOT A PRODUCT MODE. Every session's debugging
- * rests on the trace, so this is opt-in and off by default. If it turns out to
- * be the whole difference, the ANSWER is not to ship it on -- it is to stop
- * writing a kilobyte per BOP in the first place.
- */
-INT g_LogIsQuiet = 0;
-
-/* THE COST OF THE INSTRUMENT, MEASURED BY THE INSTRUMENT (Importance = 1):
- * Two sessions have now blamed the trace for the guests feeling slow, and both
- * times it was a guess. These are the numbers that settle it: ticks spent
- * inside LogAppend, and how many calls and bytes that was. QPC, not
- * GetTickCount -- a 15 ms clock cannot see a call that costs microseconds, and
- * summing 15 ms quanta over 100k calls is how a measurement invents a
- * bottleneck.
- */
-LONGLONG g_LogQpc = 0;
-DWORD g_LogCalls = 0;
-DWORD g_LogBytes = 0;
 
 VOID LogAppend(PCSTR path, PCSTR buffer, PCSTR end)
 {

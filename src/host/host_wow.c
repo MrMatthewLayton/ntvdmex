@@ -31,6 +31,222 @@
 #include "host_install.h"
 #include "host_io.h"
 
+/* THE Win16 COMM API, ON THE REAL UART. (GH #9 + #128, session 56) (Importance = 4):
+ * wowuser.h answered the whole comm family with IE_BADID, and its note gave
+ * the reason plainly: "the equipment word claims none, on purpose". THAT WAS
+ * TRUE WHEN IT WAS WRITTEN AND I MADE IT FALSE THIS SESSION -- the equipment
+ * word now reports SER=2 and the BDA carries 0x03F8/0x02F8, with a real 8250
+ * behind them. A host that advertises two serial ports and then refuses to
+ * open either is the same two-layers-disagreeing fault the equipment word
+ * itself was fixed for, pointing the other way.
+ *
+ * So the Win16 side is wired to the same vdd_comm the ports and INT 14h use.
+ * One device, three ways in, and none of them can now contradict the others.
+ *
+ * [CAUTION]: THESE LIVE HERE, NOT IN wowuser.h, because that header must not see host
+ * internals -- it gets declarations only. Same rule as the rest of the WOW
+ * layer.
+ */
+#define WOWCOMM_MAX             4           /* #245: COM1-COM4, as the equipment word now says */
+
+/* The PM->V86 transfer buffer for pointer-taking INT 21h calls; allocated in
+ * WowPlaceV86 and used by PmInt21Transfer. Declared here because the allocation
+ * site comes long before the use site. 0 = absent, and every arm checks.
+ */
+/* The PSP/arena block krnl386 is entered with. It must be the LAST thing allocated:
+ * krnl386 carves from ES+0x10 upward without asking DOS (see WowPlaceV86), so
+ * anything handed out after it would be memory krnl386 already believes it owns.
+ */
+/* THE HOST POOL, AND WHY THERE HAS TO BE ONE:
+ * WowPlaceV86 hands krnl386 every remaining paragraph of conventional memory,
+ * because krnl386 carves from ES+0x10 upward without asking DOS and anything left
+ * free would be handed out twice. The consequence is that EVERY host structure
+ * allocated after that point finds nothing -- and two are, both lazily at the
+ * mode switch:
+ *   * the INT 2Fh 168A vendor-API stub  -> "no memory for the stub", and krnl386
+ *     prints "Inadequate DPMI Server" and exits (error #1 of its table);
+ *   * the 256-vector default PM handler table -> INT 21h AH=35h then reports
+ *     vector 0x21 as 0000:0000, so krnl386 saves a null previous-handler and its
+ *     chain-to-DOS path calls into nothing.
+ * Both were found this way, one run apart. So: reserve a pool BEFORE the arena
+ * goes, and bump-allocate host structures out of it.
+ * - THE RULE FOR ANYTHING ADDED LATER: on the WOW path, host memory comes from
+ *   WowHostAllocate(), not DosMcbAllocate(). A DosMcbAllocate() after WowPlaceV86 will fail,
+ *   and the failure will look like the guest's fault.
+ */
+/* 16 KB. Was 4 KB (0x100) with 0x41 in use, and the SFT block is 0x1D9 paragraphs on
+ * its own -- a 128-entry table of 59-byte entries. Sized at 0x200 first, and THAT IS
+ * THE REGRESSION THIS COMMENT EXISTS FOR: the SFT is claimed in WowPlaceV86 and the
+ * 256-vector handler table lazily at the mode switch, so the SFT fitted, the handler
+ * table did not, and WowHostAllocate's failure is SILENT at that call site. The run
+ * died at PM step 0x0d with no error -- precisely the failure the note above predicts,
+ * walked into one release after writing it down. Leave the slack.
+ */
+#define WOW_HOSTPOOL_PARAS      0x400       /* 16 KB: SFT 0x1d9, handler table 0x40 */
+#define WOW_PSP_BLOCK_PARAS     0x40        /* A WOW launch keeps only the PSP's block */
+
+#define WOW_ENTRY_CX_FULL_U     0xF880u     /* krnl386's entry CX: its 64 KB selector less our header image */
+
+/* -- ANSWER AN UNIMPLEMENTED WOW32 CALL DIFFERENTLY, WITHOUT CLAIMING TO KNOW
+ * WHAT IT MEANS. (GH #128, session 37) ------------------------------------------
+ * 53 of the 82 IDs are not named by krnl386's export table, and the sentinel we
+ * answer them with is load-bearing: `0` is right for "declined / not present" and
+ * WRONG for a caller that loops until the answer is non-zero. krnl386 has one
+ * (observed): it allocates, asks WOW32 0x7d whether the result is acceptable, and
+ * on 0 allocates another and asks again. It ran 1884 times and took the stack out.
+ * Guessing the semantics and writing a `case` for it is what this project keeps
+ * paying for. So: a FILE, like pmbp.txt -- one `<hex id> <hex dword>` per line --
+ * that changes the answer for one run. The log marks every overridden call as an
+ * EXPERIMENT rather than a service, so no reader can mistake a measurement for an
+ * implementation. Absent file = the sentinel, unchanged, and no cost.
+ */
+#define WOW32RET_PATH           CFG_("wow32ret.txt")
+#define WOW32RET_MAX            16
+
+/* AND THE SAME LEVER FOR THE EPILOGUE MODE. (GH #128, session 38) (Importance = 3):
+ * `wow32ret.txt` chooses what a call ANSWERS. `wowmode.txt` chooses HOW IT
+ * RETURNS -- the word at bp-24 that picks one of krnl386's 38 return paths (see
+ * WOW32_OFF_MODE in wow32.h). krnl386 pushes 0 there and never sets it, so all
+ * 37 non-zero modes exist for the 32-bit side and none of them has ever been
+ * exercised on this host. Mode 25 is the task switch-back.
+ *
+ * [CAUTION]: THIS IS THE MOST DANGEROUS KNOB IN THE TREE. A mode selects a code path that
+ * pops a specific stack shape; the wrong one at the wrong call site resumes the
+ * guest with SS:SP loaded from whatever two registers happened to hold, which is
+ * not a crash so much as a random jump. One line, one id, one run, and read the
+ * log -- the same discipline wow32ret.txt earned the hard way, for higher stakes.
+ * Format: `<hex id> <hex mode>`, data lines first, `#` comments below.
+ */
+#define WOWMODE_PATH            CFG_("wowmode.txt")
+#define WOWMODE_MAX             8
+
+/* THE WIN16 TASK SCHEDULER (GH #128, session 38) (Importance = 3):
+ * The mechanism, the evidence for it and what this first cut does NOT do are
+ * all in src/wow/wowsched.h; this is the state and the wiring.
+ *
+ * [CAUTION]: OPT-IN, and deliberately so. Turning it on changes the ORDER in which two
+ * 16-bit tasks run, which is the largest behavioural change this host has made
+ * since it started executing Win16 code at all. A default run must still
+ * reproduce the committed result exactly, so the switch is a file on the share
+ * and its absence costs nothing.
+ */
+#define WOWSCHED_PATH           CFG_("wowsched.txt")
+
+/* #164: A TASK RUNS IN ITS OWN CURRENT DIRECTORY. (s85):
+ * DOS has one current directory and Win16 one per task. On NT the 32-bit side keeps
+ * them (krnl386's TDB holds only the drive -- measured: TDB+0x66 = 0x82, +0x67
+ * empty, for WOWEXEC and the task alike) and puts a task's back when it runs. Here
+ * OUR scheduler switches tasks, so this is that table. Measured with
+ * tests/probes/win16/w_cwd: the launched task parked at its first WaitEvent, WOWEXEC
+ * changed back to C:\WINDOWS, and the task resumed there -- its relative CreateFile
+ * landed in C:\WINDOWS, where stock puts it in the launch folder.
+ * - A task's entry is written when it parks at its launch (it inherits the directory
+ *   its creator chose for LoadModule -- WOWEXEC sets it from the launch's cur= just
+ *   before) and whenever it calls WOW32 0x82; it is restored when it is resumed.
+ */
+#define WOW_TASK_DIRS           8
+
+#define WOWQUIET_PATH           CFG_("wowquiet.txt")
+
+/* CALLING 16-BIT CODE: THE SWITCH. (GH #128, session 40) (Importance = 5):
+ * Opt-in for the same reason the scheduler is, and the reason is stronger here:
+ * this makes the host execute guest code that nothing has ever executed, on a
+ * stack it did not build the frame for. A default run must still reproduce the
+ * committed baseline (270 / 44 / 122 / 98) count for count, so the switch is a
+ * file on the share and its absence costs nothing. See src/wow/wowcall.h.
+ */
+#define WOWCALL_PATH            CFG_("wowcall.txt")
+
+enum
+{
+    WOW_K2_STUB_LENGTH = 8
+};   /* WowKernel2Stub: push imm16 ; call far -- the bytes before the return */
+
+enum
+{
+    WOW_CALLBACK_STUB_LIMIT = 0x0F
+};   /* the callback stub's 16-byte segment */
+
+enum
+{
+    WOW_LDT_PROBES = 2, WOW_LDT_PROBE_GAP = 4, WOW_LDT_PROBE1_BASE = 0x5A5A1000, WOW_LDT_PROBE1_LIMIT = 0x0123, WOW_LDT_PROBE2_BASE = 0x3C3C2000, WOW_LDT_PROBE2_LIMIT = 0x0456
+};   /* WowFindLdtBase: two distinctive descriptors */
+
+enum
+{
+    WOW_FILLER_SLACK_PARAS = 2
+};   /* WowPlaceV86: the MCB headers a filler allocation adds */
+
+enum
+{
+    WOW32_KNOB_COLUMNS = 2
+};   /* wow32mode.txt / wow32ret.txt: two hex columns a line */
+
+enum
+{
+    WOW_RETARGET_HEADROOM = 0x40, WOW_RETARGET_STACK_MIN = 0x200
+};   /* WowSchedRetarget: below the lowest live frame */
+
+enum
+{
+    WOW_SHADOW_SCAN_SLACK = 8
+};   /* WowShadowSync looks a few entries past g_LdtNext */
+
+enum
+{
+    WOW_VENDOR_STUB_SELECTOR = 0x10, WOW_VENDOR_STUB_LIMIT = 0x1F
+};   /* WowVendorApiEntry: the mov ax,imm16's operand; the segment */
+
+/* -- THE WOW32.DLL / NTVDM.EXE STAND-INS (s90, #5/#278). See src/shim/wowshim.c.
+ * Loaded once, at WOW start-up, by FULL PATH from bin\wowshim\ -- a module of that
+ * name must be in the process before any 32-bit thunk DLL asks for it by name
+ * (winmm asks in NotifyCallbackData, the first thing MMSYSTEM calls).
+ */
+typedef struct
+{
+    DWORD  Version;
+    PVOID (*GetVdmPointer)(DWORD segmentedAddress, DWORD byteCount, BOOL isProtectedMode);
+    HANDLE (*Handle32)(WORD handle16, DWORD handleType);
+    WORD   (*Handle16)(HANDLE handle32, DWORD handleType);
+    BOOL   (*Callback16Ex)(DWORD segmentedFunction, DWORD flags, DWORD argumentBytes, PVOID arguments, DWORD *returnValue);
+    VOID   (*IcaInterrupt)(INT picAdapter, BYTE line, INT count);
+    VOID   (*Yield16)(VOID);
+    VOID   (*Log)(PCSTR message);
+    /* version 2 (s91, #309): krnl386's global heap -- see ShimGlobal16 */
+    DWORD  (*Global16)(INT operation, DWORD firstArgument, DWORD secondArgument);
+    /* version 3 (s91, #11): the VDD service API -- see "THIRD-PARTY VDDs" below */
+    DWORD  (*GetRegister)(INT registerIndex);
+    VOID   (*SetRegister)(INT registerIndex, DWORD value);
+    PVOID (*MapFlat)(WORD segment, DWORD offset, INT isProtectedMode);
+    BOOL   (*InstallIoHook)(HANDLE vddHandle, WORD rangeCount, PCVOID ranges, PCVOID handlers);
+    VOID   (*RemoveIoHook)(HANDLE vddHandle, WORD rangeCount, PCVOID ranges);
+} NTVDMEX_SHIM_API;
+
+enum
+{
+    WOW_WINDOW_NESTING_MAX = 6, WOW_CALL16_PHASE_MAX = 500000
+};   /* WowCall16SyncEx */
+
+/* THIRD-PARTY VDDs, MICROSOFT ABI (s91, #11):
+ * A DOS program with a VDD of its own registers it with the third-party BOP,
+ * `C4 C4 58 nn` (the DDK's isvbop.inc): nn=0 RegisterModule (DS:SI the DLL, DS:DI
+ * its init routine's name, DS:BX its dispatch routine's name; CF clear + AX = a
+ * handle, or CF set + AX = 1 no DLL / 2 no dispatch routine / 3 no init routine),
+ * nn=1 UnRegisterModule (AX = handle), nn=2 DispatchCall (AX = handle; the VDD
+ * reads and writes the caller's registers). The VDD calls back through what
+ * NTVDM.EXE exports -- getAX/setAX..., VdmMapFlat, VDDInstallIOHook -- which in
+ * this process is bin\wowshim\NTVDM.EXE (src/shim/wowshim.c), loaded before the VDD
+ * so its import of "NTVDM.EXE" resolves to it by name. These are the host halves.
+ */
+enum { SHIM_R_EAX, SHIM_R_EBX, SHIM_R_ECX, SHIM_R_EDX, SHIM_R_ESI, SHIM_R_EDI, SHIM_R_EBP,
+       SHIM_R_ESP, SHIM_R_EIP, SHIM_R_CS, SHIM_R_DS, SHIM_R_ES, SHIM_R_SS, SHIM_R_FS,
+       SHIM_R_GS, SHIM_R_EFL, SHIM_R_MSW };
+
+enum
+{
+    WOW_WNDPROC_ARGUMENTS = 5
+};   /* a Win16 window procedure: hwnd, msg, wParam, lParam high, low */
+
 INT   g_WowFoldMute;
 DWORD g_WowFoldDropped;      /* dumps folded away, reported in WOWPERF */
 DWORD g_IcaRaised = 0;
@@ -39,6 +255,187 @@ DWORD g_IcaNoHandler = 0;
 /* 0 not tried, 1 loaded+init, 2 no load, 3 init refused */
 DWORD g_ShimState[WOW_SHIMS];
 DWORD g_ShimError[WOW_SHIMS];
+
+CHAR      g_WowName[WOW_MAX_MOD][16];
+/* Bytes of usable memory above krnl386's stack, handed to it in CX at entry. See
+ * the note at the entry setup and WowPlaceV86.
+ */
+WORD      g_WowEntryCx = 0;
+WORD      g_WowPspSegment  = 0;
+/* Where WOW32 0xc5 puts a resolved module path so the guest can point at it. Its own
+ * paragraph, and separate from the transfer buffer above on purpose -- see the
+ * allocation site and the 0xc5 service.
+ */
+WORD      g_WowPathSegment = 0;
+/* WHERE A LAUNCHED TASK'S ENVIRONMENT LIVES. (seg2 0xd1, session 39 part 8) (Importance = 1):
+ * A COPY, and the copy is the whole point: the parent hands its child an
+ * environment through its own PSP and then FREES that block the moment
+ * LoadModule returns -- measured, `LDTSYNC idx 0x15f <- base=0 acc=0x00` one line
+ * before `PSPENV CHANGED: sel 0x03bf +0x2c 0x0aff -> 0x03c7`. A child pointed at
+ * the parent's block therefore holds a selector that stops being present a few
+ * calls later, which is exactly the `#GP` the first cut of the service produced.
+ * Its own paragraph for the same reason as the path scratch: the child keeps this
+ * pointer for its whole life, so it cannot share a buffer anything else reuses.
+ */
+WORD      g_WowEnvironmentSegment  = 0;
+DWORD     g_WowCallbackLinear = 0;
+WORD  g_WowDgroupSelector   = 0;      /* krnl386's DGROUP selector, learned at a BOP */
+INT g_WowCallOn = 0;
+static INT  g_WowCommOpen[WOWCOMM_MAX];        /* 1 = this port is open to Win16 */
+static WORD g_WowCommEvent[WOWCOMM_MAX];         /* the event word SetCommEventMask points at */
+static WORD      g_WowPoolSegment  = 0;
+static WORD      g_WowPoolNext = 0;     /* paragraphs handed out so far */
+
+/* The `-a` argument of the WOW launch: the full path of krnl386.exe. krnl386 reads
+ * it back out of the DOS environment block to find its own file -- see WowPlaceV86.
+ */
+static CHAR      g_WowKernelPath[512];
+/* THE WAY BACK OUT OF 16-BIT CODE. (GH #128, session 40) (Importance = 1):
+ * One paragraph holding `C4 C4 57`, and a 16-bit CODE selector over it. It is the
+ * far return address every host-made call to a Win16 procedure is given, and it is
+ * dispatched by its LINEAR ADDRESS rather than by the BOP code byte -- the byte is
+ * for the reader, the address is ours by construction and cannot be collided with
+ * by our own INT-site patcher, which also writes `C4 C4`. See src/wow/wowcall.h.
+ */
+static WORD      g_WowCallbackSegment = 0;
+static WORD      g_WowCallbackSelector = 0;          /* built at the first callback */
+
+/* WOW STAGE 2: give the loaded module REAL SELECTORS. (GH #128):
+ * The load stage put each segment in host memory and fixed it up. This gives every
+ * segment an LDT descriptor, which is why it lives here, after the DPMI LDT pool
+ * exists and the VDM is registered.
+ *
+ * [CAUTION]: THIS IS NOT THE ENTRY PATH, AND THE COMMENT THAT USED TO SIT HERE SAID IT WAS.
+ * It claimed "krnl386 is the 386 ENHANCED-mode kernel: it runs in 16-bit PROTECTED
+ * mode, not V86". That is a plausible inference from what krnl386 IS, it survived
+ * four sessions in these comments, and krnl386's own instructions refute it:
+ *
+ *   c045  mov ax,es / shl ax,4      ES is a real-mode PARAGRAPH. Shifting a selector
+ *                                   by 4 is meaningless; this computes the right
+ *                                   answer against two independent oracle dumps.
+ *   c03b  mov word [cs:0x30], ds    A store through CS. Never legal in protected
+ *                                   mode -- a code selector is not writable.
+ *   c0c2  call <2F/1687 check>      It finds the DPMI host and SWITCHES ITSELF, with
+ *                                   AX=0 (16-bit client), then checks cs&7==7, then
+ *                                   INT 31h 000A for a data alias of CS -- and redoes
+ *                                   the SAME cs:0x30 store through that alias.
+ *
+ * The identical store, once per mode, is the binary telling you where the boundary
+ * is. krnl386 is entered in V86 and becomes a 16-bit DPMI client; that is why
+ * INT 31h 0002 (paragraph -> selector) is the function it calls most, twelve times.
+ * So real execution needs the segments in CONVENTIONAL memory with paragraph
+ * relocations. What is below still earns its keep -- it proved LDT installation
+ * works on a WOW launch, proved relocation against real descriptors, and caught the
+ * force-typed-index bug -- but it belongs AFTER the switch, not before it.
+ *
+ * [CAUTION]: THE QUESTION THIS ANSWERS, AND IT IS NOT RHETORICAL: XP's LDT validator caps
+ * base + limit at MmHighestUserAddress (~2GB) -- a true 4GB flat selector is refused
+ * outright (Kernel RE session 7, and it is why Doom's DOS/4GW selector has to be
+ * clamped). Our segments come from VirtualAlloc, which normally lands well under 2GB,
+ * so these SHOULD install. "Should" is not "does", and VdmInstallLdtEntries returns an
+ * NTSTATUS, so ask it rather than assume. A descriptor that silently fails to install
+ * leaves a selector that faults on first use -- a silent death, far from the cause.
+ */
+/* WHERE IS OUR DESCRIPTOR TABLE?:
+ * krnl386 wants what NTVDM's "MS-DOS" vendor API gives it: a WRITABLE SELECTOR ONTO
+ * THE DESCRIPTOR TABLE, so it can edit descriptors without a DPMI call each time.
+ * Measured off stock (tests/probes/dos/vendprobe.asm): selector 0x0137, writable,
+ * base 0x001140B0, limit 0x5FFF -- and the descriptor at window[CS & 0xFFF8] reads
+ *     FF FF D0 6D 00 FA 00 00   -> base 0x00006DD0, access 0xFA (code)
+ * while DPMI 0006 reports CS's base as 0x00006DD0. Two independent routes, same
+ * base, right type. It is the real table, and it lives at a USER-MODE address.
+ *
+ * [CAUTION]: WE CANNOT ASK THE CPU WHERE OURS IS. `SLDT` yields the GDT selector, and the GDT
+ * is not readable from ring 3. So find it the only way available from user mode:
+ * install descriptors whose contents are unique, then search our own address space
+ * for those exact eight bytes. A hit is that descriptor's slot; the table base is
+ * the hit minus (index * 8).
+ *
+ * Clean-room by construction -- it uses only our own memory and the documented
+ * descriptor encoding, and depends on no Windows internal we would have to be told.
+ *
+ * [CAUTION]: AND IT MUST NOT LIE, IN EITHER DIRECTION:
+ *   * one magic value could occur by chance in an unrelated buffer, so a candidate
+ *     is confirmed by a SECOND descriptor at a different index appearing at the
+ *     predicted offset. One match is a coincidence; two at the right stride is a
+ *     table.
+ *   * a "not found" is worthless unless the things searched for exist, so LAR/LSL
+ *     verify both probes installed before the search runs. Otherwise a refused
+ *     descriptor and an unmappable table produce the same log line -- and one of
+ *     those is a conclusion about Windows while the other is a bug in here.
+ */
+static DWORD g_WowLdtBase = 0;
+static NE_REGISTRY g_WowRegistry;
+static WORD  g_Wow32ReturnId[WOW32RET_MAX];
+static DWORD g_Wow32ReturnValue[WOW32RET_MAX];
+static INT   g_Wow32ReturnCount = 0;
+static WORD g_Wow32ModeId[WOWMODE_MAX];
+static WORD g_Wow32ModeValue[WOWMODE_MAX];
+static INT  g_Wow32ModeCount = 0;
+static INT   g_WowSchedRoundRobin = 0;            /* round-robin cursor for the yields */
+static struct
+{
+    WORD Task;
+    CHAR Directory[MAX_PATH];
+} g_WowTaskDirectory[WOW_TASK_DIRS];
+
+static DWORD g_WowSchedInterTask;
+
+/* THE "MS-DOS" VENDOR-SPECIFIC DPMI API (INT 2Fh 168A). GH #128:
+ * krnl386 will not run without this. It asks with DS:SI -> "MS-DOS", and if AL
+ * comes back 0x8A (unchanged: "not supported") it aborts with
+ * "NTVDM KERNEL: Inadequate DPMI Server" (observed). Leaving AL alone -- the correct answer for
+ * a host with no vendor API -- is therefore fatal to this one guest.
+ *
+ * [INFO]: WHAT STOCK NTVDM ACTUALLY RETURNS, measured (tests/probes/dos/vendprobe.com under
+ * `stock`): in REAL mode AL=8A (not supported); in PROTECTED mode AL=00 and
+ * ES:DI = 00C7:2037, a readable code selector (LAR=0xFB00). Called (same probe):
+ *
+ *     AX=0x0000  ->  AX=0x0100, CF=0
+ *     AX=0x0100  ->  AX=0x0137, CF=0
+ *     anything else  ->  CF=1
+ *
+ * A two-function entry returning constants. So the API is PM-ONLY, which is
+ * consistent: krnl386 only ever asks after it has switched.
+ *
+ * [INFO]: AND krnl386 ONLY NEEDS IT TO EXIST. It calls the entry once, with AX=0x0100,
+ * and keeps the AX it gets back only when CF is clear AND it is a WRITABLE
+ * selector; otherwise it carries on normally (observed: CF=1 here costs nothing).
+ * So an honest "that function is not provided" (CF=1) is tolerated by the guest.
+ *
+ * [CAUTION]: WHICH IS WHY FUNCTION 0x0100 RETURNS CF=1 HERE AND NOT A SELECTOR. Stock hands
+ * back 0x0137, a writable data selector (VERW, measured) onto something
+ * ntvdm owns -- we do not know what, and a selector onto an empty block of ours
+ * would pass that check, get stored, and be read later as if it were that something.
+ * That is the "runs but lies" failure this project treats as the most expensive
+ * kind. Declining is truthful and costs nothing today. Function 0 mirrors the
+ * oracle exactly, because there we are copying a measured answer rather than
+ * inventing one.
+ */
+static WORD g_WowVendorSelector = 0;
+
+static WORD  g_WowShadowSelector = 0;
+/* -- "WHAT DID THE SHADOW LAST LOOK LIKE" IS A DIFFERENT QUESTION FROM "WHAT IS
+ * IN THE REAL LDT", AND CONFLATING THEM IS A BUG WE HAVE NOW MADE TWICE.
+ * The sync wants to know which entries the GUEST changed, so it must diff the
+ * shadow against the last shadow it saw -- not against g_Ldt[], which is the
+ * host's record of the REAL LDT.
+ * Diffing against g_Ldt[] forces a lie whenever the two cannot be made equal:
+ * krnl386 writes free-list links with access byte 0x0F, the kernel rejects them
+ * (`INSTALL FAILED st=0xc000011a`, four per run on the rig), and the old code
+ * then updated g_Ldt[] to match the shadow ANYWAY -- purely so the next pass
+ * would not retry forever. From that moment g_Ldt[] claimed a base and limit
+ * the CPU had never been told about, and DpmiSelectorBase() -- which every part of
+ * the host uses to resolve a guest pointer, including the WOW32 argument
+ * translation added this session -- would have answered from it.
+ * With a separate `seen` copy, a failed install stops being retried without
+ * anybody having to pretend it succeeded.
+ */
+static BYTE *g_WowSeen = NULL;          /* last shadow contents we processed */
+static const INT g_ShimTibOffsets[16] = { VTIB_EAX, VTIB_EBX, VTIB_ECX, VTIB_EDX, VTIB_ESI,
+    VTIB_EDI, VTIB_EBP, VTIB_ESP, VTIB_EIP, VTIB_CS, VTIB_DS, VTIB_ES, VTIB_SS, VTIB_FS,
+    VTIB_GS, VTIB_EFLAGS };
+
 /* THE WOW32 BOP BLOCK'S ONLY WAY OUT. (session 56):
  * Identical to LogAppend + SerialOut, except that it drops the buffer when
  * the current call is a folded repeat. Deliberately NOT a change to
@@ -85,26 +482,6 @@ VOID WowLogFlush(PSTR base, PSTR *logCursor)
     }
     LogAppend(LOG_PATH, base, end); SerialOut(base, end); *logCursor = base;
 }
-
-/* THE Win16 COMM API, ON THE REAL UART. (GH #9 + #128, session 56) (Importance = 4):
- * wowuser.h answered the whole comm family with IE_BADID, and its note gave
- * the reason plainly: "the equipment word claims none, on purpose". THAT WAS
- * TRUE WHEN IT WAS WRITTEN AND I MADE IT FALSE THIS SESSION -- the equipment
- * word now reports SER=2 and the BDA carries 0x03F8/0x02F8, with a real 8250
- * behind them. A host that advertises two serial ports and then refuses to
- * open either is the same two-layers-disagreeing fault the equipment word
- * itself was fixed for, pointing the other way.
- *
- * So the Win16 side is wired to the same vdd_comm the ports and INT 14h use.
- * One device, three ways in, and none of them can now contradict the others.
- *
- * [CAUTION]: THESE LIVE HERE, NOT IN wowuser.h, because that header must not see host
- * internals -- it gets declarations only. Same rule as the rest of the WOW
- * layer.
- */
-#define WOWCOMM_MAX     4   /* #245: COM1-COM4, as the equipment word now says */
-static INT  g_WowCommOpen[WOWCOMM_MAX];        /* 1 = this port is open to Win16 */
-static WORD g_WowCommEvent[WOWCOMM_MAX];         /* the event word SetCommEventMask points at */
 
 INT WowCommOpen(PCSTR device)
 {
@@ -237,7 +614,6 @@ INT LaunchIsWow(PCSTR command)
     return 0;
 }
 
-CHAR      g_WowName[WOW_MAX_MOD][16];
 /* WHICH MODULE OWNS THIS SELECTOR? (GH #128, session 38) (Importance = 1):
  * Needed because the WOW32 id space is per module: a call's stub segment names
  * the table it belongs to, and the table decides whose numbering applies. The
@@ -315,10 +691,6 @@ INT WowGdiAnchor(WORD thunkId, WORD argumentBytes, WORD returnStub)
                           thunkId, argumentBytes, returnStub);
 }
 
-enum
-{
-    WOW_K2_STUB_LENGTH = 8
-};   /* WowKernel2Stub: push imm16 ; call far -- the bytes before the return */
 INT WowKernel2Stub(WORD thunkId, WORD returnStub)
 {
     const NE_SEGMENT *segment;
@@ -337,43 +709,6 @@ INT WowKernel2Stub(WORD thunkId, WORD returnStub)
         && image[offset + 3] == X86_OP_CALL_FAR;
 }
 
-/* The PM->V86 transfer buffer for pointer-taking INT 21h calls; allocated in
- * WowPlaceV86 and used by PmInt21Transfer. Declared here because the allocation
- * site comes long before the use site. 0 = absent, and every arm checks.
- */
-/* The PSP/arena block krnl386 is entered with. It must be the LAST thing allocated:
- * krnl386 carves from ES+0x10 upward without asking DOS (see WowPlaceV86), so
- * anything handed out after it would be memory krnl386 already believes it owns.
- */
-/* THE HOST POOL, AND WHY THERE HAS TO BE ONE:
- * WowPlaceV86 hands krnl386 every remaining paragraph of conventional memory,
- * because krnl386 carves from ES+0x10 upward without asking DOS and anything left
- * free would be handed out twice. The consequence is that EVERY host structure
- * allocated after that point finds nothing -- and two are, both lazily at the
- * mode switch:
- *   * the INT 2Fh 168A vendor-API stub  -> "no memory for the stub", and krnl386
- *     prints "Inadequate DPMI Server" and exits (error #1 of its table);
- *   * the 256-vector default PM handler table -> INT 21h AH=35h then reports
- *     vector 0x21 as 0000:0000, so krnl386 saves a null previous-handler and its
- *     chain-to-DOS path calls into nothing.
- * Both were found this way, one run apart. So: reserve a pool BEFORE the arena
- * goes, and bump-allocate host structures out of it.
- * - THE RULE FOR ANYTHING ADDED LATER: on the WOW path, host memory comes from
- *   WowHostAllocate(), not DosMcbAllocate(). A DosMcbAllocate() after WowPlaceV86 will fail,
- *   and the failure will look like the guest's fault.
- */
-/* 16 KB. Was 4 KB (0x100) with 0x41 in use, and the SFT block is 0x1D9 paragraphs on
- * its own -- a 128-entry table of 59-byte entries. Sized at 0x200 first, and THAT IS
- * THE REGRESSION THIS COMMENT EXISTS FOR: the SFT is claimed in WowPlaceV86 and the
- * 256-vector handler table lazily at the mode switch, so the SFT fitted, the handler
- * table did not, and WowHostAllocate's failure is SILENT at that call site. The run
- * died at PM step 0x0d with no error -- precisely the failure the note above predicts,
- * walked into one release after writing it down. Leave the slack.
- */
-#define WOW_HOSTPOOL_PARAS  0x400   /* 16 KB: SFT 0x1d9, handler table 0x40 */
-static WORD      g_WowPoolSegment  = 0;
-static WORD      g_WowPoolNext = 0;     /* paragraphs handed out so far */
-#define WOW_PSP_BLOCK_PARAS     0x40    /* A WOW launch keeps only the PSP's block */
 WORD WowHostAllocate(WORD paras)
 {
     WORD segment;
@@ -385,41 +720,6 @@ WORD WowHostAllocate(WORD paras)
     return segment;
 }
 
-/* The `-a` argument of the WOW launch: the full path of krnl386.exe. krnl386 reads
- * it back out of the DOS environment block to find its own file -- see WowPlaceV86.
- */
-static CHAR      g_WowKernelPath[512];
-/* Bytes of usable memory above krnl386's stack, handed to it in CX at entry. See
- * the note at the entry setup and WowPlaceV86.
- */
-WORD      g_WowEntryCx = 0;
-WORD      g_WowPspSegment  = 0;
-/* Where WOW32 0xc5 puts a resolved module path so the guest can point at it. Its own
- * paragraph, and separate from the transfer buffer above on purpose -- see the
- * allocation site and the 0xc5 service.
- */
-WORD      g_WowPathSegment = 0;
-/* WHERE A LAUNCHED TASK'S ENVIRONMENT LIVES. (seg2 0xd1, session 39 part 8) (Importance = 1):
- * A COPY, and the copy is the whole point: the parent hands its child an
- * environment through its own PSP and then FREES that block the moment
- * LoadModule returns -- measured, `LDTSYNC idx 0x15f <- base=0 acc=0x00` one line
- * before `PSPENV CHANGED: sel 0x03bf +0x2c 0x0aff -> 0x03c7`. A child pointed at
- * the parent's block therefore holds a selector that stops being present a few
- * calls later, which is exactly the `#GP` the first cut of the service produced.
- * Its own paragraph for the same reason as the path scratch: the child keeps this
- * pointer for its whole life, so it cannot share a buffer anything else reuses.
- */
-WORD      g_WowEnvironmentSegment  = 0;
-/* THE WAY BACK OUT OF 16-BIT CODE. (GH #128, session 40) (Importance = 1):
- * One paragraph holding `C4 C4 57`, and a 16-bit CODE selector over it. It is the
- * far return address every host-made call to a Win16 procedure is given, and it is
- * dispatched by its LINEAR ADDRESS rather than by the BOP code byte -- the byte is
- * for the reader, the address is ours by construction and cannot be collided with
- * by our own INT-site patcher, which also writes `C4 C4`. See src/wow/wowcall.h.
- */
-static WORD      g_WowCallbackSegment = 0;
-DWORD     g_WowCallbackLinear = 0;
-static WORD      g_WowCallbackSelector = 0;          /* built at the first callback */
 /* Report any change to a tracked PSP's environment field. Called at every WOW32 BOP
  * AND every protected-mode INT 21h, because the resolution of the answer is exactly
  * the spacing of the sampler: sampling only at WOW32 calls put the whole of WOWEXEC's
@@ -721,10 +1021,6 @@ INT WowDlgIsSelectorAbsent(WORD selector)
     return index && index < DPMI_LDT_MAX && !(g_Ldt[index].Access & X86_DESCRIPTOR_PRESENT);
 }
 
-enum
-{
-    WOW_CALLBACK_STUB_LIMIT = 0x0F
-};   /* the callback stub's 16-byte segment */
 /* A 16-BIT CODE SELECTOR OVER THE CALLBACK RETURN STUB. (session 40) (Importance = 3):
  * Not `DpmiSegmentToDescriptor`: that builds a DATA descriptor, and the guest has to
  * EXECUTE these three bytes. The limit is one paragraph on purpose -- the stub is
@@ -801,72 +1097,6 @@ VOID WowProbeLdtMatrix(PCSTR tag)
     }
 }
 
-/* WOW STAGE 2: give the loaded module REAL SELECTORS. (GH #128):
- * The load stage put each segment in host memory and fixed it up. This gives every
- * segment an LDT descriptor, which is why it lives here, after the DPMI LDT pool
- * exists and the VDM is registered.
- *
- * [CAUTION]: THIS IS NOT THE ENTRY PATH, AND THE COMMENT THAT USED TO SIT HERE SAID IT WAS.
- * It claimed "krnl386 is the 386 ENHANCED-mode kernel: it runs in 16-bit PROTECTED
- * mode, not V86". That is a plausible inference from what krnl386 IS, it survived
- * four sessions in these comments, and krnl386's own instructions refute it:
- *
- *   c045  mov ax,es / shl ax,4      ES is a real-mode PARAGRAPH. Shifting a selector
- *                                   by 4 is meaningless; this computes the right
- *                                   answer against two independent oracle dumps.
- *   c03b  mov word [cs:0x30], ds    A store through CS. Never legal in protected
- *                                   mode -- a code selector is not writable.
- *   c0c2  call <2F/1687 check>      It finds the DPMI host and SWITCHES ITSELF, with
- *                                   AX=0 (16-bit client), then checks cs&7==7, then
- *                                   INT 31h 000A for a data alias of CS -- and redoes
- *                                   the SAME cs:0x30 store through that alias.
- *
- * The identical store, once per mode, is the binary telling you where the boundary
- * is. krnl386 is entered in V86 and becomes a 16-bit DPMI client; that is why
- * INT 31h 0002 (paragraph -> selector) is the function it calls most, twelve times.
- * So real execution needs the segments in CONVENTIONAL memory with paragraph
- * relocations. What is below still earns its keep -- it proved LDT installation
- * works on a WOW launch, proved relocation against real descriptors, and caught the
- * force-typed-index bug -- but it belongs AFTER the switch, not before it.
- *
- * [CAUTION]: THE QUESTION THIS ANSWERS, AND IT IS NOT RHETORICAL: XP's LDT validator caps
- * base + limit at MmHighestUserAddress (~2GB) -- a true 4GB flat selector is refused
- * outright (Kernel RE session 7, and it is why Doom's DOS/4GW selector has to be
- * clamped). Our segments come from VirtualAlloc, which normally lands well under 2GB,
- * so these SHOULD install. "Should" is not "does", and VdmInstallLdtEntries returns an
- * NTSTATUS, so ask it rather than assume. A descriptor that silently fails to install
- * leaves a selector that faults on first use -- a silent death, far from the cause.
- */
-/* WHERE IS OUR DESCRIPTOR TABLE?:
- * krnl386 wants what NTVDM's "MS-DOS" vendor API gives it: a WRITABLE SELECTOR ONTO
- * THE DESCRIPTOR TABLE, so it can edit descriptors without a DPMI call each time.
- * Measured off stock (tests/probes/dos/vendprobe.asm): selector 0x0137, writable,
- * base 0x001140B0, limit 0x5FFF -- and the descriptor at window[CS & 0xFFF8] reads
- *     FF FF D0 6D 00 FA 00 00   -> base 0x00006DD0, access 0xFA (code)
- * while DPMI 0006 reports CS's base as 0x00006DD0. Two independent routes, same
- * base, right type. It is the real table, and it lives at a USER-MODE address.
- *
- * [CAUTION]: WE CANNOT ASK THE CPU WHERE OURS IS. `SLDT` yields the GDT selector, and the GDT
- * is not readable from ring 3. So find it the only way available from user mode:
- * install descriptors whose contents are unique, then search our own address space
- * for those exact eight bytes. A hit is that descriptor's slot; the table base is
- * the hit minus (index * 8).
- *
- * Clean-room by construction -- it uses only our own memory and the documented
- * descriptor encoding, and depends on no Windows internal we would have to be told.
- *
- * [CAUTION]: AND IT MUST NOT LIE, IN EITHER DIRECTION:
- *   * one magic value could occur by chance in an unrelated buffer, so a candidate
- *     is confirmed by a SECOND descriptor at a different index appearing at the
- *     predicted offset. One match is a coincidence; two at the right stride is a
- *     table.
- *   * a "not found" is worthless unless the things searched for exist, so LAR/LSL
- *     verify both probes installed before the search runs. Otherwise a refused
- *     descriptor and an unmappable table produce the same log line -- and one of
- *     those is a conclusion about Windows while the other is a bug in here.
- */
-static DWORD g_WowLdtBase = 0;
-
 static INT WowLdtPeek(DWORD linear, DWORD low, DWORD high)
 {
     const volatile DWORD *descriptor = (const volatile DWORD *)(ULONG_PTR)linear;
@@ -874,10 +1104,6 @@ static INT WowLdtPeek(DWORD linear, DWORD low, DWORD high)
     return descriptor[0] == low && descriptor[1] == high;
 }
 
-enum
-{
-    WOW_LDT_PROBES = 2, WOW_LDT_PROBE_GAP = 4, WOW_LDT_PROBE1_BASE = 0x5A5A1000, WOW_LDT_PROBE1_LIMIT = 0x0123, WOW_LDT_PROBE2_BASE = 0x3C3C2000, WOW_LDT_PROBE2_LIMIT = 0x0456
-};   /* WowFindLdtBase: two distinctive descriptors */
 static DWORD WowFindLdtBase(VOID)
 {
     MEMORY_BASIC_INFORMATION memoryInfo;
@@ -995,12 +1221,6 @@ static DWORD WowFindLdtBase(VOID)
     return 0;
 }
 
-#define WOW_ENTRY_CX_FULL_U     0xF880u     /* krnl386's entry CX: its 64 KB selector less our header image */
-static NE_REGISTRY g_WowRegistry;
-enum
-{
-    WOW_FILLER_SLACK_PARAS = 2
-};   /* WowPlaceV86: the MCB headers a filler allocation adds */
 /* -- WOW ENTRY STAGE: put krnl386 in CONVENTIONAL memory and relocate to PARAGRAPHS. -
  * This, not the selector stage below, is how krnl386 is actually entered -- see the
  * refutation there. It runs in V86 first and switches itself to protected mode via
@@ -2005,25 +2225,6 @@ VOID WowProbeSelectors(VOID)
     LogAppend(LDTLOG_PATH, message, cursor);
 }
 
-/* -- ANSWER AN UNIMPLEMENTED WOW32 CALL DIFFERENTLY, WITHOUT CLAIMING TO KNOW
- * WHAT IT MEANS. (GH #128, session 37) ------------------------------------------
- * 53 of the 82 IDs are not named by krnl386's export table, and the sentinel we
- * answer them with is load-bearing: `0` is right for "declined / not present" and
- * WRONG for a caller that loops until the answer is non-zero. krnl386 has one
- * (observed): it allocates, asks WOW32 0x7d whether the result is acceptable, and
- * on 0 allocates another and asks again. It ran 1884 times and took the stack out.
- * Guessing the semantics and writing a `case` for it is what this project keeps
- * paying for. So: a FILE, like pmbp.txt -- one `<hex id> <hex dword>` per line --
- * that changes the answer for one run. The log marks every overridden call as an
- * EXPERIMENT rather than a service, so no reader can mistake a measurement for an
- * implementation. Absent file = the sentinel, unchanged, and no cost.
- */
-#define WOW32RET_PATH   CFG_("wow32ret.txt")
-#define WOW32RET_MAX    16
-static WORD  g_Wow32ReturnId[WOW32RET_MAX];
-static DWORD g_Wow32ReturnValue[WOW32RET_MAX];
-static INT   g_Wow32ReturnCount = 0;
-
 DWORD Wow32ReturnOverride(WORD thunkId)
 {
     INT index;
@@ -2033,26 +2234,6 @@ DWORD Wow32ReturnOverride(WORD thunkId)
             return g_Wow32ReturnValue[index];
     return (DWORD)WOW32_UNIMPL_RET;
 }
-
-/* AND THE SAME LEVER FOR THE EPILOGUE MODE. (GH #128, session 38) (Importance = 3):
- * `wow32ret.txt` chooses what a call ANSWERS. `wowmode.txt` chooses HOW IT
- * RETURNS -- the word at bp-24 that picks one of krnl386's 38 return paths (see
- * WOW32_OFF_MODE in wow32.h). krnl386 pushes 0 there and never sets it, so all
- * 37 non-zero modes exist for the 32-bit side and none of them has ever been
- * exercised on this host. Mode 25 is the task switch-back.
- *
- * [CAUTION]: THIS IS THE MOST DANGEROUS KNOB IN THE TREE. A mode selects a code path that
- * pops a specific stack shape; the wrong one at the wrong call site resumes the
- * guest with SS:SP loaded from whatever two registers happened to hold, which is
- * not a crash so much as a random jump. One line, one id, one run, and read the
- * log -- the same discipline wow32ret.txt earned the hard way, for higher stakes.
- * Format: `<hex id> <hex mode>`, data lines first, `#` comments below.
- */
-#define WOWMODE_PATH    CFG_("wowmode.txt")
-#define WOWMODE_MAX     8
-static WORD g_Wow32ModeId[WOWMODE_MAX];
-static WORD g_Wow32ModeValue[WOWMODE_MAX];
-static INT  g_Wow32ModeCount = 0;
 
 /* -1 = no override for this id (0 is a legal mode, so it cannot be the sentinel). */
 INT Wow32ModeOverride(WORD thunkId)
@@ -2065,10 +2246,6 @@ INT Wow32ModeOverride(WORD thunkId)
     return -1;
 }
 
-enum
-{
-    WOW32_KNOB_COLUMNS = 2
-};   /* wow32mode.txt / wow32ret.txt: two hex columns a line */
 VOID Wow32ModeLoad(VOID)
 {
     HANDLE handle = CreateFileA(WOWMODE_PATH, GENERIC_READ,
@@ -2236,19 +2413,6 @@ VOID Wow32ReturnLoad(VOID)
     }
 }
 
-/* THE WIN16 TASK SCHEDULER (GH #128, session 38) (Importance = 3):
- * The mechanism, the evidence for it and what this first cut does NOT do are
- * all in src/wow/wowsched.h; this is the state and the wiring.
- *
- * [CAUTION]: OPT-IN, and deliberately so. Turning it on changes the ORDER in which two
- * 16-bit tasks run, which is the largest behavioural change this host has made
- * since it started executing Win16 code at all. A default run must still
- * reproduce the committed result exactly, so the switch is a file on the share
- * and its absence costs nothing.
- */
-#define WOWSCHED_PATH   CFG_("wowsched.txt")
-WORD  g_WowDgroupSelector   = 0;      /* krnl386's DGROUP selector, learned at a BOP */
-static INT   g_WowSchedRoundRobin = 0;            /* round-robin cursor for the yields */
 INT WowSchedFree(VOID)
 {
     INT index;
@@ -2335,24 +2499,6 @@ WORD WowSchedCurrentTask(VOID)
     return (WORD)(dgroup[WOWUSER_KRNL_CURRENT_TASK] | (dgroup[WOWUSER_KRNL_CURRENT_TASK + 1] << BYTE_SHIFT));
 }
 
-/* #164: A TASK RUNS IN ITS OWN CURRENT DIRECTORY. (s85):
- * DOS has one current directory and Win16 one per task. On NT the 32-bit side keeps
- * them (krnl386's TDB holds only the drive -- measured: TDB+0x66 = 0x82, +0x67
- * empty, for WOWEXEC and the task alike) and puts a task's back when it runs. Here
- * OUR scheduler switches tasks, so this is that table. Measured with
- * tests/probes/win16/w_cwd: the launched task parked at its first WaitEvent, WOWEXEC
- * changed back to C:\WINDOWS, and the task resumed there -- its relative CreateFile
- * landed in C:\WINDOWS, where stock puts it in the launch folder.
- * - A task's entry is written when it parks at its launch (it inherits the directory
- *   its creator chose for LoadModule -- WOWEXEC sets it from the launch's cur= just
- *   before) and whenever it calls WOW32 0x82; it is restored when it is resumed.
- */
-#define WOW_TASK_DIRS   8
-static struct
-{
-    WORD Task;
-    CHAR Directory[MAX_PATH];
-} g_WowTaskDirectory[WOW_TASK_DIRS];
 static VOID WowTaskDirectoryNote(WORD task, PCSTR directory)
 {
     INT index;
@@ -2444,10 +2590,6 @@ VOID WowSchedSetCurrent(WORD task)
     dgroup[WOWUSER_KRNL_CURRENT_TASK + 1] = (BYTE)(task >> BYTE_SHIFT);
 }
 
-enum
-{
-    WOW_RETARGET_HEADROOM = 0x40, WOW_RETARGET_STACK_MIN = 0x200
-};   /* WowSchedRetarget: below the lowest live frame */
 /* -- s92 (#306): THE RECEIVER'S STACK FOR AN INTER-TASK MESSAGE -- see
  * g_WowCallRetarget in wowcall.h. The window's owner (wowuser.h records its
  * creator) must not be the running task, and must be somewhere the host knows
@@ -2461,7 +2603,6 @@ static WORD WowSchedOwnerOf(WORD hwnd)
     return WowUserOwner16(hwnd);
 }
 
-static DWORD g_WowSchedInterTask;
 INT WowSchedRetarget(
     WORD hwnd,
     WORD *stackSegment,
@@ -2531,7 +2672,6 @@ INT WowSchedInterTaskLive(VOID)
     return 0;
 }
 
-#define WOWQUIET_PATH   CFG_("wowquiet.txt")
 VOID WowQuietLoad(VOID)
 {
     HANDLE handle = CreateFileA(WOWQUIET_PATH, GENERIC_READ,
@@ -2569,16 +2709,6 @@ VOID WowSchedLoad(VOID)
     LogAppend(LOG_PATH, lineBuffer, cursor); SerialOut(lineBuffer, cursor);
 }
 
-/* CALLING 16-BIT CODE: THE SWITCH. (GH #128, session 40) (Importance = 5):
- * Opt-in for the same reason the scheduler is, and the reason is stronger here:
- * this makes the host execute guest code that nothing has ever executed, on a
- * stack it did not build the frame for. A default run must still reproduce the
- * committed baseline (270 / 44 / 122 / 98) count for count, so the switch is a
- * file on the share and its absence costs nothing. See src/wow/wowcall.h.
- */
-#define WOWCALL_PATH    CFG_("wowcall.txt")
-INT g_WowCallOn = 0;
-
 VOID WowCallLoad(VOID)
 {
     HANDLE handle = CreateFileA(WOWCALL_PATH, GENERIC_READ,
@@ -2596,39 +2726,6 @@ VOID WowCallLoad(VOID)
     LogAppend(LOG_PATH, lineBuffer, cursor); SerialOut(lineBuffer, cursor);
 }
 
-/* THE "MS-DOS" VENDOR-SPECIFIC DPMI API (INT 2Fh 168A). GH #128:
- * krnl386 will not run without this. It asks with DS:SI -> "MS-DOS", and if AL
- * comes back 0x8A (unchanged: "not supported") it aborts with
- * "NTVDM KERNEL: Inadequate DPMI Server" (observed). Leaving AL alone -- the correct answer for
- * a host with no vendor API -- is therefore fatal to this one guest.
- *
- * [INFO]: WHAT STOCK NTVDM ACTUALLY RETURNS, measured (tests/probes/dos/vendprobe.com under
- * `stock`): in REAL mode AL=8A (not supported); in PROTECTED mode AL=00 and
- * ES:DI = 00C7:2037, a readable code selector (LAR=0xFB00). Called (same probe):
- *
- *     AX=0x0000  ->  AX=0x0100, CF=0
- *     AX=0x0100  ->  AX=0x0137, CF=0
- *     anything else  ->  CF=1
- *
- * A two-function entry returning constants. So the API is PM-ONLY, which is
- * consistent: krnl386 only ever asks after it has switched.
- *
- * [INFO]: AND krnl386 ONLY NEEDS IT TO EXIST. It calls the entry once, with AX=0x0100,
- * and keeps the AX it gets back only when CF is clear AND it is a WRITABLE
- * selector; otherwise it carries on normally (observed: CF=1 here costs nothing).
- * So an honest "that function is not provided" (CF=1) is tolerated by the guest.
- *
- * [CAUTION]: WHICH IS WHY FUNCTION 0x0100 RETURNS CF=1 HERE AND NOT A SELECTOR. Stock hands
- * back 0x0137, a writable data selector (VERW, measured) onto something
- * ntvdm owns -- we do not know what, and a selector onto an empty block of ours
- * would pass that check, get stored, and be read later as if it were that something.
- * That is the "runs but lies" failure this project treats as the most expensive
- * kind. Declining is truthful and costs nothing today. Function 0 mirrors the
- * oracle exactly, because there we are copying a measured answer rather than
- * inventing one.
- */
-static WORD g_WowVendorSelector = 0;
-
 /* Translate a guest selector to a host linear base, for far-pointer arguments.
  *
  * [CAUTION]: Goes through DpmiSelectorBase rather than g_Ldt[] directly so that a selector
@@ -2640,25 +2737,6 @@ DWORD Wow32HostSelectorToLinear(WORD selector, PVOID context)
     (VOID)context;
     return DpmiSelectorBase(selector);
 }
-
-static WORD  g_WowShadowSelector = 0;
-/* -- "WHAT DID THE SHADOW LAST LOOK LIKE" IS A DIFFERENT QUESTION FROM "WHAT IS
- * IN THE REAL LDT", AND CONFLATING THEM IS A BUG WE HAVE NOW MADE TWICE.
- * The sync wants to know which entries the GUEST changed, so it must diff the
- * shadow against the last shadow it saw -- not against g_Ldt[], which is the
- * host's record of the REAL LDT.
- * Diffing against g_Ldt[] forces a lie whenever the two cannot be made equal:
- * krnl386 writes free-list links with access byte 0x0F, the kernel rejects them
- * (`INSTALL FAILED st=0xc000011a`, four per run on the rig), and the old code
- * then updated g_Ldt[] to match the shadow ANYWAY -- purely so the next pass
- * would not retry forever. From that moment g_Ldt[] claimed a base and limit
- * the CPU had never been told about, and DpmiSelectorBase() -- which every part of
- * the host uses to resolve a guest pointer, including the WOW32 argument
- * translation added this session -- would have answered from it.
- * With a separate `seen` copy, a failed install stops being retried without
- * anybody having to pretend it succeeded.
- */
-static BYTE *g_WowSeen = NULL;          /* last shadow contents we processed */
 
 VOID WowShadowPut(INT index)      /* g_Ldt[idx] -> shadow */
 {
@@ -2681,10 +2759,6 @@ VOID WowShadowPut(INT index)      /* g_Ldt[idx] -> shadow */
     }
 }
 
-enum
-{
-    WOW_SHADOW_SCAN_SLACK = 8
-};   /* WowShadowSync looks a few entries past g_LdtNext */
 /* Push anything krnl386 changed in the shadow into the real LDT. Returns the count. */
 INT WowShadowSync(PSTR *logCursor)
 {
@@ -2789,10 +2863,6 @@ static WORD WowShadowSelector(VOID)
     return g_WowShadowSelector;
 }
 
-enum
-{
-    WOW_VENDOR_STUB_SELECTOR = 0x10, WOW_VENDOR_STUB_LIMIT = 0x1F
-};   /* WowVendorApiEntry: the mov ax,imm16's operand; the segment */
 INT WowVendorApiEntry(DOS_MACHINE *machine, WORD *selector, WORD *offset)
 {
     /* The DPMI vendor-specific API entry krnl386 asks for (INT 2Fh AX=168Ah). Its
@@ -2885,30 +2955,6 @@ INT WowCall16Sync(
     return WowCall16SyncEx(proc, ds, args, argumentCount, hwnd, message, result, NULL, 0, -1, NULL, 0);
 }
 
-/* -- THE WOW32.DLL / NTVDM.EXE STAND-INS (s90, #5/#278). See src/shim/wowshim.c.
- * Loaded once, at WOW start-up, by FULL PATH from bin\wowshim\ -- a module of that
- * name must be in the process before any 32-bit thunk DLL asks for it by name
- * (winmm asks in NotifyCallbackData, the first thing MMSYSTEM calls).
- */
-typedef struct
-{
-    DWORD  Version;
-    PVOID (*GetVdmPointer)(DWORD segmentedAddress, DWORD byteCount, BOOL isProtectedMode);
-    HANDLE (*Handle32)(WORD handle16, DWORD handleType);
-    WORD   (*Handle16)(HANDLE handle32, DWORD handleType);
-    BOOL   (*Callback16Ex)(DWORD segmentedFunction, DWORD flags, DWORD argumentBytes, PVOID arguments, DWORD *returnValue);
-    VOID   (*IcaInterrupt)(INT picAdapter, BYTE line, INT count);
-    VOID   (*Yield16)(VOID);
-    VOID   (*Log)(PCSTR message);
-    /* version 2 (s91, #309): krnl386's global heap -- see ShimGlobal16 */
-    DWORD  (*Global16)(INT operation, DWORD firstArgument, DWORD secondArgument);
-    /* version 3 (s91, #11): the VDD service API -- see "THIRD-PARTY VDDs" below */
-    DWORD  (*GetRegister)(INT registerIndex);
-    VOID   (*SetRegister)(INT registerIndex, DWORD value);
-    PVOID (*MapFlat)(WORD segment, DWORD offset, INT isProtectedMode);
-    BOOL   (*InstallIoHook)(HANDLE vddHandle, WORD rangeCount, PCVOID ranges, PCVOID handlers);
-    VOID   (*RemoveIoHook)(HANDLE vddHandle, WORD rangeCount, PCVOID ranges);
-} NTVDMEX_SHIM_API;
 static VOID ShimLog(PCSTR what)
 {
     CHAR buffer[200];
@@ -3094,27 +3140,6 @@ DWORD ShimGlobal16(INT operation, DWORD firstArgument, DWORD secondArgument)
     return (operation == SHIM_GLOBAL_LOCK || operation == SHIM_GLOBAL_SIZE || operation == SHIM_GLOBAL_HANDLE) ? g_WowCallLastResult : (DWORD)(WORD)g_WowCallLastResult;
 }
 
-enum
-{
-    WOW_WINDOW_NESTING_MAX = 6, WOW_CALL16_PHASE_MAX = 500000
-};   /* WowCall16SyncEx */
-/* THIRD-PARTY VDDs, MICROSOFT ABI (s91, #11):
- * A DOS program with a VDD of its own registers it with the third-party BOP,
- * `C4 C4 58 nn` (the DDK's isvbop.inc): nn=0 RegisterModule (DS:SI the DLL, DS:DI
- * its init routine's name, DS:BX its dispatch routine's name; CF clear + AX = a
- * handle, or CF set + AX = 1 no DLL / 2 no dispatch routine / 3 no init routine),
- * nn=1 UnRegisterModule (AX = handle), nn=2 DispatchCall (AX = handle; the VDD
- * reads and writes the caller's registers). The VDD calls back through what
- * NTVDM.EXE exports -- getAX/setAX..., VdmMapFlat, VDDInstallIOHook -- which in
- * this process is bin\wowshim\NTVDM.EXE (src/shim/wowshim.c), loaded before the VDD
- * so its import of "NTVDM.EXE" resolves to it by name. These are the host halves.
- */
-enum { SHIM_R_EAX, SHIM_R_EBX, SHIM_R_ECX, SHIM_R_EDX, SHIM_R_ESI, SHIM_R_EDI, SHIM_R_EBP,
-       SHIM_R_ESP, SHIM_R_EIP, SHIM_R_CS, SHIM_R_DS, SHIM_R_ES, SHIM_R_SS, SHIM_R_FS,
-       SHIM_R_GS, SHIM_R_EFL, SHIM_R_MSW };
-static const INT g_ShimTibOffsets[16] = { VTIB_EAX, VTIB_EBX, VTIB_ECX, VTIB_EDX, VTIB_ESI,
-    VTIB_EDI, VTIB_EBP, VTIB_ESP, VTIB_EIP, VTIB_CS, VTIB_DS, VTIB_ES, VTIB_SS, VTIB_FS,
-    VTIB_GS, VTIB_EFLAGS };
 static DWORD ShimGetRegister(INT registerIndex)
 {
     volatile BYTE *tib = g_TibDebug;
@@ -3204,10 +3229,6 @@ static VOID ShimRemoveIoHook(HANDLE vddHandle, WORD rangeCount, PCVOID ranges)
                 g_IsvHooks[index].IsLive = 0;
 }
 
-enum
-{
-    WOW_WNDPROC_ARGUMENTS = 5
-};   /* a Win16 window procedure: hwnd, msg, wParam, lParam high, low */
 VOID WowShimsLoad(VOID)
 {
     static INT done;

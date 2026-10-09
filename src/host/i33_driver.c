@@ -12,6 +12,9 @@
 
 #include "i33_driver.h"
 
+static const CHAR g_I33AccelerationDefaultNames[I33_ACC_N][I33_ACC_NAMELEN + 1] = {
+    "Slow            ", "Moderate        ", "Fast            ", "Unaccelerated   " };
+
 VOID I33GraphicsCursorRow(
     BYTE *row,
     INT width,
@@ -87,9 +90,6 @@ VOID I33GraphicsCursorDraw(
         I33GraphicsCursorRow(pixels + (long)row * stride, width, left, screenMask[rowIndex], cursorMask[rowIndex], ones, colourMap);
     }
 }
-
-static const CHAR g_I33AccelerationDefaultNames[I33_ACC_N][I33_ACC_NAMELEN + 1] = {
-    "Slow            ", "Moderate        ", "Fast            ", "Unaccelerated   " };
 
 VOID I33AccelerationDefaultNames(BYTE *names)
 {

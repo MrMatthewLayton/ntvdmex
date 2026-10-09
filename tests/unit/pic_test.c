@@ -22,17 +22,6 @@
 
 static INT g_Checks = 0;
 static INT g_Failures = 0;
-static VOID PicTestCheck(INT condition, PCSTR description)
-{
-    ++g_Checks;
-    if (!condition)
-    {
-        ++g_Failures;
-        printf("  FAIL  %s\n", description);
-    }
-    else
-        printf("  PASS  %s\n", description);
-}
 
 /* The VDD talks to the bus only to claim ports, so a stub bus is enough.
  *
@@ -47,6 +36,24 @@ static BYTE g_LastLastPort;
 static PVDD_PORT_IN_ROUTINE  g_InRoutine;
 static PVDD_PORT_OUT_ROUTINE g_OutRoutine;
 static PVOID g_Context;
+
+/* Reach the port handlers the way the bus would. They are static in the VDD, so
+ * drive them through the device descriptor's init + the public host API instead.
+ */
+extern INT VddPicInitialize(PVDD_BUS bus, PVOID context);
+
+static VOID PicTestCheck(INT condition, PCSTR description)
+{
+    ++g_Checks;
+    if (!condition)
+    {
+        ++g_Failures;
+        printf("  FAIL  %s\n", description);
+    }
+    else
+        printf("  PASS  %s\n", description);
+}
+
 INT VddClaimPorts(
     PVDD_BUS bus,
     WORD firstPort,
@@ -74,11 +81,6 @@ static BYTE PicTestIn(WORD port)
     g_InRoutine(g_Context, port, 1, &value);
     return (BYTE)value;
 }
-
-/* Reach the port handlers the way the bus would. They are static in the VDD, so
- * drive them through the device descriptor's init + the public host API instead.
- */
-extern INT VddPicInitialize(PVDD_BUS bus, PVOID context);
 
 INT main(VOID)
 {

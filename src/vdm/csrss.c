@@ -26,6 +26,28 @@
 #define CSRSS_HEX_LETTER_VALUE      10      /* 'a' = 10 */
 #define CSRSS_NO_TASK_ID            0
 
+/* RegisterConsoleVDM's arguments on the DOS path: flag 1, no video-state buffer/size. */
+#define CSRSS_CONSOLE_VDM_DOS       1
+#define CSRSS_NO_VIDEO_STATE        0
+
+/* The other buffers GetNextVDMCommand fills in for the next command. */
+#define CSRSS_PIF_SIZE              512
+#define CSRSS_ENVIRONMENT_SIZE      8192
+#define CSRSS_DESKTOP_SIZE          512
+#define CSRSS_TITLE_SIZE            512
+#define CSRSS_RESERVED_SIZE         512
+#define CSRSS_EXIT_VDM_FLAGS        0       /* ExitVDM's second argument */
+#define CSRSS_END_OF_STRING         0
+#define CSRSS_CARRIAGE_RETURN       '\r'
+#define CSRSS_LINE_FEED             '\n'
+#define CSRSS_LAST_CHAR_OFFSET      1
+
+CHAR g_CsrssNextApp[CSRSS_APP_NAME_SIZE];
+CHAR g_CsrssNextCommand[CSRSS_COMMAND_LINE_SIZE];
+CHAR g_CsrssNextDirectory[CSRSS_DIRECTORY_SIZE];
+HANDLE g_CsrssNextStandardHandles[CSRSS_STANDARD_HANDLES];   /* the next command's StdIn/StdOut/StdErr as CSRSS placed them
+                               in THIS process (s73: handed to the relaunched host) */
+
 ULONG CsrssParseTaskId(PCSTR commandLine)
 {
     PCSTR cursor = commandLine;
@@ -55,10 +77,6 @@ ULONG CsrssParseTaskId(PCSTR commandLine)
     }
     return taskId;          /* last -i<n> on the line */
 }
-
-/* RegisterConsoleVDM's arguments on the DOS path: flag 1, no video-state buffer/size. */
-#define CSRSS_CONSOLE_VDM_DOS   1
-#define CSRSS_NO_VIDEO_STATE    0
 
 BOOL CsrssRegisterConsole(VOID)
 {
@@ -99,24 +117,6 @@ BOOL CsrssGetCommand(VDM_COMMAND_INFO *commandInfo, DWORD *lastError)
         *lastError = GetLastError();
     return succeeded;
 }
-
-CHAR g_CsrssNextApp[CSRSS_APP_NAME_SIZE];
-CHAR g_CsrssNextCommand[CSRSS_COMMAND_LINE_SIZE];
-CHAR g_CsrssNextDirectory[CSRSS_DIRECTORY_SIZE];
-HANDLE g_CsrssNextStandardHandles[CSRSS_STANDARD_HANDLES];   /* the next command's StdIn/StdOut/StdErr as CSRSS placed them
-                               in THIS process (s73: handed to the relaunched host) */
-
-/* The other buffers GetNextVDMCommand fills in for the next command. */
-#define CSRSS_PIF_SIZE          512
-#define CSRSS_ENVIRONMENT_SIZE  8192
-#define CSRSS_DESKTOP_SIZE      512
-#define CSRSS_TITLE_SIZE        512
-#define CSRSS_RESERVED_SIZE     512
-#define CSRSS_EXIT_VDM_FLAGS    0   /* ExitVDM's second argument */
-#define CSRSS_END_OF_STRING     0
-#define CSRSS_CARRIAGE_RETURN   '\r'
-#define CSRSS_LINE_FEED         '\n'
-#define CSRSS_LAST_CHAR_OFFSET  1
 
 BOOL CsrssTaskDone(ULONG taskId, ULONG exitCode, DWORD *lastError, BOOL *didExitVdm)
 {

@@ -24,16 +24,17 @@
 #include <stdio.h>
 #include <string.h>
 #include "vdd_ide.h"
-
-static INT g_Total = 0;
-static INT g_Failures = 0;
 #define CHECK(condition, message) do {                                  \
         g_Total++;                                               \
         if (condition) { printf("  PASS  %s\n", (message)); }           \
         else      { printf("  FAIL  %s\n", (message)); g_Failures++; }  \
     } while (0)
 
+static INT g_Total = 0;
+static INT g_Failures = 0;
+
 static INT g_IrqCount;
+
 static VOID IdeTestIrqSink(PVOID context, BYTE irq)
 {
     (VOID)context;
