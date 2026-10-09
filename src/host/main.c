@@ -2691,6 +2691,264 @@ static PSTR ReportNtvdmBops(PSTR cursor)
     return cursor;
 }
 
+
+static PSTR TaskRelaunchQueuedCommand(PSTR cursor, PSTR const base)
+{
+    /* ── A COMMAND ARRIVED IN THE WINDOW. The launcher queued its next DOS program
+         to THIS console's VDM (us) between the report and ExitVDM; CSRSS handed it
+         to the blocked report call. We are not going to run it in this process, and
+         CSRSS has already forgotten it: relaunch it here, in the same console, so it
+         runs in a fresh host. (Measured before this: the program silently did not
+         run and the launcher saw exit code 0.) */
+    if (g_ReportGotNext && g_CsrssNextApp[0]) {
+        CHAR commandLine[2300]; PSTR scan = commandLine; STARTUPINFOA si; PROCESS_INFORMATION processInfo;
+        scan = LogPut(scan, "\""); scan = LogPut(scan, g_CsrssNextApp); scan = LogPut(scan, "\"");
+        if (g_CsrssNextCommand[0]) { scan = LogPut(scan, " "); scan = LogPut(scan, g_CsrssNextCommand); }
+        *scan = 0;
+        ZeroMemory(&si, sizeof si); si.cb = sizeof si; ZeroMemory(&processInfo, sizeof processInfo);
+        /* ⛔ HAND OVER THE SINGLE-INSTANCE MUTEX FIRST. (s73) The relaunched host is a
+           second ntvdmhost, and the guard in WinMain refuses a second instance while
+           the first OWNS the mutex -- which this one did, for as long as it waited
+           on the child. Measured: `BC x.BAS` then `LINK x.OBJ` from one cmd window --
+           BC ran, LINK was queued to this VDM, the relaunched host wrote "REFUSED:
+           another ntvdmhost is LIVE" and exited, the launcher saw rc=0, and no EXE
+           was ever written. That was "QBasic cannot build EXEs" from a batch file.
+           The guest is gone (the exec loop is out), so the system-wide things the
+           guard protects are released here too; the child takes them over. */
+        HostPanicRelease();
+        if (g_OnceMutex) { ReleaseMutex(g_OnceMutex); CloseHandle(g_OnceMutex); g_OnceMutex = NULL; }
+        /* ── AND ITS REDIRECT. (s73) The command's StdIn/Out/Err came back from the
+             report call as handles CSRSS placed in THIS process (the launcher's
+             `LINK > file`). The child's StdioInitialize takes an inherited disk/pipe
+             standard handle first, so hand them over inheritable; a console handle
+             is left alone (the child finds its console the way it always has).
+             Measured before this: the relaunched LINK's log said "stdout -> none". */
+        {   INT item, any = 0; HANDLE handles[CSRSS_STANDARD_HANDLES] = { NULL, NULL, NULL };
+            for (item = 0; item < CSRSS_STANDARD_HANDLES; ++item) {
+                HANDLE handle = g_CsrssNextStandardHandles[item]; DWORD valueType;
+                if (!handle || handle == INVALID_HANDLE_VALUE) continue;
+                valueType = GetFileType(handle);
+                if (valueType != FILE_TYPE_DISK && valueType != FILE_TYPE_PIPE) continue;
+                if (DuplicateHandle(GetCurrentProcess(), handle, GetCurrentProcess(), &handles[item],
+                                    0, TRUE, DUPLICATE_SAME_ACCESS)) any = 1;
+            }
+            if (any) {
+                /* ⚠ STARTUPINFO NEVER REACHES THE CHILD: a DOS .EXE goes through
+                   BaseSrv, which creates the ntvdm (us again, via IFEO) itself.
+                   What the child DOES read is its PARENT'S PEB standard handles
+                   (StdioFromParent, GH #131) -- and its parent is this process.
+                   SetStdHandle writes exactly those PEB fields. Measured: with
+                   STARTUPINFO alone the child still said "stdout -> none". */
+                if (handles[CSRSS_STD_IN]) SetStdHandle(STD_INPUT_HANDLE,  handles[CSRSS_STD_IN]);
+                if (handles[CSRSS_STD_OUT]) SetStdHandle(STD_OUTPUT_HANDLE, handles[CSRSS_STD_OUT]);
+                if (handles[CSRSS_STD_ERR] || handles[CSRSS_STD_OUT]) SetStdHandle(STD_ERROR_HANDLE, handles[CSRSS_STD_ERR] ? handles[CSRSS_STD_ERR] : handles[CSRSS_STD_OUT]);
+                si.dwFlags |= STARTF_USESTDHANDLES;
+                si.hStdInput  = handles[CSRSS_STD_IN] ? handles[CSRSS_STD_IN] : GetStdHandle(STD_INPUT_HANDLE);
+                si.hStdOutput = handles[CSRSS_STD_OUT] ? handles[CSRSS_STD_OUT] : GetStdHandle(STD_OUTPUT_HANDLE);
+                si.hStdError  = handles[CSRSS_STD_ERR] ? handles[CSRSS_STD_ERR] : (handles[CSRSS_STD_OUT] ? handles[CSRSS_STD_OUT] : GetStdHandle(STD_ERROR_HANDLE));
+            }
+            cursor = LogPut(cursor, "STAGE2: task done -> next command's std handles in=0x"); cursor = LogHex(cursor, (DWORD)(ULONG_PTR)g_CsrssNextStandardHandles[0]);
+            cursor = LogPut(cursor, " out=0x"); cursor = LogHex(cursor, (DWORD)(ULONG_PTR)g_CsrssNextStandardHandles[1]);
+            cursor = LogPut(cursor, " err=0x"); cursor = LogHex(cursor, (DWORD)(ULONG_PTR)g_CsrssNextStandardHandles[2]);
+            cursor = LogPut(cursor, any ? " -> handed to the child (redirect)\r\n" : " -> not a redirect, child finds its own\r\n"); }
+        cursor = LogPut(cursor, "STAGE2: task done -> a command was queued to this VDM in the window: relaunching [");
+        cursor = LogPut(cursor, commandLine); cursor = LogPut(cursor, "] in [");  cursor = LogPut(cursor, g_CsrssNextDirectory); cursor = LogPut(cursor, "] (single-instance mutex released)");
+        if (CreateProcessA(NULL, commandLine, NULL, NULL, TRUE, 0, NULL,
+                           g_CsrssNextDirectory[0] ? g_CsrssNextDirectory : NULL, &si, &processInfo)) {
+            cursor = LogPut(cursor, " -> pid 0x"); cursor = LogHex(cursor, processInfo.dwProcessId); cursor = LogPut(cursor, ", waiting\r\n");
+            LogAppend(LOG_PATH, base, cursor); cursor = base;
+            WaitForSingleObject(processInfo.hProcess, INFINITE);
+            CloseHandle(processInfo.hProcess); CloseHandle(processInfo.hThread);
+            cursor = LogPut(cursor, "STAGE2: task done -> relaunched command finished\r\n");
+        } else { cursor = LogPut(cursor, " -> CreateProcess FAILED 0x"); cursor = LogHex(cursor, GetLastError()); cursor = LogPut(cursor, "\r\n"); }
+        LogAppend(LOG_PATH, base, cursor); cursor = base;
+    }
+    return cursor;
+}
+
+
+static PSTR TaskReportExitToCsrss(PSTR cursor, PSTR const base, DOS_MACHINE *machine)
+{
+    /* ── ★ REPORT THE ERRORLEVEL TO CSRSS AND LEAVE THE CONSOLE. (s72) ──────────────
+         Only when CSRSS queued this task to us (the harness stub / target.txt shapes
+         and a WOW launch are untouched). AFTER the flush, so the launcher -- released
+         the instant CSRSS takes the report -- finds the program's whole output.
+       ► MEASURED: GetNextVDMCommand with the exit code releases the launcher and then
+         BLOCKS, DONT_WAIT or not, until the console's next DOS command arrives: stock
+         ntvdm stays resident per console and that wait is its idle state. We do not
+         stay, so the report goes in a helper thread and the main thread carries on to
+         ExitVDM, which is what releases the console's VDM record (without it the next
+         DOS program typed into the same window was queued to a host that had gone). */
+    if (g_Fetch2Ok) {
+        HANDLE thread2; DWORD threadId = 0, waitResult;
+        cursor = LogPut(cursor, "STAGE2: task done -> reporting exit code 0x"); cursor = LogHex(cursor, (DWORD)machine->ExitCode);
+        cursor = LogPut(cursor, " to CSRSS (helper thread)...\r\n");
+        LogAppend(LOG_PATH, base, cursor); cursor = base;
+        thread2 = CreateThread(NULL, 0, CsrssReportThread, (LPVOID)(ULONG_PTR)machine->ExitCode, 0, &threadId);
+        /* A short grace so the report's LPC is processed (launcher released) before
+           ExitVDM's is. The wait normally times out: the call is blocked for the
+           console's next command, which is stock ntvdm's idle state, not ours. */
+        waitResult = thread2 ? WaitForSingleObject(thread2, CSRSS_REPORT_GRACE_MS) : WAIT_FAILED;
+        if (thread2) CloseHandle(thread2);
+        cursor = LogPut(cursor, "STAGE2: task done -> report thread ");
+        cursor = LogPut(cursor, waitResult == WAIT_OBJECT_0 ? "returned" : waitResult == WAIT_TIMEOUT ? "blocked for the console's next command (expected)" : "could not start");
+        cursor = LogPut(cursor, "; ExitVDM...\r\n");
+        LogAppend(LOG_PATH, base, cursor); cursor = base;
+        {   BOOL isExitOk = CsrssExitVdm(); DWORD exitError = GetLastError();
+            cursor = LogPut(cursor, "STAGE2: task done -> ExitVDM = "); cursor = LogPut(cursor, isExitOk ? "TRUE" : "FALSE");
+            cursor = LogPut(cursor, " err=0x"); cursor = LogHex(cursor, exitError); cursor = LogPut(cursor, " got_next="); cursor = LogHex(cursor, (DWORD)g_ReportGotNext);
+            cursor = LogPut(cursor, " next_app=["); cursor = LogPut(cursor, g_CsrssNextApp); cursor = LogPut(cursor, "]\r\n");
+            LogAppend(LOG_PATH, base, cursor); cursor = base; }
+        cursor = TaskRelaunchQueuedCommand(cursor, base);
+    }
+    return cursor;
+}
+
+
+static PSTR ReportStartMode(PSTR cursor)
+{
+    /* ⚠ REPORTED AT EXIT, not at startup. The startup line is written before a
+       later LogWrite(LOG_PATH,...) TRUNCATES the file, so it never survived to
+       be read -- exactly as #131's stdout line did not. Same trap, same day. */
+    cursor = LogPut(cursor, "STAGE2: start mode was ");
+    cursor = LogPut(cursor, g_StartMode == DOS_START_UNINSTALL ? "UNINSTALL"
+             : g_StartMode == DOS_START_SAFE       ? "SAFE (skipped: VDD plugins, audio"
+                                                       " output, real speaker, joystick, WOW"
+                                                       " shims, fullscreen)" : "normal");
+    cursor = LogPut(cursor, g_Wave.IsUsingDirectSound ? " [audio: DirectSound]" : g_Wave.IsSilent ? " [audio: no device, silent pump]"
+                                                                          : " [audio: WinMM]");
+    cursor = LogPut(cursor, "; clean exit -> failure counter cleared (GH #132)\r\n");
+    return cursor;
+}
+
+
+static PSTR ReportModeYBarDump(PSTR cursor, PSTR const base)
+{
+    /* ── DUMP THE BAR'S FOUR PLANES SO THE WAD CAN JUDGE THEM. ──────────────────────
+         Everything measured so far describes the SCREEN, and the screen is planes plus
+         a render. The oracle can only say "this pixel is wrong"; it cannot say which
+         plane holds the right byte, because by then the four have been interleaved.
+       ► WHAT THIS SETTLES. Measured against the IWAD on the last run's captures:
+         plane 1's columns are 70.3% correct and planes 0/2/3 are 33.6/29.3/27.3%, and
+         "plane 1 replicated across the group" explains 63.0% of bar pixels against a
+         40.1%-correct baseline. So plane 1's content is reaching the other three. What
+         no capture can distinguish is whether 0/2/3 hold a LITERAL COPY of plane 1
+         (one writer smearing) or their own damaged content that merely resembles it
+         (a per-plane fault). Comparing the planes to each other answers that, and the
+         answer picks between two completely different fixes.
+       ► ALSO REFUTED, AND WHY THIS IS NOT THE LATCH DUMP IT LOOKS LIKE: the
+         write-mode-1 bursts only ever touch plane offsets 0x3a1c..0x3e7f, i.e. rows
+         186..199. Rows 168..185, which no burst reaches, are MORE wrong (62.2% against
+         56.9%). The latch copy is not the status bar's cause; do not rebuild the A0000
+         trap on the strength of session 22's note. See build/barprof.py.
+         All three pages, because the pages have been equal to the digit before and
+         that is itself a fact worth re-checking. Mode-Y runs only; ~67 KB, one shot. */
+    if (g_ModeYRemap && g_Video.ModeKind == VIDEO_KIND_LINEAR8 && !g_Video.IsChain4) {
+        UINT32 page, plane, row;
+        CHAR lineBuffer[220], *lineCursor;
+        LogAppend(LOG_PATH, base, cursor); SerialOut(base, cursor); cursor = base;  /* keep the log in order */
+        lineCursor = lineBuffer; lineCursor = LogPut(lineCursor, "MODEYBAR dump: 3 pages x 4 planes x rows 168..199, "
+                               "80 bytes/row (plane offset = row*80 + x/4)\r\n");
+        LogAppend(LOG_PATH, lineBuffer, lineCursor); SerialOut(lineBuffer, lineCursor);
+        for (page = 0; page < 3; ++page)
+            for (plane = 0; plane < VIDEO_PLANES; ++plane)
+                for (row = 168; row < 200; ++row) {
+                    UINT32 position = (page * 0x4000u + row * 80u) & (MODEY_WIN - 1u), pixelX;
+                    const BYTE *source = (const BYTE *)g_ModeYView[plane];
+                    lineCursor = lineBuffer;
+                    lineCursor = LogPut(lineCursor, "MODEYBAR pg"); lineCursor = LogHexByte(lineCursor, page);
+                    lineCursor = LogPut(lineCursor, " pl");         lineCursor = LogHexByte(lineCursor, plane);
+                    lineCursor = LogPut(lineCursor, " y");          lineCursor = LogHexByte(lineCursor, row);
+                    lineCursor = LogPut(lineCursor, " ");
+                    for (pixelX = 0; pixelX < 80; ++pixelX) lineCursor = LogHexByte(lineCursor, source[(position + pixelX) & (MODEY_WIN - 1u)]);
+                    lineCursor = LogPut(lineCursor, "\r\n");
+                    /* File only: 67 KB down a 115200 COM1 is ~6 s of wind-down for a
+                       dump nobody reads off the serial line. */
+                    LogAppend(LOG_PATH, lineBuffer, lineCursor);
+                }
+        /* ── AND THE LINEAR SECTION, WHICH IS THE ONE PLACE NOBODY HAS LOOKED. ────────
+             ModeYRemapInitialize() sets g_ModeYCurrent = 4 and a chain4 change selects 4, so A0000
+             maps g_ModeYSeconds[4] -- NOT any plane -- both before the first map-mask write and
+             for as long as the guest stays chained. Anything the guest writes to A0000
+             in either window lands here and is invisible to all four planes, for good.
+             That is the exact shape the evidence demands: the bar is wrong from the
+             FIRST frame and flat afterwards, the fully-redrawn surfaces (title screen
+             0-of-64000, the 3D view) are perfect, and every "what corrupts it during
+             play" candidate has come back excluded. Write-once damage needs a
+             write-once mechanism, and this is one.
+             In chained mode the byte at offset o IS pixel (o%320, o/320), so the bar
+             region is rows 168..199 at 320 bytes a row -- no plane stride. Score it
+             against STBAR directly: a good score means Doom drew the bar while the
+             window pointed here and the planes never received it. */
+        lineCursor = lineBuffer; lineCursor = LogPut(lineCursor, "MODEYLIN dump: linear section, rows 168..199, "
+                               "320 bytes/row in 4 chunks (offset = row*320 + x)\r\n");
+        LogAppend(LOG_PATH, lineBuffer, lineCursor); SerialOut(lineBuffer, lineCursor);
+        for (row = 168; row < 200; ++row) {
+            UINT32 quarter, pixelX;
+            for (quarter = 0; quarter < 4; ++quarter) {
+                UINT32 position = (row * 320u + quarter * 80u) & (MODEY_WIN - 1u);
+                const BYTE *source = (const BYTE *)g_ModeYView[4];
+                lineCursor = lineBuffer;
+                lineCursor = LogPut(lineCursor, "MODEYLIN y"); lineCursor = LogHexByte(lineCursor, row);
+                lineCursor = LogPut(lineCursor, " q");         lineCursor = LogHexByte(lineCursor, quarter);
+                lineCursor = LogPut(lineCursor, " ");
+                for (pixelX = 0; pixelX < 80; ++pixelX) lineCursor = LogHexByte(lineCursor, source[(position + pixelX) & (MODEY_WIN - 1u)]);
+                lineCursor = LogPut(lineCursor, "\r\n");
+                LogAppend(LOG_PATH, lineBuffer, lineCursor);
+            }
+        }
+    }
+    return cursor;
+}
+
+
+/* The end-of-run report, section by section, in the order the log has always had them. */
+static PSTR ReportEndOfRun(PSTR cursor, PSTR const base, PCSTR const reportEnd, DOS_MACHINE *machine, volatile BYTE * const tib)
+{
+    cursor = ReportNtvdmBops(cursor);
+    cursor = ReportHotPortsAndTimerCounters(cursor);
+    cursor = ReportPresentTiming(cursor);
+    cursor = ReportPitPacingAndHostCpuTime(cursor);
+    cursor = ReportRetracePolling(cursor);
+    cursor = ReportCpuSpeedGovernor(cursor);
+    cursor = ReportDeliveryLatencies(cursor);
+    cursor = ReportDmxTaskAndShimIrqs(cursor);
+    cursor = ReportHostLock(cursor);
+    cursor = ReportKeyboardControllerAndFontQueries(cursor, base);
+    cursor = ReportExecEventsAndIrq0Timeline(cursor, base);
+    cursor = ReportV86StringTiming(cursor);
+    cursor = ReportUnclaimedPorts(cursor);
+    cursor = ReportUnimplemented(cursor, machine);
+    { UINT plane, nonZero[VIDEO_PLANES]; 
+      for (plane = 0; plane < VIDEO_PLANES; ++plane) { UINT byteIndex2, changed = 0;
+          { const BYTE *planeBytes = g_Video.YMapPlane ? g_Video.YMapPlane(g_Video.YMapContext, plane) : g_Video.Planes[plane];
+            for (byteIndex2 = 0; byteIndex2 < VIDEO_PLANE_SIZE; ++byteIndex2) if (planeBytes[byteIndex2]) ++changed; }
+          nonZero[plane] = changed; }
+      cursor = ReportSoundStack(cursor);
+      cursor = ReportSbReplay(cursor, base);
+      cursor = ReportDpmiSimulatedInterrupts(cursor, base);
+      cursor = ReportPmReflectedInterrupts(cursor, base);
+      cursor = ReportTimerAndInterruptDelivery(cursor, base);
+      cursor = ReportDmaAndSoundBlaster(cursor);
+      cursor = ReportDmxTaskAndDmaPolls(cursor);
+      cursor = ReportDeviceIrqRetriesAndSoundBlocks(cursor, base, reportEnd);
+      cursor = ReportAudioDevices(cursor);
+      cursor = ReportPlanarVideoState(cursor, reportEnd);
+      cursor = ReportPlanarSites(cursor, base, reportEnd);
+      cursor = ReportCrtcAndVideoNow(cursor, nonZero);
+    }
+    cursor = ReportGuestStateAtExit(cursor, base, tib);
+    cursor = ReportInterpreterBailSites(cursor, base, reportEnd);
+    cursor = ReportModeSets(cursor);
+    cursor = ReportModeY(cursor);
+    cursor = ReportVesa(cursor, base);
+    cursor = ReportModeYBarDump(cursor, base);
+    if (g_CpuSpeedPeriods) CpuSpeedTimelineDump("STAGE2: CTL");                 /* #225 */
+    cursor = LogPut(cursor, "STAGE2: complete\r\n");
+    LogAppend(LOG_PATH, base, cursor); SerialOut(base, cursor); cursor = base;   /* headless: mirror the DOS-output flush + completion to COM1 */
+    return cursor;
+}
+
 enum { INSTALL_EXIT_OK = 0, INSTALL_EXIT_FAILED = 1, INSTALL_STATUS_EXIT_OURS = 0, INSTALL_STATUS_EXIT_NONE = 1, INSTALL_STATUS_EXIT_OTHER = 2 };   /* the install verbs' exit codes */
 enum { PENDING_INT_RETRIES_MAX = 0x10000 };   /* event 3 ("interrupt pending, not entered"): retries before giving up */
 enum { EXEC_HANDLED_RUN_OVER = 2, EXEC_HANDLED_CHILD_EXITED = 3 };   /* WinMain's DosTerminate outcomes: the run ends, or a child returned to its parent */
@@ -9166,237 +9424,13 @@ INT WINAPI WinMain(HINSTANCE instance, HINSTANCE previousInstance, LPSTR command
        the line buffer instead. The log copy below is unconditional either way:
        it is a different sink and the one the rig harness reads. */
     StdioFlush();
-    /* ── ★ REPORT THE ERRORLEVEL TO CSRSS AND LEAVE THE CONSOLE. (s72) ──────────────
-         Only when CSRSS queued this task to us (the harness stub / target.txt shapes
-         and a WOW launch are untouched). AFTER the flush, so the launcher -- released
-         the instant CSRSS takes the report -- finds the program's whole output.
-       ► MEASURED: GetNextVDMCommand with the exit code releases the launcher and then
-         BLOCKS, DONT_WAIT or not, until the console's next DOS command arrives: stock
-         ntvdm stays resident per console and that wait is its idle state. We do not
-         stay, so the report goes in a helper thread and the main thread carries on to
-         ExitVDM, which is what releases the console's VDM record (without it the next
-         DOS program typed into the same window was queued to a host that had gone). */
-    if (g_Fetch2Ok) {
-        HANDLE thread2; DWORD threadId = 0, waitResult;
-        cursor = LogPut(cursor, "STAGE2: task done -> reporting exit code 0x"); cursor = LogHex(cursor, (DWORD)machine.ExitCode);
-        cursor = LogPut(cursor, " to CSRSS (helper thread)...\r\n");
-        LogAppend(LOG_PATH, base, cursor); cursor = base;
-        thread2 = CreateThread(NULL, 0, CsrssReportThread, (LPVOID)(ULONG_PTR)machine.ExitCode, 0, &threadId);
-        /* A short grace so the report's LPC is processed (launcher released) before
-           ExitVDM's is. The wait normally times out: the call is blocked for the
-           console's next command, which is stock ntvdm's idle state, not ours. */
-        waitResult = thread2 ? WaitForSingleObject(thread2, CSRSS_REPORT_GRACE_MS) : WAIT_FAILED;
-        if (thread2) CloseHandle(thread2);
-        cursor = LogPut(cursor, "STAGE2: task done -> report thread ");
-        cursor = LogPut(cursor, waitResult == WAIT_OBJECT_0 ? "returned" : waitResult == WAIT_TIMEOUT ? "blocked for the console's next command (expected)" : "could not start");
-        cursor = LogPut(cursor, "; ExitVDM...\r\n");
-        LogAppend(LOG_PATH, base, cursor); cursor = base;
-        {   BOOL isExitOk = CsrssExitVdm(); DWORD exitError = GetLastError();
-            cursor = LogPut(cursor, "STAGE2: task done -> ExitVDM = "); cursor = LogPut(cursor, isExitOk ? "TRUE" : "FALSE");
-            cursor = LogPut(cursor, " err=0x"); cursor = LogHex(cursor, exitError); cursor = LogPut(cursor, " got_next="); cursor = LogHex(cursor, (DWORD)g_ReportGotNext);
-            cursor = LogPut(cursor, " next_app=["); cursor = LogPut(cursor, g_CsrssNextApp); cursor = LogPut(cursor, "]\r\n");
-            LogAppend(LOG_PATH, base, cursor); cursor = base; }
-        /* ── A COMMAND ARRIVED IN THE WINDOW. The launcher queued its next DOS program
-             to THIS console's VDM (us) between the report and ExitVDM; CSRSS handed it
-             to the blocked report call. We are not going to run it in this process, and
-             CSRSS has already forgotten it: relaunch it here, in the same console, so it
-             runs in a fresh host. (Measured before this: the program silently did not
-             run and the launcher saw exit code 0.) */
-        if (g_ReportGotNext && g_CsrssNextApp[0]) {
-            CHAR commandLine[2300]; PSTR scan = commandLine; STARTUPINFOA si; PROCESS_INFORMATION processInfo;
-            scan = LogPut(scan, "\""); scan = LogPut(scan, g_CsrssNextApp); scan = LogPut(scan, "\"");
-            if (g_CsrssNextCommand[0]) { scan = LogPut(scan, " "); scan = LogPut(scan, g_CsrssNextCommand); }
-            *scan = 0;
-            ZeroMemory(&si, sizeof si); si.cb = sizeof si; ZeroMemory(&processInfo, sizeof processInfo);
-            /* ⛔ HAND OVER THE SINGLE-INSTANCE MUTEX FIRST. (s73) The relaunched host is a
-               second ntvdmhost, and the guard in WinMain refuses a second instance while
-               the first OWNS the mutex -- which this one did, for as long as it waited
-               on the child. Measured: `BC x.BAS` then `LINK x.OBJ` from one cmd window --
-               BC ran, LINK was queued to this VDM, the relaunched host wrote "REFUSED:
-               another ntvdmhost is LIVE" and exited, the launcher saw rc=0, and no EXE
-               was ever written. That was "QBasic cannot build EXEs" from a batch file.
-               The guest is gone (the exec loop is out), so the system-wide things the
-               guard protects are released here too; the child takes them over. */
-            HostPanicRelease();
-            if (g_OnceMutex) { ReleaseMutex(g_OnceMutex); CloseHandle(g_OnceMutex); g_OnceMutex = NULL; }
-            /* ── AND ITS REDIRECT. (s73) The command's StdIn/Out/Err came back from the
-                 report call as handles CSRSS placed in THIS process (the launcher's
-                 `LINK > file`). The child's StdioInitialize takes an inherited disk/pipe
-                 standard handle first, so hand them over inheritable; a console handle
-                 is left alone (the child finds its console the way it always has).
-                 Measured before this: the relaunched LINK's log said "stdout -> none". */
-            {   INT item, any = 0; HANDLE handles[CSRSS_STANDARD_HANDLES] = { NULL, NULL, NULL };
-                for (item = 0; item < CSRSS_STANDARD_HANDLES; ++item) {
-                    HANDLE handle = g_CsrssNextStandardHandles[item]; DWORD valueType;
-                    if (!handle || handle == INVALID_HANDLE_VALUE) continue;
-                    valueType = GetFileType(handle);
-                    if (valueType != FILE_TYPE_DISK && valueType != FILE_TYPE_PIPE) continue;
-                    if (DuplicateHandle(GetCurrentProcess(), handle, GetCurrentProcess(), &handles[item],
-                                        0, TRUE, DUPLICATE_SAME_ACCESS)) any = 1;
-                }
-                if (any) {
-                    /* ⚠ STARTUPINFO NEVER REACHES THE CHILD: a DOS .EXE goes through
-                       BaseSrv, which creates the ntvdm (us again, via IFEO) itself.
-                       What the child DOES read is its PARENT'S PEB standard handles
-                       (StdioFromParent, GH #131) -- and its parent is this process.
-                       SetStdHandle writes exactly those PEB fields. Measured: with
-                       STARTUPINFO alone the child still said "stdout -> none". */
-                    if (handles[CSRSS_STD_IN]) SetStdHandle(STD_INPUT_HANDLE,  handles[CSRSS_STD_IN]);
-                    if (handles[CSRSS_STD_OUT]) SetStdHandle(STD_OUTPUT_HANDLE, handles[CSRSS_STD_OUT]);
-                    if (handles[CSRSS_STD_ERR] || handles[CSRSS_STD_OUT]) SetStdHandle(STD_ERROR_HANDLE, handles[CSRSS_STD_ERR] ? handles[CSRSS_STD_ERR] : handles[CSRSS_STD_OUT]);
-                    si.dwFlags |= STARTF_USESTDHANDLES;
-                    si.hStdInput  = handles[CSRSS_STD_IN] ? handles[CSRSS_STD_IN] : GetStdHandle(STD_INPUT_HANDLE);
-                    si.hStdOutput = handles[CSRSS_STD_OUT] ? handles[CSRSS_STD_OUT] : GetStdHandle(STD_OUTPUT_HANDLE);
-                    si.hStdError  = handles[CSRSS_STD_ERR] ? handles[CSRSS_STD_ERR] : (handles[CSRSS_STD_OUT] ? handles[CSRSS_STD_OUT] : GetStdHandle(STD_ERROR_HANDLE));
-                }
-                cursor = LogPut(cursor, "STAGE2: task done -> next command's std handles in=0x"); cursor = LogHex(cursor, (DWORD)(ULONG_PTR)g_CsrssNextStandardHandles[0]);
-                cursor = LogPut(cursor, " out=0x"); cursor = LogHex(cursor, (DWORD)(ULONG_PTR)g_CsrssNextStandardHandles[1]);
-                cursor = LogPut(cursor, " err=0x"); cursor = LogHex(cursor, (DWORD)(ULONG_PTR)g_CsrssNextStandardHandles[2]);
-                cursor = LogPut(cursor, any ? " -> handed to the child (redirect)\r\n" : " -> not a redirect, child finds its own\r\n"); }
-            cursor = LogPut(cursor, "STAGE2: task done -> a command was queued to this VDM in the window: relaunching [");
-            cursor = LogPut(cursor, commandLine); cursor = LogPut(cursor, "] in [");  cursor = LogPut(cursor, g_CsrssNextDirectory); cursor = LogPut(cursor, "] (single-instance mutex released)");
-            if (CreateProcessA(NULL, commandLine, NULL, NULL, TRUE, 0, NULL,
-                               g_CsrssNextDirectory[0] ? g_CsrssNextDirectory : NULL, &si, &processInfo)) {
-                cursor = LogPut(cursor, " -> pid 0x"); cursor = LogHex(cursor, processInfo.dwProcessId); cursor = LogPut(cursor, ", waiting\r\n");
-                LogAppend(LOG_PATH, base, cursor); cursor = base;
-                WaitForSingleObject(processInfo.hProcess, INFINITE);
-                CloseHandle(processInfo.hProcess); CloseHandle(processInfo.hThread);
-                cursor = LogPut(cursor, "STAGE2: task done -> relaunched command finished\r\n");
-            } else { cursor = LogPut(cursor, " -> CreateProcess FAILED 0x"); cursor = LogHex(cursor, GetLastError()); cursor = LogPut(cursor, "\r\n"); }
-            LogAppend(LOG_PATH, base, cursor); cursor = base;
-        }
-    }
-    /* ⚠ REPORTED AT EXIT, not at startup. The startup line is written before a
-       later LogWrite(LOG_PATH,...) TRUNCATES the file, so it never survived to
-       be read -- exactly as #131's stdout line did not. Same trap, same day. */
-    cursor = LogPut(cursor, "STAGE2: start mode was ");
-    cursor = LogPut(cursor, g_StartMode == DOS_START_UNINSTALL ? "UNINSTALL"
-             : g_StartMode == DOS_START_SAFE       ? "SAFE (skipped: VDD plugins, audio"
-                                                       " output, real speaker, joystick, WOW"
-                                                       " shims, fullscreen)" : "normal");
-    cursor = LogPut(cursor, g_Wave.IsUsingDirectSound ? " [audio: DirectSound]" : g_Wave.IsSilent ? " [audio: no device, silent pump]"
-                                                                          : " [audio: WinMM]");
-    cursor = LogPut(cursor, "; clean exit -> failure counter cleared (GH #132)\r\n");
+    cursor = TaskReportExitToCsrss(cursor, base, &machine);
+    cursor = ReportStartMode(cursor);
     PcSpeakerClose(&g_PcSpeaker);               /* ⚠ a headless run never sees WM_DESTROY,
                                             and Beep.sys outlives the process */
     RecoveryOk();                       /* GH #132: this run ended cleanly */
     cursor = ReportStdoutAndDosOutput(cursor, &machine);
-    cursor = ReportNtvdmBops(cursor);
-    cursor = ReportHotPortsAndTimerCounters(cursor);
-    cursor = ReportPresentTiming(cursor);
-    cursor = ReportPitPacingAndHostCpuTime(cursor);
-    cursor = ReportRetracePolling(cursor);
-    cursor = ReportCpuSpeedGovernor(cursor);
-    cursor = ReportDeliveryLatencies(cursor);
-    cursor = ReportDmxTaskAndShimIrqs(cursor);
-    cursor = ReportHostLock(cursor);
-    cursor = ReportKeyboardControllerAndFontQueries(cursor, base);
-    cursor = ReportExecEventsAndIrq0Timeline(cursor, base);
-    cursor = ReportV86StringTiming(cursor);
-    cursor = ReportUnclaimedPorts(cursor);
-    {
-      cursor = ReportUnimplemented(cursor, &machine);
-      { UINT plane, nonZero[VIDEO_PLANES]; 
-        for (plane = 0; plane < VIDEO_PLANES; ++plane) { UINT byteIndex2, changed = 0;
-            { const BYTE *planeBytes = g_Video.YMapPlane ? g_Video.YMapPlane(g_Video.YMapContext, plane) : g_Video.Planes[plane];
-              for (byteIndex2 = 0; byteIndex2 < VIDEO_PLANE_SIZE; ++byteIndex2) if (planeBytes[byteIndex2]) ++changed; }
-            nonZero[plane] = changed; }
-        cursor = ReportSoundStack(cursor);
-        cursor = ReportSbReplay(cursor, base);
-        cursor = ReportDpmiSimulatedInterrupts(cursor, base);
-        cursor = ReportPmReflectedInterrupts(cursor, base);
-        cursor = ReportTimerAndInterruptDelivery(cursor, base);
-        cursor = ReportDmaAndSoundBlaster(cursor);
-        cursor = ReportDmxTaskAndDmaPolls(cursor);
-        cursor = ReportDeviceIrqRetriesAndSoundBlocks(cursor, base, reportEnd);
-        cursor = ReportAudioDevices(cursor);
-        cursor = ReportPlanarVideoState(cursor, reportEnd);
-        cursor = ReportPlanarSites(cursor, base, reportEnd);
-        cursor = ReportCrtcAndVideoNow(cursor, nonZero);
-      }
-      cursor = ReportGuestStateAtExit(cursor, base, tib);
-      cursor = ReportInterpreterBailSites(cursor, base, reportEnd);
-      cursor = ReportModeSets(cursor);
-      cursor = ReportModeY(cursor);
-      cursor = ReportVesa(cursor, base);
-    }
-    /* ── DUMP THE BAR'S FOUR PLANES SO THE WAD CAN JUDGE THEM. ──────────────────────
-         Everything measured so far describes the SCREEN, and the screen is planes plus
-         a render. The oracle can only say "this pixel is wrong"; it cannot say which
-         plane holds the right byte, because by then the four have been interleaved.
-       ► WHAT THIS SETTLES. Measured against the IWAD on the last run's captures:
-         plane 1's columns are 70.3% correct and planes 0/2/3 are 33.6/29.3/27.3%, and
-         "plane 1 replicated across the group" explains 63.0% of bar pixels against a
-         40.1%-correct baseline. So plane 1's content is reaching the other three. What
-         no capture can distinguish is whether 0/2/3 hold a LITERAL COPY of plane 1
-         (one writer smearing) or their own damaged content that merely resembles it
-         (a per-plane fault). Comparing the planes to each other answers that, and the
-         answer picks between two completely different fixes.
-       ► ALSO REFUTED, AND WHY THIS IS NOT THE LATCH DUMP IT LOOKS LIKE: the
-         write-mode-1 bursts only ever touch plane offsets 0x3a1c..0x3e7f, i.e. rows
-         186..199. Rows 168..185, which no burst reaches, are MORE wrong (62.2% against
-         56.9%). The latch copy is not the status bar's cause; do not rebuild the A0000
-         trap on the strength of session 22's note. See build/barprof.py.
-         All three pages, because the pages have been equal to the digit before and
-         that is itself a fact worth re-checking. Mode-Y runs only; ~67 KB, one shot. */
-    if (g_ModeYRemap && g_Video.ModeKind == VIDEO_KIND_LINEAR8 && !g_Video.IsChain4) {
-        UINT32 page, plane, row;
-        CHAR lineBuffer[220], *lineCursor;
-        LogAppend(LOG_PATH, base, cursor); SerialOut(base, cursor); cursor = base;  /* keep the log in order */
-        lineCursor = lineBuffer; lineCursor = LogPut(lineCursor, "MODEYBAR dump: 3 pages x 4 planes x rows 168..199, "
-                               "80 bytes/row (plane offset = row*80 + x/4)\r\n");
-        LogAppend(LOG_PATH, lineBuffer, lineCursor); SerialOut(lineBuffer, lineCursor);
-        for (page = 0; page < 3; ++page)
-            for (plane = 0; plane < VIDEO_PLANES; ++plane)
-                for (row = 168; row < 200; ++row) {
-                    UINT32 position = (page * 0x4000u + row * 80u) & (MODEY_WIN - 1u), pixelX;
-                    const BYTE *source = (const BYTE *)g_ModeYView[plane];
-                    lineCursor = lineBuffer;
-                    lineCursor = LogPut(lineCursor, "MODEYBAR pg"); lineCursor = LogHexByte(lineCursor, page);
-                    lineCursor = LogPut(lineCursor, " pl");         lineCursor = LogHexByte(lineCursor, plane);
-                    lineCursor = LogPut(lineCursor, " y");          lineCursor = LogHexByte(lineCursor, row);
-                    lineCursor = LogPut(lineCursor, " ");
-                    for (pixelX = 0; pixelX < 80; ++pixelX) lineCursor = LogHexByte(lineCursor, source[(position + pixelX) & (MODEY_WIN - 1u)]);
-                    lineCursor = LogPut(lineCursor, "\r\n");
-                    /* File only: 67 KB down a 115200 COM1 is ~6 s of wind-down for a
-                       dump nobody reads off the serial line. */
-                    LogAppend(LOG_PATH, lineBuffer, lineCursor);
-                }
-        /* ── AND THE LINEAR SECTION, WHICH IS THE ONE PLACE NOBODY HAS LOOKED. ────────
-             ModeYRemapInitialize() sets g_ModeYCurrent = 4 and a chain4 change selects 4, so A0000
-             maps g_ModeYSeconds[4] -- NOT any plane -- both before the first map-mask write and
-             for as long as the guest stays chained. Anything the guest writes to A0000
-             in either window lands here and is invisible to all four planes, for good.
-             That is the exact shape the evidence demands: the bar is wrong from the
-             FIRST frame and flat afterwards, the fully-redrawn surfaces (title screen
-             0-of-64000, the 3D view) are perfect, and every "what corrupts it during
-             play" candidate has come back excluded. Write-once damage needs a
-             write-once mechanism, and this is one.
-             In chained mode the byte at offset o IS pixel (o%320, o/320), so the bar
-             region is rows 168..199 at 320 bytes a row -- no plane stride. Score it
-             against STBAR directly: a good score means Doom drew the bar while the
-             window pointed here and the planes never received it. */
-        lineCursor = lineBuffer; lineCursor = LogPut(lineCursor, "MODEYLIN dump: linear section, rows 168..199, "
-                               "320 bytes/row in 4 chunks (offset = row*320 + x)\r\n");
-        LogAppend(LOG_PATH, lineBuffer, lineCursor); SerialOut(lineBuffer, lineCursor);
-        for (row = 168; row < 200; ++row) {
-            UINT32 quarter, pixelX;
-            for (quarter = 0; quarter < 4; ++quarter) {
-                UINT32 position = (row * 320u + quarter * 80u) & (MODEY_WIN - 1u);
-                const BYTE *source = (const BYTE *)g_ModeYView[4];
-                lineCursor = lineBuffer;
-                lineCursor = LogPut(lineCursor, "MODEYLIN y"); lineCursor = LogHexByte(lineCursor, row);
-                lineCursor = LogPut(lineCursor, " q");         lineCursor = LogHexByte(lineCursor, quarter);
-                lineCursor = LogPut(lineCursor, " ");
-                for (pixelX = 0; pixelX < 80; ++pixelX) lineCursor = LogHexByte(lineCursor, source[(position + pixelX) & (MODEY_WIN - 1u)]);
-                lineCursor = LogPut(lineCursor, "\r\n");
-                LogAppend(LOG_PATH, lineBuffer, lineCursor);
-            }
-        }
-    }
-    if (g_CpuSpeedPeriods) CpuSpeedTimelineDump("STAGE2: CTL");                 /* #225 */
-    cursor = LogPut(cursor, "STAGE2: complete\r\n");
-    LogAppend(LOG_PATH, base, cursor); SerialOut(base, cursor); cursor = base;   /* headless: mirror the DOS-output flush + completion to COM1 */
+    cursor = ReportEndOfRun(cursor, base, reportEnd, &machine, tib);
 
     /* Headless test mode: the guest has just terminated (or the PM loop hit its
        headless time cap), so exit immediately (no window-close needed) -- this lets a
