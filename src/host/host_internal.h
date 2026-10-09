@@ -25,8 +25,6 @@
 #include "host_install.h"
 
 /* State used from a file other than its owner's (tentative definitions). */
-static UINT g_DmaPollOverflow;
-static UINT g_PollStackOverflow;
 /* Functions called from a file other than their own. */
 
 #endif
