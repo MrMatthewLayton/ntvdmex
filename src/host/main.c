@@ -156,7 +156,6 @@ static CHAR             g_TextFontLive[NTVDMEX_PATH_MAX];
 #include "present_ddraw.h"
 
 #include "host_internal.h"
-#include "host_state.c"
 #include "host_core.c"
 #include "host_diag.c"
 #include "host_timing.c"

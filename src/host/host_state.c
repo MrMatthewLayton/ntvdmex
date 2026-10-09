@@ -1,52 +1,79 @@
 /* host_state.c -- the machine's state that the whole host shares: the virtual devices, the guest
  *   CPU context and the run-wide flags.
  *
- * Part of the host's single translation unit: #included by main.c after host_internal.h. */
+ * Its own translation unit (#335): the variables are declared in host_state.h. */
+#include <windows.h>
+#include "ntvdm.h"
+#include "host_strings.h"   /* defines only: the initialisers' text */
+#include "settings.h"
+#include "pcspeaker.h"
+#include "../wow/ne.h"
+#include "../wow/wowsched.h"
+#include "dos_int21.h"
+#include "dos_env.h"
+#include "dos_xms.h"
+#include "dos_recovery.h"
+#include "vdd_bus.h"
+#include "vdd_pit.h"
+#include "vdd_pic.h"
+#include "vdd_video.h"
+#include "vdd_input.h"
+#include "vdd_speaker.h"
+#include "vdd_joy.h"
+#include "vdd_opl.h"
+#include "vdd_sb.h"
+#include "vdd_gus.h"
+#include "vdd_comm.h"
+#include "vdd_audio.h"
+#include "audio_wave.h"
+#include "present_ddraw.h"
+#include "host_types.h"
+#include "host_state.h"
 
-static PFN_ADD_VECTORED_EXCEPTION_HANDLER                  g_PfnAddVeh;
-static PFN_REGISTER_RAW_INPUT_DEVICES g_PfnRegisterRawInput;
-static PFN_GET_RAW_INPUT_DATA         g_PfnGetRawInput;
-static DOS_SAFE_SKIPS g_Safe;           /* s90 #132: all zero unless SAFE MODE (dos_recovery.h) */
+PFN_ADD_VECTORED_EXCEPTION_HANDLER                  g_PfnAddVeh;
+PFN_REGISTER_RAW_INPUT_DEVICES g_PfnRegisterRawInput;
+PFN_GET_RAW_INPUT_DATA         g_PfnGetRawInput;
+DOS_SAFE_SKIPS g_Safe;           /* s90 #132: all zero unless SAFE MODE (dos_recovery.h) */
 /* The live machine, for the WATCHDOG THREAD. A wedged run is terminated forcefully and
    therefore skips the normal wind-down -- which is where captured DOS output is flushed,
    so everything the program printed was thrown away in exactly the case where it matters
    most. Doom prints its whole startup and then hangs; without this the log proved it had
    run but could not show what it said. */
-static DOS_MACHINE *g_Machine = NULL;
+DOS_MACHINE *g_Machine = NULL;
 
 /* The device bus + its VDDs + the presentation layer live for the host's life. */
-static VDD_BUS      g_Bus;
-static PIT_STATE    g_Pit;       static NTVDD_DEVICE g_PitDevice;
-static PIC_STATE    g_Pic;       static NTVDD_DEVICE g_PicDevice;
-static VIDEO_STATE  g_Video;       static NTVDD_DEVICE g_VideoDevice;
-static INPUT_STATE  g_Input;        static NTVDD_DEVICE g_InputDevice;
-static SPEAKER_STATE g_Speaker;      static NTVDD_DEVICE g_SpeakerDevice;
+VDD_BUS      g_Bus;
+PIT_STATE    g_Pit;       NTVDD_DEVICE g_PitDevice;
+PIC_STATE    g_Pic;       NTVDD_DEVICE g_PicDevice;
+VIDEO_STATE  g_Video;       NTVDD_DEVICE g_VideoDevice;
+INPUT_STATE  g_Input;        NTVDD_DEVICE g_InputDevice;
+SPEAKER_STATE g_Speaker;      NTVDD_DEVICE g_SpeakerDevice;
 /* The REAL speaker, and whether the setting wants it. g_Speaker drives the mixer;
    this drives Beep.sys. They are independent -- "Both" means both. */
-static PCSPEAKER  g_PcSpeaker = { INVALID_HANDLE_VALUE, 0, 0, 0, 0, 0 };
-static INT    g_SpeakerReal;
-static OPL_STATE    g_Opl;       static NTVDD_DEVICE g_OplDevice;
-static SB_STATE     g_Sb;        static NTVDD_DEVICE g_SbDevice;
+PCSPEAKER  g_PcSpeaker = { INVALID_HANDLE_VALUE, 0, 0, 0, 0, 0 };
+INT    g_SpeakerReal;
+OPL_STATE    g_Opl;       NTVDD_DEVICE g_OplDevice;
+SB_STATE     g_Sb;        NTVDD_DEVICE g_SbDevice;
 /* The Gravis UltraSound (s80, north star 2): 240h, IRQ 11, DMA 3 -- off the SB's 220h/5/1/5. */
-static GUS_STATE    g_Gus;       static NTVDD_DEVICE g_GusDevice;
-static COMM_STATE   g_Comm;      static NTVDD_DEVICE g_CommDevice;   /* GH #9 */
+GUS_STATE    g_Gus;       NTVDD_DEVICE g_GusDevice;
+COMM_STATE   g_Comm;      NTVDD_DEVICE g_CommDevice;   /* GH #9 */
 /* ── THE GAMEPORT (session 62). The VDD models the 558 one-shot behind port
      0x201; this side feeds it: a winmm poll thread (joyGetPosEx -- XP-safe,
      loaded dynamically like waveOut, no new import) writes present/axes/
      buttons, and SettingsApply writes the adapter type. Until now the port
      was UNCLAIMED and Mario Bros died right after a CLI poll of it. */
-static JOYSTICK_STATE    g_Joystick;       static NTVDD_DEVICE g_JoystickDevice;
-static AUDIO_STATE  g_Audio;     static AUDIO_WAVE g_Wave;
-static PRESENT_DDRAW g_PresentDdraw;
-static DOS_XMS_STATE    g_Xms;       /* M4: XMS extended-memory manager           */
-static volatile LONG g_Irq0Pending = 0;    /* PIT raised IRQ0 (UI thread sets, V86 thread delivers) */
+JOYSTICK_STATE    g_Joystick;       NTVDD_DEVICE g_JoystickDevice;
+AUDIO_STATE  g_Audio;     AUDIO_WAVE g_Wave;
+PRESENT_DDRAW g_PresentDdraw;
+DOS_XMS_STATE    g_Xms;       /* M4: XMS extended-memory manager           */
+volatile LONG g_Irq0Pending = 0;    /* PIT raised IRQ0 (UI thread sets, V86 thread delivers) */
 /* s90 (#278): hardware interrupts raised by a 32-bit component (call_ica_hw_interrupt,
    bin\wowshim\NTVDM.EXE), one bit per PIC line: bits 0-7 master (vectors 08h-0Fh),
    8-15 slave (70h-77h). Set from ANY thread; delivered on the guest thread. */
-static volatile LONG g_IcaPending = 0;
-static volatile LONG g_PmTickOwed = 0;
-static volatile LONG g_Irq1Pending = 0;    /* count of un-delivered keyboard IRQ1s (one per scancode byte) */
-static INT g_InPmIrq     = 0;             /* #2b: re-entrancy guard while inside an injected PM ISR   */
+volatile LONG g_IcaPending = 0;
+volatile LONG g_PmTickOwed = 0;
+volatile LONG g_Irq1Pending = 0;    /* count of un-delivered keyboard IRQ1s (one per scancode byte) */
+INT g_InPmIrq     = 0;             /* #2b: re-entrancy guard while inside an injected PM ISR   */
 /* ── LOCK CONTENTION INSTRUMENT ──────────────────────────────────────────────
    MEASURED (gameplay run, 2026-08-21): the guest's clock went 448 ms without
    advancing and then received all 448 ms at once. At Skyroads' ~291 Hz tick that
@@ -73,19 +100,19 @@ static INT g_InPmIrq     = 0;             /* #2b: re-entrancy guard while inside
      thread (HostIoDo already holds it when HostPitSync re-enters), so timing
      every acquisition would report near-zero holds for the nested ones and bury
      the one that actually matters. */
-static LARGE_INTEGER g_QpcFrequency;
-static INT      g_LockSite, g_LockHoldSite, g_LockWaitSite;
-static UINT32 g_LockHoldMicroseconds, g_LockWaitMicroseconds, g_UiGapMicroseconds;
-static INT      g_UiTickMinimumMs = UITICK_AUTO;
-static DWORD    g_KeyMessageHistogram[8];     /* queue delay ms: 0,1,2,4,8,16,32,64+       */
-static DWORD    g_KeyMessageMaximumMs, g_KeyMessageCount;
-static DWORD    g_KeyDeliveryHistogram[8];     /* queue->INT 09h ms: same buckets           */
-static DWORD    g_KeyDeliveryMaximumMs, g_KeyDeliveryCount;
-static INT      g_KeyIrqRetry = KEYIRQ_RETRY_ON;      /* keyirq.txt = 0 restores single-attempt */
-static HWND         g_Window;
-static HANDLE       g_KeyEvent;            /* signalled when a key is pushed     */
-static volatile LONG g_Running = 1;         /* 0 once the window is closed         */
-static INT g_DpmiPm = 0;                   /* set once the guest is switched to PM (spike) */
+LARGE_INTEGER g_QpcFrequency;
+INT      g_LockSite, g_LockHoldSite, g_LockWaitSite;
+UINT32 g_LockHoldMicroseconds, g_LockWaitMicroseconds, g_UiGapMicroseconds;
+INT      g_UiTickMinimumMs = UITICK_AUTO;
+DWORD    g_KeyMessageHistogram[8];     /* queue delay ms: 0,1,2,4,8,16,32,64+       */
+DWORD    g_KeyMessageMaximumMs, g_KeyMessageCount;
+DWORD    g_KeyDeliveryHistogram[8];     /* queue->INT 09h ms: same buckets           */
+DWORD    g_KeyDeliveryMaximumMs, g_KeyDeliveryCount;
+INT      g_KeyIrqRetry = KEYIRQ_RETRY_ON;      /* keyirq.txt = 0 restores single-attempt */
+HWND         g_Window;
+HANDLE       g_KeyEvent;            /* signalled when a key is pushed     */
+volatile LONG g_Running = 1;         /* 0 once the window is closed         */
+INT g_DpmiPm = 0;                   /* set once the guest is switched to PM (spike) */
 /* ── A CLIENT THAT EXITS INSIDE A NESTED RUN HAS STILL EXITED. (s80) ───────────────────
      The PM `AH=4Ch` arm answers 0, and the main loop reads 0 as "the client is gone". But
      the IRQ, mouse-callback and 0303 injectors run the client's code in loops of their
@@ -95,18 +122,18 @@ static INT g_DpmiPm = 0;                   /* set once the guest is switched to 
      it again: every selector freed, and the host access-violated in the fault trampoline
      (`DPMI FATAL c0000005`, bytes `1f 0f a9 0f a1 61` = pop ds/gs/fs, popa). One flag,
      set by the one arm that means "exited", checked where the main loop enters PM. */
-static INT g_PmClientExited = 0;
-static DWORD g_DpmiCodeBase = 0;          /* linear base of the guest PM code seg (retcs<<4) */
-static DWORD g_PatchMapLinear[DPMI_PMAP_SLOTS];      /* 0 = empty (linear 0 is never a site) */
-static BYTE  g_PatchMapVector[DPMI_PMAP_SLOTS];
-static INT g_PmNoIrq = 0;
+INT g_PmClientExited = 0;
+DWORD g_DpmiCodeBase = 0;          /* linear base of the guest PM code seg (retcs<<4) */
+DWORD g_PatchMapLinear[DPMI_PMAP_SLOTS];      /* 0 = empty (linear 0 is never a site) */
+BYTE  g_PatchMapVector[DPMI_PMAP_SLOTS];
+INT g_PmNoIrq = 0;
 /* THE EIP WE HANDED TO VdmStartExecution. The kernel's exception record reports a
    fault EIP that is NOT reliable -- E+0, E+1 and E+3 all measured, and pmal.com and
    pmstep.com fault at DIFFERENT offsets on byte-identical code. Since the guest has
    provably executed nothing when the fault arrives (pmal makes AL a program counter:
    AL=0 at the first fault, and unchanged at the second), this is where it really is. */
-static volatile LONG g_PmEntryEip = -1;
-static INT   g_BreakpointCount = 0;
+volatile LONG g_PmEntryEip = -1;
+INT   g_BreakpointCount = 0;
 /* --- run 52 hang-diagnostic telemetry (GH #2) ---------------------------------------
    The PM loop can stop advancing in three indistinguishable-in-the-log ways: (a) the
    main thread wedges INSIDE one DpmiEnterProtectedMode() because the kernel silently swallowed a
@@ -117,42 +144,42 @@ static INT   g_BreakpointCount = 0;
    only when the loop iterates -> distinguishes (b)/(c) from (a)), the guest CS:EIP handed
    to the LAST DpmiEnterProtectedMode (where a frozen guest is wedged), and VEH fire-counters
    (whether a real exception was ever delivered to us at all). */
-static volatile LONG  g_DpmiIteration     = 0;  /* host PM-loop iteration heartbeat (pre-enter) */
-static volatile LONG  g_DpmiDone     = 0;  /* PM loop finished (client exited cleanly) -> watchdog must NOT kill */
-static DWORD          g_IoExtra      = 0;  /* accesses absorbed by the LOOP burst */
-static DWORD          g_Irq0Injected      = 0;  /* INT 08h injections into the guest   */
-static DWORD          g_Irq0TimeLast[IRQ0TL_SECS];   /* deliveries per second of run     */
-static DWORD          g_Irq0GapHistogram[8];       /* ms: <1,1,2,4,8,16,32,64+         */
-static DWORD          g_Irq0GapMaximumMs, g_Irq0GapCount;
+volatile LONG  g_DpmiIteration     = 0;  /* host PM-loop iteration heartbeat (pre-enter) */
+volatile LONG  g_DpmiDone     = 0;  /* PM loop finished (client exited cleanly) -> watchdog must NOT kill */
+DWORD          g_IoExtra      = 0;  /* accesses absorbed by the LOOP burst */
+DWORD          g_Irq0Injected      = 0;  /* INT 08h injections into the guest   */
+DWORD          g_Irq0TimeLast[IRQ0TL_SECS];   /* deliveries per second of run     */
+DWORD          g_Irq0GapHistogram[8];       /* ms: <1,1,2,4,8,16,32,64+         */
+DWORD          g_Irq0GapMaximumMs, g_Irq0GapCount;
 /* Anomalous gaps (>= 2 programmed periods) and normal ones, with I/O as a RATE. */
-static DWORD          g_Irq0AnomalyCount, g_Irq0AnomalyMicroseconds, g_Irq0AnomalyIo;
-static DWORD          g_Irq0AnomalyRaise, g_Irq0AnomalyAttempts, g_Irq0AnomalyNie, g_Irq0AnomalyYield;
-static DWORD          g_Irq0AnomalyGeneration, g_Irq0AnomalyDelete;   /* B and A, by raise count */
-static volatile LONG  g_WoundDown    = 0;  /* exec loop exited: clean shutdown in progress */
-static INT   g_IoHotCount = 0;
-static WORD g_Unclaimed[IO_UNCLAIMED_MAX];
-static INT      g_UnclaimedCount = 0;
-static volatile DWORD g_DpmiLastCs  = 0;  /* guest CS after the last return                */
-static volatile DWORD g_DpmiLastEip = 0;  /* guest EIP after the last return               */
-static DWORD g_PmVector8ArmedMs = 0;
-static INT   g_PmAppHookedTimer = 0;
-static INT   g_DpmiVi = 1;                 /* DPMI virtual interrupt flag (INT 31h 0900/0901/0902) */
-static BYTE g_BiosUnimplemented[BYTE_VALUES];   /* GH #27: BIOS services a run actually wanted */
+DWORD          g_Irq0AnomalyCount, g_Irq0AnomalyMicroseconds, g_Irq0AnomalyIo;
+DWORD          g_Irq0AnomalyRaise, g_Irq0AnomalyAttempts, g_Irq0AnomalyNie, g_Irq0AnomalyYield;
+DWORD          g_Irq0AnomalyGeneration, g_Irq0AnomalyDelete;   /* B and A, by raise count */
+volatile LONG  g_WoundDown    = 0;  /* exec loop exited: clean shutdown in progress */
+INT   g_IoHotCount = 0;
+WORD g_Unclaimed[IO_UNCLAIMED_MAX];
+INT      g_UnclaimedCount = 0;
+volatile DWORD g_DpmiLastCs  = 0;  /* guest CS after the last return                */
+volatile DWORD g_DpmiLastEip = 0;  /* guest EIP after the last return               */
+DWORD g_PmVector8ArmedMs = 0;
+INT   g_PmAppHookedTimer = 0;
+INT   g_DpmiVi = 1;                 /* DPMI virtual interrupt flag (INT 31h 0900/0901/0902) */
+BYTE g_BiosUnimplemented[BYTE_VALUES];   /* GH #27: BIOS services a run actually wanted */
 
-static INT g_ExecDepth;
-static CHAR g_ProgramName[PROGRAM_NAME_SIZE];           /* fwd: the status strip's name (defined below) */
+INT g_ExecDepth;
+CHAR g_ProgramName[64] = HOST_PROGRAM_NONE;      /* first part of the status strip    */
 
-static WORD  g_PmReturnSelector = 0;
+WORD  g_PmReturnSelector = 0;
 /* GH #18: the PM-fault reflect selectors (0 = not installed). Run 67 corrected model:
    g_DpmiFaultSelector = the handler STACK selector (writable-data) written to [TIB+0x638];
    g_DpmiFaultCodeSelector = the handler CODE selector (with a BOP at DPMI_FAULT_COFF) whose
    {sel,off} we plant in the class table; g_FaultTable = the handler table (stride 0x10) the
    kernel reads via [VDM_TIB+8], indexed by fault class -- DOS_FLTSITE_N entries, each
    pointing at its OWN BOP so the index survives the reflect (see dos_layout.h). */
-static WORD  g_DpmiFaultSelector = 0;
-static WORD  g_DpmiFaultCodeSelector = 0;
-static INT   g_LdtNext = DPMI_LDT_FIRSTFREE;
-static volatile BYTE *g_TibDebug = 0;        /* VDM_TIB, for the crash VEH to dump guest state */
+WORD  g_DpmiFaultSelector = 0;
+WORD  g_DpmiFaultCodeSelector = 0;
+INT   g_LdtNext = DPMI_LDT_FIRSTFREE;
+volatile BYTE *g_TibDebug = 0;        /* VDM_TIB, for the crash VEH to dump guest state */
 
 /* Device IRQs 2-7 (the Sound Blaster's block-completion IRQ 5 above all). IRQ 0
    and 1 keep their existing dedicated paths; everything else latches here and is
@@ -168,32 +195,32 @@ static volatile BYTE *g_TibDebug = 0;        /* VDM_TIB, for the crash VEH to du
      The ASYNCHRONOUS injector covers the slave too: a latch that only waits for the
      next trap delivers once per timer tick to a guest that spins -- measured with
      p_irq8.com, 5 RTC interrupts in 5 BIOS ticks against ~280 on three real machines. */
-static volatile LONG  g_IrqNPending[PIC_LINES];
-static const BYTE  g_IrqOrder[14] = { 2, 8, 9, 10, 11, 12, 13, 14, 15, 3, 4, 5, 6, 7 };
-static DWORD          g_IrqRaised[PIC_LINES];     /* VddRaiseIrq calls, per line */
+volatile LONG  g_IrqNPending[PIC_LINES];
+const BYTE  g_IrqOrder[14] = { 2, 8, 9, 10, 11, 12, 13, 14, 15, 3, 4, 5, 6, 7 };
+DWORD          g_IrqRaised[PIC_LINES];     /* VddRaiseIrq calls, per line */
 /* Async preemption (session 11). g_HostCpu is a handle to the thread that runs the guest
    -- VdmQueueInterrupt's ServiceData -- duplicated once from the exec thread itself.
    g_QiBits are the [0x714] pending bits to set alongside the queue call, and
    g_QiRaise enables the periodic IRQ 5 the qirq probe listens for; both come from
    QIMODE_PATH so a mode can be retried without a rebuild. */
-static HANDLE         g_HostCpu          = NULL;
+HANDLE         g_HostCpu          = NULL;
 /* ON BY DEFAULT since v132: async injection is what makes a real game playable (a guest
    parked in its own handler never traps, so nothing else can deliver its timer or its
    keystrokes), and it is now gated by a real PIC. qimode can still turn it OFF (bit 6) for
    A/B testing, but nothing should depend on a flag file being present to work. */
-static INT            g_QiSuspended       = 1;   /* async-inject via SuspendThread+SetThreadContext */
+INT            g_QiSuspended       = 1;   /* async-inject via SuspendThread+SetThreadContext */
 /* Set only while the exec thread is inside VdmStartExecution, i.e. while the thread's
    CONTEXT genuinely is the guest's frame and our loop is not touching the VDM_TIB. The
    async injector refuses to act unless this is set, so it can never race the exec loop. */
-static volatile LONG  g_InExec       = 0;
+volatile LONG  g_InExec       = 0;
 /* #219: the window is inactive, so the machine is paused -- see HostPauseSet(). */
-static volatile LONG  g_PauseWant    = 0;
+volatile LONG  g_PauseWant    = 0;
 /* Signalled by the IRQ0 raise site when a tick is still pending after its one attempt.
    Declared here because HostIrqSink is above the courier itself; see
    TickCourierThread for what waits on it. */
-static HANDLE         g_CourierEvent;
-static DWORD          g_AsyncInjected     = 0;   /* successful async injections */
-static DWORD          g_AsyncBail    = 0;   /* attempts declined (guest not in a safe spot) */
+HANDLE         g_CourierEvent;
+DWORD          g_AsyncInjected     = 0;   /* successful async injections */
+DWORD          g_AsyncBail    = 0;   /* attempts declined (guest not in a safe spot) */
 /* ── ASYNCHRONOUS DELIVERY INTO **PROTECTED MODE**. ───────────────────────────────
    The V86 arm below has always bailed when the guest is not in V86, and that hole is
    exactly where a DOS/4GW game lives. It is not a detail: a protected-mode guest that
@@ -213,12 +240,12 @@ static DWORD          g_AsyncBail    = 0;   /* attempts declined (guest not in a
    ten early-outs fired. Session 18 concluded "the async mechanism is what tears the
    VDM down" from a control where async was ON; if it never injects, that attribution
    was to a mechanism that was not running. */
-static LONG g_AsyncWhy = 0;
-static DWORD g_AsyncWhyHistogram[PIC_LINES_PER_CHIP][ASYNC_WHY_MAX];
-static volatile LONG g_AsyncPmActive = 0;  /* an async PM interrupt is in flight     */
-static DWORD g_AsyncPmEip = 0, g_AsyncPmEsp = 0, g_AsyncPmEflags = 0;
-static WORD  g_AsyncPmCs  = 0, g_AsyncPmSs  = 0;
-static DWORD g_LeLoadBase   = 0;           /* first [LE CODE OBJECT] allocation */
+LONG g_AsyncWhy = 0;
+DWORD g_AsyncWhyHistogram[PIC_LINES_PER_CHIP][ASYNC_WHY_MAX];
+volatile LONG g_AsyncPmActive = 0;  /* an async PM interrupt is in flight     */
+DWORD g_AsyncPmEip = 0, g_AsyncPmEsp = 0, g_AsyncPmEflags = 0;
+WORD  g_AsyncPmCs  = 0, g_AsyncPmSs  = 0;
+DWORD g_LeLoadBase   = 0;           /* first [LE CODE OBJECT] allocation */
 /* ── ★★★★★ A DPMI REAL-MODE SIMULATION IS A WINDOW IN WHICH THE VDM HAS NO SETTLED
      MODE, AND THE ASYNC INJECTOR MUST NOT LOOK INTO IT. (s72, Doom's E1M1 crash)
      INT 31h AX=0300h/0301h/0302h save the client's protected-mode register file,
@@ -238,7 +265,7 @@ static DWORD g_LeLoadBase   = 0;           /* first [LE CODE OBJECT] allocation 
    ⚠ NOTHING IS LOST by refusing here. The injector's contract is already "observed
      only -- the next tick injects", so the interrupt is simply delivered a moment
      later, once the guest is back in a mode that exists. */
-static volatile LONG g_SimIntBusy = 0;
+volatile LONG g_SimIntBusy = 0;
 /* ── …BUT INSIDE THAT WINDOW THE MODE *IS* SETTLED WHILE VdmRunGuest IS RUNNING. (s81, ZAR) ──
      The nested 0301/0302 loop rewrites the TIB to V86, then calls VdmRunGuest() exactly as the
      main loop does -- and for the length of that call the frame is an ordinary V86 one.
@@ -251,10 +278,10 @@ static volatile LONG g_SimIntBusy = 0;
      g_InExec first on return -- the re-check after the suspend then catches a thread that
      has left. Only DEVICE lines whose real-mode vector is the guest's own code are let
      through: our stubs in DOS_HDLR_SEG BOP, and the nested loop services no such BOP. */
-static volatile LONG g_NestedRm = 0;
-static INT    g_PitPaceOn = 1, g_PitPaceMs = 1;
-static volatile LONGLONG g_Int15EventEnd;     /* QPC of the AH=83h deadline; 0 = none     */
-static DWORD g_Int15Waits, g_Int15Events, g_Int15Posted, g_Int15Busy;
+volatile LONG g_NestedRm = 0;
+INT    g_PitPaceOn = 1, g_PitPaceMs = 1;
+volatile LONGLONG g_Int15EventEnd;     /* QPC of the AH=83h deadline; 0 = none     */
+DWORD g_Int15Waits, g_Int15Events, g_Int15Posted, g_Int15Busy;
 /* ── ⚠⚠ DEFAULT OFF, AND THE REASON IS THE MEASUREMENT, NOT THE MECHANISM. ────────
      The mechanism above is established: raises - attempts == yields, exactly, in
      every run taken. What is NOT established is that this thread is a net win, and
@@ -271,8 +298,8 @@ static DWORD g_Int15Waits, g_Int15Events, g_Int15Posted, g_Int15Busy;
      which), not another single-run A/B. Shipping it on would be calling a result that
      the data does not support -- and this file's history is mostly the cost of doing
      exactly that. */
-static INT    g_CourierOn = 0;              /* courier.txt = 1 enables */
-static DWORD  g_CourierWakes, g_CourierInjected, g_CourierTries, g_CourierGiveUp;
+INT    g_CourierOn = 0;              /* courier.txt = 1 enables */
+DWORD  g_CourierWakes, g_CourierInjected, g_CourierTries, g_CourierGiveUp;
 /* ── ★ APPROXIMATE CPU SPEED: THE V86 HALF. (GH #56) ─────────────────────────────
      The arithmetic and the whole argument for it are in src/host/cpuspeed.h. This
      is the mechanism: a thread that, for the milliseconds the Bresenham says the
@@ -309,20 +336,20 @@ static DWORD  g_CourierWakes, g_CourierInjected, g_CourierTries, g_CourierGiveUp
      elapsed wall time, so a throttled guest gets the same 18.2 ticks a second it
      would on a slow real machine, rather than a compressed clock. Session 22
      proved that compressing game time is catastrophic; this deliberately does not. */
-static INT    g_CpuSpeedIndex      = 0;      /* CPUSPEED_* index; 0 = unlimited      */
-static volatile LONG g_CpuSpeedDuty = CPUSPEED_BP_FULL;   /* basis points, read by the thread */
-static volatile LONG g_CpuSpeedDutyRm = CPUSPEED_BP_FULL;   /* #225: the same, for a real-mode program */
-static DWORD  g_CpuSpeedRunMs, g_CpuSpeedHeldMs;   /* what the throttle really did */
-static DWORD  g_CpuSpeedMissed;   /* held millisecond the guest was not in exec for */
-static DWORD  g_CpuSpeedHoldMaximumMicroseconds;   /* #225: the longest single hold, and */
-static DWORD    g_CpuSpeedPeriods;      /* how many run/hold cycles were completed   */
-static DWORD    g_StartMs;            /* GetTickCount at throttle start, for exec_bp */
+INT    g_CpuSpeedIndex      = 0;      /* CPUSPEED_* index; 0 = unlimited      */
+volatile LONG g_CpuSpeedDuty = CPUSPEED_BP_FULL;   /* basis points, read by the thread */
+volatile LONG g_CpuSpeedDutyRm = CPUSPEED_BP_FULL;   /* #225: the same, for a real-mode program */
+DWORD  g_CpuSpeedRunMs, g_CpuSpeedHeldMs;   /* what the throttle really did */
+DWORD  g_CpuSpeedMissed;   /* held millisecond the guest was not in exec for */
+DWORD  g_CpuSpeedHoldMaximumMicroseconds;   /* #225: the longest single hold, and */
+DWORD    g_CpuSpeedPeriods;      /* how many run/hold cycles were completed   */
+DWORD    g_StartMs;            /* GetTickCount at throttle start, for exec_bp */
 
-static DWORD         g_CpuSpeedCooperativeCatches, g_CpuSpeedCooperativeTimeouts;
-static UINT32 g_TypematicPeriodMicroseconds =  TYPEMATIC_DEFAULT_PERIOD_US;
-static INT           g_MouseSensitivity = PERCENT;       /* percent; msens.txt tunes feel per-guest */
+DWORD         g_CpuSpeedCooperativeCatches, g_CpuSpeedCooperativeTimeouts;
+UINT32 g_TypematicPeriodMicroseconds =  TYPEMATIC_DEFAULT_PERIOD_US;
+INT           g_MouseSensitivity = PERCENT;       /* percent; msens.txt tunes feel per-guest */
 /* DPMI 0300 (simulate real-mode interrupt) vectors we do NOT service. See the 0300 arm. */
-static DWORD g_SimIntUnhandled, g_SimIntVector[IVT_VECTORS];
+DWORD g_SimIntUnhandled, g_SimIntVector[IVT_VECTORS];
 /* ── 0Ch / 14h: THE EVENT HANDLER. STORED AND REPORTED; NOT YET CALLED. ──────────────
      A guest installs a far pointer and a call mask and expects the driver to CALL IT
      on the masked events. We do not do that yet -- invoking guest code out of band
@@ -335,17 +362,17 @@ static DWORD g_SimIntUnhandled, g_SimIntVector[IVT_VECTORS];
      jump to 0000:0000. Now the pointer round-trips, and the install is COUNTED so a
      log says plainly "this guest wants callbacks and is not getting them" instead of
      leaving it to be re-diagnosed from behaviour. */
-static volatile LONG g_MouseEventMask, g_MouseEventSegment, g_MouseEventOffset;
-static INT    g_MouseCallbackActive;           /* a callback is in flight                    */
-static DWORD  g_MouseCallbackInjected, g_MouseCallbackDone, g_MouseCallbackLost, g_MouseCallbackPm, g_MouseCallbackStray;
+volatile LONG g_MouseEventMask, g_MouseEventSegment, g_MouseEventOffset;
+INT    g_MouseCallbackActive;           /* a callback is in flight                    */
+DWORD  g_MouseCallbackInjected, g_MouseCallbackDone, g_MouseCallbackLost, g_MouseCallbackPm, g_MouseCallbackStray;
 /* Why a delivery attempt did NOT happen, by reason -- a zero cb_inj must be readable:
    [0] in flight  [1] no mask/no events  [2] no handler  [3] inside our stub  [4] IF off */
-static DWORD  g_MouseCallbackWhy[MOUSE_CB_WHY_COUNT];           /* [5] = return stub clobbered (see MS_CB_RET_OFF) */
-static DWORD  g_MouseEventRaised;          /* event bits ever raised by the UI side      */
+DWORD  g_MouseCallbackWhy[MOUSE_CB_WHY_COUNT];           /* [5] = return stub clobbered (see MS_CB_RET_OFF) */
+DWORD  g_MouseEventRaised;          /* event bits ever raised by the UI side      */
 /* Input capture ("exclusivity") -- see InputCaptureSet. Declared up here because
    StatusUpdate, which is defined above it, reports the capture state and the chord
    that changes it on the right-hand half of the status strip. */
-static volatile LONG g_Captured = 0;
+volatile LONG g_Captured = 0;
 
 /* ── ★ THE GUEST ASKING FOR THE MOUSE IS WHAT TAKES IT. ──────────────────────────
      A DOS program that wants the mouse says so, through INT 33h, and a program that
@@ -371,7 +398,7 @@ static volatile LONG g_Captured = 0;
      set when we auto-capture and never cleared, so a user who escapes with Win+F10
      stays escaped -- the guest goes on polling INT 33h every frame, and without the
      latch every one of those polls would drag the pointer straight back in. */
-static volatile LONG g_MouseWantCapture = 0;   /* guest used the mouse; UI: please grab */
+volatile LONG g_MouseWantCapture = 0;   /* guest used the mouse; UI: please grab */
 /* RULE 1 of the capture policy, and the ONE predicate for it -- "has this guest ever
    used the mouse". Defined here rather than beside the rules it serves because the
    status strip, which is built long before InputCaptureSet, has to answer it too.
@@ -391,16 +418,16 @@ static volatile LONG g_MouseWantCapture = 0;   /* guest used the mouse; UI: plea
      the arrow over the video would leave NO pointer in a graphics mode where our INT 33h
      draws none (09h shapes are accepted and discarded); unmeasured which guests that is. Default OFF = capture, the behaviour every build so far has had.
      Live: OK in the dialog releases a held capture at once (SettingsApply). */
-static volatile LONG g_MouseSeamless = 0;
-static NE_MODULE g_WowModule[WOW_MAX_MOD];
-static BYTE  *g_WowImage[WOW_MAX_MOD];
-static INT       g_WowModuleCount = 0;
+volatile LONG g_MouseSeamless = 0;
+NE_MODULE g_WowModule[WOW_MAX_MOD];
+BYTE  *g_WowImage[WOW_MAX_MOD];
+INT       g_WowModuleCount = 0;
 
-static WORD      g_PmTransferSegment  = 0;
-static WORD      g_WowPspSelector[WOW_PSP_TRACK];
-static INT       g_WowPspCount = 0;
+WORD      g_PmTransferSegment  = 0;
+WORD      g_WowPspSelector[WOW_PSP_TRACK];
+INT       g_WowPspCount = 0;
 
-static INT  g_WowLaunch = 0;                /* `-w`: this VDM hosts Win16        */
+INT  g_WowLaunch = 0;                /* `-w`: this VDM hosts Win16        */
 /* ── ★ TWO COPIES, BECAUSE THE MENU AND THE DIALOG MEAN DIFFERENT THINGS. ────────
      g_Settings is WHAT IS IN FORCE. g_SettingsDisk is WHAT THE REGISTRY HOLDS. They start
      identical and diverge only when something is tried from a menu.
@@ -413,8 +440,8 @@ static INT  g_WowLaunch = 0;                /* `-w`: this VDM hosts Win16       
      oversight: if the dialog showed the live values instead, then changing an audio
      setting and pressing OK would silently make every display experiment permanent.
      Two meanings, two copies, and the one you edit is the one you save. */
-static NTVDMEX_SETTINGS g_Settings;
-static DOS_MACHINE   *g_DosMachine;          /* so the DOS version can be changed live */
+NTVDMEX_SETTINGS g_Settings;
+DOS_MACHINE   *g_DosMachine;          /* so the DOS version can be changed live */
 
 /* ── THE CARD, IN ONE PLACE, BECAUSE THREE THINGS HAVE TO AGREE ABOUT IT. ────────
      vdd_sb answers at this port and raises this IRQ; the DMA controller moves the
@@ -422,14 +449,14 @@ static DOS_MACHINE   *g_DosMachine;          /* so the DOS version can be change
      one thing while doing another is worse than saying nothing at all -- a driver
      that believes the string waits on an interrupt that arrives elsewhere -- so the
      numbers exist once and every consumer reads them from here. */
-static DOS_SB_CONFIG g_SbConfig = { SB_DEFAULT_BASE, SB_DEFAULT_IRQ, SB_DEFAULT_DMA8,
+DOS_SB_CONFIG g_SbConfig = { SB_DEFAULT_BASE, SB_DEFAULT_IRQ, SB_DEFAULT_DMA8,
                              0 /* H is not advertised by default -- see dos_env.h */,
                              DOS_SB_DEFAULT_TYPE, 0, 0 };
 /* Whether the extended/expanded memory managers announce themselves at all. Off
    means INT 2Fh AX=4300 does not answer and there is no INT 67h vector, which is
    the state a real machine is in with no HIMEM/EMM386 line in CONFIG.SYS -- and
    which some games specifically want. */
-static INT g_XmsOn = 1, g_EmsOn = 1;
+INT g_XmsOn = 1, g_EmsOn = 1;
 
 /* ── PROBE A GUEST POINTER WITHOUT FAULTING. Session 17, and it cost a run. ────────
    IsBadReadPtr does its job by TOUCHING the memory inside an SEH frame -- so on a bad
@@ -445,12 +472,12 @@ static INT g_XmsOn = 1, g_EmsOn = 1;
 /* The thread that RUNS THE GUEST (the main one). Recorded so the fatal dump can say
    whether a host-side crash happened on it or on one of the worker threads -- audio,
    present, watchdog. Those are different bugs and the dump used to name neither. */
-static DWORD g_GuestThreadId = 0;
-static INT   g_WowSchedOn = 0;
+DWORD g_GuestThreadId = 0;
+INT   g_WowSchedOn = 0;
 /* s92 (#306): every task that is not running, parked (wowsched.h WOWSCHED_MAX). */
-static WOWSCHED_SLOT g_WowSchedSlots[WOWSCHED_MAX];
-static INT   g_WowWindowNested;            /* defined with the nested run (WowCall16SyncEx) */
-static BYTE *g_WowShadow = NULL;
+WOWSCHED_SLOT g_WowSchedSlots[WOWSCHED_MAX];
+INT g_WowWindowNested = 0;
+BYTE *g_WowShadow = NULL;
 /* ── ★★★ THE DEFAULT PM HANDLER FOR A HARDWARE IRQ, WHEN THE GUEST OWNS THE REAL-MODE
      VECTOR: A TRUE NESTED-V86 REFLECTION. (s81, ZAR's streaming audio) ───────────────
      DPMI 0.9: a protected-mode interrupt nobody hooked in PM is reflected to the real-mode
@@ -467,4 +494,4 @@ static BYTE *g_WowShadow = NULL;
      ISR, so nothing is marshalled. Returns 1 when the ISR ran to its IRET.
    ⚠ Its own stack, below 0301's default one (the code segment at FF00), so a reflection
      can never land on a frame that call is using. */
-static DWORD g_PmIrqRmReflects = 0, g_PmIrqRmFail = 0;
+DWORD g_PmIrqRmReflects = 0, g_PmIrqRmFail = 0;
