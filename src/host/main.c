@@ -422,35 +422,6 @@ DWORD g_DmxMixerOk;
 DWORD g_DmxOverdue;
 DWORD g_DmxOverdueMaximum;
 DWORD g_DmxAnyBusy;
-/* PACE THE PIT:
- * HostPitSync() advances the emulated 8254 by however much wall-clock has elapsed
- * since the last call, raising one IRQ0 per reload period -- so its CALL RATE sets
- * how evenly the guest's ticks land. It is driven by the UI thread and by guest I/O
- * traps, and measured it runs 65 times a second against a 140 Hz timer: each call
- * therefore raises about two ticks, which go out back-to-back.
- * Measured interval between DELIVERED IRQ0s (n=6069, 135/s, so 7.4 ms if even):
- *     <0.5ms  52.7%     8-16ms  22.9%     16-32ms  18.6%     max 48 ms
- * 53% arrive in BURSTS and 28% of gaps exceed 11.6 ms -- one DMA block. That is the
- * whole audio defect: DMX's mixer is armed by the SB block IRQ (next_due = NOW) and
- * serviced on the next timer tick, so a gap longer than a block lets a second block
- * arm before the first is serviced. The two arms COLLAPSE into one refill and a block
- * is never filled -- 32.8% measured, against 28% of gaps being over-length.
- * - So call it far more often. At ~1 kHz each sync raises at most one tick and the
- *   ticks come out evenly, WITHOUT changing the rate: the 8254 still advances by real
- *   elapsed time and the guest still gets the 140 Hz it programmed. This is a pacing
- *   change, not a rate change -- which matters, because session 22 proved that
- *   delivering MORE ticks per opportunity (DPMI_IRQ0_BATCH) compresses game time and
- *   is catastrophic.
- *
- * [CAUTION]: 1 ms Sleep needs the multimedia timer resolution raised; without timeBeginPeriod
- * XP's default granularity is ~15.6 ms and this thread would run slower than the UI
- * one it is meant to replace. Loaded dynamically, as audio_wave.c already does for
- * waveOut, so the import allowlist is unaffected.
- *
- * [CAUTION]: It takes g_Lock like every other caller, so it is a knob (pitpace.txt = 0 to
- * disable) and the lock figures must be read on the first run with it on.
- */
-typedef MMRESULT (WINAPI *PFN_TIME_BEGIN_PERIOD)(UINT);
 static HANDLE g_PitPaceThread;
 /* #256: 1 while the TOP-LEVEL PM loop is dispatching -- the one place a PM BIOS wait may
  * re-execute its BOP (every nested loop counts its passes). See the PM INT 15h 86h arm.
