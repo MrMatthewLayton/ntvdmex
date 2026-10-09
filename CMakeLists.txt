@@ -97,6 +97,7 @@ endif()
 add_executable(ntvdmhost
     src/host/main.c
     src/host/log.c
+    src/host/cpuspeed.c
     src/host/pcspeaker.c
     src/vdd/present_scale.c
     src/vdm/v86.c

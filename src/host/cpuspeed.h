@@ -74,25 +74,8 @@
 #define CPUSPEED_BP_FULL_UL     10000ul
 #define CPUSPEED_DEFAULT_ROUND_TRIP_US 100ul   /* unmeasured: a sane placeholder  */
 #define CPUSPEED_MAX_DEBT_US  100000ll  /* 100 ms ceiling on one debt              */
-static const UINT g_CpuSpeedMhz[CPUSPEED_COUNT] = {
-    0,      /*  0: Host (Unlimited) -- the default                                */
-    1000,   /*  1: Intel Pentium III 1 GHz                                        */
-    600,    /*  2: Intel Pentium III 600 MHz                                      */
-    300,    /*  3: Intel Pentium II 300 MHz                                       */
-    200,    /*  4: Intel Pentium MMX 200 MHz                                      */
-    133,    /*  5: Intel Pentium 133 MHz                                          */
-    100,    /*  6: Intel 486DX4 100 MHz                                           */
-    66,     /*  7: Intel 486DX2 66 MHz                                            */
-    50,     /*  8: Intel 486DX 50 MHz                                             */
-    33,     /*  9: Intel 386DX 33 MHz                                             */
-    16      /* 10: Intel 386DX 16 MHz                                             */
-};
-static PCSTR const g_CpuSpeedNames[CPUSPEED_COUNT] = {
-    "Host (Unlimited)", "Intel Pentium III 1 GHz", "Intel Pentium III 600 MHz",
-    "Intel Pentium II 300 MHz", "Intel Pentium MMX 200 MHz", "Intel Pentium 133 MHz",
-    "Intel 486DX4 100 MHz", "Intel 486DX2 66 MHz", "Intel 486DX 50 MHz",
-    "Intel 386DX 33 MHz", "Intel 386DX 16 MHz"
-};
+extern const UINT g_CpuSpeedMhz[CPUSPEED_COUNT];
+extern PCSTR const g_CpuSpeedNames[CPUSPEED_COUNT];
 /* The '|'-separated form SET_DEFS wants. Kept adjacent to the table above so the
    two cannot drift; cpuspeed_test.c checks that they still agree. */
 #define CPUSPEED_ITEMS \
@@ -103,11 +86,7 @@ static PCSTR const g_CpuSpeedNames[CPUSPEED_COUNT] = {
 
 /* Can THIS PC offer rung `idx`? Host is always there; a rung is only a real throttle
    below the host's own clock (`host_mhz`, 0 = unknown -> offer everything). */
-static INT CpuSpeedIsAvailable(UINT index, UINT hostMhz)
-{
-    if (index == 0u || index >= CPUSPEED_COUNT) return index == 0u;
-    return hostMhz == 0u || g_CpuSpeedMhz[index] < hostMhz;
-}
+INT CpuSpeedIsAvailable(UINT index, UINT hostMhz);
 
 /* ── THE ONE CALIBRATION CONSTANT. ───────────────────────────────────────────────
      "How fast does an unthrottled NTVDMEX look to a DOS program, in MHz?"
@@ -171,33 +150,8 @@ static INT CpuSpeedIsAvailable(UINT index, UINT hostMhz)
    run whose guest time E included Doom's start-up; the rungs then measured ~10% fast
    (486DX2-66 37.1 vs 33.1, DX4-100 48.6 vs 43.8, P133 86.2 vs 80.2), so 664 x 1.10. */
 #define CPUSPEED_FPS_PER_KMHZ10 730u
-static const UINT g_CpuSpeedDoomFps10[CPUSPEED_COUNT] = {
-    0,      /*  0: Host -- unthrottled                                           */
-    2100,   /*  1: Pentium III 1 GHz   (TU Wien PIII-800 188-202; above any cap)  */
-    1900,   /*  2: Pentium III 600     (TU Wien PIII-500 183-191)                 */
-    1150,   /*  3: Pentium II 300      (between PII-233 105.4 and PII-350 122.4)  */
-    976,    /*  4: Pentium MMX 200     (thandor 97.63)                            */
-    802,    /*  5: Pentium 133         (thandor 80.23)                            */
-    438,    /*  6: 486DX4 100          (thandor 43.75)                            */
-    331,    /*  7: 486DX2 66           (thandor 33.12)                            */
-    280,    /*  8: 486DX 50            (thandor 28.00)                            */
-    75,     /*  9: 386DX 33            (thandor Am386DX-33 7.47)                  */
-    29      /* 10: 386DX 16            (386DX-25 4.58 scaled by clock, 16/25)     */
-};
 
-static UINT CpuSpeedDutyBp(UINT index, UINT referenceMhz)
-{
-    UINT64 ceiling10;                   /* fps x 10 at a 100% share, this host */
-    UINT fps10;
-    if (index >= CPUSPEED_COUNT || referenceMhz == 0u) return CPUSPEED_BP_FULL_U;
-    fps10 = g_CpuSpeedDoomFps10[index];
-    if (fps10 == 0u) return CPUSPEED_BP_FULL_U;
-    ceiling10 = (UINT64)CPUSPEED_FPS_PER_KMHZ10 * referenceMhz / (UINT64)MEGAHERTZ_PER_GIGAHERTZ_U;
-    if (ceiling10 == 0ull || fps10 >= ceiling10) return CPUSPEED_BP_FULL_U;   /* a ceiling, never a boost */
-    /* Round UP, and never to zero: a duty of 0 would stop the guest dead. */
-    {   UINT64 dutyBp = ((UINT64)fps10 * (UINT64)CPUSPEED_BP_FULL_U + ceiling10 - 1ull) / ceiling10;
-        return dutyBp ? (UINT)dutyBp : 1u; }
-}
+UINT CpuSpeedDutyBp(UINT index, UINT referenceMhz);
 
 /* ── #225: A REAL-MODE PROGRAM GETS ITS OWN SHARE. ─────────────────────────────────
      The ladder above is Doom's: 32-bit protected-mode code, verified on the rig (the
@@ -214,13 +168,7 @@ static UINT CpuSpeedDutyBp(UINT index, UINT referenceMhz)
      against published real-486 results, blocked on #238 (it times itself on a 1 kHz
      timer we deliver ~44% of). */
 #define CPUSPEED_RM_PCT 200u
-static UINT CpuSpeedRealModeDutyBp(UINT protectedModeBp)
-{
-    UINT64 dutyBp;
-    if (protectedModeBp == 0u || protectedModeBp >= CPUSPEED_BP_FULL_U) return CPUSPEED_BP_FULL_U;
-    dutyBp = (UINT64)protectedModeBp * CPUSPEED_RM_PCT / PERCENT_U;
-    return dutyBp >= (UINT64)CPUSPEED_BP_FULL_U ? CPUSPEED_BP_FULL_U : (UINT)dutyBp;
-}
+UINT CpuSpeedRealModeDutyBp(UINT protectedModeBp);
 
 /* ── THE V86 HALF: HOW LONG THE GUEST RUNS, AND HOW LONG IT IS HELD. ─────────────
      One millisecond is the floor: Sleep() cannot express less even with the
@@ -288,33 +236,7 @@ static UINT CpuSpeedRealModeDutyBp(UINT protectedModeBp)
 #define CPUSPEED_GRAN_MAX_MS    250u   /* coarser than this is the old slideshow    */
 #define CPUSPEED_GRAN_DEFAULT   16u    /* one 60 Hz frame: the bar to clear         */
 
-/* The finest period this host can actually deliver at `duty_bp`, given a measured
-   round-trip cost. Below rt_us/duty there is no run phase left to shorten.
-   ⚠ ALSO FLOORED BY THE HOLD: Sleep cannot express less than a millisecond, so a
-     period whose OFF phase rounds to zero delivers no throttling at all -- the debt
-     carries, but the guest runs free meanwhile. Hence the second term. */
-static UINT CpuSpeedPeriodFloorMs(UINT dutyBp, unsigned long roundTripUs)
-{
-    unsigned long byRun, byHold;
-    if (!dutyBp || dutyBp >= CPUSPEED_BP_FULL_U) return CPUSPEED_GRAN_MIN_MS;
-    if (!roundTripUs) roundTripUs = CPUSPEED_DEFAULT_ROUND_TRIP_US;                      /* unmeasured: a sane placeholder */
-    byRun  = (roundTripUs * (unsigned long)CPUSPEED_BP_FULL_U + dutyBp - 1ul) / dutyBp / (unsigned long)MICROSECONDS_PER_MILLISECOND_U;  /* ms */
-    byHold = ((unsigned long)CPUSPEED_BP_FULL_U + (CPUSPEED_BP_FULL_U - dutyBp) - 1ul) / (CPUSPEED_BP_FULL_U - dutyBp);
-    if (byHold < 1ul) byHold = 1ul;
-    { unsigned long floorMs = byRun > byHold ? byRun : byHold;
-      if (floorMs < CPUSPEED_GRAN_MIN_MS) floorMs = CPUSPEED_GRAN_MIN_MS;
-      if (floorMs > CPUSPEED_GRAN_MAX_MS) floorMs = CPUSPEED_GRAN_MAX_MS;
-      return (UINT)floorMs; }
-}
 
-/* How long to let the guest run this period, in MICROSECONDS, for a target period.
-   Returns 0 when the answer is "do not wait at all -- reach for it immediately",
-   which is the fine end of the slider and the whole point of it. */
-static unsigned long CpuSpeedRunUs(UINT dutyBp, UINT periodMs)
-{
-    if (!dutyBp || dutyBp >= CPUSPEED_BP_FULL_U) return 0ul;
-    return ((unsigned long)periodMs * (unsigned long)MICROSECONDS_PER_MILLISECOND_U * dutyBp) / (unsigned long)CPUSPEED_BP_FULL_U;
-}
 
 /* ── ★ THE RUN PHASE IS MEASURED, NOT ASSUMED, AND THAT IS THE WHOLE DESIGN. ─────
      The second cut asked for a 1 ms run and computed the hold from that constant.
@@ -374,15 +296,9 @@ static unsigned long CpuSpeedRunUs(UINT dutyBp, UINT periodMs)
      the threshold sits between. Keyed on duty, which already carries the reference. */
 #define CPUSPEED_RUN_FLOOR_BP  32u
 
-static UINT64 CpuSpeedHoldFor(UINT64 executedUs,
+UINT64 CpuSpeedHoldFor(UINT64 executedUs,
                                             UINT64 wallUs,
-                                            UINT dutyBp)
-{
-    UINT64 targetUs;
-    if (dutyBp == 0u || dutyBp >= CPUSPEED_BP_FULL_U) return 0ull;   /* unlimited: never hold */
-    targetUs = (executedUs * (UINT64)CPUSPEED_BP_FULL_U) / (UINT64)dutyBp;
-    return targetUs > wallUs ? targetUs - wallUs : 0ull;
-}
+                                            UINT dutyBp);
 
 /* One period of the controller, as a PURE FUNCTION so the loop and the deterministic
    test run the identical law (tests/unit/cpuspeed_test.c drives this against a
@@ -395,26 +311,16 @@ static UINT64 CpuSpeedHoldFor(UINT64 executedUs,
    throws away is accumulated LEAD (the guest ran slower than asked), which must not
    be bankable as a later burst. A stall (wall jumps, exec flat) lands here too and is
    correctly forgiven. The window bound is the only other reason to rebaseline. */
-static UINT64 CpuSpeedStep(UINT64 executedUs, UINT64 wallUs,
+UINT64 CpuSpeedStep(UINT64 executedUs, UINT64 wallUs,
                                         UINT dutyBp, UINT64 capUs,
-                                        INT *isReset)
-{
-    UINT64 rawHold = CpuSpeedHoldFor(executedUs, wallUs, dutyBp);
-    UINT64 hold = rawHold > capUs ? capUs : rawHold;
-    *isReset = (rawHold == 0ull) || (wallUs > CPUSPEED_MAX_WINDOW_US);
-    return hold;
-}
+                                        INT *isReset);
 
 /* The duty actually achieved over a window, in basis points: exec / wall. This is
    what the guest FEELS, and it equals the target only when the target is reachable
    -- below the port-trap ceiling and inside the hold cap. Logged beside the
    requested duty so the two can disagree in the open rather than the label lying. */
-static UINT CpuSpeedDeliveredBp(UINT64 executedUs,
-                                      UINT64 wallUs)
-{
-    if (!wallUs) return 0u;
-    return (UINT)((executedUs * (UINT64)CPUSPEED_BP_FULL_U) / wallUs);
-}
+UINT CpuSpeedDeliveredBp(UINT64 executedUs,
+                                      UINT64 wallUs);
 
 /* ── THE INTERPRETER HALF: PACE BY INSTRUCTIONS, NOT BY DUTY. ────────────────────
      Here we know exactly how much work was done, so the throttle can be precise
@@ -431,11 +337,7 @@ typedef struct _CPUSPEED_PACE { INT64 OwedUs; } CPUSPEED_PACE, *PCPUSPEED_PACE;
      only, and it is a scale factor -- if the interpreter comes out uniformly fast
      or slow against the V86 path at the same setting, this is the constant to move. */
 #define CPUSPEED_CPI 3u
-static unsigned long CpuSpeedInstructionsPerSecond(UINT index)
-{
-    if (index == 0u || index >= CPUSPEED_COUNT) return 0ul;
-    return (unsigned long)g_CpuSpeedMhz[index] * (unsigned long)HERTZ_PER_MEGAHERTZ_U / CPUSPEED_CPI;
-}
+unsigned long CpuSpeedInstructionsPerSecond(UINT index);
 
 /* Charge `ran` instructions that really took `elapsed_us`, and return how many
    WHOLE MILLISECONDS to sleep to make them take as long as the setting says they
@@ -444,18 +346,7 @@ static unsigned long CpuSpeedInstructionsPerSecond(UINT index)
    second would otherwise book a second of sleep and stall the guest visibly; and a
    guest running FASTER than the setting (elapsed > owed) must not accumulate
    negative debt it can spend later as a burst. Both ends are held. */
-static INT CpuSpeedCharge(CPUSPEED_PACE *pace, unsigned long ran, unsigned long instructionsPerSecond,
-                           INT64 elapsedUs)
-{
-    INT64 wantedUs, milliseconds;
-    if (!instructionsPerSecond || !ran) { if (pace->OwedUs < 0) pace->OwedUs = 0; return 0; }
-    wantedUs = ((INT64)ran * (INT64)MICROSECONDS_PER_SECOND_U) / (INT64)instructionsPerSecond;
-    pace->OwedUs += wantedUs - elapsedUs;
-    if (pace->OwedUs < 0) pace->OwedUs = 0;              /* no credit for running fast */
-    if (pace->OwedUs > CPUSPEED_MAX_DEBT_US) pace->OwedUs = CPUSPEED_MAX_DEBT_US; /* 100 ms ceiling on one debt */
-    milliseconds = pace->OwedUs / (INT64)MICROSECONDS_PER_MILLISECOND_U;
-    pace->OwedUs -= milliseconds * (INT64)MICROSECONDS_PER_MILLISECOND_U;
-    return (INT)milliseconds;
-}
+INT CpuSpeedCharge(CPUSPEED_PACE *pace, unsigned long ran, unsigned long instructionsPerSecond,
+                           INT64 elapsedUs);
 
 #endif /* CPUSPEED_H */
