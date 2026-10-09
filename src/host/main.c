@@ -85,8 +85,8 @@ typedef CHAR BIOS_KBDACT_FITS[(sizeof(g_BiosKeyboardActionCode) <= DOS_KBDACT_LE
 #include "vdd_video.h"
 #include "sysfont.h"        /* #322: the VGA tables from the system fonts */
 /* #321: what the last font build did (Settings shows it) and the TextFont it was for. */
-static SYSFONT_REPORT g_SysFontReport;
-static CHAR             g_TextFontLive[NTVDMEX_PATH_MAX];
+SYSFONT_REPORT g_SysFontReport;
+CHAR             g_TextFontLive[NTVDMEX_PATH_MAX];
 #include "vdd_input.h"
 #include "vdd_speaker.h"
 #include "vdd_joy.h"
@@ -111,7 +111,6 @@ static CHAR             g_TextFontLive[NTVDMEX_PATH_MAX];
 #include "host_dpmi.c"
 #include "host_dpmi_int.c"
 #include "host_wow.c"
-#include "host_settings.c"
 #include "host_window.c"
 
 
@@ -367,7 +366,7 @@ static DMA_STATE    g_Dma;       static NTVDD_DEVICE g_DmaDevice;
 static BYTE      g_GusDram[GUS_DRAM_SIZE];
 INT          g_GusOn = 0;
 static WORD     g_Emu8KDram[EMU8K_DRAM_WORDS];
-static PCSTR g_DosVersionWhy = 0;
+PCSTR g_DosVersionWhy = 0;
 static INT          g_DosVersionShell = 0;      /* #208: an XP shell is present, told 5.00 itself */
 UINT32 g_PitAsyncAttempts;
 static DWORD g_KeyPmLogged  = 0;           /* bounded KEYPM account; see the PM exec loop */
@@ -764,9 +763,9 @@ static INT       g_WowEntering = 0;   /* the guest is krnl386, not DOS     */
      which is what the Skyroads timing guard and every rig measurement assume. */
 HANDLE g_ExecThread;                        /* the exec (guest) thread               */
 INT    g_ExecPriorityForeground = THREAD_PRIORITY_NORMAL;
-static NTVDMEX_SETTINGS g_SettingsDisk;
+NTVDMEX_SETTINGS g_SettingsDisk;
 
-static INT g_DspVersionForced;                /* cfg\dspver.txt beat the model's version */
+INT g_DspVersionForced;                /* cfg\dspver.txt beat the model's version */
 
 /* ── #136: CONVENTIONAL MEMORY, AND WHERE IT ENDS. ────────────────────────────────
      g_ConventionalKbWant is the setting (memory FITTED, 64..640 KB); g_DosMemoryTop is the
@@ -777,7 +776,7 @@ static INT g_DspVersionForced;                /* cfg\dspver.txt beat the model's
      the MCB chain. ⚠ START-UP ONLY: SettingsApply runs again on a dialog OK, but moving
      the top of an arena a program is already running in is not something any machine
      does; the new value is the next program's. */
-static UINT g_ConventionalKbWant = BIOS_CONV_KB_MAX;
+UINT g_ConventionalKbWant = BIOS_CONV_KB_MAX;
 /* ── WHERE DOES A MAP-MASK WRITE GO IF IT DOES NOT MOVE THE WINDOW? ──────────────────
      The last run wrote the map mask 2,042,942 times and swapped 1,867,689 times: 175,253
      writes -- 8.6% -- did not move the window, and nothing says which of the four ways

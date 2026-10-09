@@ -1,11 +1,22 @@
 /* host_settings.c -- the Settings dialog: applying, loading and showing every setting and where its
  *   value came from.
  *
- * Part of the host's single translation unit: #included by main.c after host_internal.h. */
+ * Its own translation unit (#335): declared in host_settings.h. */
+#include "host_state.h"
+#include "log.h"
+#include <commctrl.h>
+#include "host_settings.h"
+#include "main.h"
+#include "host_window.h"
+#include "host_bios.h"
+#include "host_dos.h"
+#include "host_input.h"
+#include "host_timing.h"
+
 
 /* The reported DOS version, when something overrides the dialog's (s80): the XP shell's
    5.00, or cfg\dosver.txt. The dialog SHOWS it and does not push over it. */
-static INT          g_DosVersionForced = 0;
+INT          g_DosVersionForced = 0;
 INT          g_JoystickPovMap;   /* JoystickGamepad: map the pad's D-pad
                                        (POV hat) onto axis A -- what a DOS
                                        platformer actually wants from a pad */
@@ -18,11 +29,11 @@ static const INT UITICK_MS[UITICK_CHOICES] = { UITICK_AUTO, 5, 10, 15, 20 };   /
      point it is read; SettingsLogSources() prints the lot once they have all run. */
 static PCSTR g_SettingsOverrideBy[SET_COUNT];      /* what overrode the row, if anything */
 static DWORD       g_SettingsOverrideValue[SET_COUNT];    /* ...and the value it put in force   */
-static VOID SettingsNoteOverride(INT settingId, PCSTR source, DWORD value)
+VOID SettingsNoteOverride(INT settingId, PCSTR source, DWORD value)
 {
     g_SettingsOverrideBy[settingId] = source; g_SettingsOverrideValue[settingId] = value;
 }
-static PCSTR g_ShellOverride;               /* #203: cfg\shell.txt beat DosPrompt */
+PCSTR g_ShellOverride;               /* #203: cfg\shell.txt beat DosPrompt */
 
 /* ⚠ THE ROWS SettingsApply() AND ITS NEIGHBOURS ACTUALLY READ. A row not in this
      list is stored and shown in the dialog and changes nothing (GH #136), and the log
@@ -80,7 +91,7 @@ static PCSTR SettingsDeadWhyText(INT index)
     }
 }
 
-static VOID SettingsLogSources(VOID)
+VOID SettingsLogSources(VOID)
 {
     static PCSTR const source[] = { "default", "registry",
                                        "registry value OUT OF RANGE -> default" };
@@ -120,7 +131,7 @@ static VOID SettingsLogSources(VOID)
 }
 
 enum { TYPEMATIC_RATE_MIN = 2 };   /* SettingsApply: below it, the BIOS default rate stands */
-static VOID SettingsApply(HWND window, const NTVDMEX_SETTINGS *settings, INT live)
+VOID SettingsApply(HWND window, const NTVDMEX_SETTINGS *settings, INT live)
 {
     g_MouseSensitivity        = (INT)settings->Values[SET_MSENS];
     /* #136: the keyboard layout the BIOS translates with (vdd_input.c, from XP's own
@@ -251,7 +262,7 @@ static VOID SettingsApply(HWND window, const NTVDMEX_SETTINGS *settings, INT liv
      choose. */
 #define FSINT_FLAG   CFG_("fsinteger.flag")
 
-static VOID SettingsApplyPresent(PRESENT_DDRAW *present, const NTVDMEX_SETTINGS *settings)
+VOID SettingsApplyPresent(PRESENT_DDRAW *present, const NTVDMEX_SETTINGS *settings)
 {
     present->IsVsync  = (INT)(settings->Values[SET_VSYNC]  ? 1 : 0);
     present->Filter = (INT)(settings->Values[SET_FILTER] <= PRESENT_FILTER_SHARP ? settings->Values[SET_FILTER] : PRESENT_FILTER_SHARP);   /* #325 */
@@ -270,7 +281,7 @@ static VOID SettingsApplyPresent(PRESENT_DDRAW *present, const NTVDMEX_SETTINGS 
                     || (GetFileAttributesA(DDRAWFS_FLAG) != INVALID_FILE_ATTRIBUTES);
 }
 
-static VOID SettingsApplyDevices(const NTVDMEX_SETTINGS *settings)
+VOID SettingsApplyDevices(const NTVDMEX_SETTINGS *settings)
 {
     VddAudioSetMaster(&g_Audio, settings->Values[SET_VOLUME], (INT)settings->Values[SET_MUTE]);
     /* The speaker VDD stays on the bus either way: port 0x61 must keep answering
@@ -292,7 +303,7 @@ enum { SETTINGS_RATE_CHOICES = 3, SETTINGS_RATE_DEFAULT = 1 };   /* SettingsOutp
    and the waveOut device must be opened at the same rate or every sample is
    resampled to a clock nothing is running at. One function so the two callers
    cannot disagree. */
-static UINT32 SettingsOutputHz(const NTVDMEX_SETTINGS *settings)
+UINT32 SettingsOutputHz(const NTVDMEX_SETTINGS *settings)
 {
     static const UINT32 rates[SETTINGS_RATE_CHOICES] = { 22050u, 44100u, 48000u };
     return rates[settings->Values[SET_RATE] < SETTINGS_RATE_CHOICES ? settings->Values[SET_RATE] : SETTINGS_RATE_DEFAULT];
@@ -313,7 +324,7 @@ static VOID SettingsApplyTextFont(VOID)
     VddVideoRefreshFonts(&g_Video);
 }
 
-static VOID SettingsApplyLive(HWND window)
+VOID SettingsApplyLive(HWND window)
 {
     SettingsApply(window, &g_Settings, SETTINGS_APPLY_LIVE);
     SettingsApplyTextFont();
@@ -699,7 +710,7 @@ static VOID SettingsFillCpuInfo(HWND dialog)
     RegCloseKey(key);
 }
 enum { THEME_ETDT_ENABLE = 0x2, THEME_ETDT_USETABTEXTURE = 0x4 };   /* uxtheme.h's EnableThemeDialogTexture flags */
-static INT_PTR CALLBACK SettingsPageProcedure(HWND dialog, UINT message, WPARAM wParam, LPARAM lParam)
+INT_PTR CALLBACK SettingsPageProcedure(HWND dialog, UINT message, WPARAM wParam, LPARAM lParam)
 {
     (VOID)wParam; (VOID)lParam;
     /* #291: a slider's label follows it as it moves. */
@@ -824,7 +835,7 @@ static LRESULT CALLBACK SettingsMessageFilter(INT code, WPARAM wParam, LPARAM lP
     }
     return CallNextHookEx(g_SettingsHook, code, wParam, lParam);
 }
-static INT_PTR CALLBACK SettingsDialogProcedure(HWND dialog, UINT message, WPARAM wParam, LPARAM lParam)
+INT_PTR CALLBACK SettingsDialogProcedure(HWND dialog, UINT message, WPARAM wParam, LPARAM lParam)
 {
     switch (message) {
     case WM_INITDIALOG: {

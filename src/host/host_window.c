@@ -234,7 +234,7 @@ static LONG  g_MouseRawTotalX, g_MouseRawTotalY;
 #define CURSOR_IDLE_MS 5000u
 /* s84 (user): Settings > Input > Show Host Mouse Cursor -- HOSTCUR_* in settings.h.
    Smart is the rule above; Always never hides over the video, Never always does. */
-static INT   g_HostCursorMode = HOSTCUR_SMART;
+INT   g_HostCursorMode = HOSTCUR_SMART;
 static DWORD g_CursorMovedMs;         /* GetTickCount of the last real movement   */
 static POINT g_CursorLastPoint = { -1, -1 };
 static INT   g_CursorIdle;             /* hidden for stillness, until it next moves */
@@ -1264,7 +1264,7 @@ static VOID FullscreenReleaseHint(VOID)
     g_PresentDdraw.HintText  = HOST_CAPTURE_HINT_TEXT;
     g_PresentDdraw.HintUntil = GetTickCount() + FULLSCREEN_RELEASE_HINT_MS;
 }
-static VOID InputCaptureSet(HWND window, INT isOn)
+VOID InputCaptureSet(HWND window, INT isOn)
 {
     /* RULE 1. Refuse rather than assert: this is reached from the menu, the click
        path and the UI tick, and "the guest never asked for the mouse" is a normal
@@ -1701,7 +1701,7 @@ static VOID HostAutoFullscreenConsider(HWND window, INT graphics)
 }
 /* Frames the presenter drops between the ones it shows. 0 = every frame, which is
    what this host has always done. Read on the UI thread's timer tick. */
-static INT g_FrameSkip;
+INT g_FrameSkip;
 
 /* ── #325: THE WINDOW IS THE PICTURE, AT A WHOLE SCALE. ──────────────────────────────
      1x is one desktop pixel per frame pixel and Nx an N x N block, and the picture is
@@ -1774,7 +1774,7 @@ enum { HOST_SCALE_MAX = 4 };   /* the window's integer scales: 1x to 4x */
    ⚠ DRIVEN FROM g_Settings, NOT FROM WHATEVER THE HANDLER JUST DID. The dialog can
      change these too, and so can the startup load; re-reading the live settings is
      the only version that is right for all three callers. */
-static VOID MenuViewSync(HWND window)
+VOID MenuViewSync(HWND window)
 {
     HMENU menu = GetMenu(window);
     INT index;
@@ -1862,7 +1862,7 @@ static VOID HostApplyScale(HWND window, INT scale)
     }
     HostFrameSize(&g_WindowFrameWidth, &g_WindowFrameHeight);
 }
-static VOID HostApplyWindowSize(HWND window, DWORD index)
+VOID HostApplyWindowSize(HWND window, DWORD index)
 {
     HostApplyScale(window, (INT)index + 1 <= HOST_SCALE_MAX ? (INT)index + 1 : 1);
 }
@@ -1878,8 +1878,8 @@ static VOID HostApplyWindowSize(HWND window, DWORD index)
      unconditionally would mean picking a different SCALER snapped a window the user
      had dragged to their own size back to 1x -- the setting reaching past its own
      business, which is the thing that makes people stop touching the menu. */
-static DWORD g_WindowSizeLive = WINDOW_SETTING_UNSET_U;   /* what the window is currently AT */
-static DWORD g_AspectLive  = WINDOW_SETTING_UNSET_U;   /* ...and the shape it is that size IN */
+DWORD g_WindowSizeLive = WINDOW_SETTING_UNSET_U;   /* what the window is currently AT */
+DWORD g_AspectLive  = WINDOW_SETTING_UNSET_U;   /* ...and the shape it is that size IN */
 enum { WINDOW_RESIZE_SETTLE_MS = 150 };   /* a frame-size change must hold this long before it is applied */
 /* ── #325: THE WINDOW FOLLOWS THE MODE. When the frame's size changes -- text to a
      320x200 game, a VESA mode, Mode X -- a normal (not maximised, not fullscreen)
@@ -1908,7 +1908,7 @@ static VOID HostFollowFrame(HWND window)
      one line of .rc layout, not four edits in four functions that can disagree. */
 /* s84, the user's redesign: six tabs in a 640 x 480 dialog. Processor, Memory and
    Advanced became "Machine"; General is "MS-DOS"; Display is "Video". */
-static const INT g_SettingsPages[NTVDMEX_PAGE_COUNT] = {
+const INT g_SettingsPages[NTVDMEX_PAGE_COUNT] = {
     IDD_PAGE_GENERAL, IDD_PAGE_CPU, IDD_PAGE_DISPLAY,
     IDD_PAGE_AUDIO,   IDD_PAGE_INPUT, IDD_PAGE_DRIVES
 };

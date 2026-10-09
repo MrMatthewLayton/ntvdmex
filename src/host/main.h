@@ -48,4 +48,10 @@ extern VDM_COMMAND_INFO g_CommandInfo;
 extern PCSTR g_StdioHow;
 extern PCSTR g_StdioSource;
 extern DWORD g_StdioParentProcessId;
+extern SYSFONT_REPORT g_SysFontReport;
+extern CHAR g_TextFontLive[NTVDMEX_PATH_MAX];
+extern PCSTR g_DosVersionWhy;
+extern NTVDMEX_SETTINGS g_SettingsDisk;
+extern INT g_DspVersionForced;
+extern UINT g_ConventionalKbWant;
 #endif

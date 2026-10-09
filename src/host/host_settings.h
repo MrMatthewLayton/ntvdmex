@@ -1,4 +1,5 @@
-/* host_settings.h -- what host_settings.c offers the host's other files.
+/* host_settings.h -- the Settings dialog: applying, loading and showing every setting and where its
+ *   value came from.
  *
  * Declarations only (#335): defined in host_settings.c. */
 #ifndef NTVDMEX_HOST_SETTINGS_H
@@ -7,4 +8,15 @@
 
 extern INT g_JoystickPovMap;
 
+extern INT g_DosVersionForced;
+VOID SettingsNoteOverride(INT settingId, PCSTR source, DWORD value);
+extern PCSTR g_ShellOverride;
+VOID SettingsLogSources(VOID);
+VOID SettingsApply(HWND window, const NTVDMEX_SETTINGS *settings, INT live);
+VOID SettingsApplyPresent(PRESENT_DDRAW *present, const NTVDMEX_SETTINGS *settings);
+VOID SettingsApplyDevices(const NTVDMEX_SETTINGS *settings);
+UINT32 SettingsOutputHz(const NTVDMEX_SETTINGS *settings);
+VOID SettingsApplyLive(HWND window);
+INT_PTR CALLBACK SettingsPageProcedure(HWND dialog, UINT message, WPARAM wParam, LPARAM lParam);
+INT_PTR CALLBACK SettingsDialogProcedure(HWND dialog, UINT message, WPARAM wParam, LPARAM lParam);
 #endif

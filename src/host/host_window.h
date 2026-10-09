@@ -15,4 +15,12 @@ extern INT g_MouseRawOk;
 extern volatile LONG g_MouseAutoCaptureDone;
 extern volatile LONG g_MouseWantRelease;
 extern DWORD g_MouseAltCalls;
+extern INT g_HostCursorMode;
+VOID InputCaptureSet(HWND window, INT isOn);
+extern INT g_FrameSkip;
+VOID MenuViewSync(HWND window);
+VOID HostApplyWindowSize(HWND window, DWORD index);
+extern DWORD g_WindowSizeLive;
+extern DWORD g_AspectLive;
+extern const INT g_SettingsPages[NTVDMEX_PAGE_COUNT];
 #endif
