@@ -57,6 +57,13 @@
 #include "vdd_net.h"
 #include "../../sdk/include/ntvdmex-vdd.h"
 #include "dpmi_svc.h"
+#include "dpmi_rmcs.h"
+#include "x86len.h"
+#include "i33_driver.h"
+#include "pif.h"
+#include "sysfont.h"
+#include "dos_disk.h"
+#include "dos_err.h"
 #include "host_types.h"
 
 
