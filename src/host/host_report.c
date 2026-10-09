@@ -2,9 +2,37 @@
  * order the log has always had them (ReportEndOfRun), plus the start mode and the DOS
  * output that WinMain reports just before it.
  *
- * Part of the host's single translation unit: #included by main.c just above WinMain. */
+ * Its own translation unit (#335): declared in host_report.h. */
+#include "host_state.h"
+#include "log.h"
+#include "ne.h"
+#include "wow32.h"
+#include "wowanchors.h"
+#include "wowsched.h"
+#include "wowcall.h"
+#include "wowmsg.h"
+#include "wowres.h"
+#include "wowwin.h"
+#include "wowgdi.h"
+#include "wowuser.h"
+#include "host_report.h"
+#include "main.h"
+#include "host_audio.h"
+#include "host_bios.h"
+#include "host_diag.h"
+#include "host_dos.h"
+#include "host_dpmi.h"
+#include "host_dpmi_int.h"
+#include "host_input.h"
+#include "host_io.h"
+#include "host_irq.h"
+#include "host_timing.h"
+#include "host_video.h"
+#include "host_window.h"
+#include "host_wow.h"
 
-static PSTR ReportStartMode(PSTR cursor)
+
+PSTR ReportStartMode(PSTR cursor)
 {
     /* ⚠ REPORTED AT EXIT, not at startup. The startup line is written before a
        later LogWrite(LOG_PATH,...) TRUNCATES the file, so it never survived to
@@ -21,7 +49,7 @@ static PSTR ReportStartMode(PSTR cursor)
 }
 
 /* End of run: where stdout went, and the DOS output -- echoed to the console when nothing live carried it. */
-static PSTR ReportStdoutAndDosOutput(PSTR cursor, DOS_MACHINE *machine)
+PSTR ReportStdoutAndDosOutput(PSTR cursor, DOS_MACHINE *machine)
 {
     cursor = LogPut(cursor, "STAGE2: stdout -> ");
     if (g_StdioSource[0]) { cursor = LogPut(cursor, g_StdioSource); cursor = LogPut(cursor, " -> "); }
@@ -1790,7 +1818,7 @@ static PSTR ReportModeYBarDump(PSTR cursor, PSTR const base)
 }
 
 /* The end-of-run report, section by section, in the order the log has always had them. */
-static PSTR ReportEndOfRun(PSTR cursor, PSTR const base, PCSTR const reportEnd, DOS_MACHINE *machine, volatile BYTE * const tib)
+PSTR ReportEndOfRun(PSTR cursor, PSTR const base, PCSTR const reportEnd, DOS_MACHINE *machine, volatile BYTE * const tib)
 {
     cursor = ReportNtvdmBops(cursor);
     cursor = ReportHotPortsAndTimerCounters(cursor);

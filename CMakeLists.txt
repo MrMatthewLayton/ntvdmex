@@ -99,6 +99,7 @@ add_executable(ntvdmhost
     src/host/log.c
     src/host/host_state.c
     src/host/host_core.c
+    src/host/host_report.c
     src/host/host_dpmi_int.c
     src/host/host_dpmi.c
     src/host/host_wow.c

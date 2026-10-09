@@ -6,6 +6,7 @@
 
 #include "host_types.h"
 #include "host_state.h"
+#include "host_report.h"
 #include "host_dpmi_int.h"
 #include "host_dos.h"
 #include "host_irq.h"

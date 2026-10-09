@@ -288,7 +288,7 @@ INT  g_CsProbeCount = 0;
 /* Set per BOP in the exec loop: did this `C4 C4 nn` execute in GUEST code rather than at
    one of the addresses we plant ours at? See the note where it is assigned. */
 static INT g_BopFromGuest = 0;
-static DWORD g_NtvdmBopCount = 0;   /* how many guest-issued NTVDM BOPs this run serviced */
+DWORD g_NtvdmBopCount = 0;   /* how many guest-issued NTVDM BOPs this run serviced */
 /* s79: set at load time, from the IMAGE, not the path -- see the scan in STAGE2.
    g_GuestNtAware means "we loaded this as a shell AND it talks to NTVDM", which is
    what earns it DOS 5.00 and the private AH=53h answers. */
@@ -355,7 +355,7 @@ static BYTE g_FileBuffer[0x80000];   /* 512KB: hold a real game's MZ image (DOS/
 
 static FDC_STATE    g_Fdc;       static NTVDD_DEVICE g_FdcDevice;
 static IDE_STATE    g_Ide;       static NTVDD_DEVICE g_IdeDevice;
-static DMA_STATE    g_Dma;       static NTVDD_DEVICE g_DmaDevice;
+DMA_STATE    g_Dma;       static NTVDD_DEVICE g_DmaDevice;
 static BYTE      g_GusDram[GUS_DRAM_SIZE];
 INT          g_GusOn = 0;
 static WORD     g_Emu8KDram[EMU8K_DRAM_WORDS];
@@ -463,8 +463,8 @@ DWORD          g_Irq0NormalCount, g_Irq0NormalMicroseconds, g_Irq0NormalIo;
 DWORD          g_Irq0WorstRaise, g_Irq0WorstAttempts, g_Irq0WorstNie, g_Irq0WorstYield;
 DWORD          g_Irq0WorstPerMicroseconds;   /* the period in force at the worst gap  */
 /* V86 single-run stretch durations (Skyroads wobble, s61). See the exec loop. */
-static DWORD          g_V86StringHistogram[8], g_V86StringCount8;
-static DWORD          g_V86StringMaximumMs, g_V86StringMaximumCs, g_V86StringMaximumIp, g_V86StringMaximumEvent;
+DWORD          g_V86StringHistogram[8], g_V86StringCount8;
+DWORD          g_V86StringMaximumMs, g_V86StringMaximumCs, g_V86StringMaximumIp, g_V86StringMaximumEvent;
 DWORD          g_HeartbeatDs = 0;            /* guest DS sampled by the heartbeat (s69 fade dump) */
 DWORD          g_EventIoString      = 0;  /* REP INS/OUTS (event 1) reflects serviced */
 static HANDLE         g_OnceMutex    = NULL; /* the single-instance mutex (WinMain); handed
@@ -484,7 +484,7 @@ static HANDLE         g_OnceMutex    = NULL; /* the single-instance mutex (WinMa
      guest that is not being stepped; a storm that is all `direct` is the kernel
      re-reporting an event we already retired. The event histogram says which
      kernel event is arriving. One dirty run now answers the question. */
-static DWORD g_IoViaDirect = 0, g_IoViaRetro = 0;
+DWORD g_IoViaDirect = 0, g_IoViaRetro = 0;
 static LONGLONG g_HostTimeLast;           /* QPC of the last VdmRunGuest return; 0 = none */
 static INT  g_HostEventLast;
 INT            g_NoA000       = 0;  /* NOA000_FLAG present: leave A0000 mapped (diagnostic) */
@@ -493,14 +493,14 @@ static INT            g_Fault32Warned  = 0;  /* said once: NT's 16-bit frame can
 DWORD          g_NoPmPatchMinimum = 0; /* ...or only regions >= this many bytes */
 DWORD          g_MemoryDumpLinear = 0, g_MemoryDumpLength = 0;   /* MEMDUMP_FLAG */
 static INT            g_Interp12      = 0;  /* INTERP12_FLAG: interpret mode 12h, no page trap */
-static DWORD          g_RunStartTick= 0;  /* exec-loop start, so STAGE2 can report a RATE    */
+DWORD          g_RunStartTick= 0;  /* exec-loop start, so STAGE2 can report a RATE    */
 /* Planar-mode interpretation, measured. `batches` is how many times we drove the
    guest from the host, `instrs` how many instructions that came to, and `bails`
    how often the interpreter declined the very first opcode and had to let V86 run
    (each bail is a stretch of guest execution whose A0000 writes we do NOT see). */
-static DWORD          g_P12Batches   = 0;
-static DWORD          g_P12Instructions    = 0;
-static DWORD          g_P12Bails     = 0;
+DWORD          g_P12Batches   = 0;
+DWORD          g_P12Instructions    = 0;
+DWORD          g_P12Bails     = 0;
 /* ── EVERY DISTINCT BAIL SITE, NOT THE FIRST TWELVE LINES. (s68) ──────────────────
      In a planar mode a bail is not one instruction: VdmRunGuest keeps the guest until the
      next EVENT with A0000 unprotected, so every VRAM write in that stretch is lost to
@@ -508,8 +508,8 @@ static DWORD          g_P12Bails     = 0;
      12-line budget spent on one site hid the `repne scasb` that cost Lemmings its
      sprite erase for four sessions. Linear table, BOP stubs excluded, printed at
      exit with the bytes so each entry can be decoded without a dump. */
-static P12_SITE g_P12Site[P12_SITE_MAX];
-static UINT g_P12SiteCount = 0, g_P12SiteLost = 0;
+P12_SITE g_P12Site[P12_SITE_MAX];
+UINT g_P12SiteCount = 0, g_P12SiteLost = 0;
 DWORD g_HeadlessMs = PM_HEADLESS_MS_DEFAULT;   /* overridable via HEADLESS_MS_PATH */
 INT   g_LdtClientMark = 0;          /* g_LdtNext when the client switched in */
 /* Ticks run per asynchronous entry -- see the drain in the main loop. */
@@ -534,14 +534,14 @@ static INT  g_CloseForced;           /* the exit in progress is ours, not the gu
      the intercept exists for (KEYB-style remappers, hot-key TSRs, p_kbd3).
      g_Int15StubOffset is recorded where the stub is planted (bios_ints[]). */
 WORD  g_Int15StubOffset;
-static DWORD g_Kb4FCalls, g_Kb4FTranslate;         /* k4f entries / bytes it handed back */
+DWORD g_Kb4FCalls, g_Kb4FTranslate;         /* k4f entries / bytes it handed back */
 DWORD      g_PrintScreenJobs, g_PrintScreenErrors;
 BYTE       g_PrintScreenStatus = BIOS_PRINT_SCREEN_STATUS_OK;   /* what 0050:0000 would hold */
-static DWORD          g_ExecPriority     = 0;   /* guest thread priority class; see EXECPRIO_PATH */
+DWORD          g_ExecPriority     = 0;   /* guest thread priority class; see EXECPRIO_PATH */
 static INT            g_QiRaise      = 0;
 static INT            g_QiVif        = 0;   /* start the guest with EFLAGS.VIF set */
 static INT            g_QiKeys       = 0;   /* synthesise keypresses (repro the hang) */
-static DWORD          g_InterpRefused = 0;  /* interpreter declined the faulting opcode */
+DWORD          g_InterpRefused = 0;  /* interpreter declined the faulting opcode */
 /* ── ★★★★ A TIMER RE-ARMED FROM INSIDE ITS OWN HANDLER DISCARDS THE TICK QUEUED BEHIND IT. ──
      s70, the user's by-hand Lemmings run: the fade completed, then "it stalled when the
      trapdoors opened" -- every heartbeat from then on inside the ISR's retrace spin,
@@ -575,7 +575,7 @@ DWORD    g_Irq0ResyncDrop = 0;
        7 all gates open (the pass tried)   8 claim refused (IRQ0 masked/in service)
        9 the injector declined (guest in the extender's 16-bit code)
      7 counts the pass; 8/9 are that pass's failures, so 7 - 8 - 9 = delivered. */
-static DWORD g_PmCooperativeGate[PM_GATES];
+DWORD g_PmCooperativeGate[PM_GATES];
 /* ── WHICH INJECTION PATH ACTUALLY PRODUCES A REFILL? ────────────────────────────────
      Measured: DMX polls the 8237's channel-1 CURRENT COUNT ~55 times a second (all
      8-bit reads, so two per poll) while 82 DMA blocks complete -- and 32% of audible
@@ -591,13 +591,13 @@ static DWORD g_PmCooperativeGate[PM_GATES];
      that happen INSIDE a cooperative INT 08h. The handler runs synchronously within
      DpmiInjectPmIrq(), so a before/after snapshot of the counter brackets it exactly,
      with no new plumbing into the device model. Near zero here confirms it. */
-static UINT32 g_CooperativeDmaPolls;
-static UINT32 g_CooperativeDmaPollsDevice[PIC_LINES_PER_CHIP];   /* ...and the same, per DEVICE line */
+UINT32 g_CooperativeDmaPolls;
+UINT32 g_CooperativeDmaPollsDevice[PIC_LINES_PER_CHIP];   /* ...and the same, per DEVICE line */
 /* Cooperative delivery of DEVICE lines (2-7) to a PM client -- the retry the async
    path never had. `inj` is the interrupts that would previously have been LOST. */
-static DWORD g_PmDeviceIrqInjected  = 0;
-static DWORD g_PmDeviceIrqFail = 0;
-static DWORD g_PmDeviceIrqDrop = 0;           /* pending on a line the client never hooked */
+DWORD g_PmDeviceIrqInjected  = 0;
+DWORD g_PmDeviceIrqFail = 0;
+DWORD g_PmDeviceIrqDrop = 0;           /* pending on a line the client never hooked */
 /* ── WHERE WAS THE GUEST WHEN THE CLOCK ASKED FOR A TURN? ────────────────────────────
      The asynchronous injector is the ONLY thing that can touch a protected-mode guest
      inside a BOP-free stretch, and session 20 localised Doom's death to exactly such a
@@ -625,9 +625,9 @@ static DWORD g_PmDeviceIrqDrop = 0;           /* pending on a line the client ne
    Only NEW maxima log, so a run reports a growth curve of a few dozen lines instead of
    one line per entry. */
 #define PM_STRETCH_LOG_US 300u
-static DWORD g_PmStretchMaximumMicroseconds = 0;
+DWORD g_PmStretchMaximumMicroseconds = 0;
 static DWORD g_PmStretchLogged = 0;
-static DOS_START_MODE g_StartMode = DOS_START_NORMAL;
+DOS_START_MODE g_StartMode = DOS_START_NORMAL;
 
 /* ⚠ Reported at EXIT, not at init. The early-startup log line was written
    before a later LogWrite(LOG_PATH,...) TRUNCATES the file, so it never
@@ -2458,7 +2458,6 @@ static INT DpmiEndClientSession(PSTR *cursorIo, PSTR const base, volatile BYTE *
     *cursorIo = cursor; return HOST_FLOW_NEXT;
 }
 
-#include "host_report.c"   /* the end-of-run report: ReportEndOfRun and its sections */
 enum { INSTALL_EXIT_OK = 0, INSTALL_EXIT_FAILED = 1, INSTALL_STATUS_EXIT_OURS = 0, INSTALL_STATUS_EXIT_NONE = 1, INSTALL_STATUS_EXIT_OTHER = 2 };   /* the install verbs' exit codes */
 enum { PENDING_INT_RETRIES_MAX = 0x10000 };   /* event 3 ("interrupt pending, not entered"): retries before giving up */
 enum { EXEC_HANDLED_RUN_OVER = 2, EXEC_HANDLED_CHILD_EXITED = 3 };   /* WinMain's DosTerminate outcomes: the run ends, or a child returned to its parent */
