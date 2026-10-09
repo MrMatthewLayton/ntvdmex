@@ -213,8 +213,42 @@ static BOOL DosDiskGeometryFromBpb(
       ...
   }
   ```
-- **A one-line body may stay unbraced** (`if (!bootSector) return FALSE;`).
-- **Blank lines:** one after every function; one after the file header; never two in a row.
+- **A single-statement body may stay unbraced, on the next line**, one level in. A body of
+  two or more statements is always braced.
+
+  ```c
+  if (!job->IsActive)
+      return BIOS_PRINT_SCREEN_STEP_DONE;
+  ```
+- **One statement per line.** A `case` label stands alone on its line; its statements follow,
+  one level in. The exception is a line that only writes the log -- one field per line,
+  `cursor = LogPut(cursor, " io_r=");  cursor = LogHex(cursor, g_Gus.IoReads);` -- which reads
+  as a table and stays together.
+- **A signature fits on one line, or takes one parameter per line**, one level in, the closing
+  parenthesis after the last parameter:
+
+  ```c
+  static inline VOID DosClockSetDate(
+      _In_ PCDOS_CLOCK_TIME hostNow,
+      _Inout_ PINT64 offset,
+      _In_ UINT year)
+  ```
+- **A wrapped expression** (by hand -- this one needs judgement): break before an operator,
+  never align under an opening parenthesis. Keep each top-level term whole on its own line, one
+  level in; a term that itself wraps continues one level deeper, so the indentation shows what
+  binds to what. A wrapped `&&`/`||` chain takes one condition per line; a wrapped ternary
+  takes three lines (the condition, `? a`, `: b`). `=` stays on the first line.
+
+  ```c
+  INT64 dayOfEra = yearOfEra * DOS_CLOCK_DAYS_PER_YEAR
+      + yearOfEra / DOS_CLOCK_LEAP_YEAR_INTERVAL
+      - yearOfEra / DOS_CLOCK_YEARS_PER_CENTURY
+      + dayOfYear;
+  ```
+- **Blank lines:** one after every function; one after the file header; one after a function's
+  local declarations; one between the groups of a `switch`; one between the steps of a
+  function where it reads as a sequence (by hand); never two in a row.
+- **Constants before code** in a header: its `#define`s and types come before its functions.
 - **`#define` values line up** within a block of definitions, on a 4-column stop, and so do
   their trailing comments; a definition whose comment would pass 120 columns keeps one space.
   A comment that opens a new group of definitions has a blank line above it. The trailing
