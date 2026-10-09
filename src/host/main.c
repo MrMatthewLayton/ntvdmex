@@ -6213,6 +6213,220 @@ static INT StartupRunInstallVerb(INT *exitCode)
     return HOST_FLOW_NEXT;
 }
 
+
+/* cfg\target.txt: the harness's way of naming the program -- consulted only when neither CSRSS nor the user (asking for a shell) named one (GH #130). */
+static VOID StartupLoadTarget(PSTR *cursorIo, DWORD *readCountIo, const INT wowCommandFromCsrss, const INT wantShell, CHAR *programPathBuffer, CHAR *args)
+{
+    PSTR cursor = *cursorIo;
+    DWORD readCount = *readCountIo;
+    {
+        INT csrssNamed = (g_CurrentDirectory[0] && g_Title[0]) || (readCount != 0) || wowCommandFromCsrss;
+        /* ⚠ `want_shell` skips target.txt ENTIRELY. A user who opened NTVDMEX asked for
+             a shell, not for whatever the last test run happened to leave in cfg\. */
+        HANDLE thread = (csrssNamed || wantShell)
+                  ? INVALID_HANDLE_VALUE
+                  : CreateFileA(TARGET_PATH, GENERIC_READ, FILE_SHARE_READ, NULL,
+                                OPEN_EXISTING, 0, NULL);
+        if (csrssNamed && !readCount) {
+            cursor = LogPut(cursor, "STAGE2: CSRSS named a program -- target.txt NOT consulted "
+                        "(GH #130)\r\n");
+        }
+        if (thread != INVALID_HANDLE_VALUE) {
+            CHAR tempPath[512]; DWORD tempLength = 0; PSTR scan; PSTR cursorA = 0;
+            ReadFile(thread, tempPath, sizeof(tempPath) - 1, &tempLength, NULL); CloseHandle(thread);
+            tempPath[tempLength < sizeof(tempPath) ? tempLength : sizeof(tempPath) - 1] = 0;
+            /* ── ⚠⚠ A PROGRAM PATH MAY CONTAIN SPACES, AND THIS SPLIT ON THE FIRST ONE.
+                 Every path the rig used to hand us was C:\game\X.EXE or C:\test\X.COM,
+                 so "first space starts the arguments" was never wrong -- until the rig
+                 moved into the share folder, whose path contains "Documents and
+                 Settings". Measured, first run after the move:
+
+                   target.txt loaded 0x0 from C:\Documents
+                     args=[and Settings\All Users\...\games\Skyroads\Skyroads.EXE]
+
+                 A zero-byte load, then the embedded four-byte `mov ah,4Ch / int 21h`
+                 stub runs INSTEAD of the game and the run completes cleanly -- the
+                 same silent-success shape as GH #131 below, and it reports `mode
+                 sets: none` rather than any kind of error.
+               ⇒ So honour QUOTES, and treat an unquoted line as a bare path with no
+                 arguments when what it names actually exists. A quoted first token is
+                 unambiguous and is what every Windows caller already writes. */
+            scan = tempPath;
+            if (*scan == '"') {                            /* "path with spaces" [args] */
+                PSTR word2 = scan; ++scan;
+                while (*scan && *scan != '"') *word2++ = *scan++;
+                if (*scan == '"') ++scan;
+                *word2 = 0;
+                while (*scan == ' ') ++scan;
+                { PSTR limit; for (limit = scan; *limit; ++limit) if (*limit == '\r' || *limit == '\n') { *limit = 0; break; } }
+                if (*scan) cursorA = scan;
+            } else {
+                for (scan = tempPath; *scan; ++scan)                 /* trim EOL first */
+                    if (*scan == '\r' || *scan == '\n') { *scan = 0; break; }
+                /* Unquoted: only split on a space if the WHOLE line is not itself a
+                   file. That keeps `C:\test\x.com >out.txt` working and stops a path
+                   with spaces being torn in half. */
+                { HANDLE probe = CreateFileA(tempPath, GENERIC_READ, FILE_SHARE_READ, NULL,
+                                             OPEN_EXISTING, 0, NULL);
+                  if (probe != INVALID_HANDLE_VALUE) CloseHandle(probe);
+                  else for (scan = tempPath; *scan; ++scan)
+                           if (*scan == ' ') { *scan = 0; cursorA = scan + 1; break; } }
+            }
+            if (tempPath[0]) {
+                HANDLE fileHandle = CreateFileA(tempPath, GENERIC_READ, FILE_SHARE_READ, NULL,
+                                        OPEN_EXISTING, 0, NULL);
+                if (fileHandle != INVALID_HANDLE_VALUE) { ReadFile(fileHandle, g_FileBuffer, sizeof(g_FileBuffer), &readCount, NULL); CloseHandle(fileHandle); }
+                LogPut(programPathBuffer, tempPath);                  /* env argv[0] */
+                if (cursorA) LogPut(args, cursorA);                   /* PSP command tail */
+                /* ★ GH #128: on a WOW launch this same path is the WIN16 program,
+                     and WOW32 0x70 is how WOWEXEC asks for it. The DOS image
+                     loaded just below is discarded there (see WowPlaceV86), but
+                     the NAME is the one thing the WOW path still needs -- Windows
+                     does not put it on the VDM's command line. */
+                LogPut(g_WowCommandProgram, tempPath); WowShorten(g_WowCommandProgram, sizeof g_WowCommandProgram);
+                if (cursorA) LogPut(g_WowCommandArguments, cursorA);
+                cursor = LogPut(cursor, "STAGE2: target.txt loaded 0x"); cursor = LogHex(cursor, readCount);
+                cursor = LogPut(cursor, " from "); cursor = LogPut(cursor, tempPath);
+                if (cursorA && cursorA[0]) { cursor = LogPut(cursor, " args=["); cursor = LogPut(cursor, cursorA); cursor = LogPut(cursor, "]"); }
+                cursor = LogPut(cursor, "\r\n");
+            }
+        }
+    }
+    *cursorIo = cursor; *readCountIo = readCount;
+}
+
+
+/* The Win16 program, from CSRSS (s73): a WOW launch never carried its program on its command line, so ask CSRSS for it -- the second fetch, which names the program and its arguments. */
+static VOID StartupFetchWowCommand(PSTR *cursorIo, INT *wowCommandFromCsrssIo, CHAR *args, CHAR *programPathBuffer, DWORD *readCountIo)
+{
+    PSTR cursor = *cursorIo;
+    INT wowCommandFromCsrss = *wowCommandFromCsrssIo;
+    DWORD readCount = *readCountIo;
+    /* ── ★★★★ THE WIN16 PROGRAM, FROM CSRSS. (s73) ──────────────────────────
+         A WOW launch never carried its program: the VDM starts as
+         `ntvdm -f -i<n> -w -a krnl386.exe`, the first fetch above returns FALSE
+         err=0x57 (measured, s3x), and until today the name came ONLY from
+         cfg\target.txt -- the harness's channel -- so on any machine without
+         that file a double-clicked Win16 program ran nothing, and on the rig it
+         ran whatever the file happened to name last. Stock WOW gets it exactly
+         the way stock DOS does: WOWEXEC's WowGetNextVDMCommand (WOW32 0x70) is
+         wow32.dll calling GetNextVDMCommand with VDM_FLAG_WOW, and CSRSS answers
+         with the AppName + CmdLine the launcher queued. We ask here, before
+         krnl386 runs, so that 0x70 can answer from g_WowCommandProgram as it already
+         does. DONT_WAIT: a misunderstanding is a FALSE, never a hang. */
+    VDM_COMMAND_INFO commandInfo2;
+    DWORD error2 = 0; BOOL ok2; INT item;
+    static CHAR pifFile2[512], desktop2[512], title2[512], reservedBuffer2[512];
+    ZeroMemory(&commandInfo2, sizeof commandInfo2);
+    commandInfo2.CmdLine = g_CommandLine2; commandInfo2.CmdLen = sizeof g_CommandLine2;  commandInfo2.AppName = g_Application2; commandInfo2.AppLen = sizeof g_Application2;
+    commandInfo2.PifFile = pifFile2; commandInfo2.PifLen = sizeof pifFile2; commandInfo2.CurDirectory = g_CurrentDirectory2; commandInfo2.CurDirectoryLen = sizeof g_CurrentDirectory2;
+    commandInfo2.Env = g_Environment2; commandInfo2.EnvLen = sizeof g_Environment2; commandInfo2.Desktop = desktop2; commandInfo2.DesktopLen = sizeof desktop2;
+    commandInfo2.Title = title2; commandInfo2.TitleLen = sizeof title2; commandInfo2.Reserved = reservedBuffer2; commandInfo2.ReservedLen = sizeof reservedBuffer2;
+    commandInfo2.StartupInfo.cb = sizeof(STARTUPINFOA);
+    /* ► THE SHAPE IS MEASURED, NOT ASSUMED (rig, s73). WOW|FIRST|DONT_WAIT alone
+         answers FALSE err=0x490 (ERROR_NOT_FOUND), with either task id. What
+         answers TRUE is GET_FIRST_COMMAND|WOW -- the same handshake stock ntvdm's
+         cmdGetStartInfo makes for DOS, and like the DOS one it fills Title/CurDir
+         and leaves AppName as capture-buffer junk ("[5??]"). So, as on the DOS
+         path: the GET_FIRST call first, then the FIRST_TASK fetch for the command
+         itself. Every call is DONT_WAIT and every answer is logged; a "name" is
+         only believed when it is drive-qualified or UNC -- TRUE with junk is not
+         a program. */
+    {   static const struct { DWORD VdmState; INT IsOwnTask; INT IsHandshake; PCSTR Description; } vdmStates[] = {
+            { VDM_GET_FIRST_COMMAND | VDM_FLAG_WOW | VDM_FLAG_DONT_WAIT, 1, 1, "GET_FIRST|WOW|DONT_WAIT taskid=-i (handshake)" },
+            { VDM_FLAG_WOW | VDM_FLAG_FIRST_TASK | VDM_FLAG_DONT_WAIT, 1, 0, "WOW|FIRST|DONT_WAIT taskid=-i" },
+            { VDM_FLAG_WOW | VDM_FLAG_FIRST_TASK | VDM_FLAG_DONT_WAIT, 0, 0, "WOW|FIRST|DONT_WAIT taskid=0"  },
+            { VDM_FLAG_WOW | VDM_FLAG_DONT_WAIT, 1, 0, "WOW|DONT_WAIT taskid=-i"       },
+            { VDM_FLAG_WOW | VDM_FLAG_FIRST_TASK | VDM_FLAG_RETRY | VDM_FLAG_DONT_WAIT, 1, 0, "WOW|FIRST|RETRY|DONT_WAIT taskid=-i" },
+        };
+        UINT si; INT named = 0;
+        for (si = 0; si < sizeof vdmStates / sizeof vdmStates[0] && !named; ++si) {
+            g_Application2[0] = 0; g_CommandLine2[0] = 0; g_CurrentDirectory2[0] = 0; error2 = 0;
+            commandInfo2.AppLen = sizeof g_Application2; commandInfo2.CmdLen = sizeof g_CommandLine2; commandInfo2.CurDirectoryLen = sizeof g_CurrentDirectory2;
+            commandInfo2.EnvLen = sizeof g_Environment2; commandInfo2.PifLen = sizeof pifFile2; commandInfo2.DesktopLen = sizeof desktop2;
+            commandInfo2.TitleLen = sizeof title2; commandInfo2.ReservedLen = sizeof reservedBuffer2;
+            commandInfo2.VDMState = vdmStates[si].VdmState;
+            commandInfo2.TaskId = vdmStates[si].IsOwnTask ? g_CommandInfo.TaskId : 0;
+            ok2 = CsrssGetCommand(&commandInfo2, &error2);
+            g_Application2[sizeof g_Application2 - 1] = 0; g_CommandLine2[sizeof g_CommandLine2 - 1] = 0; g_CurrentDirectory2[sizeof g_CurrentDirectory2 - 1] = 0;
+            named = ok2 && !vdmStates[si].IsHandshake
+                    && ((g_Application2[0] >= 'A' && (g_Application2[0] | ASCII_CASE_BIT) <= 'z' && g_Application2[1] == ':' && g_Application2[2] == '\\')
+                        || (g_Application2[0] == '\\' && g_Application2[1] == '\\'));
+            cursor = LogPut(cursor, "STAGE1: WOW command fetch ["); cursor = LogPut(cursor, vdmStates[si].Description); cursor = LogPut(cursor, "] -> ");
+            cursor = LogPut(cursor, ok2 ? "TRUE" : "FALSE");
+            cursor = LogPut(cursor, " err=0x"); cursor = LogHex(cursor, error2);
+            cursor = LogPut(cursor, " app=["); if (named) cursor = LogPut(cursor, g_Application2); else if (g_Application2[0]) cursor = LogPut(cursor, "<not a path>");
+            cursor = LogPut(cursor, "] args=["); if (named) cursor = LogPut(cursor, g_CommandLine2);
+            cursor = LogPut(cursor, "] cur=["); cursor = LogPut(cursor, g_CurrentDirectory2); cursor = LogPut(cursor, "] show=0x"); cursor = LogHex(cursor, commandInfo2.StartupInfo.wShowWindow);
+            cursor = LogPut(cursor, " taskid=0x"); cursor = LogHex(cursor, commandInfo2.TaskId);
+            cursor = LogPut(cursor, "\r\n");
+        }
+        ok2 = named;
+    }
+    for (item = 0; g_CommandLine2[item]; ++item) if (g_CommandLine2[item] == '\r' || g_CommandLine2[item] == '\n') { g_CommandLine2[item] = 0; break; }
+    wowCommandFromCsrss = ok2 && g_Application2[0];
+    if (wowCommandFromCsrss) {
+        /* Exactly what the target.txt path does with a name, or the stage below
+           builds the V86 world for the embedded four-byte stub instead ("STAGE2:
+           embedded fallback"), krnl386 gets no program path in its environment,
+           and it dies in its own init: "NTVDM KERNEL: Unable to initialize heap".
+           Measured, first cut. The image read here is discarded by WowPlaceV86;
+           the NAME and the byte count are what the stage keys on. */
+        HANDLE wowHandle;
+        LogPut(g_WowCommandProgram, g_Application2); WowShorten(g_WowCommandProgram, sizeof g_WowCommandProgram);
+        /* the tail arrives with its leading space, as a DOS tail does; 0x70 adds its own */
+        { PCSTR cursorA = g_CommandLine2; while (*cursorA == ' ') ++cursorA; LogPut(g_WowCommandArguments, cursorA); LogPut(args, cursorA); }
+        LogPut(programPathBuffer, g_WowCommandProgram);
+        wowHandle = CreateFileA(g_WowCommandProgram, GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING, 0, NULL);
+        if (wowHandle != INVALID_HANDLE_VALUE) { ReadFile(wowHandle, g_FileBuffer, sizeof(g_FileBuffer), &readCount, NULL); CloseHandle(wowHandle); }
+        if (g_CurrentDirectory2[0]) {
+            SetCurrentDirectoryA(g_CurrentDirectory2);
+            /* #164: WOWEXEC changes to this before LoadModule, so the task starts
+               in the folder it was launched from -- 8.3, as krnl386 sees paths. */
+            if (!GetShortPathNameA(g_CurrentDirectory2, g_WowCommandDirectory, sizeof g_WowCommandDirectory)
+                || lstrlenA(g_WowCommandDirectory) >= WOW_COMMAND_DIRECTORY_MAX)
+                g_WowCommandDirectory[0] = 0;
+        }
+        cursor = LogPut(cursor, "STAGE2: Win16 program from CSRSS -- LAUNCH ["); cursor = LogPut(cursor, g_WowCommandProgram);
+        cursor = LogPut(cursor, "] loaded 0x"); cursor = LogHex(cursor, readCount); cursor = LogPut(cursor, " (target.txt NOT consulted)\r\n");
+        if (!readCount) wowCommandFromCsrss = 0;          /* unreadable: fall back as before */
+    }
+    *cursorIo = cursor; *wowCommandFromCsrssIo = wowCommandFromCsrss; *readCountIo = readCount;
+}
+
+
+
+/* The first fetch gave a directory or a title: fetch the command again, in full, for its application name, command line and the rest. */
+static PSTR StartupFetchCommandDetails(PSTR cursor)
+{
+    VDM_COMMAND_INFO commandInfo2;
+    DWORD error2 = 0; BOOL ok2; INT item;
+    static CHAR pifFile2[512], desktop2[512], title2[512], reservedBuffer2[512];
+    ZeroMemory(&commandInfo2, sizeof commandInfo2);
+    commandInfo2.CmdLine = g_CommandLine2; commandInfo2.CmdLen = sizeof g_CommandLine2;  commandInfo2.AppName = g_Application2; commandInfo2.AppLen = sizeof g_Application2;
+    commandInfo2.PifFile = pifFile2; commandInfo2.PifLen = sizeof pifFile2; commandInfo2.CurDirectory = g_CurrentDirectory2; commandInfo2.CurDirectoryLen = sizeof g_CurrentDirectory2;
+    commandInfo2.Env = g_Environment2; commandInfo2.EnvLen = sizeof g_Environment2; commandInfo2.Desktop = desktop2; commandInfo2.DesktopLen = sizeof desktop2;
+    commandInfo2.Title = title2; commandInfo2.TitleLen = sizeof title2; commandInfo2.Reserved = reservedBuffer2; commandInfo2.ReservedLen = sizeof reservedBuffer2;
+    commandInfo2.StartupInfo.cb = sizeof(STARTUPINFOA);
+    commandInfo2.VDMState = VDM_FLAG_DOS | VDM_FLAG_FIRST_TASK | VDM_FLAG_DONT_WAIT;              /* VDM_FLAG_DOS | FIRST_TASK | DONT_WAIT */
+    commandInfo2.TaskId = g_CommandInfo.TaskId;
+    ok2 = CsrssGetCommand(&commandInfo2, &error2);
+    g_Application2[sizeof g_Application2 - 1] = 0; g_CommandLine2[sizeof g_CommandLine2 - 1] = 0; g_CurrentDirectory2[sizeof g_CurrentDirectory2 - 1] = 0;
+    /* the tail ends in CR LF; the PSP wants neither */
+    for (item = 0; g_CommandLine2[item]; ++item) if (g_CommandLine2[item] == '\r' || g_CommandLine2[item] == '\n') { g_CommandLine2[item] = 0; break; }
+    g_Fetch2Ok = ok2 && commandInfo2.AppLen > 1 && g_Application2[0];
+    cursor = LogPut(cursor, "STAGE1: command fetch (DOS|FIRST|DONT_WAIT) -> "); cursor = LogPut(cursor, ok2 ? "TRUE" : "FALSE");
+    cursor = LogPut(cursor, " err=0x"); cursor = LogHex(cursor, error2);
+    cursor = LogPut(cursor, " app=["); cursor = LogPut(cursor, g_Application2); cursor = LogPut(cursor, "] args=["); cursor = LogPut(cursor, g_CommandLine2);
+    cursor = LogPut(cursor, "] cur=["); cursor = LogPut(cursor, g_CurrentDirectory2); cursor = LogPut(cursor, "] bat=0x"); cursor = LogHex(cursor, commandInfo2.ComingFromBat);
+    cursor = LogPut(cursor, " drive=0x"); cursor = LogHex(cursor, commandInfo2.CurrentDrive); cursor = LogPut(cursor, " envlen=0x"); cursor = LogHex(cursor, commandInfo2.EnvLen);
+    cursor = LogPut(cursor, " flags=0x"); cursor = LogHex(cursor, commandInfo2.CreationFlags);
+    cursor = LogPut(cursor, " std=0x"); cursor = LogHex(cursor, (DWORD)(ULONG_PTR)commandInfo2.StdIn); cursor = LogPut(cursor, "/0x"); cursor = LogHex(cursor, (DWORD)(ULONG_PTR)commandInfo2.StdOut);
+    cursor = LogPut(cursor, "/0x"); cursor = LogHex(cursor, (DWORD)(ULONG_PTR)commandInfo2.StdErr);
+    cursor = LogPut(cursor, "\r\n");
+    return cursor;
+}
+
 INT WINAPI WinMain(HINSTANCE instance, HINSTANCE previousInstance, LPSTR commandLineText, INT showCommand)
 {
     CHAR report[8192]; PSTR cursor = report; PSTR base;
@@ -6644,121 +6858,9 @@ INT WINAPI WinMain(HINSTANCE instance, HINSTANCE previousInstance, LPSTR command
          Only after a successful first fetch: on a WOW launch the first returns FALSE
          (err 0x57) and that tell is left exactly as it was. */
     if (g_CurrentDirectory[0] || g_Title[0]) {
-        VDM_COMMAND_INFO commandInfo2;
-        DWORD error2 = 0; BOOL ok2; INT item;
-        static CHAR pifFile2[512], desktop2[512], title2[512], reservedBuffer2[512];
-        ZeroMemory(&commandInfo2, sizeof commandInfo2);
-        commandInfo2.CmdLine = g_CommandLine2; commandInfo2.CmdLen = sizeof g_CommandLine2;  commandInfo2.AppName = g_Application2; commandInfo2.AppLen = sizeof g_Application2;
-        commandInfo2.PifFile = pifFile2; commandInfo2.PifLen = sizeof pifFile2; commandInfo2.CurDirectory = g_CurrentDirectory2; commandInfo2.CurDirectoryLen = sizeof g_CurrentDirectory2;
-        commandInfo2.Env = g_Environment2; commandInfo2.EnvLen = sizeof g_Environment2; commandInfo2.Desktop = desktop2; commandInfo2.DesktopLen = sizeof desktop2;
-        commandInfo2.Title = title2; commandInfo2.TitleLen = sizeof title2; commandInfo2.Reserved = reservedBuffer2; commandInfo2.ReservedLen = sizeof reservedBuffer2;
-        commandInfo2.StartupInfo.cb = sizeof(STARTUPINFOA);
-        commandInfo2.VDMState = VDM_FLAG_DOS | VDM_FLAG_FIRST_TASK | VDM_FLAG_DONT_WAIT;              /* VDM_FLAG_DOS | FIRST_TASK | DONT_WAIT */
-        commandInfo2.TaskId = g_CommandInfo.TaskId;
-        ok2 = CsrssGetCommand(&commandInfo2, &error2);
-        g_Application2[sizeof g_Application2 - 1] = 0; g_CommandLine2[sizeof g_CommandLine2 - 1] = 0; g_CurrentDirectory2[sizeof g_CurrentDirectory2 - 1] = 0;
-        /* the tail ends in CR LF; the PSP wants neither */
-        for (item = 0; g_CommandLine2[item]; ++item) if (g_CommandLine2[item] == '\r' || g_CommandLine2[item] == '\n') { g_CommandLine2[item] = 0; break; }
-        g_Fetch2Ok = ok2 && commandInfo2.AppLen > 1 && g_Application2[0];
-        cursor = LogPut(cursor, "STAGE1: command fetch (DOS|FIRST|DONT_WAIT) -> "); cursor = LogPut(cursor, ok2 ? "TRUE" : "FALSE");
-        cursor = LogPut(cursor, " err=0x"); cursor = LogHex(cursor, error2);
-        cursor = LogPut(cursor, " app=["); cursor = LogPut(cursor, g_Application2); cursor = LogPut(cursor, "] args=["); cursor = LogPut(cursor, g_CommandLine2);
-        cursor = LogPut(cursor, "] cur=["); cursor = LogPut(cursor, g_CurrentDirectory2); cursor = LogPut(cursor, "] bat=0x"); cursor = LogHex(cursor, commandInfo2.ComingFromBat);
-        cursor = LogPut(cursor, " drive=0x"); cursor = LogHex(cursor, commandInfo2.CurrentDrive); cursor = LogPut(cursor, " envlen=0x"); cursor = LogHex(cursor, commandInfo2.EnvLen);
-        cursor = LogPut(cursor, " flags=0x"); cursor = LogHex(cursor, commandInfo2.CreationFlags);
-        cursor = LogPut(cursor, " std=0x"); cursor = LogHex(cursor, (DWORD)(ULONG_PTR)commandInfo2.StdIn); cursor = LogPut(cursor, "/0x"); cursor = LogHex(cursor, (DWORD)(ULONG_PTR)commandInfo2.StdOut);
-        cursor = LogPut(cursor, "/0x"); cursor = LogHex(cursor, (DWORD)(ULONG_PTR)commandInfo2.StdErr);
-        cursor = LogPut(cursor, "\r\n");
+        cursor = StartupFetchCommandDetails(cursor);
     } else if (g_WowLaunch) {
-        /* ── ★★★★ THE WIN16 PROGRAM, FROM CSRSS. (s73) ──────────────────────────
-             A WOW launch never carried its program: the VDM starts as
-             `ntvdm -f -i<n> -w -a krnl386.exe`, the first fetch above returns FALSE
-             err=0x57 (measured, s3x), and until today the name came ONLY from
-             cfg\target.txt -- the harness's channel -- so on any machine without
-             that file a double-clicked Win16 program ran nothing, and on the rig it
-             ran whatever the file happened to name last. Stock WOW gets it exactly
-             the way stock DOS does: WOWEXEC's WowGetNextVDMCommand (WOW32 0x70) is
-             wow32.dll calling GetNextVDMCommand with VDM_FLAG_WOW, and CSRSS answers
-             with the AppName + CmdLine the launcher queued. We ask here, before
-             krnl386 runs, so that 0x70 can answer from g_WowCommandProgram as it already
-             does. DONT_WAIT: a misunderstanding is a FALSE, never a hang. */
-        VDM_COMMAND_INFO commandInfo2;
-        DWORD error2 = 0; BOOL ok2; INT item;
-        static CHAR pifFile2[512], desktop2[512], title2[512], reservedBuffer2[512];
-        ZeroMemory(&commandInfo2, sizeof commandInfo2);
-        commandInfo2.CmdLine = g_CommandLine2; commandInfo2.CmdLen = sizeof g_CommandLine2;  commandInfo2.AppName = g_Application2; commandInfo2.AppLen = sizeof g_Application2;
-        commandInfo2.PifFile = pifFile2; commandInfo2.PifLen = sizeof pifFile2; commandInfo2.CurDirectory = g_CurrentDirectory2; commandInfo2.CurDirectoryLen = sizeof g_CurrentDirectory2;
-        commandInfo2.Env = g_Environment2; commandInfo2.EnvLen = sizeof g_Environment2; commandInfo2.Desktop = desktop2; commandInfo2.DesktopLen = sizeof desktop2;
-        commandInfo2.Title = title2; commandInfo2.TitleLen = sizeof title2; commandInfo2.Reserved = reservedBuffer2; commandInfo2.ReservedLen = sizeof reservedBuffer2;
-        commandInfo2.StartupInfo.cb = sizeof(STARTUPINFOA);
-        /* ► THE SHAPE IS MEASURED, NOT ASSUMED (rig, s73). WOW|FIRST|DONT_WAIT alone
-             answers FALSE err=0x490 (ERROR_NOT_FOUND), with either task id. What
-             answers TRUE is GET_FIRST_COMMAND|WOW -- the same handshake stock ntvdm's
-             cmdGetStartInfo makes for DOS, and like the DOS one it fills Title/CurDir
-             and leaves AppName as capture-buffer junk ("[5??]"). So, as on the DOS
-             path: the GET_FIRST call first, then the FIRST_TASK fetch for the command
-             itself. Every call is DONT_WAIT and every answer is logged; a "name" is
-             only believed when it is drive-qualified or UNC -- TRUE with junk is not
-             a program. */
-        {   static const struct { DWORD VdmState; INT IsOwnTask; INT IsHandshake; PCSTR Description; } vdmStates[] = {
-                { VDM_GET_FIRST_COMMAND | VDM_FLAG_WOW | VDM_FLAG_DONT_WAIT, 1, 1, "GET_FIRST|WOW|DONT_WAIT taskid=-i (handshake)" },
-                { VDM_FLAG_WOW | VDM_FLAG_FIRST_TASK | VDM_FLAG_DONT_WAIT, 1, 0, "WOW|FIRST|DONT_WAIT taskid=-i" },
-                { VDM_FLAG_WOW | VDM_FLAG_FIRST_TASK | VDM_FLAG_DONT_WAIT, 0, 0, "WOW|FIRST|DONT_WAIT taskid=0"  },
-                { VDM_FLAG_WOW | VDM_FLAG_DONT_WAIT, 1, 0, "WOW|DONT_WAIT taskid=-i"       },
-                { VDM_FLAG_WOW | VDM_FLAG_FIRST_TASK | VDM_FLAG_RETRY | VDM_FLAG_DONT_WAIT, 1, 0, "WOW|FIRST|RETRY|DONT_WAIT taskid=-i" },
-            };
-            UINT si; INT named = 0;
-            for (si = 0; si < sizeof vdmStates / sizeof vdmStates[0] && !named; ++si) {
-                g_Application2[0] = 0; g_CommandLine2[0] = 0; g_CurrentDirectory2[0] = 0; error2 = 0;
-                commandInfo2.AppLen = sizeof g_Application2; commandInfo2.CmdLen = sizeof g_CommandLine2; commandInfo2.CurDirectoryLen = sizeof g_CurrentDirectory2;
-                commandInfo2.EnvLen = sizeof g_Environment2; commandInfo2.PifLen = sizeof pifFile2; commandInfo2.DesktopLen = sizeof desktop2;
-                commandInfo2.TitleLen = sizeof title2; commandInfo2.ReservedLen = sizeof reservedBuffer2;
-                commandInfo2.VDMState = vdmStates[si].VdmState;
-                commandInfo2.TaskId = vdmStates[si].IsOwnTask ? g_CommandInfo.TaskId : 0;
-                ok2 = CsrssGetCommand(&commandInfo2, &error2);
-                g_Application2[sizeof g_Application2 - 1] = 0; g_CommandLine2[sizeof g_CommandLine2 - 1] = 0; g_CurrentDirectory2[sizeof g_CurrentDirectory2 - 1] = 0;
-                named = ok2 && !vdmStates[si].IsHandshake
-                        && ((g_Application2[0] >= 'A' && (g_Application2[0] | ASCII_CASE_BIT) <= 'z' && g_Application2[1] == ':' && g_Application2[2] == '\\')
-                            || (g_Application2[0] == '\\' && g_Application2[1] == '\\'));
-                cursor = LogPut(cursor, "STAGE1: WOW command fetch ["); cursor = LogPut(cursor, vdmStates[si].Description); cursor = LogPut(cursor, "] -> ");
-                cursor = LogPut(cursor, ok2 ? "TRUE" : "FALSE");
-                cursor = LogPut(cursor, " err=0x"); cursor = LogHex(cursor, error2);
-                cursor = LogPut(cursor, " app=["); if (named) cursor = LogPut(cursor, g_Application2); else if (g_Application2[0]) cursor = LogPut(cursor, "<not a path>");
-                cursor = LogPut(cursor, "] args=["); if (named) cursor = LogPut(cursor, g_CommandLine2);
-                cursor = LogPut(cursor, "] cur=["); cursor = LogPut(cursor, g_CurrentDirectory2); cursor = LogPut(cursor, "] show=0x"); cursor = LogHex(cursor, commandInfo2.StartupInfo.wShowWindow);
-                cursor = LogPut(cursor, " taskid=0x"); cursor = LogHex(cursor, commandInfo2.TaskId);
-                cursor = LogPut(cursor, "\r\n");
-            }
-            ok2 = named;
-        }
-        for (item = 0; g_CommandLine2[item]; ++item) if (g_CommandLine2[item] == '\r' || g_CommandLine2[item] == '\n') { g_CommandLine2[item] = 0; break; }
-        wowCommandFromCsrss = ok2 && g_Application2[0];
-        if (wowCommandFromCsrss) {
-            /* Exactly what the target.txt path does with a name, or the stage below
-               builds the V86 world for the embedded four-byte stub instead ("STAGE2:
-               embedded fallback"), krnl386 gets no program path in its environment,
-               and it dies in its own init: "NTVDM KERNEL: Unable to initialize heap".
-               Measured, first cut. The image read here is discarded by WowPlaceV86;
-               the NAME and the byte count are what the stage keys on. */
-            HANDLE wowHandle;
-            LogPut(g_WowCommandProgram, g_Application2); WowShorten(g_WowCommandProgram, sizeof g_WowCommandProgram);
-            /* the tail arrives with its leading space, as a DOS tail does; 0x70 adds its own */
-            { PCSTR cursorA = g_CommandLine2; while (*cursorA == ' ') ++cursorA; LogPut(g_WowCommandArguments, cursorA); LogPut(args, cursorA); }
-            LogPut(programPathBuffer, g_WowCommandProgram);
-            wowHandle = CreateFileA(g_WowCommandProgram, GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING, 0, NULL);
-            if (wowHandle != INVALID_HANDLE_VALUE) { ReadFile(wowHandle, g_FileBuffer, sizeof(g_FileBuffer), &readCount, NULL); CloseHandle(wowHandle); }
-            if (g_CurrentDirectory2[0]) {
-                SetCurrentDirectoryA(g_CurrentDirectory2);
-                /* #164: WOWEXEC changes to this before LoadModule, so the task starts
-                   in the folder it was launched from -- 8.3, as krnl386 sees paths. */
-                if (!GetShortPathNameA(g_CurrentDirectory2, g_WowCommandDirectory, sizeof g_WowCommandDirectory)
-                    || lstrlenA(g_WowCommandDirectory) >= WOW_COMMAND_DIRECTORY_MAX)
-                    g_WowCommandDirectory[0] = 0;
-            }
-            cursor = LogPut(cursor, "STAGE2: Win16 program from CSRSS -- LAUNCH ["); cursor = LogPut(cursor, g_WowCommandProgram);
-            cursor = LogPut(cursor, "] loaded 0x"); cursor = LogHex(cursor, readCount); cursor = LogPut(cursor, " (target.txt NOT consulted)\r\n");
-            if (!readCount) wowCommandFromCsrss = 0;          /* unreadable: fall back as before */
-        }
+        StartupFetchWowCommand(&cursor, &wowCommandFromCsrss, args, programPathBuffer, &readCount);
     }
     LogWrite(LOG_PATH, report, cursor);
     /* ⚠ AFTER the LogWrite, not before: LogWrite TRUNCATES. The first cut of this
@@ -6776,79 +6878,7 @@ INT WINAPI WinMain(HINSTANCE instance, HINSTANCE previousInstance, LPSTR command
     }
 
     StartupLoadCsrssApplication(&cursor, &wantShell, &readCount, programPathBuffer, args);
-    {
-        INT csrssNamed = (g_CurrentDirectory[0] && g_Title[0]) || (readCount != 0) || wowCommandFromCsrss;
-        /* ⚠ `want_shell` skips target.txt ENTIRELY. A user who opened NTVDMEX asked for
-             a shell, not for whatever the last test run happened to leave in cfg\. */
-        HANDLE thread = (csrssNamed || wantShell)
-                  ? INVALID_HANDLE_VALUE
-                  : CreateFileA(TARGET_PATH, GENERIC_READ, FILE_SHARE_READ, NULL,
-                                OPEN_EXISTING, 0, NULL);
-        if (csrssNamed && !readCount) {
-            cursor = LogPut(cursor, "STAGE2: CSRSS named a program -- target.txt NOT consulted "
-                        "(GH #130)\r\n");
-        }
-        if (thread != INVALID_HANDLE_VALUE) {
-            CHAR tempPath[512]; DWORD tempLength = 0; PSTR scan; PSTR cursorA = 0;
-            ReadFile(thread, tempPath, sizeof(tempPath) - 1, &tempLength, NULL); CloseHandle(thread);
-            tempPath[tempLength < sizeof(tempPath) ? tempLength : sizeof(tempPath) - 1] = 0;
-            /* ── ⚠⚠ A PROGRAM PATH MAY CONTAIN SPACES, AND THIS SPLIT ON THE FIRST ONE.
-                 Every path the rig used to hand us was C:\game\X.EXE or C:\test\X.COM,
-                 so "first space starts the arguments" was never wrong -- until the rig
-                 moved into the share folder, whose path contains "Documents and
-                 Settings". Measured, first run after the move:
-
-                   target.txt loaded 0x0 from C:\Documents
-                     args=[and Settings\All Users\...\games\Skyroads\Skyroads.EXE]
-
-                 A zero-byte load, then the embedded four-byte `mov ah,4Ch / int 21h`
-                 stub runs INSTEAD of the game and the run completes cleanly -- the
-                 same silent-success shape as GH #131 below, and it reports `mode
-                 sets: none` rather than any kind of error.
-               ⇒ So honour QUOTES, and treat an unquoted line as a bare path with no
-                 arguments when what it names actually exists. A quoted first token is
-                 unambiguous and is what every Windows caller already writes. */
-            scan = tempPath;
-            if (*scan == '"') {                            /* "path with spaces" [args] */
-                PSTR word2 = scan; ++scan;
-                while (*scan && *scan != '"') *word2++ = *scan++;
-                if (*scan == '"') ++scan;
-                *word2 = 0;
-                while (*scan == ' ') ++scan;
-                { PSTR limit; for (limit = scan; *limit; ++limit) if (*limit == '\r' || *limit == '\n') { *limit = 0; break; } }
-                if (*scan) cursorA = scan;
-            } else {
-                for (scan = tempPath; *scan; ++scan)                 /* trim EOL first */
-                    if (*scan == '\r' || *scan == '\n') { *scan = 0; break; }
-                /* Unquoted: only split on a space if the WHOLE line is not itself a
-                   file. That keeps `C:\test\x.com >out.txt` working and stops a path
-                   with spaces being torn in half. */
-                { HANDLE probe = CreateFileA(tempPath, GENERIC_READ, FILE_SHARE_READ, NULL,
-                                             OPEN_EXISTING, 0, NULL);
-                  if (probe != INVALID_HANDLE_VALUE) CloseHandle(probe);
-                  else for (scan = tempPath; *scan; ++scan)
-                           if (*scan == ' ') { *scan = 0; cursorA = scan + 1; break; } }
-            }
-            if (tempPath[0]) {
-                HANDLE fileHandle = CreateFileA(tempPath, GENERIC_READ, FILE_SHARE_READ, NULL,
-                                        OPEN_EXISTING, 0, NULL);
-                if (fileHandle != INVALID_HANDLE_VALUE) { ReadFile(fileHandle, g_FileBuffer, sizeof(g_FileBuffer), &readCount, NULL); CloseHandle(fileHandle); }
-                LogPut(programPathBuffer, tempPath);                  /* env argv[0] */
-                if (cursorA) LogPut(args, cursorA);                   /* PSP command tail */
-                /* ★ GH #128: on a WOW launch this same path is the WIN16 program,
-                     and WOW32 0x70 is how WOWEXEC asks for it. The DOS image
-                     loaded just below is discarded there (see WowPlaceV86), but
-                     the NAME is the one thing the WOW path still needs -- Windows
-                     does not put it on the VDM's command line. */
-                LogPut(g_WowCommandProgram, tempPath); WowShorten(g_WowCommandProgram, sizeof g_WowCommandProgram);
-                if (cursorA) LogPut(g_WowCommandArguments, cursorA);
-                cursor = LogPut(cursor, "STAGE2: target.txt loaded 0x"); cursor = LogHex(cursor, readCount);
-                cursor = LogPut(cursor, " from "); cursor = LogPut(cursor, tempPath);
-                if (cursorA && cursorA[0]) { cursor = LogPut(cursor, " args=["); cursor = LogPut(cursor, cursorA); cursor = LogPut(cursor, "]"); }
-                cursor = LogPut(cursor, "\r\n");
-            }
-        }
-    }
+    StartupLoadTarget(&cursor, &readCount, wowCommandFromCsrss, wantShell, programPathBuffer, args);
     StartupLoadTitlePath(&cursor, &readCount, programPathBuffer, args);
     if (!readCount && g_CurrentDirectory[0] && g_Title[0]) {
         CHAR path[768]; PSTR pathCursor = path; HANDLE fileHandle; int targetLength; PSTR targetArguments = NULL; /* stays int: INT here moves the compiled code */
