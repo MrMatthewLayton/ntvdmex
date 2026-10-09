@@ -1,7 +1,13 @@
 /* host_install.c -- installation and recovery: becoming the machine's VDM, reversibly; the recent
  *   list; the command line.
  *
- * Part of the host's single translation unit: #included by main.c after host_internal.h. */
+ * Its own translation unit (#335): declared in host_install.h. */
+#include "host_state.h"
+#include "log.h"
+#include <tlhelp32.h>
+#include "install.h"
+#include "host_install.h"
+
 
 /* ── THE RECOVERY PATH: A MACHINE MUST NOT LOSE ITS VDM. (GH #132) ───────────
      We install by pointing ntvdm.exe's IFEO Debugger value at ourselves, so a
@@ -20,7 +26,7 @@
      strikes and the user's next launch silently ran stock ntvdm for the rest of
      the day. See src/dos/dos_recovery.h. */
 #define STARTFAIL_PATH OUT_("startfail.txt")
-static UINT RecoveryRead(VOID)
+UINT RecoveryRead(VOID)
 {
     CHAR buffer[16]; DWORD bytesRead = 0; UINT value = 0;
     HANDLE handle = CreateFileA(STARTFAIL_PATH, GENERIC_READ, FILE_SHARE_READ, NULL,
@@ -31,7 +37,7 @@ static UINT RecoveryRead(VOID)
     return value;
 }
 
-static VOID RecoveryWrite(UINT value)
+VOID RecoveryWrite(UINT value)
 {
     CHAR buffer[16]; INT index = 0; DWORD bytesWritten = 0;
     HANDLE handle = CreateFileA(STARTFAIL_PATH, GENERIC_WRITE, FILE_SHARE_READ, NULL,
@@ -48,7 +54,7 @@ static VOID RecoveryWrite(UINT value)
 /* The start SUCCEEDED: the host has a window (or tray icon) on the desktop. Called
    from the UI thread right after ShowWindow/TrayAdd, and again from the clean-exit
    path so a headless run that never got that far still clears on its way out. */
-static VOID RecoveryOk(VOID) { DeleteFileA(STARTFAIL_PATH); }
+VOID RecoveryOk(VOID) { DeleteFileA(STARTFAIL_PATH); }
 
 /* ── ★ THE INSTALLER. (GH #13) ───────────────────────────────────────────────────
      Everything above install.h's line is decision-making with no Windows in it and
@@ -102,7 +108,7 @@ static VOID InstallPreviousWrite(PCSTR value)
     RegCloseKey(key);
 }
 
-static INT MruLoad(CHAR out[MRU_MAX][MAX_PATH])
+INT MruLoad(CHAR out[MRU_MAX][MAX_PATH])
 {
     HKEY key; INT count = 0, index;
     if (RegOpenKeyExA(HKEY_CURRENT_USER, NTVDMEX_REG_KEY, 0, KEY_QUERY_VALUE, &key) != ERROR_SUCCESS)
@@ -118,7 +124,7 @@ static INT MruLoad(CHAR out[MRU_MAX][MAX_PATH])
     RegCloseKey(key);
     return count;
 }
-static VOID MruAdd(PCSTR path)
+VOID MruAdd(PCSTR path)
 {
     CHAR list[MRU_MAX][MAX_PATH], longPath[MAX_PATH];
     HKEY key; DWORD disposition, longLength; INT count, index, written = 0;
@@ -227,7 +233,7 @@ static PSTR InstallResidentText(PSTR cursor, INT count)
      registry value that reads correctly and does not route, and by a write that
      silently did nothing; reporting success on the strength of a return code alone
      is the same class of claim. Read it again and classify it again. */
-static INT InstallPerform(INT want, INT force, PSTR message, DWORD cap)
+INT InstallPerform(INT want, INT force, PSTR message, DWORD cap)
 {
     CHAR self[NTVDMEX_PATH_MAX], current[NTVDMEX_PATH_MAX], prev[NTVDMEX_PATH_MAX];
     CHAR currentBefore[NTVDMEX_PATH_MAX];
@@ -327,7 +333,7 @@ static INT InstallPerform(INT want, INT force, PSTR message, DWORD cap)
    "installed as this machine", a sentence only /install ever prints -- so it
    declared NTVDMEX uninstalled the moment after install.bat said otherwise. Two
    layers that have to agree about a string, don't. (s72, found by hand on the rig.) */
-static INSTALL_STATE InstallStatusText(PSTR message, DWORD cap)
+INSTALL_STATE InstallStatusText(PSTR message, DWORD cap)
 {
     CHAR self[NTVDMEX_PATH_MAX], current[NTVDMEX_PATH_MAX];
     PSTR cursor = message;
@@ -354,7 +360,7 @@ static INSTALL_STATE InstallStatusText(PSTR message, DWORD cap)
 }
 /* Which verb, if any, this command line asks for: 0 install, 1 uninstall,
    2 status, -1 none. The verb must be the FIRST argument -- see the call site. */
-static INT InstallVerb(PCSTR command)
+INT InstallVerb(PCSTR command)
 {
     static PCSTR const verbs[INSTALL_VERBS] = { "install", "uninstall", "status" };
     INT index, characterIndex;
@@ -378,7 +384,7 @@ static INT InstallVerb(PCSTR command)
 
 /* `/force` anywhere after the verb (#195): /uninstall /force removes a value that names
    another program. Deliberately only a command-line switch, never a menu item. */
-static INT CommandLineHasForce(PCSTR command)
+INT CommandLineHasForce(PCSTR command)
 {
     PCSTR cursor;
     if (!command) return 0;
@@ -393,7 +399,7 @@ static INT CommandLineHasForce(PCSTR command)
    menu shape, and it is safe to test for: Windows hands an IFEO-substituted VDM the
    ORIGINAL command line, whose first argument is always the path to ntvdm.exe, so a
    real VDM launch always has arguments. Same reasoning InstallVerb() already relies on. */
-static INT CommandLineBare(PCSTR command)
+INT CommandLineBare(PCSTR command)
 {
     if (!command) return 0;
     if (*command == '"') { ++command; while (*command && *command != '"') ++command; if (*command) ++command; }
@@ -416,7 +422,7 @@ static INT CommandLineBare(PCSTR command)
      product that may be installed read-only under Program Files. Rewritten every time,
      so a truncated or tampered stub cannot persist.
    Returns a process exit code. */
-static INT LaunchShellVdm(VOID)
+INT LaunchShellVdm(VOID)
 {
     CHAR stub[MAX_PATH + 32], message[1024];
     DWORD length, bytesWritten = 0;
@@ -477,7 +483,7 @@ static INT LaunchShellVdm(VOID)
     return 0;
 }
 
-static VOID InstallReport(PCSTR message, INT isOk)
+VOID InstallReport(PCSTR message, INT isOk)
 {
     HANDLE handle = GetStdHandle(STD_OUTPUT_HANDLE);
     DWORD valueType = (handle && handle != INVALID_HANDLE_VALUE) ? GetFileType(handle) : FILE_TYPE_UNKNOWN;
@@ -494,7 +500,7 @@ static VOID InstallReport(PCSTR message, INT isOk)
 /* Take ourselves out of the launch path. Needs the privilege the installer had;
    if it fails, SAY SO -- a recovery step that silently does nothing is worse
    than none, because the next start believes it was handled. */
-static VOID RecoveryUninstall(PSTR *logCursor)
+VOID RecoveryUninstall(PSTR *logCursor)
 {
     HKEY key; LONG status;
     status = RegOpenKeyExA(HKEY_LOCAL_MACHINE,
@@ -518,7 +524,7 @@ static VOID RecoveryUninstall(PSTR *logCursor)
 /* Step over argv[0] (which Windows may have quoted) and return the rest. Under an
    IFEO Debugger hook argv[0] is OUR exe, and what follows is the ORIGINAL command
    line, starting with the quoted path of the program really being launched. */
-static PCSTR CommandLineAfterArgv0(PCSTR cursor)
+PCSTR CommandLineAfterArgv0(PCSTR cursor)
 {
     if (*cursor == '"') { ++cursor; while (*cursor && *cursor != '"') ++cursor; if (*cursor) ++cursor; }
     else           { while (*cursor && *cursor != ' ') ++cursor; }

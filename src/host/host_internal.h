@@ -6,6 +6,7 @@
 
 #include "host_types.h"
 #include "host_state.h"
+#include "host_install.h"
 
 static VOID HostProfileDump(VOID);
 static VOID WowIcaDeliver(DOS_MACHINE *machine, volatile BYTE *tib, UINT steps);
@@ -55,7 +56,6 @@ static INT  DpmiAsyncInjectPm(UINT irq, CONTEXT *context);
 static struct { BYTE Irq, Path, State; WORD Cs, Ip; DWORD Flags; } g_IfvTrace[IFV_TRACE_MAX];
 static struct { WORD Cs; DWORD Eip, Count; } g_PmInjectSite[PMINJ_SITES];
 static VOID MouseChildExited(VOID);          /* fwd: see g_MouseWantRelease */
-static VOID InstallReport(PCSTR message, INT isOk);
 static HANDLE StdioPebHandle(HANDLE proc, UINT offset);
 static VOID HostRecordFinish(VOID);        /* below: patches the header, logs */
 static VOID HostMouseButton(INT button, INT down);
@@ -432,19 +432,6 @@ static INT IsOurStubCsIp(DWORD cs, DWORD ip);
 static VOID VdmStateSample(PCSTR label, volatile BYTE *tib, INT *budget);
 static VOID InjectInt(volatile BYTE *tib, UINT vector);
 static INT DosTerminate(DOS_MACHINE *machine, PVOID tib, PSTR *logCursor, PSTR base);
-static UINT RecoveryRead(VOID);
-static VOID RecoveryWrite(UINT value);
-static VOID RecoveryOk(VOID);
-static INT MruLoad(CHAR out[MRU_MAX][MAX_PATH]);
-static VOID MruAdd(PCSTR path);
-static INT InstallPerform(INT want, INT force, PSTR message, DWORD cap);
-static INSTALL_STATE InstallStatusText(PSTR message, DWORD cap);
-static INT InstallVerb(PCSTR command);
-static INT CommandLineHasForce(PCSTR command);
-static INT CommandLineBare(PCSTR command);
-static INT LaunchShellVdm(VOID);
-static VOID InstallReport(PCSTR message, INT isOk);
-static VOID RecoveryUninstall(PSTR *logCursor);
 static INT HostHasFloppy(VOID);
 static INT HostHasCdrom(VOID);
 static PDOS_DISK_GEOMETRY DiskFor(UINT drive);
@@ -523,7 +510,6 @@ static INT MouseEventQueueTake(MOUSE_EVENT_ENTRY *event, LONG *outAx, WORD *segm
 static VOID MouseCallbackTry(volatile BYTE *tib);
 static VOID MouseCallbackReturn(volatile BYTE *tib);
 static VOID MouseDrawGraphicsCursor(BYTE *pixels, INT width, INT height, INT stride);
-static PCSTR CommandLineAfterArgv0(PCSTR cursor);
 static INT LaunchIsWow(PCSTR command);
 static INT WowModuleOfSelector(WORD selector);
 static INT WowUserAnchor(WORD thunkId, WORD argumentBytes, WORD returnStub);
