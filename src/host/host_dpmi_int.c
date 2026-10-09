@@ -2436,10 +2436,598 @@ static INT Wow32RunLaunchedTaskFirst(PSTR *cursorIo, PSTR const base, WOW32_FRAM
     *cursorIo = cursor; return HOST_FLOW_NEXT;
 }
 
+
+/* Log a WOW32 call's frame: its function id (and name, for krnl386's own thunks), whose table the id
+   belongs to, the stub, and the arguments. */
+static PSTR Wow32LogFrame(PSTR cursor, PSTR const base, const BYTE bopCode, const volatile BYTE * const frameBytes, volatile BYTE * const tib, SIZE_T const reportSize)
+{
+    /* ★ THE FUNCTION ID. Every 32-bit call goes through one common
+         thunk, reached by a FAR call from a per-function stub that has
+         pushed its arguments and then its ID (observed in every frame).
+         So bp+2/bp+4 are the return address back into the stub, and
+         bp+6 is the ID the stub pushed last.
+       That is the whole WOW32 interface: a small integer namespace.
+       Naming it here is what turns a wall of identical BOP lines into
+       a list of functions to implement. */
+    if (bopCode == WOW32_BOP) {
+        /* ⚠ CORRECTED, AND THE CORRECTION IS THE WHOLE POINT.
+             This used to read the arguments at bp+12 and so printed
+             the CALLER's far return address as the first two argument
+             words. That is why session 30 filed VirtualAlloc's argument
+             ORDER as "not pinned down, two readings possible" -- there
+             was only ever one reading, and the instrument was lying.
+           The arguments are at bp+16: above bp+2..bp+10 (the stub's
+             return, its id, its argument byte count) and the CALLER's far
+             return at bp+12/+14 -- which is where the guest resumes, and
+             the N argument bytes above it are what it discards. See
+             wow32.h for the pinned layout. */
+        DWORD frameId  = (DWORD)(frameBytes[WOW32_OFF_ID]
+                             | (frameBytes[WOW32_OFF_ID + 1] << BYTE_SHIFT));
+        DWORD argumentBytes  = (DWORD)(frameBytes[WOW32_OFF_ARGB]
+                             | (frameBytes[WOW32_OFF_ARGB + 1] << BYTE_SHIFT));
+        DWORD argumentCount   = argumentBytes / WOW_WORD_BYTES, item;
+        /* ★ AN ID IS ONLY MEANINGFUL WITH ITS TABLE. The stub lives
+             in the module that owns the numbering, so print that
+             segment and only apply krnl386's names when the stub is
+             krnl386's. This log said "GetProfileInt" over WOWEXEC's
+             RegisterClass for one run, which is how the whole per-module
+             id space came to light -- an instrument must not put a name
+             on something it has not identified. */
+        DWORD frameSegment = (DWORD)(frameBytes[WOW32_OFF_STUB_SEGMENT] | (frameBytes[WOW32_OFF_STUB_SEGMENT + 1] << BYTE_SHIFT));
+        INT   isKernelThunk   = frameSegment == VDM_REG16(tib, VTIB_CS);
+        PCSTR thunkName = isKernelThunk ? Wow32Name((WORD)frameId) : NULL;
+        cursor = LogPut(cursor, " FUNC=0x"); cursor = LogHex(cursor, frameId);
+        if (thunkName) { cursor = LogPut(cursor, " "); cursor = LogPut(cursor, thunkName); }
+        if (isKernelThunk) cursor = LogPut(cursor, " [krnl]");
+        else {
+            INT module = WowModuleOfSelector((WORD)frameSegment);
+            cursor = LogPut(cursor, " [");
+            /* ⚠ `?` MEANT TWO DIFFERENT THINGS AND THAT COST A
+                 READING. WowModuleOfSelector is a BIND-STAGE table:
+                 it cannot name a selector krnl386 allocated at run
+                 time, so USER's own calls printed as "?'s table"
+                 even though the dispatcher had identified that very
+                 segment from a stub and was routing them to
+                 wowuser.h. A line saying "unknown" about something
+                 the host knows is an instrument lying quietly.
+                 The two tables we HAVE identified say so by name. */
+            if (g_WowUserSegment && frameSegment == g_WowUserSegment)
+                cursor = LogPut(cursor, "USER");
+            else if (g_WowKernel2Segment && frameSegment == g_WowKernel2Segment)
+                cursor = LogPut(cursor, "krnl386 seg2");
+            else if (g_WowSoundSegment && frameSegment == g_WowSoundSegment)
+                cursor = LogPut(cursor, "SOUND");
+            else if (g_WowMultimediaSegment && frameSegment == g_WowMultimediaSegment)
+                cursor = LogPut(cursor, "MMSYSTEM");
+            else
+                cursor = LogPut(cursor, module >= 0 ? g_WowName[module] : "?");
+            cursor = LogPut(cursor, "'s table -- a DIFFERENT id space]");
+        }
+        cursor = LogPut(cursor, " stub=0x"); cursor = LogHex(cursor, frameSegment);
+        /* ── ★ WHICH TASK IS CALLING. (GH #128, session 38) ───────────
+             krnl386 keeps the current task's TDB selector in its DGROUP
+             at offset 0x228 (observed), and at EVERY WOW32 call the
+             guest's own DS already selects DGROUP (observed) -- so it
+             selects the segment this lives in. No base to resolve, nothing that
+             moves between runs, and it costs one read.
+           ★ IT TURNS THE LOG INTO A TASK TIMELINE, which is the thing
+             the frontier needs. WOWEXEC executes, calls WaitEvent(0) --
+             the handshake between InitTask and InitApp in every Win16
+             startup -- and never gives control back, so krnl386's boot
+             task never returns from LoadModule and never unlinks its own
+             bring-up record. That record is what GetExePtr(NULL) then
+             matches, and the #GP that follows is the consequence. Every one of
+             those claims is about WHO WAS
+             RUNNING, and until now the log could not say.
+           ⚠ It is a READING, not a lever. krnl386 reacts when this word
+             differs across a BOP, which reads like an invitation to
+             schedule by writing it -- but measured, what that does is
+             restore the caller after someone else ran. Writing it here
+             would park the wrong stack in the wrong TDB. */
+        {   DWORD instanceBase = DpmiSelectorBase((WORD)(VDM_REG(tib, VTIB_DS)
+                                             & WORD_MASK));
+            if (instanceBase) {
+                const volatile BYTE *dgroup =
+                    (const volatile BYTE *)(ULONG_PTR)instanceBase;
+                cursor = LogPut(cursor, " task=0x");
+                cursor = LogHex(cursor, (DWORD)(dgroup[0x228] | (dgroup[0x229] << BYTE_SHIFT)));
+                /* ★ And keep it where USER's GetWindowTask can
+                     see it -- the same word, read once. */
+                g_WowUserCurrentTask = (WORD)(dgroup[WOWUSER_KRNL_CURRENT_TASK] | (dgroup[WOWUSER_KRNL_CURRENT_TASK + 1] << BYTE_SHIFT));
+            }
+        }
+        /* ── ★ AND WHICH EPILOGUE THIS CALL WILL RETURN THROUGH.
+             The mode word at bp-24 picks how the call returns
+             (see WOW32_OFF_MODE in wow32.h). krnl386 always passes
+             0 (observed), so this MUST read `mode=0` on
+             every line -- and the day something writes it, the log
+             says so instead of the guest quietly returning
+             somewhere else. Predict the number before the run. */
+        cursor = LogPut(cursor, " mode=");
+        cursor = LogHex(cursor, (DWORD)(frameBytes[WOW32_OFF_MODE]
+                            | (frameBytes[WOW32_OFF_MODE + 1] << BYTE_SHIFT)));
+        cursor = LogPut(cursor, " args=");   cursor = LogHex(cursor, argumentBytes);
+        cursor = LogPut(cursor, "b retstub=0x");
+        cursor = LogHex(cursor, (DWORD)(frameBytes[2] | (frameBytes[3] << BYTE_SHIFT)));
+        /* ⚠ A CALL SITE IS A SEGMENT AND AN OFFSET. This printed the
+             offset alone, and every reader (including this session)
+             assumed segment 1 -- krnl386's main segment, where most of
+             them are. Session 34 chased `from=0x09bf` into seg1, found
+             it landing mid-instruction, and only then looked at the
+             frame word above it: the caller was 0x01d7, a DIFFERENT
+             segment of krnl386. An instrument that names half an address
+             invites looking in the wrong module. */
+        cursor = LogPut(cursor, " from=0x");
+        cursor = LogHex(cursor, (DWORD)(frameBytes[14] | (frameBytes[15] << BYTE_SHIFT)));
+        cursor = LogPut(cursor, ":0x");
+        cursor = LogHex(cursor, (DWORD)(frameBytes[12] | (frameBytes[13] << BYTE_SHIFT)));
+        if (argumentCount && argumentCount <= 16) {
+            cursor = LogPut(cursor, " (");
+            for (item = 0; item < argumentCount; ++item) {
+                if (item) cursor = LogPut(cursor, " ");
+                cursor = LogHex(cursor, (DWORD)(frameBytes[WOW32_OFF_ARGS + item * WOW_WORD_BYTES]
+                             | (frameBytes[WOW32_OFF_ARGS + item * WOW_WORD_BYTES + 1] << BYTE_SHIFT)));
+            }
+            cursor = LogPut(cursor, ")");
+            /* ── ★★ krnl386 SAYS WHY IT IS GIVING UP, AND WE NEVER READ IT. ──
+                 Its last act before ExitKernelThunk is WOW32 0xc4 -- the fatal
+                 error box -- and two of the words in this frame are a far
+                 pointer to the message. Session 34 got "NTVDM KERNEL: Missing
+                 16-bit system module" only by taking the pointer out of the log
+                 by hand and reading the string it named. Several different
+                 failures end in this same call; guessing which one from
+                 surrounding behaviour is
+                 exactly the reasoning-instead-of-measuring this project keeps
+                 paying for. Print it.
+               ⚠ NO ASSUMED FRAME. Which words hold the pointer is not fixed by
+                 anything we have measured -- only that some adjacent pair does.
+                 So try every (offset, segment) pair, and print only the ones
+                 that resolve to a real selector AND look like text. A pair that
+                 is not a string prints nothing rather than a plausible lie. */
+            /* ── ⚠ AND NOT ONLY FOR ID 0xc4. (session 37) ──────────
+                 This was gated on krnl386's MessageBox, and the very
+                 next message the guest tried to show came through a
+                 DIFFERENT id from a DIFFERENT module (0x140, same
+                 7-word frame, same 0x8008 style) -- so the run printed
+                 seven hex words where it could have printed
+                 "Application Error". A string argument is worth
+                 decoding whoever is passing it; the scan already
+                 refuses anything that is not a NUL-terminated run of
+                 text through a selector that resolves, so a non-string
+                 still prints nothing rather than a plausible lie. */
+            if (argumentCount >= 2) {
+                for (item = 0; item + 1 < argumentCount; ++item) {
+                    DWORD argumentOffset = (DWORD)(frameBytes[WOW32_OFF_ARGS + item * WOW_WORD_BYTES]
+                                  | (frameBytes[WOW32_OFF_ARGS + item * WOW_WORD_BYTES + 1] << BYTE_SHIFT));
+                    DWORD argumentSelector = (DWORD)(frameBytes[WOW32_OFF_ARGS + item * WOW_WORD_BYTES + 2]
+                                  | (frameBytes[WOW32_OFF_ARGS + item * WOW_WORD_BYTES + 3] << BYTE_SHIFT));
+                    DWORD abase = argumentSelector ? DpmiSelectorBase((WORD)argumentSelector) : 0;
+                    const volatile BYTE *sourceBytes;
+                    UINT length2 = 0;
+                    if (!argumentSelector || !abase) continue;
+                    sourceBytes = (const volatile BYTE *)(ULONG_PTR)(abase + argumentOffset);
+                    if (!HostReadable((const VOID *)sourceBytes, 8)) continue;
+                    /* ── ⚠ TAB AND CRLF ARE PART OF THE MESSAGE, NOT THE END
+                           OF IT. (session 36) ────────────────────────────
+                         This scan accepted only 0x20..0x7E, and the ONE
+                         string in this frame that names the actual fault --
+                         the formatted body, "Please re-install the following
+                         module to your system32 directory:\r\n\t\t<NAME>" --
+                         has a `\r` at offset 66. So the walk stopped there,
+                         `s[n2] != 0` rejected it as "not a C string", and the
+                         log printed only the CAPTION, which is the one part of
+                         the message that is the same for every missing module.
+                         The run named the class of failure and withheld the
+                         instance -- and the instance is the whole question.
+                       ⚠ Accept them in the SCAN, escape them in the OUTPUT: a
+                         raw CRLF here would split one log line into three and
+                         make the message look like unrelated records. */
+                    while (length2 < 120 && ((sourceBytes[length2] >= 0x20 && sourceBytes[length2] < 0x7F)
+                                        || sourceBytes[length2] == '\t' || sourceBytes[length2] == '\r'
+                                        || sourceBytes[length2] == '\n')) ++length2;
+                    if (length2 < 6 || sourceBytes[length2] != 0) continue;   /* not a C string */
+                    /* Escaping can double a 120-char string, and several args
+                       can match. Stop before `report[2048]` overflows -- an
+                       instrument that corrupts its own stack to print one more
+                       message is worse than one that prints fewer. */
+                    if ((SIZE_T)(cursor - base) > reportSize - 400) break;
+                    cursor = LogPut(cursor, "\r\n    ★ arg["); cursor = LogHex(cursor, item);
+                    cursor = LogPut(cursor, "] 0x"); cursor = LogHex(cursor, argumentSelector);
+                    cursor = LogPut(cursor, ":0x"); cursor = LogHex(cursor, argumentOffset);
+                    cursor = LogPut(cursor, " = \"");
+                    { UINT index2;
+                      for (index2 = 0; index2 < length2; ++index2) {
+                          BYTE byteCharacter = sourceBytes[index2];
+                          if      (byteCharacter == '\t') { *cursor++ = '\\'; *cursor++ = 't'; }
+                          else if (byteCharacter == '\r') { *cursor++ = '\\'; *cursor++ = 'r'; }
+                          else if (byteCharacter == '\n') { *cursor++ = '\\'; *cursor++ = 'n'; }
+                          else                   *cursor++ = (CHAR)byteCharacter;
+                      } }
+                    cursor = LogPut(cursor, "\"");
+                }
+            }
+        }
+    }
+    return cursor;
+}
+
+
+/* The WOW32 BOP: a thunk calling out to the host. Decode its frame, let the scheduler act, then service the id by module -- KERNEL's own, krnl386's second table, USER, SHELL, COMMDLG, GDI -- or through Wow32Call, stepping past the BOP. */
+static INT Wow32ServiceBop(PSTR *cursorIo, PSTR const base, const BYTE bopCode, volatile BYTE * const tib, DOS_MACHINE * const machine, DWORD *wowStaleIo, INT *wowStaleOkIo, DWORD *wowAnswerIo, INT *exitCodeOut)
+{
+    PSTR cursor = *cursorIo;
+    INT commandTakenBefore = 0;
+    DWORD wowStale = *wowStaleIo;
+    INT wowStaleOk = *wowStaleOkIo;
+    DWORD wowAnswer = *wowAnswerIo;
+    if (bopCode == WOW32_BOP) {
+        DWORD wow32StackBase = DpmiSelectorBase((WORD)VDM_REG16(tib, VTIB_SS));
+        WOW32_FRAME frame;
+        frame.FrameBase      = (volatile BYTE *)(ULONG_PTR)
+                    (wow32StackBase + VDM_REG16(tib, VTIB_EBP));
+        frame.Id      = Wow32PeekWord(frame.FrameBase + WOW32_OFF_ID);
+        frame.ArgumentBytes    = Wow32PeekWord(frame.FrameBase + WOW32_OFF_ARGB);
+        frame.CallSite    = Wow32PeekWord(frame.FrameBase + WOW32_OFF_FROM);
+        frame.StubSegment = Wow32PeekWord(frame.FrameBase + WOW32_OFF_STUB_SEGMENT);          /* the stub's own segment */
+        /* ★ WHOSE ID SPACE IS THIS? The per-function stub lives in the module
+             that owns the numbering, so resolving its segment against
+             krnl386's own segment bases answers it exactly. Everything we
+             know about this interface came out of krnl386, so a call that did
+             NOT come through krnl386's table gets the honest "unimplemented"
+             rather than an answer from the wrong function. */
+        /* ⚠ NOT via g_WowPmBase[]: that table is filled by a descriptor-limit
+             match that has not fired yet when the earliest calls arrive, so a
+             gate keyed on it rejected EVERYTHING and the run collapsed from 258
+             calls to 3. Measured, not reasoned about.
+           ⇒ The BOP itself is the reference. It lives in krnl386's own common
+             thunk (observed), so the executing CS at a BOP IS krnl386's
+             code segment -- and a stub in that same segment is krnl386's stub.
+             Exact, self-contained, and true from the first call onward. */
+        frame.IsKernel = (frame.StubSegment == (WORD)VDM_REG16(tib, VTIB_CS));
+        frame.SelectorToLinear = Wow32HostSelectorToLinear;
+        frame.Context     = NULL;
+        frame.Result     = 0;
+        frame.IsServiced = 0;
+        /* A service may ASK for a 16-bit call; whether one happens is the
+           host's decision, and `cbok` is where that decision is made. */
+        frame.IsCallbackAllowed    = g_WowCallOn;
+        frame.CallbackProcedure  = 0;
+        frame.CallbackDataSelector    = 0;
+        frame.CallbackArgumentCount  = 0; frame.CallbackSink = NULL;
+        frame.CallbackWindow  = 0; frame.CallbackMessage = 0;
+        frame.CallbackBlobLength = 0; frame.CallbackBlobArgument = -1;
+        frame.CallbackReturnMode   = WOWCALL_RET_KEEP;
+        /* ⚠ AND THESE TWO, WHICH COST A RUN BY BEING LEFT OUT. `f` is a
+             stack local, so an un-set field is whatever was there before
+             -- and `cbact` is read as a DECISION about what the host does
+             with a returned value. Uninitialised, it made a WM_CREATE
+             callback and a LocalAlloc callback both run the EDIT-text
+             action, following a pointer that was never a pointer and
+             issuing a LocalUnlock against a lock nobody had taken. Every
+             field of this frame is initialised here for that reason. */
+        frame.CallbackAction   = WOWCALL_ACT_NONE; frame.CallbackActionArgument = 0;
+        frame.IsEnumerationRequested  = 0;                /* ...and this one too */
+        frame.GuestDataSelector      = (WORD)VDM_REG16(tib, VTIB_DS);
+        frame.IsModalDialog = 0;                /* ...and this one, for the same
+                                          reason: it decides whether the
+                                          guest is resumed at all */
+        /* ★ krnl386's segment 1 as a LIVE selector, for the day a
+             service needs to call a KERNEL export. The WOW32 common
+             thunk is IN that segment, so the CS at this BOP is it --
+             exact, free, and true from the first call onward. */
+        if (frame.IsKernel) g_WowUserKernelSegment = (WORD)VDM_REG16(tib, VTIB_CS);
+        g_WowLastId = (WORD)frame.Id; g_WowLastFrom = frame.CallSite;
+        /* ── ★★ THE EPILOGUE-MODE EXPERIMENT (wowmode.txt). ────────────
+             Written BEFORE anything is serviced, because the guest reads
+             the mode after the BOP whatever we do here -- a stepped-over
+             call returns through it just as a serviced one does, and the
+             one call this exists for (0x74, the task launch) is stepped
+             over. See WOW32_OFF_MODE in wow32.h for what the modes are and
+             why krnl386 itself never sets one. */
+        {   INT modeOverride = Wow32ModeOverride((WORD)frame.Id);
+            if (modeOverride >= 0) {
+                Wow32PokeWord(frame.FrameBase + WOW32_OFF_MODE, (WORD)modeOverride);
+                cursor = LogPut(cursor, "\n     ** wowmode.txt OVERRIDE: returning"
+                            " through epilogue mode ");
+                cursor = LogHex(cursor, (DWORD)modeOverride);
+                cursor = LogPut(cursor, " -- an EXPERIMENT, not a service **");
+            }
+        }
+        /* ── ★★★ THE SCHEDULER'S TWO BOP HOOKS. See src/wow/wowsched.h. ──
+             DS is krnl386's DGROUP at every WOW32 BOP (observed on every
+             call), which is the only reason the
+             current-task word is reachable from outside a call. Learn it
+             unconditionally -- it costs nothing and the fault hook, which
+             runs where DS is anybody's, depends on having it. */
+        g_WowDgroupSelector = (WORD)VDM_REG16(tib, VTIB_DS);
+        if (g_WowSchedOn && !g_WowCallRetarget) {     /* s92 #306: inter-task calls */
+            g_WowCallCurrentTask = WowSchedCurrentTask;
+            g_WowCallRetarget = WowSchedRetarget;
+            g_WowCallUntarget = WowSchedUntarget;
+        }
+        {
+            INT exitCode, flow = Wow32RunLaunchedTaskFirst(&cursor, base, &frame, tib, &exitCode);
+            if (flow == HOST_FLOW_RETURN) { *cursorIo = cursor; *wowStaleIo = wowStale; *wowStaleOkIo = wowStaleOk; *wowAnswerIo = wowAnswer; *exitCodeOut = exitCode; return HOST_FLOW_RETURN; }
+        }
+        {
+            INT exitCode, flow = Wow32ScheduleKernelCall(&cursor, base, &frame, tib, &exitCode);
+            if (flow == HOST_FLOW_RETURN) { *cursorIo = cursor; *wowStaleIo = wowStale; *wowStaleOkIo = wowStaleOk; *wowAnswerIo = wowAnswer; *exitCodeOut = exitCode; return HOST_FLOW_RETURN; }
+        }
+        /* ── ★ #306 (s90): WowWaitForMsgAndEvent WITH NOBODY TO YIELD TO MUST
+             WAIT. The arm above handles it when another task is parked; with
+             none it fell through to "unimplemented", answered 0 instantly, and
+             the guest's idle loop (wait -> PeekMessage -> wait) ran at 100% CPU
+             -- measured after Calc closed with its Help task alive: 0x3e46a
+             stepped-over calls, all of them this one.
+             0 is still the answer (see above: "carry on and look"); what was
+             missing is the block before it. Real windows
+             are pumped (that is where a Win16 message comes from), then up to
+             50 ms of waiting for input -- the same bound and reasoning as the
+             GetMessage wait -- and any IRQ a 32-bit component raised. */
+        if (frame.IsKernel && frame.Id == WOW32_WOWWAITFORMSGANDEVENT) {
+            if (!g_WowMsgCount && !WowWinPump(WOW_PUMP_BUDGET))
+                MsgWaitForMultipleObjects(0, NULL, FALSE, WOW_INPUT_WAIT_MS, QS_ALLINPUT);
+            if (g_IcaPending) WowIcaDeliver(g_DosMachine, tib, 0);
+            Wow32SetReturn(&frame, 0);
+            ++g_Wow32Serviced;
+            ++g_WowIdleWaits;
+            VDM_REG(tib, VTIB_EIP) += VDM_BOP_LENGTH;
+            if (g_WowIdleWaits <= 4) {
+                cursor = LogPut(cursor, " -> SERVICED: idle wait (no parked task to yield to),"
+                            " answered 0 after up to 50 ms\r\n");
+                WowLogFlush(base, &cursor);
+            } else cursor = base;
+            { *cursorIo = cursor; *wowStaleIo = wowStale; *wowStaleOkIo = wowStaleOk; *wowAnswerIo = wowAnswer; *exitCodeOut = 1; return HOST_FLOW_RETURN; }
+        }
+        {
+            INT exitCode, flow = Wow32ServiceFileRead(&cursor, base, &frame, machine, tib, &exitCode);
+            if (flow == HOST_FLOW_RETURN) { *cursorIo = cursor; *wowStaleIo = wowStale; *wowStaleOkIo = wowStaleOk; *wowAnswerIo = wowAnswer; *exitCodeOut = exitCode; return HOST_FLOW_RETURN; }
+        }
+        {
+            INT exitCode, flow = Wow32ServiceGetCurrentDirectory(&cursor, base, &frame, tib, machine, &exitCode);
+            if (flow == HOST_FLOW_RETURN) { *cursorIo = cursor; *wowStaleIo = wowStale; *wowStaleOkIo = wowStaleOk; *wowAnswerIo = wowAnswer; *exitCodeOut = exitCode; return HOST_FLOW_RETURN; }
+        }
+        {
+            INT exitCode, flow = Wow32ServiceResolveModulePath(&cursor, base, &frame, tib, &exitCode);
+            if (flow == HOST_FLOW_RETURN) { *cursorIo = cursor; *wowStaleIo = wowStale; *wowStaleOkIo = wowStaleOk; *wowAnswerIo = wowAnswer; *exitCodeOut = exitCode; return HOST_FLOW_RETURN; }
+        }
+        /* ── ★ ExitKernelThunk: krnl386 SAYS IT IS DONE, SO STOP. ──────
+             krnl386 does not expect to be returned to from this call:
+             stepped over, the guest's next instruction is a deliberate UD0
+             (`0f ff`, in the fault bytes). That UD0 is reflected to its own
+             handler, which sets the vector again and faults again: a run
+             that has ENDED then fills the log to its 268 MB cap, and every
+             one of those bytes is after the last thing that happened.
+           ⇒ End the run where the guest ended it, and say which code. */
+        if (frame.IsKernel && frame.Id == WOW32_EXITKERNELTHUNK) {
+            cursor = LogPut(cursor, "\n     ★ ExitKernelThunk(0x");
+            cursor = LogHex(cursor, Wow32ArgWord(&frame, 0));
+            cursor = LogPut(cursor, ") -- krnl386 is shutting the VDM down; ending the run"
+                        " here rather than looping on the UD0 behind it\r\n");
+            WowLogFlush(base, &cursor);
+            { *cursorIo = cursor; *wowStaleIo = wowStale; *wowStaleOkIo = wowStaleOk; *wowAnswerIo = wowAnswer; *exitCodeOut = -1; return HOST_FLOW_RETURN; }
+        }
+        /* ── ★★★ krnl386's SEGMENT-2 TABLE. Learn its selector from a stub.
+             Same shape as USER's anchor below, and for the same reason:
+             the id space is per TABLE, so nothing here may be answered
+             until the table has identified itself. See WowKernel2Stub. */
+        if (!frame.IsKernel && !g_WowKernel2Segment && frame.StubSegment != g_WowUserSegment
+            && WowKernel2Stub(frame.Id, Wow32PeekWord(frame.FrameBase + WOW32_OFF_RETURN_STUB))) {
+            g_WowKernel2Segment = frame.StubSegment;
+            cursor = LogPut(cursor, "\n     WOWKRNL2: krnl386's SECOND stub table is in"
+                        " segment 0x");
+            cursor = LogHex(cursor, g_WowKernel2Segment);
+            cursor = LogPut(cursor, " (learned from the stub's own bytes in the file)");
+        }
+        {
+            INT exitCode, flow = Wow32ServiceKernelSecondTable(&cursor, base, &frame, tib, &exitCode);
+            if (flow == HOST_FLOW_RETURN) { *cursorIo = cursor; *wowStaleIo = wowStale; *wowStaleOkIo = wowStaleOk; *wowAnswerIo = wowAnswer; *exitCodeOut = exitCode; return HOST_FLOW_RETURN; }
+        }
+        /* ── ★★★ USER'S OWN ID SPACE. See src/wow/wowuser.h. ──────────
+             Deliberately a separate dispatcher behind a separate check:
+             `0x39` is GetProfileInt in krnl386's table and RegisterClass
+             in USER's, and one switch holding both id spaces is exactly
+             how this host came to answer the second with the first. */
+        if (!frame.IsKernel && !g_WowUserSegment
+            && WowUserAnchor(frame.Id, frame.ArgumentBytes, Wow32PeekWord(frame.FrameBase + WOW32_OFF_RETURN_STUB))) {
+            g_WowUserSegment = frame.StubSegment;
+            cursor = LogPut(cursor, "\n     WOWUSER: USER's code segment is 0x");
+            cursor = LogHex(cursor, g_WowUserSegment);
+            cursor = LogPut(cursor, " (learned from its own stub, not from the module table)");
+        }
+        {
+            INT exitCode, flow = Wow32ServiceUser(&cursor, base, &frame, tib, &exitCode);
+            if (flow == HOST_FLOW_RETURN) { *cursorIo = cursor; *wowStaleIo = wowStale; *wowStaleOkIo = wowStaleOk; *wowAnswerIo = wowAnswer; *exitCodeOut = exitCode; return HOST_FLOW_RETURN; }
+        }
+        /* ── ★★★ SHELL.DLL'S OWN ID SPACE. See src/wow/wowshell.h. ────
+             A fourth table, behind a fourth check, for the reason the
+             third one exists: `0x16` is SetFocus in USER's numbering and
+             ShellAbout in SHELL's, and the two must never meet. The
+             anchor and the service are the SAME call -- the table names
+             itself with the first thing we are asked to do out of it. */
+        if (!frame.IsKernel && !g_WowShellSegment
+            && frame.StubSegment != g_WowUserSegment && frame.StubSegment != g_WowKernel2Segment
+            && WowShellAnchor(frame.Id, frame.ArgumentBytes, Wow32PeekWord(frame.FrameBase + WOW32_OFF_RETURN_STUB))) {
+            g_WowShellSegment = frame.StubSegment;
+            cursor = LogPut(cursor, "\n     WOWSHELL: SHELL.DLL's code segment is 0x");
+            cursor = LogHex(cursor, g_WowShellSegment);
+            cursor = LogPut(cursor, " (learned from its own stub, not from the module"
+                        " table)");
+        }
+        {
+            INT exitCode, flow = Wow32ServiceShell(&cursor, base, &frame, tib, &exitCode);
+            if (flow == HOST_FLOW_RETURN) { *cursorIo = cursor; *wowStaleIo = wowStale; *wowStaleOkIo = wowStaleOk; *wowAnswerIo = wowAnswer; *exitCodeOut = exitCode; return HOST_FLOW_RETURN; }
+        }
+        /* ── ★★★ COMMDLG.DLL'S OWN ID SPACE. See src/wow/wowcommdlg.h. ─
+             The fifth table, behind the fifth check. Same shape as
+             SHELL's: the anchor and the service are the same call, so
+             nothing is answered before the table has named itself. */
+        if (!frame.IsKernel && !g_WowCommonDialogSegment
+            && frame.StubSegment != g_WowUserSegment && frame.StubSegment != g_WowKernel2Segment
+            && frame.StubSegment != g_WowShellSegment
+            && WowCommonDialogAnchor(frame.Id, frame.ArgumentBytes, Wow32PeekWord(frame.FrameBase + WOW32_OFF_RETURN_STUB))) {
+            g_WowCommonDialogSegment = frame.StubSegment;
+            cursor = LogPut(cursor, "\n     WOWCOMMDLG: COMMDLG.DLL's code segment is 0x");
+            cursor = LogHex(cursor, g_WowCommonDialogSegment);
+            cursor = LogPut(cursor, " (learned from its own stub, not from the module"
+                        " table)");
+        }
+        {
+            INT exitCode, flow = Wow32ServiceCommonDialog(&cursor, base, &frame, tib, &exitCode);
+            if (flow == HOST_FLOW_RETURN) { *cursorIo = cursor; *wowStaleIo = wowStale; *wowStaleOkIo = wowStaleOk; *wowAnswerIo = wowAnswer; *exitCodeOut = exitCode; return HOST_FLOW_RETURN; }
+        }
+        /* ── ★★ KEYBOARD.DRV'S OWN ID SPACE. See src/wow/wowkbd.h. ────
+             The sixth table, behind the sixth check, same shape as the
+             two before it. */
+        if (!frame.IsKernel && !g_WowKeyboardSegment
+            && frame.StubSegment != g_WowUserSegment && frame.StubSegment != g_WowKernel2Segment
+            && frame.StubSegment != g_WowShellSegment && frame.StubSegment != g_WowCommonDialogSegment
+            && WowKeyboardAnchor(frame.Id, frame.ArgumentBytes, Wow32PeekWord(frame.FrameBase + WOW32_OFF_RETURN_STUB))) {
+            g_WowKeyboardSegment = frame.StubSegment;
+            cursor = LogPut(cursor, "\n     WOWKBD: KEYBOARD.DRV's code segment is 0x");
+            cursor = LogHex(cursor, g_WowKeyboardSegment);
+            cursor = LogPut(cursor, " (learned from its own stub, not from the module"
+                        " table)");
+        }
+        if (!frame.IsKernel && g_WowKeyboardSegment && frame.StubSegment == g_WowKeyboardSegment) {
+            CHAR note[320];
+            if (WowKeyboardCall(&frame, note, sizeof note)) {
+                ++g_Wow32Serviced;
+                VDM_REG(tib, VTIB_EIP) += VDM_BOP_LENGTH;
+                cursor = LogPut(cursor, " -> SERVICED (KEYBOARD), returned 0x");
+                cursor = LogHex(cursor, frame.Result);
+                if (note[0]) { cursor = LogPut(cursor, " -- "); cursor = LogPut(cursor, note); }
+                cursor = LogPut(cursor, "\r\n");
+                WowLogFlush(base, &cursor);
+                { *cursorIo = cursor; *wowStaleIo = wowStale; *wowStaleOkIo = wowStaleOk; *wowAnswerIo = wowAnswer; *exitCodeOut = 1; return HOST_FLOW_RETURN; }
+            }
+        }
+        /* ── ★★ GDI.EXE'S OWN ID SPACE. See src/wow/wowgdi.h. ────────
+             The seventh table, and the one MS Paint lives behind. */
+        if (!frame.IsKernel && !g_WowGdiSegment
+            && frame.StubSegment != g_WowUserSegment && frame.StubSegment != g_WowKernel2Segment
+            && frame.StubSegment != g_WowShellSegment && frame.StubSegment != g_WowCommonDialogSegment
+            && frame.StubSegment != g_WowKeyboardSegment
+            && WowGdiAnchor(frame.Id, frame.ArgumentBytes, Wow32PeekWord(frame.FrameBase + WOW32_OFF_RETURN_STUB))) {
+            g_WowGdiSegment = frame.StubSegment;
+            cursor = LogPut(cursor, "\n     WOWGDI: GDI.EXE's code segment is 0x");
+            cursor = LogHex(cursor, g_WowGdiSegment);
+            cursor = LogPut(cursor, " (learned from its own stub, not from the module"
+                        " table)");
+        }
+        {
+            INT exitCode, flow = Wow32ServiceGdi(&cursor, base, &frame, tib, &exitCode);
+            if (flow == HOST_FLOW_RETURN) { *cursorIo = cursor; *wowStaleIo = wowStale; *wowStaleOkIo = wowStaleOk; *wowAnswerIo = wowAnswer; *exitCodeOut = exitCode; return HOST_FLOW_RETURN; }
+        }
+        /* ── ★ SOUND.DRV'S OWN ID SPACE (s90, #299). See src/wow/wowsound.h. */
+        if (!frame.IsKernel && !g_WowSoundSegment
+            && frame.StubSegment != g_WowUserSegment && frame.StubSegment != g_WowKernel2Segment
+            && frame.StubSegment != g_WowShellSegment && frame.StubSegment != g_WowCommonDialogSegment
+            && frame.StubSegment != g_WowKeyboardSegment && frame.StubSegment != g_WowGdiSegment
+            && WowSoundAnchor(frame.Id, frame.ArgumentBytes, Wow32PeekWord(frame.FrameBase + WOW32_OFF_RETURN_STUB))) {
+            g_WowSoundSegment = frame.StubSegment;
+            cursor = LogPut(cursor, "\n     WOWSOUND: SOUND.DRV's code segment is 0x");
+            cursor = LogHex(cursor, g_WowSoundSegment);
+            cursor = LogPut(cursor, " (learned from its own stub, not from the module"
+                        " table)");
+        }
+        if (!frame.IsKernel && g_WowSoundSegment && frame.StubSegment == g_WowSoundSegment) {
+            CHAR note[160];
+            if (WowSoundCall(&frame, note, sizeof note)) {
+                ++g_Wow32Serviced;
+                VDM_REG(tib, VTIB_EIP) += VDM_BOP_LENGTH;
+                cursor = LogPut(cursor, " -> SERVICED (SOUND), returned 0x");
+                cursor = LogHex(cursor, frame.Result);
+                if (note[0]) { cursor = LogPut(cursor, " -- "); cursor = LogPut(cursor, note); }
+                cursor = LogPut(cursor, "\r\n");
+                WowLogFlush(base, &cursor);
+                { *cursorIo = cursor; *wowStaleIo = wowStale; *wowStaleOkIo = wowStaleOk; *wowAnswerIo = wowAnswer; *exitCodeOut = 1; return HOST_FLOW_RETURN; }
+            }
+        }
+        /* ── ★ MMSYSTEM'S TWO IDS (s90, #278). See src/wow/wowmmedia.h. */
+        if (!frame.IsKernel && !g_WowMultimediaSegment
+            && frame.StubSegment != g_WowUserSegment && frame.StubSegment != g_WowKernel2Segment
+            && frame.StubSegment != g_WowShellSegment && frame.StubSegment != g_WowCommonDialogSegment
+            && frame.StubSegment != g_WowKeyboardSegment && frame.StubSegment != g_WowGdiSegment
+            && frame.StubSegment != g_WowSoundSegment
+            && WowAnchorHit(g_WowMmediaAnchors,
+                              (INT)(sizeof g_WowMmediaAnchors / sizeof g_WowMmediaAnchors[0]),
+                              frame.Id, frame.ArgumentBytes, Wow32PeekWord(frame.FrameBase + WOW32_OFF_RETURN_STUB))) {
+            g_WowMultimediaSegment = frame.StubSegment;
+            cursor = LogPut(cursor, "\n     WOWMMEDIA: MMSYSTEM's stub segment is 0x");
+            cursor = LogHex(cursor, g_WowMultimediaSegment);
+        }
+        if (!frame.IsKernel && g_WowMultimediaSegment && frame.StubSegment == g_WowMultimediaSegment) {
+            CHAR note[200];
+            if (WowMultimediaCall(&frame, note, sizeof note)) {
+                ++g_Wow32Serviced;
+                VDM_REG(tib, VTIB_EIP) += VDM_BOP_LENGTH;
+                cursor = LogPut(cursor, " -> SERVICED (MMSYSTEM), returned 0x");
+                cursor = LogHex(cursor, frame.Result);
+                if (note[0]) { cursor = LogPut(cursor, " -- "); cursor = LogPut(cursor, note); }
+                cursor = LogPut(cursor, "\r\n");
+                WowLogFlush(base, &cursor);
+                { *cursorIo = cursor; *wowStaleIo = wowStale; *wowStaleOkIo = wowStaleOk; *wowAnswerIo = wowAnswer; *exitCodeOut = 1; return HOST_FLOW_RETURN; }
+            }
+        }
+        /* Snapshot before the dispatch: the handler sets this when it
+           hands the program over, and "delivered now" and "delivered
+           earlier" are different events that must not read the same. */
+        commandTakenBefore = g_WowCommandIsTaken;
+        if (Wow32Call(&frame, &g_WowDosData)) {
+            /* ⚠ A DECLINE IS NOT A SERVICE and the log must not blur
+                 them. "krnl386 got further because we answered 9 calls"
+                 and "because we told it 7 times to ask DOS instead" are
+                 different claims about the same run, and only separate
+                 counters can tell them apart afterwards. */
+            INT isDeclined = (frame.Result == WOW32_DECLINE
+                        && Wow32MayDecline(frame.Id, frame.CallSite));
+            if (isDeclined) ++g_Wow32Declined; else ++g_Wow32Serviced;
+            VDM_REG(tib, VTIB_EIP) += VDM_BOP_LENGTH;
+            cursor = LogPut(cursor, isDeclined ? " -> DECLINED (krnl386 will chain to real"
+                               " DOS) 0x" : " -> SERVICED, returned 0x");
+            cursor = LogHex(cursor, frame.Result);
+            if (frame.Id == WOW32_REGISTERDOSDATA) {
+                cursor = LogPut(cursor, " (DOS data area at 0x");
+                cursor = LogHex(cursor, g_WowDosData.FarPointer); cursor = LogPut(cursor, ")");
+            }
+            /* ★ SAY WHAT WAS HANDED OVER, not just that something was.
+                 This one call decides which program the VDM runs, and a
+                 line reading "returned 0x1" would leave the single most
+                 important fact of the run unrecorded. */
+            if (frame.Id == WOW32_WOWGETNEXTVDMCOMMAND) {
+                if (g_WowCommandProgram[0]) {
+                    cursor = LogPut(cursor, " -- LAUNCH ["); cursor = LogPut(cursor, g_WowCommandProgram);
+                    if (g_WowCommandArguments[0]) {
+                        cursor = LogPut(cursor, "] args["); cursor = LogPut(cursor, g_WowCommandArguments);
+                    }
+                    cursor = LogPut(cursor, "]");
+                    if (commandTakenBefore) cursor = LogPut(cursor, " -- ALREADY DELIVERED,"
+                                                      " answered \"nothing more\"");
+                } else {
+                    cursor = LogPut(cursor, " -- no command (this VDM was not told what"
+                                " Win16 program to run)");
+                }
+            }
+            cursor = LogPut(cursor, "\r\n");
+            WowLogFlush(base, &cursor);
+            { *cursorIo = cursor; *wowStaleIo = wowStale; *wowStaleOkIo = wowStaleOk; *wowAnswerIo = wowAnswer; *exitCodeOut = 1; return HOST_FLOW_RETURN; }
+        }
+        ++g_Wow32Unimplemented;
+        /* Read the litter FIRST, then overwrite it -- the value that would
+           have been used is evidence, and it is gone a line later. */
+        wowStale = Wow32PeekReturn(&frame); wowStaleOk = 1;
+        wowAnswer = Wow32ReturnOverride(frame.Id);   /* wow32ret.txt, if any */
+        Wow32SetReturn(&frame, wowAnswer);            /* ★ see WOW32_UNIMPL_RET */
+    }
+    *cursorIo = cursor; *wowStaleIo = wowStale; *wowStaleOkIo = wowStaleOk; *wowAnswerIo = wowAnswer; return HOST_FLOW_NEXT;
+}
+
 static INT DpmiServicePmIntBody(DOS_MACHINE *machine, volatile BYTE *tib, DWORD vector,
                                     UINT steps)
 {
     CHAR report[2048]; PSTR base = report; PSTR cursor = report;
+    SIZE_T const reportSize = sizeof report;
     DWORD ax = VDM_REG16(tib, VTIB_EAX);
     DWORD event = VDM_REG(tib, VTIB_EVENT), eip = DpmiPmEip(tib);
     (VOID)steps;
@@ -2882,7 +3470,7 @@ static INT DpmiServicePmIntBody(DOS_MACHINE *machine, volatile BYTE *tib, DWORD 
                Captured while the frame is still in scope. A separate flag, because
                every 32-bit value is a possible hole value (0xFFFF is DECLINE) and a
                sentinel that collides with real data is how an instrument starts lying. */
-            DWORD wowStale = 0; INT wowStaleOk = 0; INT commandTakenBefore = 0;
+            DWORD wowStale = 0; INT wowStaleOk = 0;
             DWORD wowAnswer = (DWORD)WOW32_UNIMPL_RET;
             /* ★ WATCH PSP+0x2c ACROSS EVERY WOW32 CALL, AND REPORT ONLY CHANGES.
                  Knowing the field ends up wrong is not knowing who wrote it. Sampling
@@ -3075,213 +3663,7 @@ static INT DpmiServicePmIntBody(DOS_MACHINE *machine, volatile BYTE *tib, DWORD 
                 {   DWORD bpValue = VDM_REG16(tib, VTIB_EBP);
                     const volatile BYTE *frameBytes =
                         (const volatile BYTE *)(ULONG_PTR)(stackSegmentBase + bpValue);
-                    /* ★ THE FUNCTION ID. Every 32-bit call goes through one common
-                         thunk, reached by a FAR call from a per-function stub that has
-                         pushed its arguments and then its ID (observed in every frame).
-                         So bp+2/bp+4 are the return address back into the stub, and
-                         bp+6 is the ID the stub pushed last.
-                       That is the whole WOW32 interface: a small integer namespace.
-                       Naming it here is what turns a wall of identical BOP lines into
-                       a list of functions to implement. */
-                    if (bopCode == WOW32_BOP) {
-                        /* ⚠ CORRECTED, AND THE CORRECTION IS THE WHOLE POINT.
-                             This used to read the arguments at bp+12 and so printed
-                             the CALLER's far return address as the first two argument
-                             words. That is why session 30 filed VirtualAlloc's argument
-                             ORDER as "not pinned down, two readings possible" -- there
-                             was only ever one reading, and the instrument was lying.
-                           The arguments are at bp+16: above bp+2..bp+10 (the stub's
-                             return, its id, its argument byte count) and the CALLER's far
-                             return at bp+12/+14 -- which is where the guest resumes, and
-                             the N argument bytes above it are what it discards. See
-                             wow32.h for the pinned layout. */
-                        DWORD frameId  = (DWORD)(frameBytes[WOW32_OFF_ID]
-                                             | (frameBytes[WOW32_OFF_ID + 1] << BYTE_SHIFT));
-                        DWORD argumentBytes  = (DWORD)(frameBytes[WOW32_OFF_ARGB]
-                                             | (frameBytes[WOW32_OFF_ARGB + 1] << BYTE_SHIFT));
-                        DWORD argumentCount   = argumentBytes / WOW_WORD_BYTES, item;
-                        /* ★ AN ID IS ONLY MEANINGFUL WITH ITS TABLE. The stub lives
-                             in the module that owns the numbering, so print that
-                             segment and only apply krnl386's names when the stub is
-                             krnl386's. This log said "GetProfileInt" over WOWEXEC's
-                             RegisterClass for one run, which is how the whole per-module
-                             id space came to light -- an instrument must not put a name
-                             on something it has not identified. */
-                        DWORD frameSegment = (DWORD)(frameBytes[WOW32_OFF_STUB_SEGMENT] | (frameBytes[WOW32_OFF_STUB_SEGMENT + 1] << BYTE_SHIFT));
-                        INT   isKernelThunk   = frameSegment == VDM_REG16(tib, VTIB_CS);
-                        PCSTR thunkName = isKernelThunk ? Wow32Name((WORD)frameId) : NULL;
-                        cursor = LogPut(cursor, " FUNC=0x"); cursor = LogHex(cursor, frameId);
-                        if (thunkName) { cursor = LogPut(cursor, " "); cursor = LogPut(cursor, thunkName); }
-                        if (isKernelThunk) cursor = LogPut(cursor, " [krnl]");
-                        else {
-                            INT module = WowModuleOfSelector((WORD)frameSegment);
-                            cursor = LogPut(cursor, " [");
-                            /* ⚠ `?` MEANT TWO DIFFERENT THINGS AND THAT COST A
-                                 READING. WowModuleOfSelector is a BIND-STAGE table:
-                                 it cannot name a selector krnl386 allocated at run
-                                 time, so USER's own calls printed as "?'s table"
-                                 even though the dispatcher had identified that very
-                                 segment from a stub and was routing them to
-                                 wowuser.h. A line saying "unknown" about something
-                                 the host knows is an instrument lying quietly.
-                                 The two tables we HAVE identified say so by name. */
-                            if (g_WowUserSegment && frameSegment == g_WowUserSegment)
-                                cursor = LogPut(cursor, "USER");
-                            else if (g_WowKernel2Segment && frameSegment == g_WowKernel2Segment)
-                                cursor = LogPut(cursor, "krnl386 seg2");
-                            else if (g_WowSoundSegment && frameSegment == g_WowSoundSegment)
-                                cursor = LogPut(cursor, "SOUND");
-                            else if (g_WowMultimediaSegment && frameSegment == g_WowMultimediaSegment)
-                                cursor = LogPut(cursor, "MMSYSTEM");
-                            else
-                                cursor = LogPut(cursor, module >= 0 ? g_WowName[module] : "?");
-                            cursor = LogPut(cursor, "'s table -- a DIFFERENT id space]");
-                        }
-                        cursor = LogPut(cursor, " stub=0x"); cursor = LogHex(cursor, frameSegment);
-                        /* ── ★ WHICH TASK IS CALLING. (GH #128, session 38) ───────────
-                             krnl386 keeps the current task's TDB selector in its DGROUP
-                             at offset 0x228 (observed), and at EVERY WOW32 call the
-                             guest's own DS already selects DGROUP (observed) -- so it
-                             selects the segment this lives in. No base to resolve, nothing that
-                             moves between runs, and it costs one read.
-                           ★ IT TURNS THE LOG INTO A TASK TIMELINE, which is the thing
-                             the frontier needs. WOWEXEC executes, calls WaitEvent(0) --
-                             the handshake between InitTask and InitApp in every Win16
-                             startup -- and never gives control back, so krnl386's boot
-                             task never returns from LoadModule and never unlinks its own
-                             bring-up record. That record is what GetExePtr(NULL) then
-                             matches, and the #GP that follows is the consequence. Every one of
-                             those claims is about WHO WAS
-                             RUNNING, and until now the log could not say.
-                           ⚠ It is a READING, not a lever. krnl386 reacts when this word
-                             differs across a BOP, which reads like an invitation to
-                             schedule by writing it -- but measured, what that does is
-                             restore the caller after someone else ran. Writing it here
-                             would park the wrong stack in the wrong TDB. */
-                        {   DWORD instanceBase = DpmiSelectorBase((WORD)(VDM_REG(tib, VTIB_DS)
-                                                             & WORD_MASK));
-                            if (instanceBase) {
-                                const volatile BYTE *dgroup =
-                                    (const volatile BYTE *)(ULONG_PTR)instanceBase;
-                                cursor = LogPut(cursor, " task=0x");
-                                cursor = LogHex(cursor, (DWORD)(dgroup[0x228] | (dgroup[0x229] << BYTE_SHIFT)));
-                                /* ★ And keep it where USER's GetWindowTask can
-                                     see it -- the same word, read once. */
-                                g_WowUserCurrentTask = (WORD)(dgroup[WOWUSER_KRNL_CURRENT_TASK] | (dgroup[WOWUSER_KRNL_CURRENT_TASK + 1] << BYTE_SHIFT));
-                            }
-                        }
-                        /* ── ★ AND WHICH EPILOGUE THIS CALL WILL RETURN THROUGH.
-                             The mode word at bp-24 picks how the call returns
-                             (see WOW32_OFF_MODE in wow32.h). krnl386 always passes
-                             0 (observed), so this MUST read `mode=0` on
-                             every line -- and the day something writes it, the log
-                             says so instead of the guest quietly returning
-                             somewhere else. Predict the number before the run. */
-                        cursor = LogPut(cursor, " mode=");
-                        cursor = LogHex(cursor, (DWORD)(frameBytes[WOW32_OFF_MODE]
-                                            | (frameBytes[WOW32_OFF_MODE + 1] << BYTE_SHIFT)));
-                        cursor = LogPut(cursor, " args=");   cursor = LogHex(cursor, argumentBytes);
-                        cursor = LogPut(cursor, "b retstub=0x");
-                        cursor = LogHex(cursor, (DWORD)(frameBytes[2] | (frameBytes[3] << BYTE_SHIFT)));
-                        /* ⚠ A CALL SITE IS A SEGMENT AND AN OFFSET. This printed the
-                             offset alone, and every reader (including this session)
-                             assumed segment 1 -- krnl386's main segment, where most of
-                             them are. Session 34 chased `from=0x09bf` into seg1, found
-                             it landing mid-instruction, and only then looked at the
-                             frame word above it: the caller was 0x01d7, a DIFFERENT
-                             segment of krnl386. An instrument that names half an address
-                             invites looking in the wrong module. */
-                        cursor = LogPut(cursor, " from=0x");
-                        cursor = LogHex(cursor, (DWORD)(frameBytes[14] | (frameBytes[15] << BYTE_SHIFT)));
-                        cursor = LogPut(cursor, ":0x");
-                        cursor = LogHex(cursor, (DWORD)(frameBytes[12] | (frameBytes[13] << BYTE_SHIFT)));
-                        if (argumentCount && argumentCount <= 16) {
-                            cursor = LogPut(cursor, " (");
-                            for (item = 0; item < argumentCount; ++item) {
-                                if (item) cursor = LogPut(cursor, " ");
-                                cursor = LogHex(cursor, (DWORD)(frameBytes[WOW32_OFF_ARGS + item * WOW_WORD_BYTES]
-                                             | (frameBytes[WOW32_OFF_ARGS + item * WOW_WORD_BYTES + 1] << BYTE_SHIFT)));
-                            }
-                            cursor = LogPut(cursor, ")");
-                            /* ── ★★ krnl386 SAYS WHY IT IS GIVING UP, AND WE NEVER READ IT. ──
-                                 Its last act before ExitKernelThunk is WOW32 0xc4 -- the fatal
-                                 error box -- and two of the words in this frame are a far
-                                 pointer to the message. Session 34 got "NTVDM KERNEL: Missing
-                                 16-bit system module" only by taking the pointer out of the log
-                                 by hand and reading the string it named. Several different
-                                 failures end in this same call; guessing which one from
-                                 surrounding behaviour is
-                                 exactly the reasoning-instead-of-measuring this project keeps
-                                 paying for. Print it.
-                               ⚠ NO ASSUMED FRAME. Which words hold the pointer is not fixed by
-                                 anything we have measured -- only that some adjacent pair does.
-                                 So try every (offset, segment) pair, and print only the ones
-                                 that resolve to a real selector AND look like text. A pair that
-                                 is not a string prints nothing rather than a plausible lie. */
-                            /* ── ⚠ AND NOT ONLY FOR ID 0xc4. (session 37) ──────────
-                                 This was gated on krnl386's MessageBox, and the very
-                                 next message the guest tried to show came through a
-                                 DIFFERENT id from a DIFFERENT module (0x140, same
-                                 7-word frame, same 0x8008 style) -- so the run printed
-                                 seven hex words where it could have printed
-                                 "Application Error". A string argument is worth
-                                 decoding whoever is passing it; the scan already
-                                 refuses anything that is not a NUL-terminated run of
-                                 text through a selector that resolves, so a non-string
-                                 still prints nothing rather than a plausible lie. */
-                            if (argumentCount >= 2) {
-                                for (item = 0; item + 1 < argumentCount; ++item) {
-                                    DWORD argumentOffset = (DWORD)(frameBytes[WOW32_OFF_ARGS + item * WOW_WORD_BYTES]
-                                                  | (frameBytes[WOW32_OFF_ARGS + item * WOW_WORD_BYTES + 1] << BYTE_SHIFT));
-                                    DWORD argumentSelector = (DWORD)(frameBytes[WOW32_OFF_ARGS + item * WOW_WORD_BYTES + 2]
-                                                  | (frameBytes[WOW32_OFF_ARGS + item * WOW_WORD_BYTES + 3] << BYTE_SHIFT));
-                                    DWORD abase = argumentSelector ? DpmiSelectorBase((WORD)argumentSelector) : 0;
-                                    const volatile BYTE *sourceBytes;
-                                    UINT length2 = 0;
-                                    if (!argumentSelector || !abase) continue;
-                                    sourceBytes = (const volatile BYTE *)(ULONG_PTR)(abase + argumentOffset);
-                                    if (!HostReadable((const VOID *)sourceBytes, 8)) continue;
-                                    /* ── ⚠ TAB AND CRLF ARE PART OF THE MESSAGE, NOT THE END
-                                           OF IT. (session 36) ────────────────────────────
-                                         This scan accepted only 0x20..0x7E, and the ONE
-                                         string in this frame that names the actual fault --
-                                         the formatted body, "Please re-install the following
-                                         module to your system32 directory:\r\n\t\t<NAME>" --
-                                         has a `\r` at offset 66. So the walk stopped there,
-                                         `s[n2] != 0` rejected it as "not a C string", and the
-                                         log printed only the CAPTION, which is the one part of
-                                         the message that is the same for every missing module.
-                                         The run named the class of failure and withheld the
-                                         instance -- and the instance is the whole question.
-                                       ⚠ Accept them in the SCAN, escape them in the OUTPUT: a
-                                         raw CRLF here would split one log line into three and
-                                         make the message look like unrelated records. */
-                                    while (length2 < 120 && ((sourceBytes[length2] >= 0x20 && sourceBytes[length2] < 0x7F)
-                                                        || sourceBytes[length2] == '\t' || sourceBytes[length2] == '\r'
-                                                        || sourceBytes[length2] == '\n')) ++length2;
-                                    if (length2 < 6 || sourceBytes[length2] != 0) continue;   /* not a C string */
-                                    /* Escaping can double a 120-char string, and several args
-                                       can match. Stop before `report[2048]` overflows -- an
-                                       instrument that corrupts its own stack to print one more
-                                       message is worse than one that prints fewer. */
-                                    if ((SIZE_T)(cursor - base) > sizeof(report) - 400) break;
-                                    cursor = LogPut(cursor, "\r\n    ★ arg["); cursor = LogHex(cursor, item);
-                                    cursor = LogPut(cursor, "] 0x"); cursor = LogHex(cursor, argumentSelector);
-                                    cursor = LogPut(cursor, ":0x"); cursor = LogHex(cursor, argumentOffset);
-                                    cursor = LogPut(cursor, " = \"");
-                                    { UINT index2;
-                                      for (index2 = 0; index2 < length2; ++index2) {
-                                          BYTE byteCharacter = sourceBytes[index2];
-                                          if      (byteCharacter == '\t') { *cursor++ = '\\'; *cursor++ = 't'; }
-                                          else if (byteCharacter == '\r') { *cursor++ = '\\'; *cursor++ = 'r'; }
-                                          else if (byteCharacter == '\n') { *cursor++ = '\\'; *cursor++ = 'n'; }
-                                          else                   *cursor++ = (CHAR)byteCharacter;
-                                      } }
-                                    cursor = LogPut(cursor, "\"");
-                                }
-                            }
-                        }
-                    }
+                    cursor = Wow32LogFrame(cursor, base, bopCode, frameBytes, tib, reportSize);
                     cursor = LogPut(cursor, "\r\n    @ss:bp");
                     for (word = 0; word < 12; ++word) {
                         cursor = LogPut(cursor, " ");
@@ -3308,365 +3690,9 @@ static INT DpmiServicePmIntBody(DOS_MACHINE *machine, volatile BYTE *tib, DWORD 
                  -- the thunk loads AX/DX from that hole after the BOP (observed:
                  anything we put in registers is overwritten before the caller
                  sees it). Wow32SetReturn() is the only correct way. */
-            if (bopCode == WOW32_BOP) {
-                DWORD wow32StackBase = DpmiSelectorBase((WORD)VDM_REG16(tib, VTIB_SS));
-                WOW32_FRAME frame;
-                frame.FrameBase      = (volatile BYTE *)(ULONG_PTR)
-                            (wow32StackBase + VDM_REG16(tib, VTIB_EBP));
-                frame.Id      = Wow32PeekWord(frame.FrameBase + WOW32_OFF_ID);
-                frame.ArgumentBytes    = Wow32PeekWord(frame.FrameBase + WOW32_OFF_ARGB);
-                frame.CallSite    = Wow32PeekWord(frame.FrameBase + WOW32_OFF_FROM);
-                frame.StubSegment = Wow32PeekWord(frame.FrameBase + WOW32_OFF_STUB_SEGMENT);          /* the stub's own segment */
-                /* ★ WHOSE ID SPACE IS THIS? The per-function stub lives in the module
-                     that owns the numbering, so resolving its segment against
-                     krnl386's own segment bases answers it exactly. Everything we
-                     know about this interface came out of krnl386, so a call that did
-                     NOT come through krnl386's table gets the honest "unimplemented"
-                     rather than an answer from the wrong function. */
-                /* ⚠ NOT via g_WowPmBase[]: that table is filled by a descriptor-limit
-                     match that has not fired yet when the earliest calls arrive, so a
-                     gate keyed on it rejected EVERYTHING and the run collapsed from 258
-                     calls to 3. Measured, not reasoned about.
-                   ⇒ The BOP itself is the reference. It lives in krnl386's own common
-                     thunk (observed), so the executing CS at a BOP IS krnl386's
-                     code segment -- and a stub in that same segment is krnl386's stub.
-                     Exact, self-contained, and true from the first call onward. */
-                frame.IsKernel = (frame.StubSegment == (WORD)VDM_REG16(tib, VTIB_CS));
-                frame.SelectorToLinear = Wow32HostSelectorToLinear;
-                frame.Context     = NULL;
-                frame.Result     = 0;
-                frame.IsServiced = 0;
-                /* A service may ASK for a 16-bit call; whether one happens is the
-                   host's decision, and `cbok` is where that decision is made. */
-                frame.IsCallbackAllowed    = g_WowCallOn;
-                frame.CallbackProcedure  = 0;
-                frame.CallbackDataSelector    = 0;
-                frame.CallbackArgumentCount  = 0; frame.CallbackSink = NULL;
-                frame.CallbackWindow  = 0; frame.CallbackMessage = 0;
-                frame.CallbackBlobLength = 0; frame.CallbackBlobArgument = -1;
-                frame.CallbackReturnMode   = WOWCALL_RET_KEEP;
-                /* ⚠ AND THESE TWO, WHICH COST A RUN BY BEING LEFT OUT. `f` is a
-                     stack local, so an un-set field is whatever was there before
-                     -- and `cbact` is read as a DECISION about what the host does
-                     with a returned value. Uninitialised, it made a WM_CREATE
-                     callback and a LocalAlloc callback both run the EDIT-text
-                     action, following a pointer that was never a pointer and
-                     issuing a LocalUnlock against a lock nobody had taken. Every
-                     field of this frame is initialised here for that reason. */
-                frame.CallbackAction   = WOWCALL_ACT_NONE; frame.CallbackActionArgument = 0;
-                frame.IsEnumerationRequested  = 0;                /* ...and this one too */
-                frame.GuestDataSelector      = (WORD)VDM_REG16(tib, VTIB_DS);
-                frame.IsModalDialog = 0;                /* ...and this one, for the same
-                                                  reason: it decides whether the
-                                                  guest is resumed at all */
-                /* ★ krnl386's segment 1 as a LIVE selector, for the day a
-                     service needs to call a KERNEL export. The WOW32 common
-                     thunk is IN that segment, so the CS at this BOP is it --
-                     exact, free, and true from the first call onward. */
-                if (frame.IsKernel) g_WowUserKernelSegment = (WORD)VDM_REG16(tib, VTIB_CS);
-                g_WowLastId = (WORD)frame.Id; g_WowLastFrom = frame.CallSite;
-                /* ── ★★ THE EPILOGUE-MODE EXPERIMENT (wowmode.txt). ────────────
-                     Written BEFORE anything is serviced, because the guest reads
-                     the mode after the BOP whatever we do here -- a stepped-over
-                     call returns through it just as a serviced one does, and the
-                     one call this exists for (0x74, the task launch) is stepped
-                     over. See WOW32_OFF_MODE in wow32.h for what the modes are and
-                     why krnl386 itself never sets one. */
-                {   INT modeOverride = Wow32ModeOverride((WORD)frame.Id);
-                    if (modeOverride >= 0) {
-                        Wow32PokeWord(frame.FrameBase + WOW32_OFF_MODE, (WORD)modeOverride);
-                        cursor = LogPut(cursor, "\n     ** wowmode.txt OVERRIDE: returning"
-                                    " through epilogue mode ");
-                        cursor = LogHex(cursor, (DWORD)modeOverride);
-                        cursor = LogPut(cursor, " -- an EXPERIMENT, not a service **");
-                    }
-                }
-                /* ── ★★★ THE SCHEDULER'S TWO BOP HOOKS. See src/wow/wowsched.h. ──
-                     DS is krnl386's DGROUP at every WOW32 BOP (observed on every
-                     call), which is the only reason the
-                     current-task word is reachable from outside a call. Learn it
-                     unconditionally -- it costs nothing and the fault hook, which
-                     runs where DS is anybody's, depends on having it. */
-                g_WowDgroupSelector = (WORD)VDM_REG16(tib, VTIB_DS);
-                if (g_WowSchedOn && !g_WowCallRetarget) {     /* s92 #306: inter-task calls */
-                    g_WowCallCurrentTask = WowSchedCurrentTask;
-                    g_WowCallRetarget = WowSchedRetarget;
-                    g_WowCallUntarget = WowSchedUntarget;
-                }
-                {
-                    INT exitCode, flow = Wow32RunLaunchedTaskFirst(&cursor, base, &frame, tib, &exitCode);
-                    if (flow == HOST_FLOW_RETURN) return exitCode;
-                }
-                {
-                    INT exitCode, flow = Wow32ScheduleKernelCall(&cursor, base, &frame, tib, &exitCode);
-                    if (flow == HOST_FLOW_RETURN) return exitCode;
-                }
-                /* ── ★ #306 (s90): WowWaitForMsgAndEvent WITH NOBODY TO YIELD TO MUST
-                     WAIT. The arm above handles it when another task is parked; with
-                     none it fell through to "unimplemented", answered 0 instantly, and
-                     the guest's idle loop (wait -> PeekMessage -> wait) ran at 100% CPU
-                     -- measured after Calc closed with its Help task alive: 0x3e46a
-                     stepped-over calls, all of them this one.
-                     0 is still the answer (see above: "carry on and look"); what was
-                     missing is the block before it. Real windows
-                     are pumped (that is where a Win16 message comes from), then up to
-                     50 ms of waiting for input -- the same bound and reasoning as the
-                     GetMessage wait -- and any IRQ a 32-bit component raised. */
-                if (frame.IsKernel && frame.Id == WOW32_WOWWAITFORMSGANDEVENT) {
-                    if (!g_WowMsgCount && !WowWinPump(WOW_PUMP_BUDGET))
-                        MsgWaitForMultipleObjects(0, NULL, FALSE, WOW_INPUT_WAIT_MS, QS_ALLINPUT);
-                    if (g_IcaPending) WowIcaDeliver(g_DosMachine, tib, 0);
-                    Wow32SetReturn(&frame, 0);
-                    ++g_Wow32Serviced;
-                    ++g_WowIdleWaits;
-                    VDM_REG(tib, VTIB_EIP) += VDM_BOP_LENGTH;
-                    if (g_WowIdleWaits <= 4) {
-                        cursor = LogPut(cursor, " -> SERVICED: idle wait (no parked task to yield to),"
-                                    " answered 0 after up to 50 ms\r\n");
-                        WowLogFlush(base, &cursor);
-                    } else cursor = base;
-                    return 1;
-                }
-                {
-                    INT exitCode, flow = Wow32ServiceFileRead(&cursor, base, &frame, machine, tib, &exitCode);
-                    if (flow == HOST_FLOW_RETURN) return exitCode;
-                }
-                {
-                    INT exitCode, flow = Wow32ServiceGetCurrentDirectory(&cursor, base, &frame, tib, machine, &exitCode);
-                    if (flow == HOST_FLOW_RETURN) return exitCode;
-                }
-                {
-                    INT exitCode, flow = Wow32ServiceResolveModulePath(&cursor, base, &frame, tib, &exitCode);
-                    if (flow == HOST_FLOW_RETURN) return exitCode;
-                }
-                /* ── ★ ExitKernelThunk: krnl386 SAYS IT IS DONE, SO STOP. ──────
-                     krnl386 does not expect to be returned to from this call:
-                     stepped over, the guest's next instruction is a deliberate UD0
-                     (`0f ff`, in the fault bytes). That UD0 is reflected to its own
-                     handler, which sets the vector again and faults again: a run
-                     that has ENDED then fills the log to its 268 MB cap, and every
-                     one of those bytes is after the last thing that happened.
-                   ⇒ End the run where the guest ended it, and say which code. */
-                if (frame.IsKernel && frame.Id == WOW32_EXITKERNELTHUNK) {
-                    cursor = LogPut(cursor, "\n     ★ ExitKernelThunk(0x");
-                    cursor = LogHex(cursor, Wow32ArgWord(&frame, 0));
-                    cursor = LogPut(cursor, ") -- krnl386 is shutting the VDM down; ending the run"
-                                " here rather than looping on the UD0 behind it\r\n");
-                    WowLogFlush(base, &cursor);
-                    return -1;
-                }
-                /* ── ★★★ krnl386's SEGMENT-2 TABLE. Learn its selector from a stub.
-                     Same shape as USER's anchor below, and for the same reason:
-                     the id space is per TABLE, so nothing here may be answered
-                     until the table has identified itself. See WowKernel2Stub. */
-                if (!frame.IsKernel && !g_WowKernel2Segment && frame.StubSegment != g_WowUserSegment
-                    && WowKernel2Stub(frame.Id, Wow32PeekWord(frame.FrameBase + WOW32_OFF_RETURN_STUB))) {
-                    g_WowKernel2Segment = frame.StubSegment;
-                    cursor = LogPut(cursor, "\n     WOWKRNL2: krnl386's SECOND stub table is in"
-                                " segment 0x");
-                    cursor = LogHex(cursor, g_WowKernel2Segment);
-                    cursor = LogPut(cursor, " (learned from the stub's own bytes in the file)");
-                }
-                {
-                    INT exitCode, flow = Wow32ServiceKernelSecondTable(&cursor, base, &frame, tib, &exitCode);
-                    if (flow == HOST_FLOW_RETURN) return exitCode;
-                }
-                /* ── ★★★ USER'S OWN ID SPACE. See src/wow/wowuser.h. ──────────
-                     Deliberately a separate dispatcher behind a separate check:
-                     `0x39` is GetProfileInt in krnl386's table and RegisterClass
-                     in USER's, and one switch holding both id spaces is exactly
-                     how this host came to answer the second with the first. */
-                if (!frame.IsKernel && !g_WowUserSegment
-                    && WowUserAnchor(frame.Id, frame.ArgumentBytes, Wow32PeekWord(frame.FrameBase + WOW32_OFF_RETURN_STUB))) {
-                    g_WowUserSegment = frame.StubSegment;
-                    cursor = LogPut(cursor, "\n     WOWUSER: USER's code segment is 0x");
-                    cursor = LogHex(cursor, g_WowUserSegment);
-                    cursor = LogPut(cursor, " (learned from its own stub, not from the module table)");
-                }
-                {
-                    INT exitCode, flow = Wow32ServiceUser(&cursor, base, &frame, tib, &exitCode);
-                    if (flow == HOST_FLOW_RETURN) return exitCode;
-                }
-                /* ── ★★★ SHELL.DLL'S OWN ID SPACE. See src/wow/wowshell.h. ────
-                     A fourth table, behind a fourth check, for the reason the
-                     third one exists: `0x16` is SetFocus in USER's numbering and
-                     ShellAbout in SHELL's, and the two must never meet. The
-                     anchor and the service are the SAME call -- the table names
-                     itself with the first thing we are asked to do out of it. */
-                if (!frame.IsKernel && !g_WowShellSegment
-                    && frame.StubSegment != g_WowUserSegment && frame.StubSegment != g_WowKernel2Segment
-                    && WowShellAnchor(frame.Id, frame.ArgumentBytes, Wow32PeekWord(frame.FrameBase + WOW32_OFF_RETURN_STUB))) {
-                    g_WowShellSegment = frame.StubSegment;
-                    cursor = LogPut(cursor, "\n     WOWSHELL: SHELL.DLL's code segment is 0x");
-                    cursor = LogHex(cursor, g_WowShellSegment);
-                    cursor = LogPut(cursor, " (learned from its own stub, not from the module"
-                                " table)");
-                }
-                {
-                    INT exitCode, flow = Wow32ServiceShell(&cursor, base, &frame, tib, &exitCode);
-                    if (flow == HOST_FLOW_RETURN) return exitCode;
-                }
-                /* ── ★★★ COMMDLG.DLL'S OWN ID SPACE. See src/wow/wowcommdlg.h. ─
-                     The fifth table, behind the fifth check. Same shape as
-                     SHELL's: the anchor and the service are the same call, so
-                     nothing is answered before the table has named itself. */
-                if (!frame.IsKernel && !g_WowCommonDialogSegment
-                    && frame.StubSegment != g_WowUserSegment && frame.StubSegment != g_WowKernel2Segment
-                    && frame.StubSegment != g_WowShellSegment
-                    && WowCommonDialogAnchor(frame.Id, frame.ArgumentBytes, Wow32PeekWord(frame.FrameBase + WOW32_OFF_RETURN_STUB))) {
-                    g_WowCommonDialogSegment = frame.StubSegment;
-                    cursor = LogPut(cursor, "\n     WOWCOMMDLG: COMMDLG.DLL's code segment is 0x");
-                    cursor = LogHex(cursor, g_WowCommonDialogSegment);
-                    cursor = LogPut(cursor, " (learned from its own stub, not from the module"
-                                " table)");
-                }
-                {
-                    INT exitCode, flow = Wow32ServiceCommonDialog(&cursor, base, &frame, tib, &exitCode);
-                    if (flow == HOST_FLOW_RETURN) return exitCode;
-                }
-                /* ── ★★ KEYBOARD.DRV'S OWN ID SPACE. See src/wow/wowkbd.h. ────
-                     The sixth table, behind the sixth check, same shape as the
-                     two before it. */
-                if (!frame.IsKernel && !g_WowKeyboardSegment
-                    && frame.StubSegment != g_WowUserSegment && frame.StubSegment != g_WowKernel2Segment
-                    && frame.StubSegment != g_WowShellSegment && frame.StubSegment != g_WowCommonDialogSegment
-                    && WowKeyboardAnchor(frame.Id, frame.ArgumentBytes, Wow32PeekWord(frame.FrameBase + WOW32_OFF_RETURN_STUB))) {
-                    g_WowKeyboardSegment = frame.StubSegment;
-                    cursor = LogPut(cursor, "\n     WOWKBD: KEYBOARD.DRV's code segment is 0x");
-                    cursor = LogHex(cursor, g_WowKeyboardSegment);
-                    cursor = LogPut(cursor, " (learned from its own stub, not from the module"
-                                " table)");
-                }
-                if (!frame.IsKernel && g_WowKeyboardSegment && frame.StubSegment == g_WowKeyboardSegment) {
-                    CHAR note[320];
-                    if (WowKeyboardCall(&frame, note, sizeof note)) {
-                        ++g_Wow32Serviced;
-                        VDM_REG(tib, VTIB_EIP) += VDM_BOP_LENGTH;
-                        cursor = LogPut(cursor, " -> SERVICED (KEYBOARD), returned 0x");
-                        cursor = LogHex(cursor, frame.Result);
-                        if (note[0]) { cursor = LogPut(cursor, " -- "); cursor = LogPut(cursor, note); }
-                        cursor = LogPut(cursor, "\r\n");
-                        WowLogFlush(base, &cursor);
-                        return 1;
-                    }
-                }
-                /* ── ★★ GDI.EXE'S OWN ID SPACE. See src/wow/wowgdi.h. ────────
-                     The seventh table, and the one MS Paint lives behind. */
-                if (!frame.IsKernel && !g_WowGdiSegment
-                    && frame.StubSegment != g_WowUserSegment && frame.StubSegment != g_WowKernel2Segment
-                    && frame.StubSegment != g_WowShellSegment && frame.StubSegment != g_WowCommonDialogSegment
-                    && frame.StubSegment != g_WowKeyboardSegment
-                    && WowGdiAnchor(frame.Id, frame.ArgumentBytes, Wow32PeekWord(frame.FrameBase + WOW32_OFF_RETURN_STUB))) {
-                    g_WowGdiSegment = frame.StubSegment;
-                    cursor = LogPut(cursor, "\n     WOWGDI: GDI.EXE's code segment is 0x");
-                    cursor = LogHex(cursor, g_WowGdiSegment);
-                    cursor = LogPut(cursor, " (learned from its own stub, not from the module"
-                                " table)");
-                }
-                {
-                    INT exitCode, flow = Wow32ServiceGdi(&cursor, base, &frame, tib, &exitCode);
-                    if (flow == HOST_FLOW_RETURN) return exitCode;
-                }
-                /* ── ★ SOUND.DRV'S OWN ID SPACE (s90, #299). See src/wow/wowsound.h. */
-                if (!frame.IsKernel && !g_WowSoundSegment
-                    && frame.StubSegment != g_WowUserSegment && frame.StubSegment != g_WowKernel2Segment
-                    && frame.StubSegment != g_WowShellSegment && frame.StubSegment != g_WowCommonDialogSegment
-                    && frame.StubSegment != g_WowKeyboardSegment && frame.StubSegment != g_WowGdiSegment
-                    && WowSoundAnchor(frame.Id, frame.ArgumentBytes, Wow32PeekWord(frame.FrameBase + WOW32_OFF_RETURN_STUB))) {
-                    g_WowSoundSegment = frame.StubSegment;
-                    cursor = LogPut(cursor, "\n     WOWSOUND: SOUND.DRV's code segment is 0x");
-                    cursor = LogHex(cursor, g_WowSoundSegment);
-                    cursor = LogPut(cursor, " (learned from its own stub, not from the module"
-                                " table)");
-                }
-                if (!frame.IsKernel && g_WowSoundSegment && frame.StubSegment == g_WowSoundSegment) {
-                    CHAR note[160];
-                    if (WowSoundCall(&frame, note, sizeof note)) {
-                        ++g_Wow32Serviced;
-                        VDM_REG(tib, VTIB_EIP) += VDM_BOP_LENGTH;
-                        cursor = LogPut(cursor, " -> SERVICED (SOUND), returned 0x");
-                        cursor = LogHex(cursor, frame.Result);
-                        if (note[0]) { cursor = LogPut(cursor, " -- "); cursor = LogPut(cursor, note); }
-                        cursor = LogPut(cursor, "\r\n");
-                        WowLogFlush(base, &cursor);
-                        return 1;
-                    }
-                }
-                /* ── ★ MMSYSTEM'S TWO IDS (s90, #278). See src/wow/wowmmedia.h. */
-                if (!frame.IsKernel && !g_WowMultimediaSegment
-                    && frame.StubSegment != g_WowUserSegment && frame.StubSegment != g_WowKernel2Segment
-                    && frame.StubSegment != g_WowShellSegment && frame.StubSegment != g_WowCommonDialogSegment
-                    && frame.StubSegment != g_WowKeyboardSegment && frame.StubSegment != g_WowGdiSegment
-                    && frame.StubSegment != g_WowSoundSegment
-                    && WowAnchorHit(g_WowMmediaAnchors,
-                                      (INT)(sizeof g_WowMmediaAnchors / sizeof g_WowMmediaAnchors[0]),
-                                      frame.Id, frame.ArgumentBytes, Wow32PeekWord(frame.FrameBase + WOW32_OFF_RETURN_STUB))) {
-                    g_WowMultimediaSegment = frame.StubSegment;
-                    cursor = LogPut(cursor, "\n     WOWMMEDIA: MMSYSTEM's stub segment is 0x");
-                    cursor = LogHex(cursor, g_WowMultimediaSegment);
-                }
-                if (!frame.IsKernel && g_WowMultimediaSegment && frame.StubSegment == g_WowMultimediaSegment) {
-                    CHAR note[200];
-                    if (WowMultimediaCall(&frame, note, sizeof note)) {
-                        ++g_Wow32Serviced;
-                        VDM_REG(tib, VTIB_EIP) += VDM_BOP_LENGTH;
-                        cursor = LogPut(cursor, " -> SERVICED (MMSYSTEM), returned 0x");
-                        cursor = LogHex(cursor, frame.Result);
-                        if (note[0]) { cursor = LogPut(cursor, " -- "); cursor = LogPut(cursor, note); }
-                        cursor = LogPut(cursor, "\r\n");
-                        WowLogFlush(base, &cursor);
-                        return 1;
-                    }
-                }
-                /* Snapshot before the dispatch: the handler sets this when it
-                   hands the program over, and "delivered now" and "delivered
-                   earlier" are different events that must not read the same. */
-                commandTakenBefore = g_WowCommandIsTaken;
-                if (Wow32Call(&frame, &g_WowDosData)) {
-                    /* ⚠ A DECLINE IS NOT A SERVICE and the log must not blur
-                         them. "krnl386 got further because we answered 9 calls"
-                         and "because we told it 7 times to ask DOS instead" are
-                         different claims about the same run, and only separate
-                         counters can tell them apart afterwards. */
-                    INT isDeclined = (frame.Result == WOW32_DECLINE
-                                && Wow32MayDecline(frame.Id, frame.CallSite));
-                    if (isDeclined) ++g_Wow32Declined; else ++g_Wow32Serviced;
-                    VDM_REG(tib, VTIB_EIP) += VDM_BOP_LENGTH;
-                    cursor = LogPut(cursor, isDeclined ? " -> DECLINED (krnl386 will chain to real"
-                                       " DOS) 0x" : " -> SERVICED, returned 0x");
-                    cursor = LogHex(cursor, frame.Result);
-                    if (frame.Id == WOW32_REGISTERDOSDATA) {
-                        cursor = LogPut(cursor, " (DOS data area at 0x");
-                        cursor = LogHex(cursor, g_WowDosData.FarPointer); cursor = LogPut(cursor, ")");
-                    }
-                    /* ★ SAY WHAT WAS HANDED OVER, not just that something was.
-                         This one call decides which program the VDM runs, and a
-                         line reading "returned 0x1" would leave the single most
-                         important fact of the run unrecorded. */
-                    if (frame.Id == WOW32_WOWGETNEXTVDMCOMMAND) {
-                        if (g_WowCommandProgram[0]) {
-                            cursor = LogPut(cursor, " -- LAUNCH ["); cursor = LogPut(cursor, g_WowCommandProgram);
-                            if (g_WowCommandArguments[0]) {
-                                cursor = LogPut(cursor, "] args["); cursor = LogPut(cursor, g_WowCommandArguments);
-                            }
-                            cursor = LogPut(cursor, "]");
-                            if (commandTakenBefore) cursor = LogPut(cursor, " -- ALREADY DELIVERED,"
-                                                              " answered \"nothing more\"");
-                        } else {
-                            cursor = LogPut(cursor, " -- no command (this VDM was not told what"
-                                        " Win16 program to run)");
-                        }
-                    }
-                    cursor = LogPut(cursor, "\r\n");
-                    WowLogFlush(base, &cursor);
-                    return 1;
-                }
-                ++g_Wow32Unimplemented;
-                /* Read the litter FIRST, then overwrite it -- the value that would
-                   have been used is evidence, and it is gone a line later. */
-                wowStale = Wow32PeekReturn(&frame); wowStaleOk = 1;
-                wowAnswer = Wow32ReturnOverride(frame.Id);   /* wow32ret.txt, if any */
-                Wow32SetReturn(&frame, wowAnswer);            /* ★ see WOW32_UNIMPL_RET */
+            {
+                INT exitCode, flow = Wow32ServiceBop(&cursor, base, bopCode, tib, machine, &wowStale, &wowStaleOk, &wowAnswer, &exitCode);
+                if (flow == HOST_FLOW_RETURN) return exitCode;
             }
             /* ── STEP OVER AND KEEP GOING, RATHER THAN STOPPING THE GUEST. ─────
                  Returning -1 here halts the run at the first unimplemented service,
