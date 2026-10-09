@@ -34,7 +34,6 @@
 #include <windows.h>
 #include "../ntvdmex_bits.h"
 #include "../ntvdmex_x86.h"
-
 #include "shim_api.h"   /* SHIM_API_VERSION: host + bin\wowshim\ must agree */
 
 /* The table the host hands over in NtvdmexShimInit. Its LAYOUT is the contract (the

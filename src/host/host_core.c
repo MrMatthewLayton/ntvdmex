@@ -11,9 +11,9 @@
  * Copyright (c) 2026 Matthew Layton
  */
 
+#include "host_core.h"
 #include <windows.h>
 #include "ntvdm.h"
-#include "host_core.h"
 #include "log.h"
 #include "host_types.h"
 #include "host_state.h"

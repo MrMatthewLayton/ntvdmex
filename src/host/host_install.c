@@ -11,11 +11,11 @@
  * Copyright (c) 2026 Matthew Layton
  */
 
+#include "host_install.h"
+#include <tlhelp32.h>
 #include "host_state.h"
 #include "log.h"
-#include <tlhelp32.h>
 #include "install.h"
-#include "host_install.h"
 
 /* THE RECOVERY PATH: A MACHINE MUST NOT LOSE ITS VDM. (GH #132):
  * We install by pointing ntvdm.exe's IFEO Debugger value at ourselves, so a

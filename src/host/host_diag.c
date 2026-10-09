@@ -11,6 +11,7 @@
  * Copyright (c) 2026 Matthew Layton
  */
 
+#include "host_diag.h"
 #include "host_state.h"
 #include "log.h"
 #include "ne.h"
@@ -23,7 +24,6 @@
 #include "wowwin.h"
 #include "wowgdi.h"
 #include "wowuser.h"
-#include "host_diag.h"
 #include "main.h"
 #include "host_dpmi_int.h"
 #include "host_bios.h"

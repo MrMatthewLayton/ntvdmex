@@ -11,9 +11,9 @@
  * Copyright (c) 2026 Matthew Layton
  */
 
+#include "host_input.h"
 #include "host_state.h"
 #include "log.h"
-#include "host_input.h"
 #include "main.h"
 #include "host_mouse.h"
 #include "host_window.h"

@@ -13,9 +13,9 @@
 
 #define COBJMACROS
 #define CINTERFACE
+#include "present_ddraw.h"
 #include <windows.h>
 #include <ddraw.h>
-#include "present_ddraw.h"
 #include "present_scale.h"
 
 /* Timing the blit near the vertical blank (PresentWaitVerticalBlank). */

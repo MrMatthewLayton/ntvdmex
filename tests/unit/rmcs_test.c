@@ -29,7 +29,6 @@
 #include <stdio.h>
 #include <string.h>
 #include <stdint.h>
-
 #include "../../src/host/dpmi_rmcs.h"
 
 static INT g_Total = 0;

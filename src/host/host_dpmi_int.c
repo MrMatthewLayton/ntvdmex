@@ -11,6 +11,7 @@
  * Copyright (c) 2026 Matthew Layton
  */
 
+#include "host_dpmi_int.h"
 #include "host_state.h"
 #include "log.h"
 #include "ne.h"
@@ -30,7 +31,6 @@
 #include "wowkbd.h"
 #include "wowsound.h"
 #include "wowmmedia.h"
-#include "host_dpmi_int.h"
 #include "host_bios.h"
 #include "host_dos.h"
 #include "host_dpmi.h"

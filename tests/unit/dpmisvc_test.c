@@ -25,7 +25,6 @@
 
 #include <stdio.h>
 #include <stdint.h>
-
 #include "../../src/host/dpmi_svc.h"
 
 static INT g_Total = 0;

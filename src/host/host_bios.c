@@ -11,10 +11,10 @@
  * Copyright (c) 2026 Matthew Layton
  */
 
+#include "host_bios.h"
 #include "host_state.h"
 #include "log.h"
 #include "bios_kbdact.h"
-#include "host_bios.h"
 #include "main.h"
 #include "host_video.h"
 #include "host_dos.h"

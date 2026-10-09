@@ -30,7 +30,6 @@
 #include <string.h>
 #include <stdint.h>
 #include <time.h>
-
 #include "../../src/ntvdmex_types.h"
 
 static BYTE g_Memory[0x110000];

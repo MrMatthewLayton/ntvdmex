@@ -29,7 +29,6 @@
 
 #include <stdio.h>
 #include <string.h>
-
 #include "../../src/host/x86len.h"
 
 static INT g_Total = 0;

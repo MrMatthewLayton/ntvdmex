@@ -11,10 +11,10 @@
  * Copyright (c) 2026 Matthew Layton
  */
 
+#include "wow32.h"
 #include "host_state.h"
 #include "log.h"
 #include "ne.h"
-#include "wow32.h"
 #include "wowanchors.h"
 #include "wowsched.h"
 #include "wowcall.h"

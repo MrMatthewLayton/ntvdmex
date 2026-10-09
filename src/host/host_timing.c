@@ -11,9 +11,9 @@
  * Copyright (c) 2026 Matthew Layton
  */
 
+#include "host_timing.h"
 #include "host_state.h"
 #include "log.h"
-#include "host_timing.h"
 #include "main.h"
 #include "host_video.h"
 #include "host_bios.h"

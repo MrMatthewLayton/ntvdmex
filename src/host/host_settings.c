@@ -11,10 +11,10 @@
  * Copyright (c) 2026 Matthew Layton
  */
 
+#include "host_settings.h"
+#include <commctrl.h>
 #include "host_state.h"
 #include "log.h"
-#include <commctrl.h>
-#include "host_settings.h"
 #include "main.h"
 #include "host_window.h"
 #include "host_bios.h"

@@ -11,10 +11,10 @@
  * Copyright (c) 2026 Matthew Layton
  */
 
+#include "host_dos.h"
+#include <tlhelp32.h>
 #include "host_state.h"
 #include "log.h"
-#include <tlhelp32.h>
-#include "host_dos.h"
 #include "main.h"
 #include "host_bios.h"
 #include "host_mouse.h"
