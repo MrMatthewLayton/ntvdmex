@@ -38,6 +38,10 @@ INCS=(-I "$ROOT/src/dos" -I "$ROOT/src/vdd" -I "$ROOT/src" -I "$ROOT/src/host" -
 #   build off-VM (audio_wave.c and present_ddraw.c want DirectSound/DirectDraw);
 #   everything else in src/vdd is portable enough for a native build, which is
 #   what makes an off-VM device battery possible at all.
+# ⚠ AND THE CODE THAT USED TO LIVE IN HEADERS (#335). A header split into declarations and a
+#   .c leaves a test that included it for the code with only the declarations, so these
+#   sources -- portable, no Win32 beyond the shared types -- are linked in on the retry.
+LIBSRC=("$ROOT/src/dos/dos_recovery.c")
 VDDSRC=()
 for v in "$ROOT"/src/vdd/*.c; do
     case "$(basename "$v")" in audio_wave.c|present_ddraw.c) continue;; esac
@@ -72,8 +76,9 @@ for src in "$ROOT"/tests/unit/*_test.c; do
         #   own vdd_claim_ports stub, so linking the whole device set gives a
         #   DUPLICATE SYMBOL -- a test that is perfectly fine reported as broken
         #   purely because the runner was too generous.
-        if ! { [ -f "$own" ] && "$CC" -std=c99 -O1 -w "${INCS[@]}" -o "$bin" "$src" "$own" 2>"$OUT/$name.cc"; }; then
-            if ! "$CC" -std=c99 -O1 -w "${INCS[@]}" -o "$bin" "$src" "${VDDSRC[@]}" 2>"$OUT/$name.cc"; then
+        if ! { [ -f "$own" ] && "$CC" -std=c99 -O1 -w "${INCS[@]}" -o "$bin" "$src" "$own" 2>"$OUT/$name.cc"; } &&
+           ! "$CC" -std=c99 -O1 -w "${INCS[@]}" -o "$bin" "$src" "${LIBSRC[@]}" 2>"$OUT/$name.cc"; then
+            if ! "$CC" -std=c99 -O1 -w "${INCS[@]}" -o "$bin" "$src" "${VDDSRC[@]}" "${LIBSRC[@]}" 2>"$OUT/$name.cc"; then
                 BROKEN+=("$name")
                 continue
             fi

@@ -56,12 +56,7 @@ typedef enum _DOS_START_MODE {
 
 /* `failureCount` is the number of consecutive starts that did NOT end cleanly, read
    before this one is counted. */
-static DOS_START_MODE DosRecoveryDecideStartMode(_In_ UINT failureCount)
-{
-    if (failureCount >= DOS_RECOVERY_UNINSTALL_FAILURES) return DOS_START_UNINSTALL;
-    if (failureCount >= DOS_RECOVERY_SAFE_MODE_FAILURES) return DOS_START_SAFE;
-    return DOS_START_NORMAL;
-}
+DOS_START_MODE DosRecoveryDecideStartMode(_In_ UINT failureCount);
 
 /* ── SAFE MODE: WHAT IT SKIPS. (s90, the remainder of #132) ─────────────────────
      Two failed starts in a row mean something in start-up is wedging or crashing
@@ -88,14 +83,7 @@ typedef struct _DOS_SAFE_SKIPS {
 
 typedef const DOS_SAFE_SKIPS *PCDOS_SAFE_SKIPS;
 
-static DOS_SAFE_SKIPS DosRecoveryGetSafeSkips(_In_ DOS_START_MODE startMode)
-{
-    DOS_SAFE_SKIPS skips;
-    BYTE isSkipped = (startMode == DOS_START_SAFE) ? TRUE : FALSE;
-    skips.VddPlugins = isSkipped; skips.AudioOut = isSkipped; skips.RealSpeaker = isSkipped;
-    skips.Joystick = isSkipped; skips.WowShims = isSkipped; skips.Fullscreen = isSkipped;
-    return skips;
-}
+DOS_SAFE_SKIPS DosRecoveryGetSafeSkips(_In_ DOS_START_MODE startMode);
 
 /* The counter file's text: decimal digits, perhaps after blanks. */
 #define DOS_RECOVERY_FIRST_DIGIT      '0'
@@ -110,24 +98,6 @@ static DOS_SAFE_SKIPS DosRecoveryGetSafeSkips(_In_ DOS_START_MODE startMode)
 /* Parse the counter file's contents. Anything unreadable counts as ZERO, not as
    a failure: a corrupt counter must not be able to uninstall us on its own, and
    "the file is missing" is the normal state on a healthy machine. */
-static UINT DosRecoveryParseFailureCount(_In_reads_opt_(length) PCSTR text, _In_ UINT length)
-{
-    UINT value = 0, characterIndex, digitCount = 0;
-    if (!text) return 0;
-    for (characterIndex = 0; characterIndex < length; ++characterIndex) {
-        if (text[characterIndex] >= DOS_RECOVERY_FIRST_DIGIT
-            && text[characterIndex] <= DOS_RECOVERY_LAST_DIGIT) {
-            value = value * DOS_RECOVERY_DECIMAL_BASE
-                  + (UINT)(text[characterIndex] - DOS_RECOVERY_FIRST_DIGIT);
-            if (++digitCount > DOS_RECOVERY_MAX_DIGITS) return 0;  /* absurd -> treat as zero */
-        } else if (digitCount) break;                /* stop at the first non-digit */
-        else if (text[characterIndex] != DOS_RECOVERY_SPACE
-                 && text[characterIndex] != DOS_RECOVERY_CARRIAGE_RETURN
-                 && text[characterIndex] != DOS_RECOVERY_LINE_FEED
-                 && text[characterIndex] != DOS_RECOVERY_TAB)
-            return 0;                                /* leading junk -> zero        */
-    }
-    return value;
-}
+UINT DosRecoveryParseFailureCount(_In_reads_opt_(length) PCSTR text, _In_ UINT length);
 
 #endif /* NTVDMEX_DOS_RECOVERY_H */
