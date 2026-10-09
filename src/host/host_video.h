@@ -8,4 +8,5 @@
 VOID ModeYRingNoteIrq(UINT vector, WORD cs, WORD ip, WORD ss, WORD sp);
 
 VOID ModeYTimelineReport(VOID);
+VOID VideoTrapSync(VOID);
 #endif

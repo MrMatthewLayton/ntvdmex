@@ -1,10 +1,20 @@
 /* host_bios.c -- the BIOS and the devices it fronts: serial and parallel ports, keyboard actions,
  *   INT 15h, print screen, and the BIOS BOP dispatcher.
  *
- * Part of the host's single translation unit: #included by main.c after host_internal.h. */
+ * Its own translation unit (#335): declared in host_bios.h. */
+#include "host_state.h"
+#include "log.h"
+#include "bios_kbdact.h"
+#include "host_bios.h"
+#include "main.h"
+#include "host_video.h"
+#include "host_dos.h"
+#include "host_mouse.h"
+#include "host_timing.h"
 
-static NETBIOS_STATE    g_Net;       static NTVDD_DEVICE g_NetDevice;    /* GH #8 (s91) */
-static BYTE      g_GenericStubVector[DOS_GENSTUB_N];  /* #315: which vector each generic stub is */
+
+NETBIOS_STATE    g_Net;       NTVDD_DEVICE g_NetDevice;    /* GH #8 (s91) */
+BYTE      g_GenericStubVector[DOS_GENSTUB_N];  /* #315: which vector each generic stub is */
 /* Serial debug sink (DPMI harness): COM1 is captured by QEMU (-serial file:vm/serial.log)
    so the host reads the log directly -- no GUI screendump, no stale-host ambiguity. */
 static HANDLE g_Serial = INVALID_HANDLE_VALUE;
@@ -31,8 +41,8 @@ static INT    g_LptFailed = 0;      /* opened once and could not: stop retrying 
    ⚠ The RESERVED-DEVICE-NAME trap in the LPT note above applies here word for
      word: COM1-9 are reserved with any extension, in any directory. These names
      are deliberately not on that list. */
-static HANDLE g_ComSpool[COMM_MAX_PORTS];
-static INT    g_ComFailed[COMM_MAX_PORTS];
+HANDLE g_ComSpool[COMM_MAX_PORTS];
+INT    g_ComFailed[COMM_MAX_PORTS];
 /* Composed at open time (the root is runtime-derived now, see NTVDMEX_DIR). */
 /* ⚠ One name per VDD slot, fitted or not (GH #181 grew the slots to four): a
      slot with no name would hand OUT_() a NULL the first time a later change
@@ -44,7 +54,7 @@ static PCSTR const g_ComSpoolName[COMM_MAX_PORTS] =
    to confuse the next one -- and flushed per byte, because a VDM is far more
    often killed than exited and an unflushed buffer would read as "nothing was
    ever sent". Both rules are the LPT spool's, learned there. */
-static VOID ComTransmitSink(PVOID context, INT port, BYTE byteValue)
+VOID ComTransmitSink(PVOID context, INT port, BYTE byteValue)
 {
     (VOID)context;
     if (port < 0 || port >= COMM_MAX_PORTS || g_ComFailed[port]) return;
@@ -79,7 +89,7 @@ static VOID ComTransmitSink(PVOID context, INT port, BYTE byteValue)
      is the only writer. */
 static INT g_FpuPresent = 1;
 
-static WORD BiosEquipmentWord(VOID)
+WORD BiosEquipmentWord(VOID)
 {
     WORD equipment = BIOS_EQUIPMENT_ONE_PARALLEL | BIOS_EQUIPMENT_VIDEO_80X25_COLOUR | BIOS_EQUIPMENT_FLOPPY;                      /* floppy, 80x25 colour, 1 parallel  */
     INT portCount = 0, index;
@@ -111,12 +121,12 @@ enum { SERIAL_WRITE_TIMEOUT_MS = 250 };   /* SerialInitialize: per write */
    ⚠ g_BdaReady gates it: SettingsApply() first runs at the top of WinMain, before
      VdmRegisterWithKernel() has committed the guest's low memory, and a write to linear 0x410 then
      would fault the host. It is set by the start-up block that calls BiosBdaInitialize(). */
-static INT g_BdaReady;
-static VOID BiosBdaRefreshEquipment(VOID)
+INT g_BdaReady;
+VOID BiosBdaRefreshEquipment(VOID)
 {
     if (g_BdaReady) BiosBdaSetEquipment(NULL, BiosEquipmentWord());
 }
-static VOID SerialInitialize(VOID)
+VOID SerialInitialize(VOID)
 {
     DCB deviceControlBlock;
     COMMTIMEOUTS timeouts;
@@ -160,7 +170,7 @@ VOID SerialOut(PCSTR buffer, PCSTR end)
    so they must share the spool rather than open it twice. Returns 0 if the byte
    went nowhere, which is what lets INT 17h report an I/O error instead of the
    ready status that once made the whole feature look like it worked. */
-static INT LptSpoolPut(BYTE character)
+INT LptSpoolPut(BYTE character)
 {
     DWORD bytesWritten = 0;
     if (g_LptFailed) return 0;
@@ -181,7 +191,7 @@ static INT LptSpoolPut(BYTE character)
     FlushFileBuffers(g_Lpt);          /* the run may be killed, not exited */
     return 1;
 }
-static VOID LptTransmitSink(PVOID context, INT port, BYTE byteValue)
+VOID LptTransmitSink(PVOID context, INT port, BYTE byteValue)
 { (VOID)context; (VOID)port; LptSpoolPut(byteValue); }
 /* #254: which bios_kbdact.asm entry a KB_ACT_* runs, or -1 for none.
    ⛔ NEVER INTO A ROM BOP. A fresh VDM leaves some vectors on the VDM's own ROM at
@@ -189,7 +199,7 @@ static VOID LptTransmitSink(PVOID context, INT port, BYTE byteValue)
      loop refuses a guest-origin BOP and ENDS THE RUN. So INT 1Bh / INT 05h are called
      only when the vector has left the ROM (hooked by a guest, a TSR or a DOS) and
      does not land on such a BOP. INT 15h is always ours (DOS_CTAB_SEG). */
-static INT KeyboardActionEntry(INT keyboardAction)
+INT KeyboardActionEntry(INT keyboardAction)
 {
     UINT vector;
     switch (keyboardAction) {
@@ -215,7 +225,7 @@ static INT KeyboardActionEntry(INT keyboardAction)
     return keyboardAction == INPUT_ACTION_BREAK ? BIOS_KEYBOARD_ACTION_BREAK : BIOS_KEYBOARD_ACTION_PRINT_SCREEN;
 }
 
-static INT Int15Hooked(VOID)
+INT Int15Hooked(VOID)
 {
     return *(volatile WORD *)(ULONG_PTR)(IVT_SEGMENT_ADDRESS(VECTOR_SYSTEM)) != DOS_CTAB_SEG
         || *(volatile WORD *)(ULONG_PTR)(IVT_OFFSET_ADDRESS(VECTOR_SYSTEM)) != g_Int15StubOffset;
@@ -321,7 +331,7 @@ static UINT      g_DiskStatus;      /* AH=01h's last-status byte           */
      blocking read, so interrupts are still taken while it waits.
    ► AH=83h is posted from the pacer thread (1 kHz), because the caller polls MEMORY and
      need not trap at all while it does. */
-static volatile LONGLONG g_Int15WaitEnd;    /* QPC of the AH=86h deadline; 0 = none     */
+volatile LONGLONG g_Int15WaitEnd;    /* QPC of the AH=86h deadline; 0 = none     */
 volatile DWORD    g_Int15EventLinear;     /* linear address of its flag byte          */
 /* ── FILE > CLOSE PROGRAM, THE EXEC-THREAD HALF. (GH #152) ─────────────────────────
      See g_ExecMachine. The UI only raises g_CloseRequest; the exec thread takes it at the
@@ -338,7 +348,7 @@ static BYTE *g_ExtendedMemoryRaw;                  /* AH=88h's 15 MB, allocated 
 static DWORD    g_Int15Function87Count, g_Int15Function87Refused;
 /* `gdt_lin` = where the caller's 48-byte GDT is: ES:SI in V86; in PM the base of the
    selector in ES plus (E)SI (#244, the PM arm). */
-static UINT Int15MoveBlockAt(volatile BYTE *tib, DWORD gdtLinear)
+UINT Int15MoveBlockAt(volatile BYTE *tib, DWORD gdtLinear)
 {
     DWORD cx = VDM_REG16(tib, VTIB_ECX), length = cx * X86_WORD_SIZE;
     const volatile BYTE *gdt = (const volatile BYTE *)(ULONG_PTR)gdtLinear;
@@ -380,9 +390,9 @@ static UINT Int15MoveBlock(volatile BYTE *tib)
     return Int15MoveBlockAt(tib, (es << PARAGRAPH_SHIFT) + si);
 }
 
-static WORD g_DosMemoryTop  = (WORD)DOS_MEM_TOP;
+WORD g_DosMemoryTop  = (WORD)DOS_MEM_TOP;
 /* --- guest register view <-> VDM_TIB CONTEXT (for bus interrupt dispatch) --- */
-static VOID RegistersLoad(NTVDD_REGISTERS *registers, volatile BYTE *tib)
+VOID RegistersLoad(NTVDD_REGISTERS *registers, volatile BYTE *tib)
 {
     registers->Eax = VDM_REG(tib, VTIB_EAX); registers->Ebx = VDM_REG(tib, VTIB_EBX);
     registers->Ecx = VDM_REG(tib, VTIB_ECX); registers->Edx = VDM_REG(tib, VTIB_EDX);
@@ -400,7 +410,7 @@ static VOID RegistersLoad(NTVDD_REGISTERS *registers, volatile BYTE *tib)
    the guest. Same silent loss applied to every ES:DI and DS:SI answer (VESA info blocks,
    INT 33h, INT 10h 1Bh). RegistersLoad already reads all seven, so writing all seven back is
    symmetric: a handler that does not touch one stores the value it was given. */
-static VOID RegistersStore(NTVDD_REGISTERS *registers, volatile BYTE *tib)
+VOID RegistersStore(NTVDD_REGISTERS *registers, volatile BYTE *tib)
 {
     VDM_REG(tib, VTIB_EAX) = registers->Eax; VDM_REG(tib, VTIB_EBX) = registers->Ebx;
     VDM_REG(tib, VTIB_ECX) = registers->Ecx; VDM_REG(tib, VTIB_EDX) = registers->Edx;
@@ -432,7 +442,7 @@ static VOID RegistersStore(NTVDD_REGISTERS *registers, volatile BYTE *tib)
    (serviced, still WAITING -- EIP left on the BOP so it re-executes: INT 16h AH=00h
    with no key, INT 15h AH=86h mid-countdown). */
 #define V86BOP_RET(v) do { *logCursor = cursor; return (v); } while (0)
-static INT V86BiosBop(volatile BYTE *tib, UINT bopNumber, PSTR *logCursor, PSTR base)
+INT V86BiosBop(volatile BYTE *tib, UINT bopNumber, PSTR *logCursor, PSTR base)
 {
     PSTR cursor = *logCursor;
     /* ── GH #8 (s91): INT 2Ah / INT 5Ch, the network interface, to whichever device

@@ -826,7 +826,7 @@ static VOID A000Protect(INT isOn)
  * not model drops that one instruction back to V86.                              */
 static INT g_P12Interp = 0;    /* planar mode is current -> interpret the guest  */
 
-static VOID VideoTrapSync(VOID)
+VOID VideoTrapSync(VOID)
 {
     INT planar = VddVideoIsPlanarActive(&g_Video);
     if (planar && !g_P12Offset) { A000Protect(FALSE); g_P12Interp = 1; }

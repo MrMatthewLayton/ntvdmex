@@ -865,7 +865,7 @@ static INT HostHasCdrom(VOID)
 static HANDLE        g_DiskHandle[1] = { INVALID_HANDLE_VALUE };
 static DOS_DISK_GEOMETRY g_DiskGeometry[1];
 static INT           g_DiskTried[1];
-static PDOS_DISK_GEOMETRY DiskFor(UINT drive)
+PDOS_DISK_GEOMETRY DiskFor(UINT drive)
 {
     BYTE boot[DOS_SECTOR_SIZE];
     DWORD got = 0, size;
@@ -906,7 +906,7 @@ static PDOS_DISK_GEOMETRY DiskFor(UINT drive)
 /* Move `count` sectors between the image and guest memory. Returns 1 on a FULL
    transfer only: a short read is a failure, not a partial success, because the
    caller reports sectors-transferred in AL and a guest trusts it. */
-static INT DiskIo(UINT drive, UINT32 lba, UINT count,
+INT DiskIo(UINT drive, UINT32 lba, UINT count,
                    BYTE *guest, INT write)
 {
     DWORD moved = 0, want = count * DOS_SECTOR_SIZE;
@@ -1465,7 +1465,7 @@ static INT HostConsolePeek(PVOID context)
 
 /* Reflect CF/ZF a bus interrupt returned onto the FLAGS the INT pushed on the
    V86 stack (SS:SP+4) -- the handler's IRET restores them. */
-static VOID HostSetFlags(volatile BYTE *tib, BYTE carryFlag, BYTE zeroFlag)
+VOID HostSetFlags(volatile BYTE *tib, BYTE carryFlag, BYTE zeroFlag)
 {
     volatile WORD *flagsPointer = (volatile WORD *)((VDM_REG16(tib, VTIB_SS) << PARAGRAPH_SHIFT)
                          + ((VDM_REG16(tib, VTIB_ESP) + X86_FRAME16_FLAGS) & WORD_MASK));
@@ -1491,7 +1491,7 @@ static VOID XmsHostFree(PVOID context, PVOID memory, DWORD kilobytes)
 
 /* Service one XMS far-call (function in AH). XMS returns AX=1 success / AX=0 fail
    with BL=error code -- it does NOT use the carry flag, so no pushed-FLAGS edit. */
-static VOID HostXms(volatile BYTE *tib)
+VOID HostXms(volatile BYTE *tib)
 {
     DWORD ah = (VDM_REG(tib, VTIB_EAX) >> BYTE_SHIFT) & BYTE_MASK;
     BYTE error = DOS_XMS_ERROR_NOT_IMPLEMENTED;
@@ -1631,7 +1631,7 @@ static VOID EmsHostFree(PVOID context, PVOID memory, DWORD pages)
 }
 
 /* Service one INT 67h (EMM) call (function in AH; status back in AH). */
-static VOID HostEms(volatile BYTE *tib)
+VOID HostEms(volatile BYTE *tib)
 {
     DWORD ah = (VDM_REG(tib, VTIB_EAX) >> BYTE_SHIFT) & BYTE_MASK;
     BYTE error = DOS_EMS_ERROR_UNDEFINED_FUNCTION;

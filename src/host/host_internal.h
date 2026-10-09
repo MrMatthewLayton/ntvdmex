@@ -6,6 +6,7 @@
 
 #include "host_types.h"
 #include "host_state.h"
+#include "host_dos.h"
 #include "host_irq.h"
 #include "host_video.h"
 #include "host_diag.h"
@@ -32,7 +33,6 @@ static BYTE  g_FaultTable[DOS_FLTSITE_N * DPMI_FAULT_TABLE_ENTRY] __attribute__(
 static BYTE  g_FaultStack[DPMI_FAULT_STK_SIZE] __attribute__((aligned(16)));   /* #205 */
 static struct _DPMI_DESCRIPTOR { DWORD Base, Limit; BYTE Access, Flags; } g_Ldt[DPMI_LDT_MAX];
 static HANDLE StdioPebHandle(HANDLE proc, UINT offset);
-static VOID VideoTrapSync(VOID);             /* fwd */
 static VOID HostFullscreenToggle(HWND window);
 static VOID ModeYGr4CloseRun(VOID);       /* defined with the GR4 counters below */
 static VOID ModeYRemapSelectBody(PVOID context, INT mask);
@@ -43,7 +43,6 @@ static VOID DpmiBreakpointArm(VOID);               /* fwd: a new region may hold
 static VOID DpmiBreakpointRearmPending(DWORD currentLinear);   /* fwd: re-plant stepped-over breakpoints */
 static INT DpmiServicePmInt(DOS_MACHINE *machine, volatile BYTE *tib, DWORD vector, UINT steps);
 static VOID DpmiEnsurePmReturnSelector(VOID);   /* fwd: shared PM-return catcher installer (#2b + 0303) */
-static INT V86BiosBop(volatile BYTE *tib, UINT bopNumber, PSTR *logCursor, PSTR base);
 /* ── ★★★ THE NESTED RUN: CALL 16-BIT CODE AND WAIT FOR THE ANSWER. (s89, #162) ─────
      Every call into Win16 code so far was ARRANGED from a BOP and taken on the way out
      (wowcall.h): fine for anything the guest asked us to do, impossible for a question
@@ -88,9 +87,6 @@ static INT g_DosVersionForced;
 static PCSTR g_DosVersionWhy;
 static MPU_STATE g_Mpu;
 static NTVDD_DEVICE g_MpuDevice;
-static NETBIOS_STATE g_Net;
-static NTVDD_DEVICE g_NetDevice;
-static BYTE g_GenericStubVector[DOS_GENSTUB_N];
 static INT g_WowFoldMute;
 static DWORD g_WowFoldDropped;
 static PVOID g_Hma;
@@ -152,12 +148,6 @@ static volatile LONG g_CloseRequest;
 static INT g_TopIsShell;
 static WORD g_LdtFree[DPMI_LDT_MAX];
 static INT g_LdtFreeCount;
-static HANDLE g_ComSpool[COMM_MAX_PORTS];
-static INT g_ComFailed[COMM_MAX_PORTS];
-static INT g_BdaReady;
-static WORD g_Int15StubOffset;
-static DWORD g_PrintScreenJobs, g_PrintScreenErrors;
-static BYTE g_PrintScreenStatus;
 static INT g_BehaveDos622;
 static DWORD g_PauseCount, g_PauseCooperative, g_PauseMs;
 static INT g_PmWatchCount;
@@ -167,7 +157,6 @@ static HANDLE g_Stdio;
 static PCSTR g_StdioHow;
 static PCSTR g_StdioSource;
 static DWORD g_StdioParentProcessId;
-static volatile LONGLONG g_Int15WaitEnd;
 static INT g_PmTopDispatch;
 static INT g_PmDispatchTop;
 static INT g_SimIntReflect;
@@ -188,7 +177,6 @@ static PCSTR g_ShellOverride;
 static INT g_FrameSkip;
 static INT g_DspVersionForced;
 static UINT g_ConventionalKbWant;
-static WORD g_DosMemoryTop;
 static DWORD g_WindowSizeLive;
 static DWORD g_AspectLive;
 static const INT g_SettingsPages[NTVDMEX_PAGE_COUNT];
@@ -239,22 +227,12 @@ static VOID CriticalSnapshot(volatile BYTE *tib);
 static VOID CriticalRaise(DOS_MACHINE *machine, volatile BYTE *tib, PSTR *logCursor);
 static INT CriticalReturn(DOS_MACHINE *machine, volatile BYTE *tib, PSTR *logCursor);
 static INT PmRwHardwareFail(DOS_MACHINE *machine, volatile BYTE *tib, BYTE function, DWORD win32Error, PSTR *logCursor);
-static VOID ComTransmitSink(PVOID context, INT port, BYTE byteValue);
-static WORD BiosEquipmentWord(VOID);
-static VOID BiosBdaRefreshEquipment(VOID);
-static VOID SerialInitialize(VOID);
 static VOID WowLogFlush(PSTR base, PSTR *logCursor);
-static INT LptSpoolPut(BYTE character);
-static VOID LptTransmitSink(PVOID context, INT port, BYTE byteValue);
 static INT DosPrnOut(PVOID context, BYTE character);
-static INT KeyboardActionEntry(INT keyboardAction);
-static INT Int15Hooked(VOID);
 static VOID DosAuxOut(PVOID context, BYTE character);
 static INT DosTerminate(DOS_MACHINE *machine, PVOID tib, PSTR *logCursor, PSTR base);
 static INT HostHasFloppy(VOID);
 static INT HostHasCdrom(VOID);
-static PDOS_DISK_GEOMETRY DiskFor(UINT drive);
-static INT DiskIo(UINT drive, UINT32 lba, UINT count, BYTE *guest, INT write);
 static VOID StdioFlush(VOID);
 static HANDLE StdioPebHandle(HANDLE proc, UINT offset);
 static PCSTR StdioInitialize(VOID);
@@ -265,14 +243,10 @@ static VOID PlanesDumpBeside(PCSTR bitmapPath);
 static INT TypeInPush(PCSTR text);
 static INT HostConsoleInNoBlock(PVOID context);
 static INT HostConsolePeek(PVOID context);
-static VOID HostSetFlags(volatile BYTE *tib, BYTE carryFlag, BYTE zeroFlag);
 static PVOID XmsHostAllocate(PVOID context, DWORD kilobytes);
 static VOID XmsHostFree(PVOID context, PVOID memory, DWORD kilobytes);
-static VOID HostXms(volatile BYTE *tib);
 static PVOID EmsHostAllocate(PVOID context, DWORD pages);
 static VOID EmsHostFree(PVOID context, PVOID memory, DWORD pages);
-static VOID HostEms(volatile BYTE *tib);
-static UINT Int15MoveBlockAt(volatile BYTE *tib, DWORD gdtLinear);
 static VOID ExecMachineSave(INT depth);
 static VOID ExecMachineRestore(INT depth, PSTR *logCursor);
 static INT CloseProgramNow(DOS_MACHINE *machine, PVOID tib, PSTR *logCursor, PSTR base);
@@ -307,8 +281,6 @@ static VOID SettingsApplyLive(HWND window);
 static INT_PTR CALLBACK SettingsPageProcedure(HWND dialog, UINT message, WPARAM wParam, LPARAM lParam);
 static INT_PTR CALLBACK SettingsDialogProcedure(HWND dialog, UINT message, WPARAM wParam, LPARAM lParam);
 static DWORD WINAPI UiThread(LPVOID argument);
-static VOID RegistersLoad(NTVDD_REGISTERS *registers, volatile BYTE *tib);
-static VOID RegistersStore(NTVDD_REGISTERS *registers, volatile BYTE *tib);
 static UINT64 ModeYTimelineRdtsc(VOID);
 static VOID ModeYRemapFlushReport(VOID);
 static INT ModeYRemapInitialize(VOID);
@@ -319,7 +291,6 @@ static BYTE *ModeYRemapPlane(PVOID context, INT plane);
 static VOID ModeYGr4CloseRun(VOID);
 static VOID ModeYRemapReadMap(PVOID context, INT plane);
 static VOID ModeYRemapWriteMode(PVOID context, INT writeMode);
-static VOID VideoTrapSync(VOID);
 static INT ModeYInterpServes(VOID);
 static INT ModeYNeedsInterp(VOID);
 static INT InterpreterMemoryPageOk(UINT32 linear);
@@ -413,6 +384,5 @@ static INT DpmiInjectPmMouseCallback(DOS_MACHINE *machine, volatile BYTE *tib, U
 static VOID DpmiClientTeardown(VOID);
 static INT DpmiRunPmInterp(DOS_MACHINE *machine, volatile BYTE *tib);
 static VOID DosWowPublish(volatile BYTE *handlerArea, volatile BYTE *controlTable, UINT currentDrive);
-static INT V86BiosBop(volatile BYTE *tib, UINT bopNumber, PSTR *logCursor, PSTR base);
 
 #endif

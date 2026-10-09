@@ -107,7 +107,6 @@ static CHAR             g_TextFontLive[NTVDMEX_PATH_MAX];
 
 #include "host_internal.h"
 #include "host_diag.c"
-#include "host_bios.c"
 #include "host_dos.c"
 #include "host_video.c"
 #include "host_dpmi.c"
@@ -544,10 +543,10 @@ static INT  g_CloseForced;           /* the exit in progress is ours, not the gu
      So the call is made only once something has hooked the vector: exactly the case
      the intercept exists for (KEYB-style remappers, hot-key TSRs, p_kbd3).
      g_Int15StubOffset is recorded where the stub is planted (bios_ints[]). */
-static WORD  g_Int15StubOffset;
+WORD  g_Int15StubOffset;
 static DWORD g_Kb4FCalls, g_Kb4FTranslate;         /* k4f entries / bytes it handed back */
-static DWORD      g_PrintScreenJobs, g_PrintScreenErrors;
-static BYTE       g_PrintScreenStatus = BIOS_PRINT_SCREEN_STATUS_OK;   /* what 0050:0000 would hold */
+DWORD      g_PrintScreenJobs, g_PrintScreenErrors;
+BYTE       g_PrintScreenStatus = BIOS_PRINT_SCREEN_STATUS_OK;   /* what 0050:0000 would hold */
 static DWORD          g_ExecPriority     = 0;   /* guest thread priority class; see EXECPRIO_PATH */
 static INT            g_QiRaise      = 0;
 static INT            g_QiVif        = 0;   /* start the guest with EFLAGS.VIF set */

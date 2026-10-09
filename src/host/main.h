@@ -40,4 +40,8 @@ extern UINT g_CpuSpeedReferenceMhz;
 extern HANDLE g_ExecThread;
 extern INT g_ExecPriorityForeground;
 extern INT g_MouseCallbackTrace;
+extern WORD g_Int15StubOffset;
+extern DWORD g_PrintScreenErrors;
+extern DWORD g_PrintScreenJobs;
+extern BYTE g_PrintScreenStatus;
 #endif
