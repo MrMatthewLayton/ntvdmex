@@ -1,9 +1,22 @@
 /* wowanchors.c -- ★★★ HOW THE HOST RECOGNISES A THUNK MODULE'S CODE SEGMENT.
  *
- * The code of wowanchors.h (#335): its functions and state, in their original order. Part of
- * the host's single translation unit: #included by main.c straight after wowanchors.h. */
+ * The code of wowanchors.h (#335): its functions and state, in their original order;
+ * its own translation unit, declared in wowanchors.h. */
+#include "host_state.h"
+#include "log.h"
+#include "ne.h"
+#include "wow32.h"
+#include "wowanchors.h"
+#include "wowsched.h"
+#include "wowcall.h"
+#include "wowmsg.h"
+#include "wowres.h"
+#include "wowwin.h"
+#include "wowgdi.h"
+#include "wowuser.h"
 
-static INT WowAnchorHit(PCWOW_ANCHOR table, INT count,
+
+INT WowAnchorHit(PCWOW_ANCHOR table, INT count,
                           WORD id, WORD argumentBytes, WORD returnStub)
 {
     INT index;
@@ -15,7 +28,7 @@ static INT WowAnchorHit(PCWOW_ANCHOR table, INT count,
 
 /* ── SHELL: every stub in the module, generated. ──────────────────────
      Regenerate with `tools/ne/wowthunks.py --anchor <the module>`. */
-static const WOW_ANCHOR g_WowShellAnchors[] = {
+const WOW_ANCHOR g_WowShellAnchors[] = {
     { 0x001,  12, 0x002b },
     { 0x002,  12, 0x0038 },
     { 0x003,   4, 0x0045 },
@@ -54,7 +67,7 @@ static const WOW_ANCHOR g_WowShellAnchors[] = {
 
 /* ── GDI: every stub in the module, generated. ──────────────────────
      Regenerate with `tools/ne/wowthunks.py --anchor <the module>`. */
-static const WOW_ANCHOR g_WowGdiAnchors[] = {
+const WOW_ANCHOR g_WowGdiAnchors[] = {
     { 0x001,   6, 0x0a3f },
     { 0x002,   4, 0x0a4c },
     { 0x003,   4, 0x0ab4 },
@@ -435,7 +448,7 @@ static const WOW_ANCHOR g_WowGdiAnchors[] = {
        are here, each one an export (ids = ordinals): GetOpenFileName (0x01),
        GetSaveFileName (0x02), FindText (0x0b), ReplaceText (0x0c), ChooseColor
        (0x05), ChooseFont (0x0f), PrintDlg (0x14), CommDlgExtendedError (0x1a). */
-static const WOW_ANCHOR g_WowCommdlgAnchors[] = {
+const WOW_ANCHOR g_WowCommdlgAnchors[] = {
     { 0x001,   4, 0x0012 }, { 0x002,   4, 0x0024 },
     { 0x00b,   4, 0x0036 }, { 0x00c,   4, 0x0048 },
     { 0x005,   4, 0x005a }, { 0x00f,   4, 0x006c },
@@ -445,7 +458,7 @@ static const WOW_ANCHOR g_WowCommdlgAnchors[] = {
 /* ── KEYBOARD: every stub in the module, generated (s89) -- same reason: it was
      two rows (AnsiToOem / OemToAnsi). Regenerate with
      `tools/ne/wowthunks.py --anchor guest/ne/keyboard.drv`. */
-static const WOW_ANCHOR g_WowKeyboardAnchors[] = {
+const WOW_ANCHOR g_WowKeyboardAnchors[] = {
     { 0x004,  14, 0x006c }, { 0x005,   8, 0x0079 }, { 0x006,   8, 0x0086 },
     { 0x080,   2, 0x0093 }, { 0x081,   2, 0x00a0 }, { 0x082,   2, 0x00ad },
     { 0x083,   4, 0x00ba }, { 0x084,   0, 0x00c7 }, { 0x085,  10, 0x00d4 },
@@ -454,7 +467,7 @@ static const WOW_ANCHOR g_WowKeyboardAnchors[] = {
 
 /* ── SOUND: every stub in the module, generated (s90, #299). Regenerate with
      `tools/ne/wowthunks.py --anchor guest/ne/sound.drv`. */
-static const WOW_ANCHOR g_WowSoundAnchors[] = {
+const WOW_ANCHOR g_WowSoundAnchors[] = {
     { 0x001,   0, 0x001d }, { 0x002,   0, 0x002a }, { 0x003,   4, 0x0037 },
     { 0x004,   8, 0x0044 }, { 0x005,  10, 0x0051 }, { 0x006,   6, 0x005e },
     { 0x007,   4, 0x006b }, { 0x008,   8, 0x0078 }, { 0x009,   0, 0x0085 },
@@ -465,6 +478,6 @@ static const WOW_ANCHOR g_WowSoundAnchors[] = {
 
 /* ── MMSYSTEM (s90, #278): its whole WOW table is two stubs -- id 2 (28 argument
      bytes) and id 1 (none). See src/wow/wowmmedia.h. */
-static const WOW_ANCHOR g_WowMmediaAnchors[] = {
+const WOW_ANCHOR g_WowMmediaAnchors[] = {
     { 0x002,  28, 0x061e }, { 0x001,   0, 0x062b },
 };
