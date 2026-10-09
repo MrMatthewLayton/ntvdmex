@@ -11,4 +11,8 @@ extern DWORD g_PitDeliverSkipped;
 extern DWORD g_Irq1AsyncRetry;
 VOID HostRecordFinish(VOID);
 INT OtherHostsRunning(VOID);
+extern INT g_MouseRawOk;
+extern volatile LONG g_MouseAutoCaptureDone;
+extern volatile LONG g_MouseWantRelease;
+extern DWORD g_MouseAltCalls;
 #endif

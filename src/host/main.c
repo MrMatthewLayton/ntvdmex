@@ -109,7 +109,6 @@ static CHAR             g_TextFontLive[NTVDMEX_PATH_MAX];
 #include "host_diag.c"
 #include "host_bios.c"
 #include "host_dos.c"
-#include "host_mouse.c"
 #include "host_video.c"
 #include "host_dpmi.c"
 #include "host_dpmi_int.c"
@@ -740,7 +739,7 @@ DWORD    g_TypematicSpiDelay, g_TypematicSpiSpeed;     /* raw, so STAGE2 can sho
      events verbatim (event, BOP number, cs:ip, ss:sp, the code and stack bytes). The
      first event after a good injection is the handler's own CLI/STI reflection or its
      RETF landing on the return BOP; anything else names the wrong turn. Bounded. */
-static INT    g_MouseCallbackTrace;            /* VM events still to log after an injection  */
+INT    g_MouseCallbackTrace;            /* VM events still to log after an injection  */
 static WORD      g_WowEntryDs = 0;   /* krnl386's autodata paragraph      */
 static INT       g_WowEntering = 0;   /* the guest is krnl386, not DOS     */
 /* ── #153: FILE > OPEN EXECUTABLE / OPEN RECENT. ─────────────────────────────────────

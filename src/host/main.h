@@ -39,4 +39,5 @@ extern DWORD g_Irq0ResyncDrop;
 extern UINT g_CpuSpeedReferenceMhz;
 extern HANDLE g_ExecThread;
 extern INT g_ExecPriorityForeground;
+extern INT g_MouseCallbackTrace;
 #endif

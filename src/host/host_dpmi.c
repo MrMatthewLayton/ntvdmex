@@ -213,7 +213,7 @@ static WORD DpmiHandlerCodeSelector(VOID)
 static WORD g_SegmentToDescriptorSegment[DPMI_S2D_MAX], g_SegmentToDescriptorSelector[DPMI_S2D_MAX];
 static INT  g_SegmentToDescriptorCount = 0;
 
-static WORD DpmiSegmentToDescriptor(WORD segment)
+WORD DpmiSegmentToDescriptor(WORD segment)
 {
     INT index, ldtIndex;
     for (index = 0; index < g_SegmentToDescriptorCount; ++index) if (g_SegmentToDescriptorSegment[index] == segment) return g_SegmentToDescriptorSelector[index];

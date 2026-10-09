@@ -195,7 +195,7 @@ VOID HostRecordFinish(VOID)
     LogAppend(LOG_PATH, lineBuffer, lineCursor); SerialOut(lineBuffer, lineCursor);
 }
 
-static INT           g_MouseRawOk;           /* raw mouse registered with the window */
+INT           g_MouseRawOk;           /* raw mouse registered with the window */
 #define DDFLIP_DRIVER_FLAG  CFG_("ddflip_driver.flag")   /* s86: DirectDraw flip timed by the driver (old path) */
 static INT g_TextDump = 0;              /* textdump.flag: dump the text screen too    */
 /* g_SimIntBusy (declared above AsyncInjectIrq) is set across 0300h. */
@@ -238,14 +238,14 @@ static INT   g_HostCursorMode = HOSTCUR_SMART;
 static DWORD g_CursorMovedMs;         /* GetTickCount of the last real movement   */
 static POINT g_CursorLastPoint = { -1, -1 };
 static INT   g_CursorIdle;             /* hidden for stillness, until it next moves */
-static volatile LONG g_MouseAutoCaptureDone = 0;   /* we have grabbed once; never again     */
+volatile LONG g_MouseAutoCaptureDone = 0;   /* we have grabbed once; never again     */
 /* ── ★ A PROGRAM THAT TOOK THE MOUSE GIVES IT BACK WHEN IT EXITS. (s81, user) ──────
      The grab above is latched per PROCESS, so after a game quit to the prompt the
      pointer stayed captured over a shell that has no use for it -- and the next game
      could never be auto-captured again. On every return to a parent the exec thread
      clears the request and the latch and asks the UI thread (the owner of ClipCursor)
      to let go. */
-static volatile LONG g_MouseWantRelease = 0;
+volatile LONG g_MouseWantRelease = 0;
 /* Reported at STAGE2, because "the guest asked and we took it" and "the guest asked
    and we did not" are different outcomes and a headless run must be able to tell
    them apart. want=1 fired=0 means the request was raised and the window was not in
@@ -253,7 +253,7 @@ static volatile LONG g_MouseWantRelease = 0;
    can say which of the two happened. */
 static DWORD         g_MouseAutoCaptureFired = 0;
 
-static DWORD         g_MouseAltCalls;       /* events delivered to an alternate handler   */
+DWORD         g_MouseAltCalls;       /* events delivered to an alternate handler   */
 
 enum {                                       /* wired command IDs                */
     IDM_STUB = 1,                            /* every not-yet-wired item          */

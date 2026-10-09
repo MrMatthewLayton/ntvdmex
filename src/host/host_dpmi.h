@@ -9,4 +9,5 @@ INT DpmiSelectorIs32(WORD selector);
 DWORD DpmiSelectorBase(WORD selector);
 
 INT DpmiAsyncInjectPm(UINT irq, CONTEXT *context);
+WORD DpmiSegmentToDescriptor(WORD segment);
 #endif
