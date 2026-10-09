@@ -65,13 +65,11 @@ enum {
 };
 
 /* Does this scaler double the source buffer before the stretch? */
-static INT PresentScalerDoubles(INT scaler)
-{ return scaler == PRESENT_SCALER_SCALE2X || scaler == PRESENT_SCALER_CRT; }
+INT PresentScalerDoubles(INT scaler);
 
 /* Does it mask alternate DESTINATION rows? (a scanline is a property of the
    screen, not of the frame, so it is applied after the stretch, not before) */
-static INT PresentScalerHasScanlines(INT scaler)
-{ return scaler == PRESENT_SCALER_SCANLINES || scaler == PRESENT_SCALER_CRT; }
+INT PresentScalerHasScanlines(INT scaler);
 
 /* ── #325: THE ASPECT CHOICES, AND THEY ARE ALSO THE REGISTRY VALUE. ──────────────
      NATIVE is the default: square pixels, the frame's own width:height -- 320x200 is
@@ -104,41 +102,15 @@ enum { PRESENT_FILTER_NEAREST = 0, PRESENT_FILTER_BILINEAR, PRESENT_FILTER_SHARP
 
 /* The ratio a FORCED setting stands for; 0/0 for Native and Stretch (no ratio of its
    own). Used by PresentFit, where 0/0 means "fill". */
-static VOID PresentAspectRatio(INT aspect, INT *ratioWidth, INT *ratioHeight)
-{
-    switch (aspect) {
-    case PRESENT_ASPECT_4_3:   *ratioWidth = 4;  *ratioHeight = 3;  break;
-    case PRESENT_ASPECT_16_9:  *ratioWidth = 16; *ratioHeight = 9;  break;
-    case PRESENT_ASPECT_16_10: *ratioWidth = 16; *ratioHeight = 10; break;
-    default:                   *ratioWidth = 0;  *ratioHeight = 0;  break;
-    }
-}
+VOID PresentAspectRatio(INT aspect, INT *ratioWidth, INT *ratioHeight);
 
 /* The ratio the picture is shaped to for a frame sw x sh: a forced one, or the
    frame's own (Native, and Stretch in a window). */
-static VOID PresentTargetRatio(INT aspect, INT sourceWidth, INT sourceHeight, INT *ratioWidth, INT *ratioHeight)
-{
-    PresentAspectRatio(aspect, ratioWidth, ratioHeight);
-    if (!*ratioWidth || !*ratioHeight) { *ratioWidth = sourceWidth > 0 ? sourceWidth : PRESENT_DEFAULT_RATIO_WIDTH; *ratioHeight = sourceHeight > 0 ? sourceHeight : PRESENT_DEFAULT_RATIO_HEIGHT; }
-}
-static INT PresentIsNative(INT aspect)
-{ return aspect == PRESENT_ASPECT_NATIVE || aspect == PRESENT_ASPECT_STRETCH; }
+VOID PresentTargetRatio(INT aspect, INT sourceWidth, INT sourceHeight, INT *ratioWidth, INT *ratioHeight);
+INT PresentIsNative(INT aspect);
 
 /* The largest n:d rectangle in dst, centred. */
-static VOID PresentFitRatio(INT destinationWidth, INT destinationHeight, INT ratioWidth, INT ratioHeight, INT *left, INT *top, INT *width, INT *height)
-{
-    long fitWidth, fitHeight;
-    if (destinationWidth < 1) destinationWidth = 1;
-    if (destinationHeight < 1) destinationHeight = 1;
-    if (ratioWidth < 1 || ratioHeight < 1) { *left = 0; *top = 0; *width = destinationWidth; *height = destinationHeight; return; }
-    fitWidth = destinationWidth; fitHeight = (long)destinationWidth * ratioHeight / ratioWidth;
-    if (fitHeight > destinationHeight) { fitHeight = destinationHeight; fitWidth = (long)destinationHeight * ratioWidth / ratioHeight; }
-    if (fitWidth < 1) fitWidth = 1;
-    if (fitHeight < 1) fitHeight = 1;
-    *width = (INT)fitWidth; *height = (INT)fitHeight;
-    *left = (destinationWidth - *width) / 2;
-    *top = (destinationHeight - *height) / 2;
-}
+VOID PresentFitRatio(INT destinationWidth, INT destinationHeight, INT ratioWidth, INT ratioHeight, INT *left, INT *top, INT *width, INT *height);
 
 /* ── #325: WHERE THE PICTURE GOES, for every path (window, maximised, fullscreen, both
      renderers). `screen` = an area the user did not size (maximised / fullscreen).
@@ -152,55 +124,13 @@ static VOID PresentFitRatio(INT destinationWidth, INT destinationHeight, INT rat
        Fill (or a window)       -> the largest on-ratio rectangle.
      A window is sized to the picture (PresentWindowPicture), so in a window this
      returns the whole client. Centred; the caller paints the borders. */
-static VOID PresentLayout(INT aspect, INT fit, INT isScreen, INT destinationWidth, INT destinationHeight,
-                           INT sourceWidth, INT sourceHeight, INT *left, INT *top, INT *width, INT *height)
-{
-    INT ratioWidth, ratioHeight;
-    if (destinationWidth < 1) destinationWidth = 1;
-    if (destinationHeight < 1) destinationHeight = 1;
-    if (aspect == PRESENT_ASPECT_STRETCH && isScreen) { *left = 0; *top = 0; *width = destinationWidth; *height = destinationHeight; return; }
-    PresentTargetRatio(aspect, sourceWidth, sourceHeight, &ratioWidth, &ratioHeight);
-    if (sourceWidth > 0 && sourceHeight > 0 && fit == PRESENT_FIT_WHOLE) {
-        if (PresentIsNative(aspect)) {
-            INT scaleX = destinationWidth / sourceWidth, scaleY = destinationHeight / sourceHeight, scale = scaleX < scaleY ? scaleX : scaleY;
-            if (scale >= 1) {
-                *width = sourceWidth * scale; *height = sourceHeight * scale;
-                *left = (destinationWidth - *width) / 2; *top = (destinationHeight - *height) / 2;
-                return;
-            }
-        } else {
-            long bestArea = 0; INT bestScaleX = 0, bestScaleY = 0, scaleX;
-            for (scaleX = 1; (long)sourceWidth * scaleX <= destinationWidth; ++scaleX) {
-                long numerator = (long)sourceWidth * scaleX * ratioHeight, denominator = (long)sourceHeight * ratioWidth;   /* ny = num/den */
-                if (numerator % denominator) continue;
-                if ((long)sourceHeight * (numerator / denominator) > destinationHeight || numerator / denominator < 1) continue;
-                if ((long)sourceWidth * scaleX * sourceHeight * (numerator / denominator) > bestArea) {
-                    bestArea = (long)sourceWidth * scaleX * sourceHeight * (numerator / denominator); bestScaleX = scaleX; bestScaleY = (INT)(numerator / denominator);
-                }
-            }
-            if (bestArea) {
-                *width = sourceWidth * bestScaleX; *height = sourceHeight * bestScaleY;
-                *left = (destinationWidth - *width) / 2; *top = (destinationHeight - *height) / 2;
-                return;
-            }
-        }
-    }
-    PresentFitRatio(destinationWidth, destinationHeight, ratioWidth, ratioHeight, left, top, width, height);
-}
+VOID PresentLayout(INT aspect, INT fit, INT isScreen, INT destinationWidth, INT destinationHeight,
+                           INT sourceWidth, INT sourceHeight, INT *left, INT *top, INT *width, INT *height);
 
 /* ── #325: THE PICTURE A WINDOW IS SIZED TO, at whole scale k (1x = one desktop pixel
      per frame pixel). Native: the frame times k. Forced: k times the frame's WIDTH, and
      the height that gives the ratio -- mode 13h at 2x and 4:3 is 640x480. */
-static VOID PresentWindowPicture(INT aspect, INT sourceWidth, INT sourceHeight, INT scale, INT *width, INT *height)
-{
-    INT ratioWidth, ratioHeight;
-    if (scale < 1) scale = 1;
-    if (sourceWidth < 1 || sourceHeight < 1) { sourceWidth = PRESENT_DEFAULT_FRAME_WIDTH; sourceHeight = PRESENT_DEFAULT_FRAME_HEIGHT; }
-    *width = sourceWidth * scale;
-    if (PresentIsNative(aspect)) { *height = sourceHeight * scale; return; }
-    PresentTargetRatio(aspect, sourceWidth, sourceHeight, &ratioWidth, &ratioHeight);
-    *height = (INT)(((long)*width * ratioHeight + ratioWidth / 2) / ratioWidth);
-}
+VOID PresentWindowPicture(INT aspect, INT sourceWidth, INT sourceHeight, INT scale, INT *width, INT *height);
 
 /* Where the frame goes inside the client area.
  ⚠ WITH A LOCK ON, THE CLIENT IS ALREADY THAT SHAPE, so this normally returns the
@@ -208,22 +138,8 @@ static VOID PresentWindowPicture(INT aspect, INT sourceWidth, INT sourceHeight, 
    rather than letterboxing inside a free-shaped one. It still letterboxes when the
    two disagree (a maximised window, a drag Windows would not let us constrain),
    because distorting the picture is the worse of the two answers. */
-static VOID PresentFit(INT destinationWidth, INT destinationHeight, INT aspect,
-                        INT *left, INT *top, INT *width, INT *height)
-{
-    INT fitWidth, fitHeight, ratioWidth, ratioHeight;
-    if (destinationWidth < 1) destinationWidth = 1;
-    if (destinationHeight < 1) destinationHeight = 1;
-    PresentAspectRatio(aspect, &ratioWidth, &ratioHeight);
-    if (!ratioWidth || !ratioHeight) { *left = 0; *top = 0; *width = destinationWidth; *height = destinationHeight; return; }
-    fitWidth = destinationWidth; fitHeight = destinationWidth * ratioHeight / ratioWidth;              /* as wide as possible...          */
-    if (fitHeight > destinationHeight) { fitHeight = destinationHeight; fitWidth = destinationHeight * ratioWidth / ratioHeight; }  /* ...unless too tall      */
-    if (fitWidth < 1) fitWidth = 1;
-    if (fitHeight < 1) fitHeight = 1;
-    *width = fitWidth; *height = fitHeight;
-    *left = (destinationWidth - fitWidth) / 2;
-    *top = (destinationHeight - fitHeight) / 2;
-}
+VOID PresentFit(INT destinationWidth, INT destinationHeight, INT aspect,
+                        INT *left, INT *top, INT *width, INT *height);
 
 /* (#325: present_fit_int -- whole multiples behind the fsinteger.flag file knob -- is
    gone. Whole pixels are the default for every path now; see PresentLayout.) */
@@ -242,33 +158,8 @@ static VOID PresentFit(INT destinationWidth, INT destinationHeight, INT aspect,
      dst must have room for (sw*2) x (sh*2) bytes with a stride of sw*2. */
 /* `int sourceWidth`, not INT: spelt INT it moved the register allocation of
    present_ddraw.c, which inlines this -- bisected to that one parameter (s93). */
-static VOID PresentScale2x8(const BYTE *source, int sourceWidth, INT sourceHeight, INT sourceStride,
-                              BYTE *destination)
-{
-    INT column, row, destinationStride = sourceWidth * PRESENT_SCALE2X_FACTOR;
-    for (row = 0; row < sourceHeight; ++row) {
-        const BYTE *sourceRow = source + (SIZE_T)row * sourceStride;
-        const BYTE *rowAbove  = source + (SIZE_T)(row > 0        ? row - 1 : 0) * sourceStride;
-        const BYTE *rowBelow  = source + (SIZE_T)(row < sourceHeight - 1   ? row + 1 : sourceHeight - 1) * sourceStride;
-        BYTE *outputRow0 = destination + (SIZE_T)(row * PRESENT_SCALE2X_FACTOR)     * destinationStride;
-        BYTE *outputRow1 = destination + (SIZE_T)(row * PRESENT_SCALE2X_FACTOR + 1) * destinationStride;
-        for (column = 0; column < sourceWidth; ++column) {
-            BYTE centre = sourceRow[column];
-            BYTE above = rowAbove[column],  below = rowBelow[column];
-            BYTE left = sourceRow[column > 0      ? column - 1 : 0];
-            BYTE right = sourceRow[column < sourceWidth - 1 ? column + 1 : sourceWidth - 1];
-            BYTE topLeft = centre, topRight = centre, bottomLeft = centre, bottomRight = centre;
-            if (above != below && left != right) {
-                if (left == above) topLeft = left;
-                if (above == right) topRight = right;
-                if (left == below) bottomLeft = left;
-                if (below == right) bottomRight = right;
-            }
-            outputRow0[column * PRESENT_SCALE2X_FACTOR] = topLeft; outputRow0[column * PRESENT_SCALE2X_FACTOR + 1] = topRight;
-            outputRow1[column * PRESENT_SCALE2X_FACTOR] = bottomLeft; outputRow1[column * PRESENT_SCALE2X_FACTOR + 1] = bottomRight;
-        }
-    }
-}
+VOID PresentScale2x8(const BYTE *source, int sourceWidth, INT sourceHeight, INT sourceStride,
+                              BYTE *destination);
 
 /* ── #229: COLOUR FILTERS (docs/EMULATION.md). Default, Sepia, and the three
      monochrome monitors of the period -- white (paper-white), green (P1 phosphor) and
@@ -296,37 +187,6 @@ enum {
 };
 #define PRESENT_TINT_ITEMS "Default|Sepia|Monochrome white|Monochrome green|Monochrome orange"
 
-static UINT32 PresentTint(UINT32 argb, INT tint)
-{
-    UINT32 alpha = argb & PRESENT_ALPHA_MASK;
-    UINT32 red = (argb >> PRESENT_RED_SHIFT) & PRESENT_CHANNEL_MASK, green = (argb >> PRESENT_GREEN_SHIFT) & PRESENT_CHANNEL_MASK, blue = argb & PRESENT_CHANNEL_MASK;
-    UINT32 luminance = (red * PRESENT_LUMA_RED + green * PRESENT_LUMA_GREEN + blue * PRESENT_LUMA_BLUE + PRESENT_LUMA_ROUND) / PRESENT_LUMA_SCALE;   /* 0..255 */
-    UINT32 outputRed, outputGreen, outputBlue;
-    switch (tint) {
-    case PRESENT_TINT_SEPIA: {
-        /* 1. desaturate to 40%: c' = y + 0.4 (c - y), signed */
-        INT sepiaRed = (INT)luminance + ((INT)red - (INT)luminance) * PRESENT_SEPIA_KEEP_NUMERATOR / PRESENT_SEPIA_KEEP_DENOMINATOR;
-        INT sepiaGreen = (INT)luminance + ((INT)green - (INT)luminance) * PRESENT_SEPIA_KEEP_NUMERATOR / PRESENT_SEPIA_KEEP_DENOMINATOR;
-        INT sepiaBlue = (INT)luminance + ((INT)blue - (INT)luminance) * PRESENT_SEPIA_KEEP_NUMERATOR / PRESENT_SEPIA_KEEP_DENOMINATOR;
-        /* 2. warm cast */
-        sepiaRed = sepiaRed * PRESENT_SEPIA_WARM_RED / PERCENT; sepiaGreen = sepiaGreen * PRESENT_SEPIA_WARM_GREEN / PERCENT; sepiaBlue = sepiaBlue * PRESENT_SEPIA_WARM_BLUE / PERCENT;
-        if (sepiaRed > PRESENT_CHANNEL_MAX) sepiaRed = PRESENT_CHANNEL_MAX;
-        if (sepiaGreen > PRESENT_CHANNEL_MAX) sepiaGreen = PRESENT_CHANNEL_MAX;
-        if (sepiaBlue > PRESENT_CHANNEL_MAX) sepiaBlue = PRESENT_CHANNEL_MAX;
-        if (sepiaRed < 0) sepiaRed = 0;
-        if (sepiaGreen < 0) sepiaGreen = 0;
-        if (sepiaBlue < 0) sepiaBlue = 0;
-        /* 3. fade: black -> (30,22,12), full scale stays full scale */
-        outputRed = PRESENT_SEPIA_BLACK_RED + (UINT32)sepiaRed * PRESENT_SEPIA_SPAN_RED / PRESENT_CHANNEL_SCALE;
-        outputGreen = PRESENT_SEPIA_BLACK_GREEN + (UINT32)sepiaGreen * PRESENT_SEPIA_SPAN_GREEN / PRESENT_CHANNEL_SCALE;
-        outputBlue = PRESENT_SEPIA_BLACK_BLUE + (UINT32)sepiaBlue * PRESENT_SEPIA_SPAN_BLUE / PRESENT_CHANNEL_SCALE;
-        return alpha | (outputRed << PRESENT_RED_SHIFT) | (outputGreen << PRESENT_GREEN_SHIFT) | outputBlue; }
-    case PRESENT_TINT_MONO_WHITE:  outputRed = 255u; outputGreen = 255u; outputBlue = 255u; break;
-    case PRESENT_TINT_MONO_GREEN:  outputRed = 51u;  outputGreen = 255u; outputBlue = 51u;  break;   /* P1 */
-    case PRESENT_TINT_MONO_ORANGE: outputRed = 255u; outputGreen = 176u; outputBlue = 0u;   break;   /* amber */
-    default: return argb;
-    }
-    return alpha | (((luminance * outputRed) / PRESENT_CHANNEL_SCALE) << PRESENT_RED_SHIFT) | (((luminance * outputGreen) / PRESENT_CHANNEL_SCALE) << PRESENT_GREEN_SHIFT) | ((luminance * outputBlue) / PRESENT_CHANNEL_SCALE);
-}
+UINT32 PresentTint(UINT32 argb, INT tint);
 
 #endif /* NTVDMEX_PRESENT_SCALE_H */

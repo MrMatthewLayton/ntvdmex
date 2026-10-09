@@ -98,6 +98,7 @@ add_executable(ntvdmhost
     src/host/main.c
     src/host/log.c
     src/host/pcspeaker.c
+    src/vdd/present_scale.c
     src/vdm/v86.c
     src/vdm/dpmi.c
     src/vdm/dpmi_enter.S
@@ -176,6 +177,7 @@ if(EXISTS "${CMAKE_SOURCE_DIR}/tools/present_demo/present_demo.c")
 add_executable(present_demo WIN32
     tools/present_demo/present_demo.c
     src/vdd/present_ddraw.c
+    src/vdd/present_scale.c
     src/runtime.c)
 target_include_directories(present_demo PRIVATE src/vdd)
 ntvdmex_configure_xp_target(present_demo)
