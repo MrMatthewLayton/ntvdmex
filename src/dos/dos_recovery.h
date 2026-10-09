@@ -89,8 +89,12 @@ DOS_START_MODE DosRecoveryDecideStartMode(_In_ UINT failureCount);
  */
 typedef struct _DOS_SAFE_SKIPS
 {
-    BYTE VddPlugins, AudioOut, RealSpeaker, Joystick,
-         WowShims, Fullscreen;
+    BYTE VddPlugins;
+    BYTE AudioOut;
+    BYTE RealSpeaker;
+    BYTE Joystick;
+    BYTE WowShims;
+    BYTE Fullscreen;
 } DOS_SAFE_SKIPS, *PDOS_SAFE_SKIPS;
 
 typedef const DOS_SAFE_SKIPS *PCDOS_SAFE_SKIPS;
