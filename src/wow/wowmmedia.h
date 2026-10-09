@@ -28,6 +28,8 @@
 #ifndef NTVDMEX_WOWMMEDIA_H
 #define NTVDMEX_WOWMMEDIA_H
 
+#include "wow32.h"
+
 #define WOWMM_YIELD                     0x0001
 #define WOWMM_CALLPROC32                0x0002
 

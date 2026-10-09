@@ -57,6 +57,8 @@
 #ifndef NTVDMEX_WOWSHELL_H
 #define NTVDMEX_WOWSHELL_H
 
+#include "wow32.h"
+
 /* SHELL's ids. Numbered in THEIR OWN space -- 0x16 here is not 0x16 in USER's. */
 #define WOWSHELL_SHELLABOUT                         0x0016
 

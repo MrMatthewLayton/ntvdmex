@@ -11,6 +11,7 @@
  * Copyright (c) 2026 Matthew Layton
  */
 
+#include "wowcommdlg.h"
 #include "host_state.h"
 #include "log.h"
 #include "ne.h"
@@ -26,7 +27,6 @@
 #include "wowdlg.h"
 #include "wowenum.h"
 #include "wowshell.h"
-#include "wowcommdlg.h"
 
 static DWORD WowCdlgPeekDword(const volatile BYTE *bytes, INT offset)
 {

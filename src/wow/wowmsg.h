@@ -71,6 +71,8 @@
 #ifndef NTVDMEX_WOWMSG_H
 #define NTVDMEX_WOWMSG_H
 
+#include "host_state.h"
+
 /* Win16 message numbers this host names. Every one is either read out of a
  * guest (WM_CREATE, WM_MDICREATE, EM_*) or is the one that makes GetMessage
  * return 0 and end the loop.

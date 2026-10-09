@@ -11,6 +11,7 @@
  * Copyright (c) 2026 Matthew Layton
  */
 
+#include "wowshell.h"
 #include "host_state.h"
 #include "log.h"
 #include "ne.h"
@@ -25,7 +26,6 @@
 #include "wowuser.h"
 #include "wowdlg.h"
 #include "wowenum.h"
-#include "wowshell.h"
 #include "host_dpmi.h"
 
 static HKEY  g_WowShellKeys[WOWSHELL_KEYTOK_MAX];

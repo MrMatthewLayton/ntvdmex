@@ -11,6 +11,7 @@
  * Copyright (c) 2026 Matthew Layton
  */
 
+#include "wowkbd.h"
 #include "host_state.h"
 #include "log.h"
 #include "ne.h"
@@ -27,7 +28,6 @@
 #include "wowenum.h"
 #include "wowshell.h"
 #include "wowcommdlg.h"
-#include "wowkbd.h"
 
 INT WowKeyboardCall(WOW32_FRAME *frame, PSTR note, INT noteCapacity)
 {

@@ -103,6 +103,9 @@
 #ifndef NTVDMEX_WOWDLG_H
 #define NTVDMEX_WOWDLG_H
 
+#include "host_state.h"
+#include "wowcall.h"
+
 /* WM_INITDIALOG. The documented Win16 value, the message immediately before
  * WM_COMMAND (0x111); COMMDLG's dialog procedures handle the pair together
  * (see wowmsg.h).

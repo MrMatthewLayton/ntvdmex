@@ -55,6 +55,8 @@
 #ifndef NTVDMEX_WOWKBD_H
 #define NTVDMEX_WOWKBD_H
 
+#include "wow32.h"
+
 /* CHARMAP's two, and they live HERE and not in wowuser.h (Importance = 2):
  * VkKeyScan and MapVirtualKey are KEYBOARD.DRV exports in Win16, not USER's,
  * and every thunk module has an id space ALL ITS OWN -- 0x81 is VkKeyScan here

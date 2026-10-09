@@ -11,6 +11,7 @@
  * Copyright (c) 2026 Matthew Layton
  */
 
+#include "wowdlg.h"
 #include "host_state.h"
 #include "log.h"
 #include "ne.h"
@@ -23,7 +24,6 @@
 #include "wowwin.h"
 #include "wowgdi.h"
 #include "wowuser.h"
-#include "wowdlg.h"
 #include "host_wow.h"
 
 /* Forward declarations, from when this file was part of main.c's unit (they were in wowdlg.h). */

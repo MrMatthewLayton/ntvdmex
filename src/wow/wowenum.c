@@ -11,6 +11,7 @@
  * Copyright (c) 2026 Matthew Layton
  */
 
+#include "wowenum.h"
 #include "host_state.h"
 #include "log.h"
 #include "ne.h"
@@ -24,7 +25,6 @@
 #include "wowgdi.h"
 #include "wowuser.h"
 #include "wowdlg.h"
-#include "wowenum.h"
 #include "host_wow.h"
 
 static WOWENUM g_WowEnum;

@@ -47,6 +47,8 @@
 #ifndef NTVDMEX_WOWRES_H
 #define NTVDMEX_WOWRES_H
 
+#include "host_state.h"
+
 #define WOWRES_MAX_FILE             (2u * 1024u * 1024u)
 #define WOWRES_RT_MENU              4
 #define WOWRES_RT_ACCEL             9

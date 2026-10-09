@@ -11,6 +11,7 @@
  * Copyright (c) 2026 Matthew Layton
  */
 
+#include "wowmmedia.h"
 #include "host_state.h"
 #include "log.h"
 #include "ne.h"
@@ -29,7 +30,6 @@
 #include "wowcommdlg.h"
 #include "wowkbd.h"
 #include "wowsound.h"
-#include "wowmmedia.h"
 
 INT WowMultimediaCall(WOW32_FRAME *frame, PSTR note, INT noteCapacity)
 {

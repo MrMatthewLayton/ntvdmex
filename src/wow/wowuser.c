@@ -11,6 +11,7 @@
  * Copyright (c) 2026 Matthew Layton
  */
 
+#include "wowuser.h"
 #include "host_state.h"
 #include "log.h"
 #include "ne.h"
@@ -22,7 +23,6 @@
 #include "wowres.h"
 #include "wowwin.h"
 #include "wowgdi.h"
-#include "wowuser.h"
 #include "wowdlg.h"
 #include "wowenum.h"
 #include "host_wow.h"

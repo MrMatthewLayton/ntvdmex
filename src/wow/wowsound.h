@@ -28,6 +28,8 @@
 #ifndef NTVDMEX_WOWSOUND_H
 #define NTVDMEX_WOWSOUND_H
 
+#include "wow32.h"
+
 #define WOWSND_OPENSOUND            0x0001
 #define WOWSND_CLOSESOUND           0x0002
 #define WOWSND_SETVOICEQUEUESIZE    0x0003

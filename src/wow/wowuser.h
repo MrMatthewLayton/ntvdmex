@@ -38,6 +38,9 @@
 #ifndef WOWUSER_H
 #define WOWUSER_H
 
+#include "host_state.h"
+#include "wow32.h"
+#include "wowcall.h"
 #include "wowuser_calls.h"  /* the call table: thunk ids and argument offsets */
 #include "wowconv.h"        /* the Win16/Win32 semantic deltas, pinned by tests/unit/wow_test.c */
 

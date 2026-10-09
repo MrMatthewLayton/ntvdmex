@@ -55,6 +55,8 @@
 #ifndef NTVDMEX_WOWANCHORS_H
 #define NTVDMEX_WOWANCHORS_H
 
+#include "host_state.h"
+
 typedef struct _WOW_ANCHOR
 {
     WORD Id;

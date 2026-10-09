@@ -51,6 +51,8 @@
 #ifndef NTVDMEX_WOWENUM_H
 #define NTVDMEX_WOWENUM_H
 
+#include "host_state.h"
+
 /* WowEnumStep: the first call of an enumeration, or the next. */
 #define WOWENUM_NEXT                    0
 #define WOWENUM_FIRST                   1

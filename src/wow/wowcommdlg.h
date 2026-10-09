@@ -54,6 +54,8 @@
 #ifndef NTVDMEX_WOWCOMMDLG_H
 #define NTVDMEX_WOWCOMMDLG_H
 
+#include "wow32.h"
+
 #define WOWCDLG_GETOPENFILENAME         0x0001
 #define WOWCDLG_GETSAVEFILENAME         0x0002
 #define WOWCDLG_EXTENDEDERROR           0x001a

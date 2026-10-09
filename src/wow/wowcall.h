@@ -82,6 +82,8 @@
 #ifndef NTVDMEX_WOWCALL_H
 #define NTVDMEX_WOWCALL_H
 
+#include "host_state.h"
+
 /* WowCallEnter: whether the 16-bit procedure is known to be absent. */
 #define WOWCALL_PROCEDURE_PRESENT   0
 #define WOWCALL_PROCEDURE_ABSENT    1

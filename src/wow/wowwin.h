@@ -63,6 +63,9 @@
 #ifndef NTVDMEX_WOWWIN_H
 #define NTVDMEX_WOWWIN_H
 
+#include "host_state.h"
+#include "wowmsg.h"
+
 /* The prefix keeps a guest's class name out of the process-global Win32 class
  * namespace -- `mpframe` is SYSEDIT's, not ours to occupy.
  */
