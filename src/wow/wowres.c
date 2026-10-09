@@ -1,7 +1,22 @@
 /* wowres.c -- ★ THE GUEST'S OWN RESOURCES, AS REAL Win32 OBJECTS. GH #128, s.43.
  *
- * The code of wowres.h (#335): its functions and state, in their original order. Part of
- * the host's single translation unit: #included by main.c straight after wowres.h. */
+ * The code of wowres.h (#335): its functions and state, in their original order;
+ * its own translation unit, declared in wowres.h. */
+#include "host_state.h"
+#include "log.h"
+#include "ne.h"
+#include "wow32.h"
+#include "wowanchors.h"
+#include "wowsched.h"
+#include "wowcall.h"
+#include "wowmsg.h"
+#include "wowres.h"
+#include "wowwin.h"
+#include "wowgdi.h"
+#include "wowuser.h"
+/* Used before their definitions below. */
+static HICON WowResIconAt(DWORD groupOffset, DWORD groupLength, PINT picked, INT width, INT height);
+
 
 /* Forward declarations for the single translation unit (they were in wowres.h). */
 /* ── ★★★★★ AND THE GROUP CAN BE NAMED. (session 47) ─────────────────────────

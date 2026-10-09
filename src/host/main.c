@@ -39,7 +39,6 @@
 #include "../wow/wowmsg.h" /* GH #128: ...and the MESSAGE QUEUE the loop turns on */
 #include "../wow/wowmsg.c"
 #include "../wow/wowres.h" /* GH #128: ...and the guest's OWN menu and icons */
-#include "../wow/wowres.c"
 #include "../wow/wowwin.h" /* GH #128: ...and a Win16 window IS a real Win32 window */
 /* ⚠ wowgdi.h COMES BEFORE wowuser.h, and the order is load-bearing: USER's
      GetDC/GetWindowDC issue a GDI token, so the object map has to be in scope by
