@@ -28,11 +28,9 @@ static VOID WowIcaDeliver(DOS_MACHINE *machine, volatile BYTE *tib, UINT steps);
 static INT  ModeYInterpServes(VOID);      /* fwd: north star 1, design C */
 static VOID ModeYRingDump(PCSTR why);  /* fwd: north star 1, design C */
 static INT InterpreterMemoryPageOk(UINT32 linear);        /* fwd: page-validity guard, defined with V86HostRead8 */
-static VOID ExecMachineSave(INT depth);    /* fwd: defined with CloseProgramNow */
 static BYTE  g_FaultTable[DOS_FLTSITE_N * DPMI_FAULT_TABLE_ENTRY] __attribute__((aligned(16)));
 static BYTE  g_FaultStack[DPMI_FAULT_STK_SIZE] __attribute__((aligned(16)));   /* #205 */
 static struct _DPMI_DESCRIPTOR { DWORD Base, Limit; BYTE Access, Flags; } g_Ldt[DPMI_LDT_MAX];
-static HANDLE StdioPebHandle(HANDLE proc, UINT offset);
 static VOID HostFullscreenToggle(HWND window);
 static VOID ModeYGr4CloseRun(VOID);       /* defined with the GR4 counters below */
 static VOID ModeYRemapSelectBody(PVOID context, INT mask);
@@ -77,22 +75,10 @@ static WORD g_DsProbe[DSPROBE_MAX];
 static INT g_DsProbeCount;
 static WORD g_CsProbe[DSPROBE_MAX];
 static INT g_CsProbeCount;
-static INT g_Routed;
-static INT g_BackToPrompt;
-static VDM_COMMAND_INFO g_CommandInfo;
-static EMU8K_STATE g_Emu8K;
-static NTVDD_DEVICE g_Emu8KDevice;
-static INT g_AweOn;
 static INT g_DosVersionForced;
 static PCSTR g_DosVersionWhy;
-static MPU_STATE g_Mpu;
-static NTVDD_DEVICE g_MpuDevice;
 static INT g_WowFoldMute;
 static DWORD g_WowFoldDropped;
-static PVOID g_Hma;
-static DWORD g_HmaError;
-static DWORD g_HmaState, g_HmaProtection;
-static DOS_EMS_STATE g_Ems;
 static DWORD g_IcaRaised, g_IcaDelivered, g_IcaNoHandler;
 static DWORD g_WowIdleWaits;
 static DWORD g_ShimState[WOW_SHIMS], g_ShimError[WOW_SHIMS];
@@ -148,15 +134,9 @@ static volatile LONG g_CloseRequest;
 static INT g_TopIsShell;
 static WORD g_LdtFree[DPMI_LDT_MAX];
 static INT g_LdtFreeCount;
-static INT g_BehaveDos622;
 static DWORD g_PauseCount, g_PauseCooperative, g_PauseMs;
 static INT g_PmWatchCount;
 static DWORD g_PmCooperativeLine[PIC_LINES_PER_CHIP];
-static PCSTR g_FloppyImage;
-static HANDLE g_Stdio;
-static PCSTR g_StdioHow;
-static PCSTR g_StdioSource;
-static DWORD g_StdioParentProcessId;
 static INT g_PmTopDispatch;
 static INT g_PmDispatchTop;
 static INT g_SimIntReflect;
@@ -220,36 +200,8 @@ static DWORD g_Wow32Serviced, g_Wow32Unimplemented, g_Wow32Declined;
 static DWORD g_WowSyncWrites;
 /* Functions called from a file other than their own. */
 static VOID DsProbeLoad(VOID);
-static UINT LauncherCompilerVariables(PCSTR environment, DWORD environmentCapacity, PSTR out, DWORD outCapacity);
-static VOID HmaTry(VOID);
-static PSTR ExecBegin(DOS_MACHINE *machine, volatile BYTE *tib, PSTR cursor);
-static VOID CriticalSnapshot(volatile BYTE *tib);
-static VOID CriticalRaise(DOS_MACHINE *machine, volatile BYTE *tib, PSTR *logCursor);
-static INT CriticalReturn(DOS_MACHINE *machine, volatile BYTE *tib, PSTR *logCursor);
-static INT PmRwHardwareFail(DOS_MACHINE *machine, volatile BYTE *tib, BYTE function, DWORD win32Error, PSTR *logCursor);
 static VOID WowLogFlush(PSTR base, PSTR *logCursor);
-static INT DosPrnOut(PVOID context, BYTE character);
-static VOID DosAuxOut(PVOID context, BYTE character);
-static INT DosTerminate(DOS_MACHINE *machine, PVOID tib, PSTR *logCursor, PSTR base);
-static INT HostHasFloppy(VOID);
-static INT HostHasCdrom(VOID);
-static VOID StdioFlush(VOID);
-static HANDLE StdioPebHandle(HANDLE proc, UINT offset);
-static PCSTR StdioInitialize(VOID);
-static PCSTR StdioInitializeVdm(VOID);
-static VOID HostConsoleOut(PVOID context, BYTE ch);
-static INT HostConsoleIn(PVOID context);
 static VOID PlanesDumpBeside(PCSTR bitmapPath);
-static INT TypeInPush(PCSTR text);
-static INT HostConsoleInNoBlock(PVOID context);
-static INT HostConsolePeek(PVOID context);
-static PVOID XmsHostAllocate(PVOID context, DWORD kilobytes);
-static VOID XmsHostFree(PVOID context, PVOID memory, DWORD kilobytes);
-static PVOID EmsHostAllocate(PVOID context, DWORD pages);
-static VOID EmsHostFree(PVOID context, PVOID memory, DWORD pages);
-static VOID ExecMachineSave(INT depth);
-static VOID ExecMachineRestore(INT depth, PSTR *logCursor);
-static INT CloseProgramNow(DOS_MACHINE *machine, PVOID tib, PSTR *logCursor, PSTR base);
 static INT LaunchIsWow(PCSTR command);
 static INT WowModuleOfSelector(WORD selector);
 static INT WowUserAnchor(WORD thunkId, WORD argumentBytes, WORD returnStub);
@@ -383,6 +335,5 @@ static VOID WowIcaDeliver(DOS_MACHINE *machine, volatile BYTE *tib, UINT steps);
 static INT DpmiInjectPmMouseCallback(DOS_MACHINE *machine, volatile BYTE *tib, UINT steps);
 static VOID DpmiClientTeardown(VOID);
 static INT DpmiRunPmInterp(DOS_MACHINE *machine, volatile BYTE *tib);
-static VOID DosWowPublish(volatile BYTE *handlerArea, volatile BYTE *controlTable, UINT currentDrive);
 
 #endif

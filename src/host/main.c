@@ -107,7 +107,6 @@ static CHAR             g_TextFontLive[NTVDMEX_PATH_MAX];
 
 #include "host_internal.h"
 #include "host_diag.c"
-#include "host_dos.c"
 #include "host_video.c"
 #include "host_dpmi.c"
 #include "host_dpmi_int.c"
@@ -345,7 +344,7 @@ static WORD g_CdsSegment;                       /* the CDS array's reserved bloc
 static WORD g_SftSegment;                       /* the SFT block for a DOS guest, 0 = none  */
 
 static CHAR g_Environment[8192], g_Desktop[512], g_Title[512], g_Reserved[512];
-static VDM_COMMAND_INFO g_CommandInfo;
+VDM_COMMAND_INFO g_CommandInfo;
 /* The SECOND fetch (s72): what CSRSS actually queued -- AppName is the program's
    full path, CmdLine its argument tail (CR LF terminated), Env the launcher's Win32
    environment block. See csrss_fetch_command(). */
@@ -643,9 +642,9 @@ static DOS_START_MODE g_StartMode = DOS_START_NORMAL;
 /* ⚠ Reported at EXIT, not at init. The early-startup log line was written
    before a later LogWrite(LOG_PATH,...) TRUNCATES the file, so it never
    survived to be read -- which looked exactly like the code not running. */
-static PCSTR g_StdioHow = "(not initialised)";
-static PCSTR g_StdioSource = "";   /* which channel it came down, if any */
-static DWORD g_StdioParentProcessId;   /* GH #131: whose child we turned out to be */
+PCSTR g_StdioHow = "(not initialised)";
+PCSTR g_StdioSource = "";   /* which channel it came down, if any */
+DWORD g_StdioParentProcessId;   /* GH #131: whose child we turned out to be */
 DWORD g_DmxSamples, g_DmxBusy[12], g_DmxMixerOk;
 DWORD g_DmxOverdue, g_DmxOverdueMaximum, g_DmxAnyBusy;
 /* ── PACE THE PIT. ──────────────────────────────────────────────────────────────────

@@ -44,4 +44,8 @@ extern WORD g_Int15StubOffset;
 extern DWORD g_PrintScreenErrors;
 extern DWORD g_PrintScreenJobs;
 extern BYTE g_PrintScreenStatus;
+extern VDM_COMMAND_INFO g_CommandInfo;
+extern PCSTR g_StdioHow;
+extern PCSTR g_StdioSource;
+extern DWORD g_StdioParentProcessId;
 #endif

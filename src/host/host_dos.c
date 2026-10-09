@@ -1,7 +1,19 @@
 /* host_dos.c -- the DOS side of the host: EXEC and termination, INT 24h, disks, stdio and the
  *   console, and the XMS/EMS host calls.
  *
- * Part of the host's single translation unit: #included by main.c after host_internal.h. */
+ * Its own translation unit (#335): declared in host_dos.h. */
+#include "host_state.h"
+#include "log.h"
+#include <tlhelp32.h>
+#include "host_dos.h"
+#include "main.h"
+#include "host_bios.h"
+#include "host_mouse.h"
+#include "host_timing.h"
+#include "host_video.h"
+/* Used before their definitions below. */
+static VOID ExecMachineSave(INT depth);
+
 
 /* ── #208: A PROGRAM STARTED FROM WINDOWS RUNS UNDER XP's COMMAND.COM, AS STOCK DOES. ──
      Stock ntvdm never loads the program itself: it starts COMMAND.COM /P and answers the
@@ -9,8 +21,8 @@
      shell UNDER every program -- and File > Close Program needs one to return to. The
      shell is told 5.00 (it demands it); the program gets the Settings version (the
      user's choice, SETVER-style -- see g_shell_psp). */
-static INT   g_Routed;                  /* this run's program is handed over via sub 01 */
-static INT   g_BackToPrompt;          /* Close Program ended it: next sub 01 = prompt */
+INT   g_Routed;                  /* this run's program is handed over via sub 01 */
+INT   g_BackToPrompt;          /* Close Program ended it: next sub 01 = prompt */
 
 /* ── ★ THE COMPILER VARIABLES REACH THE GUEST, WITHOUT MOVING THE MEMORY MAP. (s73) ──
      A DOS build tool is configured through its environment -- LIB and INCLUDE for the
@@ -43,7 +55,7 @@ static INT DosEnvironmentNameIs(PCSTR name, UINT length, PCSTR literal)
 /* Scan a Win32 environment block for LIB= and INCLUDE=, 8.3-shorten each value, and
    write them as newline-separated NAME=VALUE lines into out (for DosEnvBuildWithCard's
    `extra`). Returns the number written. Nothing is written for a var that is absent. */
-static UINT LauncherCompilerVariables(PCSTR environment, DWORD environmentCapacity, PSTR out, DWORD outCapacity)
+UINT LauncherCompilerVariables(PCSTR environment, DWORD environmentCapacity, PSTR out, DWORD outCapacity)
 {
     static PCSTR want[] = { "LIB", "INCLUDE", NULL };
     PCSTR entry = environment; UINT count = 0; DWORD outLength = 0;
@@ -72,11 +84,11 @@ static UINT LauncherCompilerVariables(PCSTR environment, DWORD environmentCapaci
     return count;
 }
 /* #233: the AWE32's EMU8000 at SB base + 400h/800h/C00h, fitted when the model is AWE32. */
-static EMU8K_STATE  g_Emu8K;     static NTVDD_DEVICE g_Emu8KDevice;
-static INT          g_AweOn = 0;
-static MPU_STATE    g_Mpu;       static NTVDD_DEVICE g_MpuDevice;
-static PVOID g_Hma;       /* the HMA at linear 0x100000, 0 = unavailable */
-static DWORD        g_HmaError;   /* why not, when g_Hma == 0                     */
+EMU8K_STATE  g_Emu8K;     NTVDD_DEVICE g_Emu8KDevice;
+INT          g_AweOn = 0;
+MPU_STATE    g_Mpu;       NTVDD_DEVICE g_MpuDevice;
+PVOID g_Hma;       /* the HMA at linear 0x100000, 0 = unavailable */
+DWORD        g_HmaError;   /* why not, when g_Hma == 0                     */
 #define HMA_ERROR_PROTECTED 0xE1   /* g_HmaError: committed but not accessible */
 /* Make the HMA real: one committed 64KB range at linear 0x100000, which a guest
    reaches as FFFF:0010 because in this design a guest linear IS a host VA.
@@ -85,8 +97,8 @@ static DWORD        g_HmaError;   /* why not, when g_Hma == 0                   
      LogAppend caches one handle per path with no lock, so a concurrent writer can
      lose or misplace a line. Chasing that cost a cycle here, and the same defect
      had already put a stray SysVars line at byte 0 of the log. */
-static DWORD g_HmaState, g_HmaProtection;   /* what was already at 0x100000          */
-static VOID HmaTry(VOID)
+DWORD g_HmaState, g_HmaProtection;   /* what was already at 0x100000          */
+VOID HmaTry(VOID)
 {
     MEMORY_BASIC_INFORMATION memoryInfo;
     PVOID want = (VOID *)(ULONG_PTR)DOS_HMA_BASE_U;
@@ -114,7 +126,7 @@ static VOID HmaTry(VOID)
     { UINT index; volatile BYTE *hma = (volatile BYTE *)(ULONG_PTR)DOS_HMA_BASE_U;
       for (index = 0; index < DOS_HMA_ALLOCATION_U; ++index) hma[index] = 0; }
 }
-static DOS_EMS_STATE    g_Ems;       /* M4: EMS expanded-memory manager           */
+DOS_EMS_STATE    g_Ems;       /* M4: EMS expanded-memory manager           */
 /* ---- INT 21h AH=4Bh EXEC.  GH #30. ------------------------------------------
  *
  * A parent calls EXEC, a child runs to completion, and the parent carries on at
@@ -208,7 +220,7 @@ static INT ExecWindows(DOS_MACHINE *machine, INT kind, UINT subsystem, PSTR *log
 }
 #define EXEC_SHELL_BOP_SITES_MIN 8   /* this many C4 C4 54 sites mark XP's COMMAND.COM (it has 15) */
 /* Perform a recorded EXEC: load the child, snapshot the parent, hand over. */
-static PSTR ExecBegin(DOS_MACHINE *machine, volatile BYTE *tib, PSTR cursor)
+PSTR ExecBegin(DOS_MACHINE *machine, volatile BYTE *tib, PSTR cursor)
 {
     HANDLE fileHandle;
     DWORD bytesRead = 0;
@@ -535,7 +547,7 @@ static struct {
     BYTE  Function;                                  /* the INT 21h function that failed        */
 } g_Critical;
 
-static VOID CriticalSnapshot(volatile BYTE *tib)
+VOID CriticalSnapshot(volatile BYTE *tib)
 {
     g_Critical.Eax = VDM_REG(tib, VTIB_EAX); g_Critical.Ebx = VDM_REG(tib, VTIB_EBX);
     g_Critical.Ecx = VDM_REG(tib, VTIB_ECX); g_Critical.Edx = VDM_REG(tib, VTIB_EDX);
@@ -545,7 +557,7 @@ static VOID CriticalSnapshot(volatile BYTE *tib)
     g_Critical.Ds  = (WORD)VDM_REG(tib, VTIB_DS); g_Critical.Es = (WORD)VDM_REG(tib, VTIB_ES);
 }
 
-static VOID CriticalRaise(DOS_MACHINE *machine, volatile BYTE *tib, PSTR *logCursor)
+VOID CriticalRaise(DOS_MACHINE *machine, volatile BYTE *tib, PSTR *logCursor)
 {
     volatile BYTE *swappableDataArea = (volatile BYTE *)(((DWORD)DOS_SDA_SEG << PARAGRAPH_SHIFT) + DOS_SDA_OFF);
     g_Critical.Ah = machine->CritAh;
@@ -572,7 +584,7 @@ static VOID CriticalRaise(DOS_MACHINE *machine, volatile BYTE *tib, PSTR *logCur
 }
 
 /* Returns 1 for ABORT (the caller terminates the program), 0 to resume the guest. */
-static INT CriticalReturn(DOS_MACHINE *machine, volatile BYTE *tib, PSTR *logCursor)
+INT CriticalReturn(DOS_MACHINE *machine, volatile BYTE *tib, PSTR *logCursor)
 {
     volatile BYTE *swappableDataArea = (volatile BYTE *)(((DWORD)DOS_SDA_SEG << PARAGRAPH_SHIFT) + DOS_SDA_OFF);
     BYTE criticalAction = (BYTE)(VDM_REG(tib, VTIB_EAX) & BYTE_MASK), said = criticalAction, allowed = g_Critical.Ah;
@@ -639,7 +651,7 @@ static INT CriticalReturn(DOS_MACHINE *machine, volatile BYTE *tib, PSTR *logCur
      INT 24h is not reflected to DPMI clients (see the tail of DosInt21 for why, and
      what doing it properly needs). Returns 1 if it answered; 0 = not a hardware
      error, the caller keeps its old answer. `we` = GetLastError(), 0 = it did not fail. */
-static INT PmRwHardwareFail(DOS_MACHINE *machine, volatile BYTE *tib, BYTE function, DWORD win32Error, PSTR *logCursor)
+INT PmRwHardwareFail(DOS_MACHINE *machine, volatile BYTE *tib, BYTE function, DWORD win32Error, PSTR *logCursor)
 {
     WORD dosError = 0;
     if (!win32Error || !DosErrFromWin32((DWORD)win32Error, &dosError) || !DosCritIsHardwareError(dosError)) return 0;
@@ -654,8 +666,8 @@ static INT PmRwHardwareFail(DOS_MACHINE *machine, volatile BYTE *tib, BYTE funct
 }
 /* #251: DOS's PRN/AUX output when the guest cannot be resumed in the driver code
    (dos_auxprn.h) -- a DPMI client's INT 21h. Same devices, without the IVT hop. */
-static INT DosPrnOut(PVOID context, BYTE character) { (VOID)context; return LptSpoolPut(character); }
-static VOID DosAuxOut(PVOID context, BYTE character)
+INT DosPrnOut(PVOID context, BYTE character) { (VOID)context; return LptSpoolPut(character); }
+VOID DosAuxOut(PVOID context, BYTE character)
 {
     NTVDD_REGISTERS registers;
     (VOID)context;
@@ -669,7 +681,7 @@ static VOID DosAuxOut(PVOID context, BYTE character)
 
 /* #167: Settings > General "behave like" = MS-DOS 6.22 (0 = Windows XP NTVDM, the default).
    Mirrored from g_Settings by SettingsApply, for the device code that runs before it. */
-static INT            g_BehaveDos622 = 0;
+INT            g_BehaveDos622 = 0;
 enum { DOS_TERMINATE_MCB_GUARD = 1024 };   /* DosTerminate: blocks freed before giving up */
 /* ── A GUEST ASKED TO TERMINATE. FOUR DOORS, ONE ANSWER. (GH #134) ───────────
      AH=4Ch, AH=00h, INT 20h and INT 27h all end a program, and this decides
@@ -683,7 +695,7 @@ enum { DOS_TERMINATE_MCB_GUARD = 1024 };   /* DosTerminate: blocks freed before 
      EXEC simply never reported.
    Returns 1 if a child exited and the parent has been restored (the exec loop
    carries on), 0 if this was the top-level program and the run is over. */
-static INT DosTerminate(DOS_MACHINE *machine, PVOID tib, PSTR *logCursor, PSTR base)
+INT DosTerminate(DOS_MACHINE *machine, PVOID tib, PSTR *logCursor, PSTR base)
 {
     PSTR cursor = *logCursor;
     (VOID)cursor;
@@ -842,17 +854,17 @@ static INT DosTerminate(DOS_MACHINE *machine, PVOID tib, PSTR *logCursor, PSTR b
        machine where nothing had changed. */
 /* NULL = the harness fallback (FLOPPY_IMG_PATH), composed at use because the root is
    runtime-derived now; a settings value points this INTO g_Settings as before. */
-static PCSTR g_FloppyImage = NULL;
+PCSTR g_FloppyImage = NULL;
 static PCSTR FloppyImagePath(VOID) { return g_FloppyImage ? g_FloppyImage : FLOPPY_IMG_PATH; }
 /* ── s84 (user): DOES THIS PC HAVE THE PHYSICAL DRIVE AT ALL? ──────────────────────
      GetDriveType reads the drive's TYPE, never its media, so it cannot raise an
      "insert a disk" prompt or spin a drive up. With no physical drive the Drives tab
      greys the choice and the host treats the setting as "mounted image". */
-static INT HostHasFloppy(VOID)
+INT HostHasFloppy(VOID)
 {
     return GetDriveTypeA(HOST_FLOPPY_A_ROOT) == DRIVE_REMOVABLE || GetDriveTypeA(HOST_FLOPPY_B_ROOT) == DRIVE_REMOVABLE;
 }
-static INT HostHasCdrom(VOID)
+INT HostHasCdrom(VOID)
 {
     DWORD drives = GetLogicalDrives(); CHAR root[4] = HOST_DEFAULT_DRIVE_ROOT; INT drive;
     for (drive = DOS_DRIVE_C; drive < DOS_DRIVE_LETTERS; ++drive) {
@@ -977,11 +989,11 @@ INT DiskIo(UINT drive, UINT32 lba, UINT count,
      The code below stays: it costs nothing, it upgrades if a handle ever does
      arrive, and the raw-handle line it prints at STAGE1 is the instrument that
      turned four sessions of hypotheses into one located bug. */
-static HANDLE g_Stdio = INVALID_HANDLE_VALUE;
+HANDLE g_Stdio = INVALID_HANDLE_VALUE;
 static CHAR   g_StdioBuffer[512];
 static UINT g_StdioLength = 0;
 
-static VOID StdioFlush(VOID)
+VOID StdioFlush(VOID)
 {
     DWORD bytesWritten = 0;
     if (g_Stdio != INVALID_HANDLE_VALUE && g_StdioLength)
@@ -1221,7 +1233,7 @@ static PCSTR StdioFromParent(DWORD parentProcessId)
     return "none (no console, no redirect)";
 }
 
-static PCSTR StdioInitialize(VOID)
+PCSTR StdioInitialize(VOID)
 {
     HANDLE handle = GetStdHandle(STD_OUTPUT_HANDLE);
     DWORD valueType = (handle && handle != INVALID_HANDLE_VALUE) ? GetFileType(handle) : FILE_TYPE_UNKNOWN;
@@ -1329,7 +1341,7 @@ static PCSTR StdioAdopt(HANDLE handle)
                                   : "the console";
 }
 
-static PCSTR StdioInitializeVdm(VOID)
+PCSTR StdioInitializeVdm(VOID)
 {
     PCSTR what;
     if (g_Stdio != INVALID_HANDLE_VALUE) return g_StdioHow;   /* never downgrade */
@@ -1348,7 +1360,7 @@ static PCSTR StdioInitializeVdm(VOID)
    same shape as the per-line CreateFile that cost Skyroads 24% of its timer
    ticks; flushing per line keeps `| more` and an interactive prompt responsive
    without paying a syscall per byte. */
-static VOID HostConsoleOut(PVOID context, BYTE ch)
+VOID HostConsoleOut(PVOID context, BYTE ch)
 {
     (VOID)context;
     HOST_LOCK();
@@ -1371,7 +1383,7 @@ static VOID HostConsoleOut(PVOID context, BYTE ch)
    (measured: the guest parks at DOS_HDLR_SEG:0000, the INT 21h BOP, for the whole run).
    g_ConsoleInPending holds that second byte between the two calls. */
 static INT g_ConsoleInPending = -1;                /* scancode owed to the next read, or -1 */
-static INT HostConsoleIn(PVOID context)
+INT HostConsoleIn(PVOID context)
 {
     WORD key; INT got;
     (VOID)context;
@@ -1412,7 +1424,7 @@ static INT TypeInPop(VOID)
     return character;
 }
 /* Queue a string. All or nothing: a half-typed command is worse than none. */
-static INT TypeInPush(PCSTR text)
+INT TypeInPush(PCSTR text)
 {
     INT length = lstrlenA(text), used, index;
     HOST_LOCK();
@@ -1427,7 +1439,7 @@ static INT TypeInPush(PCSTR text)
 }
 
 /* Non-blocking console read (INT 21h AH=06 DL=FF): a key char, or -1 if none. */
-static INT HostConsoleInNoBlock(PVOID context)
+INT HostConsoleInNoBlock(PVOID context)
 {
     WORD key; INT got;
     (VOID)context;
@@ -1446,7 +1458,7 @@ static INT HostConsoleInNoBlock(PVOID context)
 /* Non-blocking console status (INT 21h AH=0B / AH=06 DL=FF peek): 1 if a key is ready.
    An owed scancode counts as ready, or a program that polls status before reading would
    stall halfway through an arrow. */
-static INT HostConsolePeek(PVOID context)
+INT HostConsolePeek(PVOID context)
 {
     WORD key; INT got;
     (VOID)context;
@@ -1478,12 +1490,12 @@ VOID HostSetFlags(volatile BYTE *tib, BYTE carryFlag, BYTE zeroFlag)
  * each EMB is a VirtualAlloc block; DosXmsMove() memcpys between it and the guest's
  * conventional window. The XMS entry point is a BOP stub reached by FAR CALL (so
  * it ends in RETF, not IRET); INT 2Fh AX=4300/4310 advertise it. */
-static PVOID XmsHostAllocate(PVOID context, DWORD kilobytes)
+PVOID XmsHostAllocate(PVOID context, DWORD kilobytes)
 {
     (VOID)context;
     return VirtualAlloc(NULL, (SIZE_T)kilobytes * BYTES_PER_KILOBYTE, MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE);
 }
-static VOID XmsHostFree(PVOID context, PVOID memory, DWORD kilobytes)
+VOID XmsHostFree(PVOID context, PVOID memory, DWORD kilobytes)
 {
     (VOID)context; (VOID)kilobytes;
     if (memory) VirtualFree(memory, 0, MEM_RELEASE);
@@ -1619,12 +1631,12 @@ VOID HostXms(volatile BYTE *tib)
  * page frame at E000:0 is real V86 RAM (v86 Map 5). DosEmsMapPage memcpys logical
  * pages in/out of the frame windows (page-frame shadowing). INT 67h carries the
  * function in AH and returns status in AH (0 = ok). */
-static PVOID EmsHostAllocate(PVOID context, DWORD pages)
+PVOID EmsHostAllocate(PVOID context, DWORD pages)
 {
     (VOID)context;
     return VirtualAlloc(NULL, (SIZE_T)pages * DOS_EMS_PAGE_SIZE, MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE);
 }
-static VOID EmsHostFree(PVOID context, PVOID memory, DWORD pages)
+VOID EmsHostFree(PVOID context, PVOID memory, DWORD pages)
 {
     (VOID)context; (VOID)pages;
     if (memory) VirtualFree(memory, 0, MEM_RELEASE);
@@ -1720,7 +1732,7 @@ static VOID ExecMachineSave(INT depth)
 
 /* Put back what the ended child may have left broken. Called with the child still at
    depth d+1, before DosTerminate frees its memory. */
-static VOID ExecMachineRestore(INT depth, PSTR *logCursor)
+VOID ExecMachineRestore(INT depth, PSTR *logCursor)
 {
     UINT index;
     INT needsModeSet;
@@ -1761,7 +1773,7 @@ static VOID ExecMachineRestore(INT depth, PSTR *logCursor)
 
 /* V86 loop: 1 = a child was ended and its parent resumed, 0 = the program we were
    started with was ended, so the run is over. */
-static INT CloseProgramNow(DOS_MACHINE *machine, PVOID tib, PSTR *logCursor, PSTR base)
+INT CloseProgramNow(DOS_MACHINE *machine, PVOID tib, PSTR *logCursor, PSTR base)
 {
     if (g_ExecDepth > 0) {
         *logCursor = LogPut(*logCursor, "CLOSEPROG: ending the program at depth ");
@@ -1796,7 +1808,7 @@ static INT CloseProgramNow(DOS_MACHINE *machine, PVOID tib, PSTR *logCursor, PST
      known to be read and written by krnl386 itself. Scratch keeps it
      self-consistent; when one of them turns out to matter, it gets pointed at
      the real variable and this comment shrinks by a line. */
-static VOID DosWowPublish(volatile BYTE *handlerArea, volatile BYTE *controlTable,
+VOID DosWowPublish(volatile BYTE *handlerArea, volatile BYTE *controlTable,
                             UINT currentDrive)
 {
     /* Offsets of the two blocks as seen from the SysVars SEGMENT, which is the one

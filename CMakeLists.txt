@@ -99,6 +99,7 @@ add_executable(ntvdmhost
     src/host/log.c
     src/host/host_state.c
     src/host/host_core.c
+    src/host/host_dos.c
     src/host/host_bios.c
     src/host/host_mouse.c
     src/host/host_timing.c
