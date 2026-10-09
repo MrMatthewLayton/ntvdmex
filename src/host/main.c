@@ -47,7 +47,6 @@
      the time USER's dispatcher is compiled. It used to be last only because it
      borrowed USER's note helpers, and those now live in wow32.h. */
 #include "../wow/wowgdi.h" /* GH #128: GDI.EXE's id space -- where MS Paint begins */
-#include "../wow/wowgdi.c"
 #include "../wow/wowuser.h" /* GH #128: USER.EXE's id space -- a DIFFERENT one; see the file */
 /* ⚠ AFTER wowuser.h, and that order is load-bearing too: the modal loop reads
      the window table and the procedure rule that file owns. USER's DialogBox and

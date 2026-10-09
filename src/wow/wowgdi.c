@@ -1,7 +1,22 @@
 /* wowgdi.c -- ★★ GDI.EXE's OWN ID SPACE.  GH #128, session 44.
  *
- * The code of wowgdi.h (#335): its functions and state, in their original order. Part of
- * the host's single translation unit: #included by main.c straight after wowgdi.h. */
+ * The code of wowgdi.h (#335): its functions and state, in their original order;
+ * its own translation unit, declared in wowgdi.h. */
+#include "host_state.h"
+#include "log.h"
+#include "ne.h"
+#include "wow32.h"
+#include "wowanchors.h"
+#include "wowsched.h"
+#include "wowcall.h"
+#include "wowmsg.h"
+#include "wowres.h"
+#include "wowwin.h"
+#include "wowgdi.h"
+#include "wowuser.h"
+#include "wowdlg.h"
+#include "wowenum.h"
+
 
 /* A little-endian WORD out of guest memory. wowuser.h has the same helper for
    the USER side; this file is included independently, so it has its own. */
@@ -255,7 +270,7 @@ INT WowGdiMetafileNext(INT room, PINT blobLength, PINT tableOffset, UINT *functi
     return 1;
 }
 
-static INT WowGdiCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
+INT WowGdiCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
 {
     if (noteCapacity) note[0] = 0;
     switch (frame->Id) {

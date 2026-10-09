@@ -1021,4 +1021,5 @@ extern WOWGDI_OBJECT g_WowGdiObjects[WOWGDI_MAX];
 extern INT g_WowGdiObjectCount;
 HGDIOBJ WowGdiH32(WORD handle16, PINT kind);
 VOID WowGdiForget(WORD handle16);
+INT WowGdiCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity);
 #endif /* NTVDMEX_WOWGDI_H */
