@@ -44,7 +44,8 @@ Use the Windows types. Never `uint8_t`/`int32_t`, never bare `int`/`unsigned`/`v
 ### Structures and enums
 
 ```c
-typedef struct _DOS_DISK_GEOMETRY {
+typedef struct _DOS_DISK_GEOMETRY
+{
     WORD  BytesPerSector;
     WORD  SectorsPerTrack;
     WORD  Heads;
@@ -197,16 +198,73 @@ static BOOL DosDiskGeometryFromBpb(
 ## 5. Layout
 
 - 4 spaces, no tabs, lines up to 100 columns.
-- **Braces, the NT layout:** a function's opening brace on its own line; `if`/`else`/`for`/
-  `while`/`switch` braces on the same line as the statement.
+- **Braces, Allman:** every block brace on its own line, at the indentation of the statement
+  that owns it -- functions, `if`/`else`/`for`/`while`/`do`/`switch`, structures and enums.
+  `else` starts its own line too. Initialiser braces (`= { ... }`) are not blocks and stay
+  where they are.
+
+  ```c
+  if (!frequency.QuadPart)
+  {
+      QueryPerformanceFrequency(&frequency);
+  }
+  else
+  {
+      ...
+  }
+  ```
 - **A one-line body may stay unbraced** (`if (!bootSector) return FALSE;`).
+- **Blank lines:** one after every function; one after the file header; never two in a row.
+- **`#define` values line up** within a block of definitions, on a 4-column stop, and so do
+  their trailing comments; a definition whose comment would pass 120 columns keeps one space.
+  A comment that opens a new group of definitions has a blank line above it. The trailing
+  comments of a run of `#include` lines line up the same way.
 - Include guards are `NTVDMEX_<PATH>_H`, e.g. `NTVDMEX_DOS_DISK_H`.
 
 ## 6. Comments
 
-Unchanged: say *why*, cite the specification or the measurement, keep the ⚠ warnings. Comments
-refer to identifiers by their current names. Under `CLEAN-ROOM.md`, comments never quote
-third-party code.
+Say *why*, cite the specification or the measurement. Comments refer to identifiers by their
+current names. Under `CLEAN-ROOM.md`, comments never quote third-party code.
+
+- **ASCII only** in comments (string literals are program output and are a separate matter):
+  `--` not an em dash, `->` not an arrow, `x` not a times sign, `section 2` not `§2`.
+- **A multi-line comment has the ` * ` gutter**, with its text starting on the opening line
+  and `*/` on a line of its own:
+
+  ```c
+  /* WATCH DMX'S TASK TABLE FROM OUTSIDE:
+   * The SB interrupt only ARMS the mixer (sets next_due = now, DOOM.EXE 0x571b4);
+   * the TIMER services it, ...
+   */
+  ```
+- **Markers** start a paragraph, with a blank comment line above it:
+  `[INFO]:` (worth knowing), `[CAUTION]:` (a trap), `[WARNING]:` (has cost real damage or a
+  session; do not do this).
+- **A section title** is a line ending in a colon. Its importance, where it has one, is written
+  out: `TWO DOORS ONTO ONE VALUE, AGAIN (Importance = 3):`, 1 to 5. A title can carry a marker:
+  `[CAUTION]: SAY IT BEFORE IT BLOCKS, NOT AFTER (Importance = 1):`.
+- **No decoration:** no rule lines, no boxes.
+
+## 6a. The file header
+
+Every source file opens with the same header, then one blank line:
+
+```c
+/* NTVDMEX -- An NTVDM replacement for Microsoft Windows
+ *
+ * What this file is, in one line.
+ *
+ * Anything else a reader needs first: what it is for, the decisions that shaped it.
+ *
+ *
+ *
+ * SPDX-License-Identifier: MIT
+ * Copyright (c) 2026 Matthew Layton
+ */
+```
+
+The file's name is not repeated in it (it would drift when a file is renamed). The licence's
+full text is in `LICENSE`.
 
 ---
 
