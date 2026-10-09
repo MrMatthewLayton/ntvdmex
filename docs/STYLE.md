@@ -259,6 +259,37 @@ static BOOL DosDiskGeometryFromBpb(
   comments of a run of `#include` lines line up the same way.
 - Include guards are `NTVDMEX_<PATH>_H`, e.g. `NTVDMEX_DOS_DISK_H`.
 
+## 5a. The order of a file
+
+**A header (`.h`):**
+
+1. the file header (section 6a);
+2. the include guard, `#ifndef` / `#define NTVDMEX_<PATH>_H`;
+3. `#include`s -- system (`<windows.h>`) first, then the project's (`"dos_mcb.h"`);
+4. `#define`s: constants, then macros;
+5. types -- `enum`s, `struct`s, `typedef`s -- each after the types it uses; a compile-time check
+   on a type (`C_ASSERT`) right after it;
+6. `extern` variables;
+7. function prototypes;
+8. `static inline` functions;
+9. `#endif /* NTVDMEX_<PATH>_H */`.
+
+**A source file (`.c`):**
+
+1. the file header;
+2. `#include`s -- **its own header first** (which proves the header compiles on its own), then
+   system headers, then the project's;
+3. private `#define`s;
+4. private types;
+5. file-scope variables -- exported first, then `static`;
+6. functions, **each `static` helper above its first caller**, so no forward declaration is
+   needed (one stays only where two functions call each other).
+
+A comment travels with the item it describes; an `#if` block moves as one unit. A header that
+grows too big to read in this order is split by what it holds: the Win16 call tables (thunk ids
+and argument offsets, with their notes) live in `wowuser_calls.h` and `wowgdi_calls.h`, and
+`wowuser.h` / `wowgdi.h` hold the host's own constants, types and prototypes.
+
 ## 6. Comments
 
 Say *why*, cite the specification or the measurement. Comments refer to identifiers by their
