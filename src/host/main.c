@@ -110,7 +110,6 @@ CHAR             g_TextFontLive[NTVDMEX_PATH_MAX];
 #include "host_dpmi.c"
 #include "host_dpmi_int.c"
 #include "host_wow.c"
-#include "host_window.c"
 
 
 /* LOG_PATH now lives in log.h -- see the note there. */

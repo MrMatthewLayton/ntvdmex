@@ -1,7 +1,31 @@
 /* host_window.c -- the window: menus, the tray, the status strip, the clipboard, mouse capture,
  *   fullscreen, scaling and the window procedure.
  *
- * Part of the host's single translation unit: #included by main.c after host_internal.h. */
+ * Its own translation unit (#335): declared in host_window.h. */
+#include "host_state.h"
+#include "log.h"
+#include <commctrl.h>
+#include "ne.h"
+#include "wow32.h"
+#include "wowanchors.h"
+#include "wowsched.h"
+#include "wowcall.h"
+#include "wowmsg.h"
+#include "wowres.h"
+#include "wowwin.h"
+#include "wowgdi.h"
+#include "wowuser.h"
+#include "host_window.h"
+#include "host_bios.h"
+#include "host_dos.h"
+#include "host_input.h"
+#include "host_install.h"
+#include "host_irq.h"
+#include "host_mouse.h"
+#include "host_settings.h"
+#include "host_timing.h"
+#include "host_video.h"
+
 
 /* dwExtraInfo tag on keystrokes WE synthesise with SendInput (the Start-menu
    suppression Ctrl tap), so our own WM_KEYDOWN/UP handlers recognise and drop them
@@ -13,27 +37,27 @@
 #define DLGCHECK_FLAG CFG_("dlgcheck.flag")
 static DWORD  g_SpeakerRealHz;   /* sampled under the lock, applied outside it */
 DWORD    g_PitDeliverSkipped;  /* attempts foregone: g_Lock busy when the crystal knocked */
-static DWORD    g_UiTickSkips;
-static DWORD    g_UiHookPresents, g_UiTimerPresents;  /* who raised each present   */
+DWORD    g_UiTickSkips;
+DWORD    g_UiHookPresents, g_UiTimerPresents;  /* who raised each present   */
 static volatile LONG g_UiPresentPending;                /* one WM_APP_PRESENT in flight */
 static int      g_UiForced;                              /* this body run was raised by the hook; stays int: INT here moves the compiled code */
 static DWORD    g_UiInputFirst;                         /* input served ahead of a queued present */
 /* Which of the three exits from the cooperative IRQ1 gate fires. See its call site. */
-static DWORD    g_Irq1Checks, g_Irq1NoIf, g_Irq1In08, g_Irq1In09;
+DWORD    g_Irq1Checks, g_Irq1NoIf, g_Irq1In08, g_Irq1In09;
 DWORD    g_Irq1AsyncRetry;
-static INT            g_Headless      = 0;  /* AUTOEXIT marker present: SMB test harness -> bound infinite runs */
-static DWORD          g_Irq1Injected      = 0;  /* INT 09h injections (should track scancodes) */
-static UINT       g_CaptureMs    = CAPTURE_MS_DEFAULT; /* CAPTURE_FLAG contents: ms between shots */
+INT            g_Headless      = 0;  /* AUTOEXIT marker present: SMB test harness -> bound infinite runs */
+DWORD          g_Irq1Injected      = 0;  /* INT 09h injections (should track scancodes) */
+UINT       g_CaptureMs    = CAPTURE_MS_DEFAULT; /* CAPTURE_FLAG contents: ms between shots */
 /* #58: an optional SECOND number in capture.flag -- ms to wait before the first shot --
    so the 40-shot budget can be spent on one moment (Doom's melt) instead of the start. */
-static DWORD          g_CaptureDelayMs, g_CaptureStart;
-static INT            g_Capture       = 0;  /* CAPTURE_FLAG present: opt-in self-screenshot for graphical tests */
+DWORD          g_CaptureDelayMs, g_CaptureStart;
+INT            g_Capture       = 0;  /* CAPTURE_FLAG present: opt-in self-screenshot for graphical tests */
 /* The UI tick must be well ABOVE the guest refresh (60/70 Hz) or the phase window
    is unreachable and every present falls back to the staleness path. */
 #define VID_PRESENT_TICK_MS   5
 #define VID_PRESENT_STALE_MS 25    /* never let the screen go quiet longer than this */
-static volatile LONG g_CloseRequest;     /* UI -> exec thread: end the innermost program */
-static INT  g_TopIsShell;           /* depth 0 is a shell: nothing to close there */
+volatile LONG g_CloseRequest;     /* UI -> exec thread: end the innermost program */
+INT  g_TopIsShell;           /* depth 0 is a shell: nothing to close there */
 /* The menu bar while FULLSCREEN has it detached. There used to be a second
    detacher -- a "Show Menu Bar" toggle -- and it was a ONE-WAY DOOR: unticking it
    removed the only control that could put it back. Removed (user report, s79);
@@ -43,7 +67,7 @@ static INT  g_TopIsShell;           /* depth 0 is a shell: nothing to close ther
 static HMENU        g_FsMenu;
 
 static INT            g_PauseSuspended    = 0;   /* the CPU thread is suspended BY THE PAUSE */
-static DWORD          g_PauseCount, g_PauseCooperative, g_PauseMs;
+DWORD          g_PauseCount, g_PauseCooperative, g_PauseMs;
 enum { INSTALL_UNFORCED = 0, INSTALL_FORCED = 1 };   /* InstallPerform: /force replaces another program's Debugger value */
 enum { SCREENSHOT_NAME_ROOM = 24, SCREENSHOT_NAME_DIGITS = 12 };   /* "shot_manual_NN.bmp": path room kept for it, and where NN starts */
 /* Async-preemption probe driver (session 11, QIMODE_PATH bit 2). Raises IRQ 5 from a
@@ -197,7 +221,7 @@ VOID HostRecordFinish(VOID)
 
 INT           g_MouseRawOk;           /* raw mouse registered with the window */
 #define DDFLIP_DRIVER_FLAG  CFG_("ddflip_driver.flag")   /* s86: DirectDraw flip timed by the driver (old path) */
-static INT g_TextDump = 0;              /* textdump.flag: dump the text screen too    */
+INT g_TextDump = 0;              /* textdump.flag: dump the text screen too    */
 /* g_SimIntBusy (declared above AsyncInjectIrq) is set across 0300h. */
 static LONG  g_MouseRawTotalX, g_MouseRawTotalY;
 /* THE HOST ARROW over the video area, which is a SEPARATE thing from the INT 33h
@@ -535,7 +559,7 @@ static HMENU BuildMenu(VOID)
 #define WM_APP_PRESENT (WM_APP + 2)   /* the guest finished a frame: present now (Auto) */
 /* Runs on the GUEST thread inside status_in, under the device lock: post and leave.
    One in flight at a time so a fast poller cannot flood the queue. */
-static VOID HostPresentHook(PVOID context)
+VOID HostPresentHook(PVOID context)
 {
     (VOID)context;
     if (g_UiTickMinimumMs != UITICK_AUTO || !g_Window) return;
@@ -564,7 +588,7 @@ static VOID TrayAdd(HINSTANCE instance, HWND window)
     g_TrayOn = Shell_NotifyIconA(NIM_ADD, &notifyIconData) ? 1 : 0;
 }
 
-static VOID TrayRemove(HWND window)
+VOID TrayRemove(HWND window)
 {
     NOTIFYICONDATAA notifyIconData;
     if (!g_TrayOn) return;
@@ -1117,7 +1141,7 @@ static VOID MenuSyncModal(HWND window, HMENU popup)
    ⚠ Capture is dropped on WM_KILLFOCUS -- otherwise a clipped cursor and a swallowed
      Alt+Tab would strand the user in a window they cannot leave. */
 HHOOK         g_LowLevelKeyboard;
-static INT           g_LowLevelKeyboardOn = 0;     /* OFF by default; llkbd.txt = 1. See InputCaptureSet. */
+INT           g_LowLevelKeyboardOn = 0;     /* OFF by default; llkbd.txt = 1. See InputCaptureSet. */
 static volatile LONG g_UiBeat;          /* ++ per WM_TIMER: the UI thread is pumping   */
 static DWORD         g_CaptureWatchdogReleased;   /* times the watchdog had to hand the box back */
 /* ⚠ host_key_held() WAS HERE AND IS GONE (s64). It answered "is a Windows key held",
@@ -1460,7 +1484,7 @@ enum { HOST_PANIC_RESUME_MAX = 64 };   /* HostPanicRelease: undo at most this ma
    ⚠ ORDER: release the SYSTEM-WIDE things first, because they are what strands a
      human. The thread resume is a loop -- suspend counts NEST, and the throttle and
      the injector can each hold one. */
-static VOID HostPanicRelease(VOID)
+VOID HostPanicRelease(VOID)
 {
     ClipCursor(NULL);
     if (g_LowLevelKeyboard) { UnhookWindowsHookEx(g_LowLevelKeyboard); g_LowLevelKeyboard = NULL; }
@@ -1490,7 +1514,7 @@ enum { CAPTURE_WATCH_MS = 250 };   /* CaptureWatchdogThread */
      has ever taken (worst measured UI gap: 35 ms) and far shorter than a human's
      patience with a dead keyboard. */
 #define CAPWD_STALL_MS 3000u
-static DWORD WINAPI CaptureWatchdogThread(LPVOID parameter)
+DWORD WINAPI CaptureWatchdogThread(LPVOID parameter)
 {
     LONG  last = -1;
     DWORD lastMs = GetTickCount();
@@ -3061,7 +3085,7 @@ static LRESULT CALLBACK HostWindowProcedure(HWND window, UINT message, WPARAM wP
     return DefWindowProcA(window, message, wParam, lParam);
 }
 enum { HID_USAGE_PAGE_GENERIC_DESKTOP = 0x01, HID_USAGE_GENERIC_MOUSE = 0x02 };   /* hidusage.h: raw input's mouse */
-static DWORD WINAPI UiThread(LPVOID argument)
+DWORD WINAPI UiThread(LPVOID argument)
 {
     WNDCLASSA windowClass; MSG message; RECT rect;
     HINSTANCE instance = GetModuleHandleA(NULL);
