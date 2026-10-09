@@ -135,7 +135,6 @@ CHAR             g_TextFontLive[NTVDMEX_PATH_MAX];
 #define SBDUMP_FLAG  CFG_("sbdump.flag")
 /* North star 2: present = no Gravis UltraSound (no device, no ULTRASND= in the env). */
 #define NOGUS_FLAG   CFG_(KNOB_FILE_NOGUS)
-#define SBDUMP_PATH  OUT_("sb.raw")
 /* s81: record the audio output (audio_rec.h via AudioWaveRecord*). The flag is the harness's
    switch; Tools > Capture > Record Audio will drive the same recorder. */
 #define WAVREC_FLAG  CFG_("wavrec.flag")
@@ -509,8 +508,7 @@ static DWORD          g_P12Bails     = 0;
      12-line budget spent on one site hid the `repne scasb` that cost Lemmings its
      sprite erase for four sessions. Linear table, BOP stubs excluded, printed at
      exit with the bytes so each entry can be decoded without a dump. */
-#define P12_SITE_MAX 24
-static struct { DWORD Cs, Ip, Count; BYTE Bytes[8]; } g_P12Site[P12_SITE_MAX];
+static P12_SITE g_P12Site[P12_SITE_MAX];
 static UINT g_P12SiteCount = 0, g_P12SiteLost = 0;
 DWORD g_HeadlessMs = PM_HEADLESS_MS_DEFAULT;   /* overridable via HEADLESS_MS_PATH */
 INT   g_LdtClientMark = 0;          /* g_LdtNext when the client switched in */
@@ -564,7 +562,6 @@ static DWORD          g_InterpRefused = 0;  /* interpreter declined the faulting
      The deviation from the hardware is exactly one tick, at exactly the moment the
      guest asked for a new period. Counted: STAGE2 irq0_isr[...,resync_drop]. */
 DWORD    g_Irq0ResyncDrop = 0;
-enum { PM_GATE_NO_LATCH = 0, PM_GATE_VIF_OFF = 1, PM_GATE_NO_HOOK = 2, PM_GATE_IN_PM_IRQ = 3, PM_GATE_NO_IRQ = 4, PM_GATE_ASYNC_IN_FLIGHT = 5, PM_GATE_ARMED = 6, PM_GATE_TRIED = 7, PM_GATE_CLAIM_REFUSED = 8, PM_GATE_DECLINED = 9, PM_GATES = 10 };   /* g_PmCooperativeGate's columns */
 /* ── #172: WHY THE PER-PASS TIMER LATCH LEFT A BACKLOG STANDING. ─────────────────
      Doom's quit wait (I_WaitVBL, a PM 3DAh poll) drops IRQ0 to ~25/s, and s81 filed it
      as ticks never RAISED. The same run's IRQ0WHY says otherwise -- gen=0 del=0x9e: every

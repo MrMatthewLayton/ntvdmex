@@ -89,6 +89,7 @@ extern INT  g_Instance, g_InstanceAbandoned;
 /* The log is the one path log.h owns; define it before including so its #ifndef
    defers to us rather than putting the log back on C:. */
 #define LOG_PATH    OUT_("ntvdmhost.log")
+#define SBDUMP_PATH OUT_("sb.raw")    /* the Sound Blaster output dump (main.c records, the report writes) */
 
 /* GetVersion() at start-up: 0x0500 = 2000, 0x0501 = XP. */
 extern DWORD g_OsVersion;

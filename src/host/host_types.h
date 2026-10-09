@@ -765,4 +765,9 @@ typedef struct _ISV_IO_HOOK { HANDLE VddHandle; WORD FirstPort, LastPort; ISV_IO
 typedef const ISV_IO_HOOK *PCISV_IO_HOOK;
 /* A descriptor in the DPMI host's LDT shadow (g_Ldt). */
 typedef struct _DPMI_DESCRIPTOR { DWORD Base, Limit; BYTE Access, Flags; } DPMI_DESCRIPTOR, *PDPMI_DESCRIPTOR;
+/* PM IRQ injection: why the cooperative path did or did not deliver (g_PmCooperativeGate's columns). */
+enum { PM_GATE_NO_LATCH = 0, PM_GATE_VIF_OFF = 1, PM_GATE_NO_HOOK = 2, PM_GATE_IN_PM_IRQ = 3, PM_GATE_NO_IRQ = 4, PM_GATE_ASYNC_IN_FLIGHT = 5, PM_GATE_ARMED = 6, PM_GATE_TRIED = 7, PM_GATE_CLAIM_REFUSED = 8, PM_GATE_DECLINED = 9, PM_GATES = 10 };
+/* A non-BOP planar-bail site (g_P12Site): where, how often, and the bytes there. */
+#define P12_SITE_MAX 24
+typedef struct _P12_SITE { DWORD Cs, Ip, Count; BYTE Bytes[8]; } P12_SITE, *PP12_SITE;
 #endif
