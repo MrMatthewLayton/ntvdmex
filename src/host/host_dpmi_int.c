@@ -268,7 +268,6 @@ enum { WOW_SEGMENT_LIMIT_SLACK = 0x100 };   /* DpmiServicePmIntBody */
 static INT DpmiServicePmIntBody(DOS_MACHINE *machine, volatile BYTE *tib, DWORD vector,
                                     UINT steps)
 {
-#define m (*machine)
     CHAR report[2048]; PSTR base = report; PSTR cursor = report;
     DWORD ax = VDM_REG16(tib, VTIB_EAX);
     DWORD event = VDM_REG(tib, VTIB_EVENT), eip = DpmiPmEip(tib);
@@ -1446,9 +1445,9 @@ static INT DpmiServicePmIntBody(DOS_MACHINE *machine, volatile BYTE *tib, DWORD 
                     cursor = LogPut(cursor, " -> 0x"); cursor = LogHex(cursor, bufferSelector);
                     cursor = LogPut(cursor, ":0x"); cursor = LogHex(cursor, bufferOffset);
                     cursor = LogPut(cursor, " lin=0x"); cursor = LogHex(cursor, bufferBase + bufferOffset);
-                    if (argumentHandle < DOS_MAX_FILES && m.FileHandles[argumentHandle] && bufferBase
+                    if (argumentHandle < DOS_MAX_FILES && machine->FileHandles[argumentHandle] && bufferBase
                         && HostWritable((VOID *)(ULONG_PTR)(bufferBase + bufferOffset), count)) {
-                        isOk = ReadFile(m.FileHandles[argumentHandle], (VOID *)(ULONG_PTR)(bufferBase + bufferOffset),
+                        isOk = ReadFile(machine->FileHandles[argumentHandle], (VOID *)(ULONG_PTR)(bufferBase + bufferOffset),
                                       count, &bytesRead, NULL) ? 1 : 0;
                     }
                     if (isOk) { Wow32SetReturn(&frame, bytesRead); ++g_Wow32Serviced;
@@ -1475,7 +1474,7 @@ static INT DpmiServicePmIntBody(DOS_MACHINE *machine, volatile BYTE *tib, DWORD 
                     VDM_SET16(tib, VTIB_EDX, (WORD)drive);
                     VDM_SET16(tib, VTIB_DS,  g_PmTransferSegment);
                     VDM_SET16(tib, VTIB_ESI, 0);
-                    m.TraceCursor = cursor; DosInt21SetProtectedMode(TRUE); DosInt21(&m); DosInt21SetProtectedMode(FALSE); cursor = m.TraceCursor;
+                    machine->TraceCursor = cursor; DosInt21SetProtectedMode(TRUE); DosInt21(machine); DosInt21SetProtectedMode(FALSE); cursor = machine->TraceCursor;
                     {   DWORD carryFlag = VDM_REG(tib, VTIB_EFLAGS) & EFLAGS_CF_U;
                         VDM_REG(tib, VTIB_EAX) = savedAx; VDM_REG(tib, VTIB_EDX) = savedDx;
                         VDM_REG(tib, VTIB_DS)  = savedDs; VDM_REG(tib, VTIB_ESI) = savedSi;
@@ -3444,7 +3443,7 @@ static INT DpmiServicePmIntBody(DOS_MACHINE *machine, volatile BYTE *tib, DWORD 
                             break; }
                         case DPMI_FN_ALLOCATE_DOS_MEMORY: {                             /* allocate DOS memory: BX paras -> AX=seg, DX=sel */
                             WORD want = (WORD)VDM_REG16(tib, VTIB_EBX), segment = 0, maximum = 0;
-                            INT error = DosMcbAllocate(NULL, m.FirstMcb, want, &segment, &maximum);
+                            INT error = DosMcbAllocate(NULL, machine->FirstMcb, want, &segment, &maximum);
                             INT ldtIndex = error ? -1 : DpmiLdtTake();   /* #248: free list first */
                             if (!error && ldtIndex < 0) {                 /* no descriptor: give the block back */
                                 DosMcbFree(NULL, segment);
@@ -3465,7 +3464,7 @@ static INT DpmiServicePmIntBody(DOS_MACHINE *machine, volatile BYTE *tib, DWORD 
                                      block's owner and size; a free tail that is not being
                                      coalesced looks completely different from a guest
                                      that really did take everything. */
-                                {   WORD mcbSegment = m.FirstMcb; INT chainGuard = 0;
+                                {   WORD mcbSegment = machine->FirstMcb; INT chainGuard = 0;
                                     cursor = LogPut(cursor, " chain:");
                                     for (;;) {
                                         volatile BYTE *mcb = (volatile BYTE *)((DWORD)mcbSegment << PARAGRAPH_SHIFT);
@@ -4313,7 +4312,7 @@ static INT DpmiServicePmIntBody(DOS_MACHINE *machine, volatile BYTE *tib, DWORD 
                             if (interruptNumber == VECTOR_DOS) {
                                 /* CF/ZF into VTIB_EFLAGS, not into an IRET frame there is none of --
                                    see the #247 note above. */
-                                m.TraceCursor = cursor; DosInt21SetProtectedMode(TRUE); DosInt21(&m); DosInt21SetProtectedMode(FALSE); cursor = m.TraceCursor;
+                                machine->TraceCursor = cursor; DosInt21SetProtectedMode(TRUE); DosInt21(machine); DosInt21SetProtectedMode(FALSE); cursor = machine->TraceCursor;
                             }
                             else if (interruptNumber == VECTOR_MOUSE) MouseInt33(tib, I33_SRC_SIM);
                             else if (interruptNumber == VECTOR_VIDEO) {
@@ -4532,11 +4531,11 @@ static INT DpmiServicePmIntBody(DOS_MACHINE *machine, volatile BYTE *tib, DWORD 
                                     done = 1; break;                /* proc RETF'd -> finished */
                                 }
                                 if (rev == VDM_EVENT_BOP && info == DOS_BOP_INT21) {   /* INT 21h from the proc */
-                                    m.TraceCursor = cursor; m.CanTrampoline = 1; DosInt21(&m); m.CanTrampoline = 0; cursor = m.TraceCursor;
-                                    if (m.Trampoline) {               /* #251: AUX/PRN driver code; its */
+                                    machine->TraceCursor = cursor; machine->CanTrampoline = 1; DosInt21(machine); machine->CanTrampoline = 0; cursor = machine->TraceCursor;
+                                    if (machine->Trampoline) {               /* #251: AUX/PRN driver code; its */
                                         VDM_SET16(tib, VTIB_CS, DOS_CTAB_SEG);   /* INT 14h/17h are */
-                                        VDM_REG(tib, VTIB_EIP) = m.Trampoline;    /* served below    */
-                                        m.Trampoline = 0;
+                                        VDM_REG(tib, VTIB_EIP) = machine->Trampoline;    /* served below    */
+                                        machine->Trampoline = 0;
                                     } else
                                     VDM_REG(tib, VTIB_EIP) += VDM_BOP_LENGTH;    /* past the BOP -> the stub IRET */
                                     LogAppend(LOG_PATH, base, cursor); SerialOut(base, cursor); cursor = base;
@@ -4702,13 +4701,13 @@ static INT DpmiServicePmIntBody(DOS_MACHINE *machine, volatile BYTE *tib, DWORD 
                             for (item = 0; item < 200 && *sourceBytes != '$'; ++item, ++sourceBytes) {
                                 BYTE printCharacter = *sourceBytes;
                                 if (printCharacter >= ASCII_SPACE) *outputCursor++ = (CHAR)printCharacter;   /* printable -> serial echo */
-                                if (m.FileHandles[1]) {                      /* #256: redirected stdout */
-                                    DWORD bytesWritten9 = 0; WriteFile(m.FileHandles[1], &printCharacter, 1, &bytesWritten9, NULL);
+                                if (machine->FileHandles[1]) {                      /* #256: redirected stdout */
+                                    DWORD bytesWritten9 = 0; WriteFile(machine->FileHandles[1], &printCharacter, 1, &bytesWritten9, NULL);
                                     continue;
                                 }
-                                if (m.ConsoleOut) m.ConsoleOut(m.ConsoleOutContext, printCharacter);  /* -> the Luna console */
-                                if (m.OutputLength < m.OutputCapacity - 1) m.Output[m.OutputLength++] = (CHAR)printCharacter;
-                                else m.IsOutputTruncated = 1;
+                                if (machine->ConsoleOut) machine->ConsoleOut(machine->ConsoleOutContext, printCharacter);  /* -> the Luna console */
+                                if (machine->OutputLength < machine->OutputCapacity - 1) machine->Output[machine->OutputLength++] = (CHAR)printCharacter;
+                                else machine->IsOutputTruncated = 1;
                             }
                             outputCursor = LogPut(outputCursor, "\"\r\n");
                             LogAppend(LOG_PATH, outputLine, outputCursor); SerialOut(outputLine, outputCursor);
@@ -4720,11 +4719,11 @@ static INT DpmiServicePmIntBody(DOS_MACHINE *machine, volatile BYTE *tib, DWORD 
                             BYTE ch = VDM_REG(tib, VTIB_EDX) & BYTE_MASK;
                             /* #256: standard output, so a redirected handle 1 gets it --
                                as the V86 OUTC does. */
-                            if (m.FileHandles[1]) { DWORD bytesWritten1 = 0; WriteFile(m.FileHandles[1], &ch, 1, &bytesWritten1, NULL); }
+                            if (machine->FileHandles[1]) { DWORD bytesWritten1 = 0; WriteFile(machine->FileHandles[1], &ch, 1, &bytesWritten1, NULL); }
                             else {
-                                if (m.ConsoleOut) m.ConsoleOut(m.ConsoleOutContext, ch);
-                                if (m.OutputLength < m.OutputCapacity - 1) m.Output[m.OutputLength++] = (CHAR)ch;
-                                else m.IsOutputTruncated = 1;
+                                if (machine->ConsoleOut) machine->ConsoleOut(machine->ConsoleOutContext, ch);
+                                if (machine->OutputLength < machine->OutputCapacity - 1) machine->Output[machine->OutputLength++] = (CHAR)ch;
+                                else machine->IsOutputTruncated = 1;
                             }
                             VDM_REG(tib, VTIB_EFLAGS) &= ~EFLAGS_CF_U;
                             VDM_REG(tib, VTIB_EIP) += DPMI_PM_BOP_LENGTH;
@@ -4742,8 +4741,8 @@ static INT DpmiServicePmIntBody(DOS_MACHINE *machine, volatile BYTE *tib, DWORD 
                                  AH=40h). The same two rules as there: a bound slot is a file;
                                  an unbound open device slot is the console, except 3/4,
                                  which are AUX and PRN (#251). */
-                            INT bound = (bh < DOS_MAX_FILES && m.FileHandles[bh] != 0);
-                            INT device   = (!bound && bh < BITS_PER_DWORD && ((m.StdOpen >> bh) & 1u));
+                            INT bound = (bh < DOS_MAX_FILES && machine->FileHandles[bh] != 0);
+                            INT device   = (!bound && bh < BITS_PER_DWORD && ((machine->StdOpen >> bh) & 1u));
                             VDM_REG(tib, VTIB_EFLAGS) &= ~EFLAGS_CF_U;
                             if (device && (bh == DOS_HANDLE_AUX || bh == DOS_HANDLE_PRN)) {     /* AUX / PRN */
                                 DWORD item;
@@ -4757,19 +4756,19 @@ static INT DpmiServicePmIntBody(DOS_MACHINE *machine, volatile BYTE *tib, DWORD 
                                 outputCursor = LogPut(outputCursor, "INT21h AH=40 write: \"");
                                 for (item = 0; item < count && item < 250; ++item) {
                                     if (bytes[item] >= ASCII_SPACE && outputCursor < outputLine + 270) *outputCursor++ = (CHAR)bytes[item];
-                                    if (m.ConsoleOut) m.ConsoleOut(m.ConsoleOutContext, bytes[item]);
-                                    if (m.OutputLength < m.OutputCapacity - 1) m.Output[m.OutputLength++] = (CHAR)bytes[item];
-                                    else m.IsOutputTruncated = 1;
+                                    if (machine->ConsoleOut) machine->ConsoleOut(machine->ConsoleOutContext, bytes[item]);
+                                    if (machine->OutputLength < machine->OutputCapacity - 1) machine->Output[machine->OutputLength++] = (CHAR)bytes[item];
+                                    else machine->IsOutputTruncated = 1;
                                 }
                                 outputCursor = LogPut(outputCursor, "\"\r\n");
                                 LogAppend(LOG_PATH, outputLine, outputCursor); SerialOut(outputLine, outputCursor);
                                 VDM_SET16(tib, VTIB_EAX, count);     /* AX = bytes written */
                             } else if (bound) {                     /* file handle */
                                 DWORD bytesWritten = 0, writeError = 0;
-                                if (!WriteFile(m.FileHandles[bh], (const VOID *)bytes, count, &bytesWritten, NULL)) writeError = GetLastError();
-                                if (!PmRwHardwareFail(&m, tib, DOS_FN_WRITE, writeError, &cursor)) {   /* #275 */
+                                if (!WriteFile(machine->FileHandles[bh], (const VOID *)bytes, count, &bytesWritten, NULL)) writeError = GetLastError();
+                                if (!PmRwHardwareFail(machine, tib, DOS_FN_WRITE, writeError, &cursor)) {   /* #275 */
                                     VDM_SET16(tib, VTIB_EAX, bytesWritten);
-                                    DosStampVdmNow(m.FileHandles[bh]);   /* #263, as the V86 AH=40h */
+                                    DosStampVdmNow(machine->FileHandles[bh]);   /* #263, as the V86 AH=40h */
                                 }
                                 cursor = LogPut(cursor, "INT21h AH=40 file write "); cursor = LogHex(cursor, bytesWritten); cursor = LogPut(cursor, "b\r\n");
                                 LogAppend(LOG_PATH, base, cursor); SerialOut(base, cursor); cursor = base;
@@ -4841,8 +4840,8 @@ static INT DpmiServicePmIntBody(DOS_MACHINE *machine, volatile BYTE *tib, DWORD 
                                        (lastError == ERROR_FILE_EXISTS ||
                                         lastError == ERROR_ALREADY_EXISTS)     ? DOS_ERR_FILE_EXISTS :
                                        (lastError == ERROR_TOO_MANY_OPEN_FILES)? DOS_ERR_TOO_MANY_OPEN_FILES : DOS_ERR_FILE_NOT_FOUND); }
-                            else { INT slot; for (slot = DOS_STD_HANDLES; slot < DOS_MAX_FILES && m.FileHandles[slot]; ++slot) {}
-                                   if (slot < PM_INT21_HANDLE_LIMIT) { m.FileHandles[slot] = file; VDM_SET16(tib, VTIB_EAX, slot);
+                            else { INT slot; for (slot = DOS_STD_HANDLES; slot < DOS_MAX_FILES && machine->FileHandles[slot]; ++slot) {}
+                                   if (slot < PM_INT21_HANDLE_LIMIT) { machine->FileHandles[slot] = file; VDM_SET16(tib, VTIB_EAX, slot);
                                                     if (ah == DOS_FN_CREATE || ah == DOS_FN_CREATE_NEW) DosStampVdmNow(file); /* #263 */ }
                                    else { CloseHandle(file); VDM_REG(tib, VTIB_EFLAGS) |= EFLAGS_CF_U; VDM_SET16(tib, VTIB_EAX, DOS_ERR_TOO_MANY_OPEN_FILES); } }
                             /* ── ⚠ "-> AX=0x2" MEANT TWO OPPOSITE THINGS. (session 37) ──
@@ -4863,8 +4862,8 @@ static INT DpmiServicePmIntBody(DOS_MACHINE *machine, volatile BYTE *tib, DWORD 
                         }
                         if (ah == DOS_FN_CLOSE) {                          /* close: BX=handle */
                             DWORD handle = VDM_REG16(tib, VTIB_EBX);
-                            INT wasOpen = (handle < DOS_MAX_FILES && m.FileHandles[handle]) ? 1 : 0;
-                            if (handle >= DOS_STD_HANDLES && handle < DOS_MAX_FILES && m.FileHandles[handle]) DosHandleRelease(&m, handle);   /* s81: a parent may hold it */
+                            INT wasOpen = (handle < DOS_MAX_FILES && machine->FileHandles[handle]) ? 1 : 0;
+                            if (handle >= DOS_STD_HANDLES && handle < DOS_MAX_FILES && machine->FileHandles[handle]) DosHandleRelease(machine, handle);   /* s81: a parent may hold it */
                             VDM_REG(tib, VTIB_EFLAGS) &= ~EFLAGS_CF_U;
                             /* Silent until session 37, which needed to know whether a handle
                                was still open when the NEXT open of the same file failed --
@@ -4880,10 +4879,10 @@ static INT DpmiServicePmIntBody(DOS_MACHINE *machine, volatile BYTE *tib, DWORD 
                             DWORD dsBase = DpmiSelectorBase((WORD)VDM_REG(tib, VTIB_DS));
                             PVOID buffer = (VOID *)(ULONG_PTR)(dsBase + VDM_REG16(tib, VTIB_EDX));
                             VDM_REG(tib, VTIB_EFLAGS) &= ~EFLAGS_CF_U;
-                            if (handle < DOS_MAX_FILES && m.FileHandles[handle]) {
+                            if (handle < DOS_MAX_FILES && machine->FileHandles[handle]) {
                                 DWORD writeError = 0;
-                                if (!ReadFile(m.FileHandles[handle], buffer, count, &bytesRead, NULL)) writeError = GetLastError();
-                                if (!PmRwHardwareFail(&m, tib, DOS_FN_READ, writeError, &cursor))   /* #275 */
+                                if (!ReadFile(machine->FileHandles[handle], buffer, count, &bytesRead, NULL)) writeError = GetLastError();
+                                if (!PmRwHardwareFail(machine, tib, DOS_FN_READ, writeError, &cursor))   /* #275 */
                                     VDM_SET16(tib, VTIB_EAX, bytesRead);
                             }
                             else { VDM_REG(tib, VTIB_EFLAGS) |= EFLAGS_CF_U; VDM_SET16(tib, VTIB_EAX, DOS_ERR_INVALID_HANDLE); }
@@ -4914,8 +4913,8 @@ static INT DpmiServicePmIntBody(DOS_MACHINE *machine, volatile BYTE *tib, DWORD 
                             cursor = LogPut(cursor, ":0x"); cursor = LogHex(cursor, VDM_REG16(tib, VTIB_EDX));
                             cursor = LogPut(cursor, " lin=0x"); cursor = LogHex(cursor, (DWORD)(ULONG_PTR)buffer);
                             cursor = LogPut(cursor, " pos=0x");
-                            cursor = LogHex(cursor, (handle < DOS_MAX_FILES && m.FileHandles[handle])
-                                        ? SetFilePointer(m.FileHandles[handle], 0, NULL, FILE_CURRENT) : 0);
+                            cursor = LogHex(cursor, (handle < DOS_MAX_FILES && machine->FileHandles[handle])
+                                        ? SetFilePointer(machine->FileHandles[handle], 0, NULL, FILE_CURRENT) : 0);
                             cursor = LogPut(cursor, " first=");
                             if (bytesRead && HostReadable(buffer, 8)) cursor = LogDump(cursor, buffer, 8);
                             else                           cursor = LogPut(cursor, "-");
@@ -4927,8 +4926,8 @@ static INT DpmiServicePmIntBody(DOS_MACHINE *machine, volatile BYTE *tib, DWORD 
                             DWORD handle = VDM_REG16(tib, VTIB_EBX), seekMethod = ax & BYTE_MASK;
                             LONG seekDistance = (LONG)((VDM_REG16(tib, VTIB_ECX) << WORD_SHIFT) | VDM_REG16(tib, VTIB_EDX));
                             VDM_REG(tib, VTIB_EFLAGS) &= ~EFLAGS_CF_U;
-                            if (handle >= DOS_STD_HANDLES && handle < DOS_MAX_FILES && m.FileHandles[handle]) {
-                                DWORD newPosition = SetFilePointer(m.FileHandles[handle], seekDistance, NULL, seekMethod);
+                            if (handle >= DOS_STD_HANDLES && handle < DOS_MAX_FILES && machine->FileHandles[handle]) {
+                                DWORD newPosition = SetFilePointer(machine->FileHandles[handle], seekDistance, NULL, seekMethod);
                                 VDM_SET16(tib, VTIB_EDX, newPosition >> WORD_SHIFT); VDM_SET16(tib, VTIB_EAX, newPosition & WORD_MASK);
                                 cursor = LogPut(cursor, "INT21h AH=42 seek h="); cursor = LogHex(cursor, handle);
                                 cursor = LogPut(cursor, " org="); cursor = LogHex(cursor, seekMethod);
@@ -5007,7 +5006,7 @@ static INT DpmiServicePmIntBody(DOS_MACHINE *machine, volatile BYTE *tib, DWORD 
                                  leaves alone is not a harmless bonus, it is a silent
                                  corruption of the caller's state. Return what DOS returns. */
                             DWORD want = VDM_REG16(tib, VTIB_EBX);
-                            m.TraceCursor = cursor; DosInt21SetProtectedMode(TRUE); DosInt21(&m); DosInt21SetProtectedMode(FALSE); cursor = m.TraceCursor;
+                            machine->TraceCursor = cursor; DosInt21SetProtectedMode(TRUE); DosInt21(machine); DosInt21SetProtectedMode(FALSE); cursor = machine->TraceCursor;
                             cursor = LogPut(cursor, "INT21h AH=48 (PM) alloc 0x"); cursor = LogHex(cursor, want);
                             if (VDM_REG(tib, VTIB_EFLAGS) & EFLAGS_CF_U) {
                                 cursor = LogPut(cursor, " -> FAILED, largest 0x");
@@ -5215,7 +5214,7 @@ static INT DpmiServicePmIntBody(DOS_MACHINE *machine, volatile BYTE *tib, DWORD 
                         cursor = WowPspEnvironmentCheck(cursor, "a PM INT 21h");
                         /* #210: the long-filename API -- PmInt21Lfn says how and why. */
                         if (ah == DOS_FN_LFN) {
-                            if (g_PmTransferSegment) { m.TraceCursor = cursor; cursor = PmInt21Lfn(&m, tib, cursor); }
+                            if (g_PmTransferSegment) { machine->TraceCursor = cursor; cursor = PmInt21Lfn(machine, tib, cursor); }
                             else {
                                 VDM_SET16(tib, VTIB_EAX, DOS_FN_LFN << BYTE_SHIFT);
                                 VDM_REG(tib, VTIB_EFLAGS) |= EFLAGS_CF_U;
@@ -5229,7 +5228,7 @@ static INT DpmiServicePmIntBody(DOS_MACHINE *machine, volatile BYTE *tib, DWORD 
                         if (g_PmTransferSegment && (ah == DOS_FN_OPEN || ah == DOS_FN_READ || ah == DOS_FN_WRITE ||
                                               ah == DOS_FN_DELETE || ah == DOS_FN_FILE_ATTRIBUTES || ah == DOS_FN_FIND_FIRST ||
                                               ah == DOS_FN_MKDIR || ah == DOS_FN_RMDIR || ah == DOS_FN_CHDIR)) {
-                            m.TraceCursor = cursor; cursor = PmInt21Transfer(&m, tib, ah, cursor);
+                            machine->TraceCursor = cursor; cursor = PmInt21Transfer(machine, tib, ah, cursor);
                             LogAppend(LOG_PATH, base, cursor); SerialOut(base, cursor); cursor = base;
                             VDM_REG(tib, VTIB_EIP) += DPMI_PM_BOP_LENGTH;
                             return 1;
@@ -5251,7 +5250,7 @@ static INT DpmiServicePmIntBody(DOS_MACHINE *machine, volatile BYTE *tib, DWORD 
                              segment becomes a selector over the same linear address. */
                         if (ah == DOS_FN_GET_INDOS_FLAG || ah == DOS_FN_GET_LIST_OF_LISTS) {
                             WORD esSelector;
-                            m.TraceCursor = cursor; DosInt21SetProtectedMode(TRUE); DosInt21(&m); DosInt21SetProtectedMode(FALSE); cursor = m.TraceCursor;
+                            machine->TraceCursor = cursor; DosInt21SetProtectedMode(TRUE); DosInt21(machine); DosInt21SetProtectedMode(FALSE); cursor = machine->TraceCursor;
                             esSelector = DpmiSegmentToDescriptor((WORD)VDM_REG16(tib, VTIB_ES));
                             cursor = LogPut(cursor, "INT21h AH=0x"); cursor = LogHex(cursor, ah);
                             cursor = LogPut(cursor, " (PM) far pointer at V86 0x");
@@ -5292,7 +5291,7 @@ static INT DpmiServicePmIntBody(DOS_MACHINE *machine, volatile BYTE *tib, DWORD 
                             ah == DOS_FN_GET_FREE_SPACE || ah == DOS_FN_SWITCH_CHAR || ah == DOS_FN_GET_RETURN_CODE || ah == DOS_FN_GET_VERIFY ||
                             ah == DOS_FN_LOCK || ah == DOS_FN_CODE_PAGE || ah == DOS_FN_SET_HANDLE_COUNT || ah == DOS_FN_COMMIT ||
                             ah == DOS_FN_COMMIT_6A) {
-                            m.TraceCursor = cursor; DosInt21SetProtectedMode(TRUE); DosInt21(&m); DosInt21SetProtectedMode(FALSE); cursor = m.TraceCursor;
+                            machine->TraceCursor = cursor; DosInt21SetProtectedMode(TRUE); DosInt21(machine); DosInt21SetProtectedMode(FALSE); cursor = machine->TraceCursor;
                             cursor = LogPut(cursor, "INT21h AH=0x"); cursor = LogHex(cursor, ah);
                             cursor = LogPut(cursor, " (PM, register-only -> V86 DOS) -> AX=0x");
                             cursor = LogHex(cursor, VDM_REG16(tib, VTIB_EAX));
