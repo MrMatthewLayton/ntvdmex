@@ -252,6 +252,22 @@ static BOOL DosDiskGeometryFromBpb(
 - **Blank lines:** one after every function; one after the file header; one after a function's
   local declarations; one between the groups of a `switch`; one between the steps of a
   function where it reads as a sequence (by hand); never two in a row.
+- **A block stands apart:** an `if` / `for` / `while` / `do` / `switch` -- braced or not --
+  has a blank line after it, and one before it. Not where the blank would split what belongs
+  together: before a `}`, an `else` or a do-loop's `while`; after a `{`, a `case` label, or the
+  comment that introduces the block. As a general rule, space is better for readability.
+
+  ```c
+  header = NeRead32(image + NE_MZ_LFANEW);
+
+  if (!NeInBounds(module, header, NE_HEADER_SIZE))
+  {
+      module->Error = __LINE__;
+      return -1;
+  }
+
+  module->Header = header;
+  ```
 - **Constants before code** in a header: its `#define`s and types come before its functions.
 - **`#define` values line up** within a block of definitions, on a 4-column stop, and so do
   their trailing comments; a definition whose comment would pass 120 columns keeps one space.
