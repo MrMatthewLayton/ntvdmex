@@ -1431,6 +1431,1011 @@ static VOID DpmiInt31AllocateDescriptors(PSTR *cursorIo, volatile BYTE * const t
     *cursorIo = cursor;
 }
 
+
+/* A GDI.EXE id: service it through WowGdiCall, step past the BOP and log the result. */
+static INT Wow32ServiceGdi(PSTR *cursorIo, PSTR const base, WOW32_FRAME *frame, volatile BYTE * const tib, INT *exitCodeOut)
+{
+    PSTR cursor = *cursorIo;
+    if (!frame->IsKernel && g_WowGdiSegment && frame->StubSegment == g_WowGdiSegment) {
+        CHAR note[320];
+        if (WowGdiCall(frame, note, sizeof note)) {
+            ++g_Wow32Serviced;
+            VDM_REG(tib, VTIB_EIP) += VDM_BOP_LENGTH;
+            cursor = LogPut(cursor, " -> SERVICED (GDI), returned 0x");
+            cursor = LogHex(cursor, frame->Result);
+            if (note[0]) { cursor = LogPut(cursor, " -- "); cursor = LogPut(cursor, note); }
+            cursor = LogPut(cursor, "\r\n");
+            /* ⛔ s89: AND GDI'S ENUMERATIONS RUN. This branch never acted on
+                 f.enumreq -- only USER's did -- so LineDDA and
+                 EnumFontFamilies armed a walk that never started: Charmap
+                 got "60 fonts" and not one callback, i.e. an empty list.
+                 Same first step as USER's branch. */
+            if (frame->IsEnumerationRequested) {
+                CHAR enumNote[256];
+                WORD  enumCallbackSelector = WowCallbackSelector();
+                DWORD enumStackBase  = DpmiSelectorBase(
+                    (WORD)VDM_REG16(tib, VTIB_SS));
+                enumNote[0] = 0;
+                WowEnumStep(tib, enumStackBase, enumCallbackSelector, WOWENUM_FIRST, 0, enumNote, sizeof enumNote);
+                cursor = LogPut(cursor, "WOWENUM: "); cursor = LogPut(cursor, enumNote);
+                cursor = LogPut(cursor, "\r\n");
+            }
+            WowLogFlush(base, &cursor);
+            { *cursorIo = cursor; *exitCodeOut = 1; return HOST_FLOW_RETURN; }
+        }
+    }
+    *cursorIo = cursor; return HOST_FLOW_NEXT;
+}
+
+
+/* A COMMDLG.DLL id: service it, step past the BOP and log the result. */
+static INT Wow32ServiceCommonDialog(PSTR *cursorIo, PSTR const base, WOW32_FRAME *frame, volatile BYTE * const tib, INT *exitCodeOut)
+{
+    PSTR cursor = *cursorIo;
+    if (!frame->IsKernel && g_WowCommonDialogSegment && frame->StubSegment == g_WowCommonDialogSegment) {
+        CHAR note[416];
+        WowWinPump(WOW_PUMP_BUDGET_BRIEF);
+        /* ⚠ Same reason as ShellAbout: a modal service does not return
+             until a human dismisses it, and the SERVICED line is
+             written afterwards. Say it before it blocks, or the log
+             looks like a run that stopped at the call before. */
+        if (frame->Id == WOWCDLG_GETOPENFILENAME
+            || frame->Id == WOWCDLG_GETSAVEFILENAME
+            || frame->Id == WOWCDLG_CHOOSEFONT
+            || frame->Id == WOWCDLG_CHOOSECOLOR) {
+            cursor = LogPut(cursor, "\n     WOWCOMMDLG: this common dialog is MODAL --"
+                        " the VDM stops here until it is dismissed;"
+                        " the SERVICED line follows when it is\r\n");
+            WowLogFlush(base, &cursor);
+        }
+        if (WowCommdlgCall(frame, note, sizeof note)) {
+            ++g_Wow32Serviced;
+            VDM_REG(tib, VTIB_EIP) += VDM_BOP_LENGTH;
+            cursor = LogPut(cursor, " -> SERVICED (COMMDLG), returned 0x");
+            cursor = LogHex(cursor, frame->Result);
+            if (note[0]) { cursor = LogPut(cursor, " -- "); cursor = LogPut(cursor, note); }
+            cursor = LogPut(cursor, "\r\n");
+            WowLogFlush(base, &cursor);
+            { *cursorIo = cursor; *exitCodeOut = 1; return HOST_FLOW_RETURN; }
+        }
+    }
+    *cursorIo = cursor; return HOST_FLOW_NEXT;
+}
+
+
+/* A SHELL.DLL id: service it, step past the BOP and log the result. */
+static INT Wow32ServiceShell(PSTR *cursorIo, PSTR const base, WOW32_FRAME *frame, volatile BYTE * const tib, INT *exitCodeOut)
+{
+    PSTR cursor = *cursorIo;
+    if (!frame->IsKernel && g_WowShellSegment && frame->StubSegment == g_WowShellSegment) {
+        CHAR note[320];
+        /* The About box runs a modal loop on this thread, so drain
+           what is already queued for the guest's windows first --
+           same reason the USER branch pumps. */
+        WowWinPump(WOW_PUMP_BUDGET_BRIEF);
+        /* ── ⚠ SAY IT BEFORE IT BLOCKS, NOT AFTER. ────────────────
+             A modal service does not return until a human dismisses
+             it, and the "SERVICED" line is written afterwards -- so
+             while the box is up the log's last line is the LoadIcon
+             before it, and a reader collecting the log at that moment
+             sees a run that appears to have STOPPED at a call that
+             completed fine. Measured, on the first run that opened
+             one. This line is written and flushed first, so the log
+             says what the host is waiting for while it waits. */
+        if (frame->Id == WOWSHELL_SHELLABOUT) {
+            cursor = LogPut(cursor, "\n     WOWSHELL: ShellAbout is MODAL -- the VDM"
+                        " stops here until the box is dismissed; the"
+                        " SERVICED line follows when it is\r\n");
+            WowLogFlush(base, &cursor);
+        }
+        if (WowShellCall(frame, note, sizeof note)) {
+            ++g_Wow32Serviced;
+            VDM_REG(tib, VTIB_EIP) += VDM_BOP_LENGTH;
+            cursor = LogPut(cursor, " -> SERVICED (SHELL), returned 0x");
+            cursor = LogHex(cursor, frame->Result);
+            if (note[0]) { cursor = LogPut(cursor, " -- "); cursor = LogPut(cursor, note); }
+            cursor = LogPut(cursor, "\r\n");
+            WowLogFlush(base, &cursor);
+            { *cursorIo = cursor; *exitCodeOut = 1; return HOST_FLOW_RETURN; }
+        }
+    }
+    *cursorIo = cursor; return HOST_FLOW_NEXT;
+}
+
+
+/* USER serviced the call: step past the BOP and log the result -- and when the answer is a 16-bit callback (a window procedure and its message), set that call up to run in the client. */
+static INT Wow32FinishUserCall(PSTR *cursorIo, PSTR const base, WOW32_FRAME *frame, CHAR *note, volatile BYTE * const tib, INT *exitCodeOut)
+{
+    PSTR cursor = *cursorIo;
+    if (WowUserCall(frame, note, sizeof note)) {
+        ++g_Wow32Serviced;
+        VDM_REG(tib, VTIB_EIP) += VDM_BOP_LENGTH;
+        cursor = LogPut(cursor, " -> SERVICED (USER), returned 0x");
+        cursor = LogHex(cursor, frame->Result);
+        if (note[0]) { cursor = LogPut(cursor, " -- "); cursor = LogPut(cursor, note); }
+        cursor = LogPut(cursor, "\r\n");
+        /* ── ★★★★★ AND NOW THE OTHER DIRECTION. (session 40) ────
+             The answer is already in the return hole and EIP is
+             already past the BOP, so what gets parked here is the
+             guest EXACTLY as it will be resumed -- see the ordering
+             note in WowCallEnter. Everything after this point in
+             the run belongs to the 16-bit procedure until its
+             `retf` reaches our stub. */
+        if (frame->CallbackProcedure) {
+            WORD  callbackSelector = WowCallbackSelector();
+            DWORD callbackStackBase = DpmiSelectorBase(
+                (WORD)VDM_REG16(tib, VTIB_SS));
+            INT argumentIndex, callbackAbsent = 0;
+            cursor = LogPut(cursor, "WOWCALL: -> 0x");
+            cursor = LogHex(cursor, frame->CallbackProcedure >> WORD_SHIFT);
+            cursor = LogPut(cursor, ":0x"); cursor = LogHex(cursor, frame->CallbackProcedure & WORD_MASK);
+            cursor = LogPut(cursor, "(");
+            for (argumentIndex = 0; argumentIndex < frame->CallbackArgumentCount; ++argumentIndex) {
+                if (argumentIndex) cursor = LogPut(cursor, " ");
+                cursor = LogHex(cursor, frame->CallbackArguments[argumentIndex]);
+            }
+            cursor = LogPut(cursor, ") ds=0x"); cursor = LogHex(cursor, frame->CallbackDataSelector);
+            if (frame->CallbackMessage) {
+                cursor = LogPut(cursor, " [hwnd=0x"); cursor = LogHex(cursor, frame->CallbackWindow);
+                cursor = LogPut(cursor, " msg=0x"); cursor = LogHex(cursor, frame->CallbackMessage);
+                cursor = LogPut(cursor, "]");
+            }
+            cursor = LogPut(cursor, " ss=0x");
+            cursor = LogHex(cursor, VDM_REG16(tib, VTIB_SS));
+            cursor = LogPut(cursor, ":0x");
+            cursor = LogHex(cursor, VDM_REG16(tib, VTIB_ESP));
+            cursor = LogPut(cursor, " ret=0x"); cursor = LogHex(cursor, callbackSelector);
+            cursor = LogPut(cursor, ":0000");
+            /* ⚠ lParam is 0 and that is a NAMED GAP, not an
+                 oversight -- WM_CREATE's lParam is an
+                 LPCREATESTRUCT and this host has never built one.
+                 Saying so on the line is what stops a later reader
+                 taking the zero for a measurement. */
+            if (frame->CallbackMessage == WM_CREATE16 && frame->CallbackBlobLength)
+                cursor = LogPut(cursor, " [lParam -> a CREATESTRUCT on the"
+                            " guest's own stack]");
+            else if (frame->CallbackMessage == WM_CREATE16)
+                cursor = LogPut(cursor, " [lParam=0: NO CREATESTRUCT -- a"
+                            " procedure that reads it will fault]");
+            /* ── ★ IS THE PROCEDURE'S SEGMENT ACTUALLY LOADED? ──
+                 A Win16 code segment is loaded on demand, and
+                 until it is, its descriptor's PRESENT bit is
+                 clear. Writing that selector into the TIB's CS
+                 kills the VDM silently; see WOWCALL_RETF_OFF.
+                 Say which one it is, because "not present" is a
+                 fact about the guest's loader and belongs in the
+                 log next to the call it changes. */
+            { WORD procedureCs = (WORD)(frame->CallbackProcedure >> WORD_SHIFT);
+              WORD procedureIndex = (WORD)(DPMI_SELECTOR_INDEX(procedureCs));
+              callbackAbsent = (procedureIndex && procedureIndex < DPMI_LDT_MAX
+                          && !(g_Ldt[procedureIndex].Access & X86_DESCRIPTOR_PRESENT));
+              if (callbackAbsent)
+                  cursor = LogPut(cursor, " [code segment NOT PRESENT --"
+                              " entering via the RETF trampoline"
+                              " so krnl386 loads it]"); }
+            if (!callbackSelector)
+                cursor = LogPut(cursor, " -- NO RETURN SELECTOR (LDT full);"
+                            " the call was NOT made");
+            else if (!WowCallEnter(tib, callbackStackBase, callbackSelector, frame->CallbackProcedure,
+                                    frame->CallbackDataSelector, frame->CallbackArguments, frame->CallbackArgumentCount,
+                                    (DWORD)(ULONG_PTR)
+                                        (frame->FrameBase + WOW32_OFF_RET),
+                                    frame->CallbackReturnMode, frame->CallbackSink,
+                                    frame->CallbackWindow, frame->CallbackMessage,
+                                    frame->CallbackBlob, frame->CallbackBlobLength,
+                                    frame->CallbackBlobArgument, callbackAbsent))
+                cursor = LogPut(cursor, " -- REFUSED (depth, or an unusable"
+                            " stack/procedure); the call was NOT"
+                            " made and the guest keeps the answer"
+                            " above");
+            else {
+                /* The action belongs to the frame we have just
+                   pushed; setting it here rather than through
+                   WowCallEnter's argument list keeps that list
+                   about the CALL and not about what follows it. */
+                if (g_WowCallDepth > 0) {
+                    g_WowCallFrames[g_WowCallDepth - 1].Action = frame->CallbackAction;
+                    g_WowCallFrames[g_WowCallDepth - 1].ActionArgument = frame->CallbackActionArgument;
+                }
+                cursor = LogPut(cursor, " -- ENTERED, depth ");
+                cursor = LogHex(cursor, (DWORD)g_WowCallDepth);
+                if (g_WowCallDepth > 0 && g_WowCallFrames[g_WowCallDepth - 1].PreviousTask) {
+                    cursor = LogPut(cursor, " [INTER-TASK: runs as task 0x");
+                    cursor = LogHex(cursor, WowSchedCurrentTask());
+                    cursor = LogPut(cursor, " on its own stack, from task 0x");
+                    cursor = LogHex(cursor, g_WowCallFrames[g_WowCallDepth - 1].PreviousTask);
+                    cursor = LogPut(cursor, "]");
+                }
+            }
+            cursor = LogPut(cursor, "\r\n");
+        }
+        /* ── ★★★★★ OR THE CALLER DOES NOT RESUME AT ALL. ───────
+             (session 57) DialogBox is defined as not returning
+             until EndDialog, so its BOP does not complete here:
+             the modal loop takes over, and the guest carries on
+             inside the dialog's own procedure instead of after
+             the call it made. The context that is parked is the
+             one this handler has already prepared -- EIP past
+             the BOP -- so when the loop finally runs out, the
+             guest is standing exactly where DialogBox returns
+             to, with the answer in its hole.
+           ⚠ `else if`, NOT a second `if`. A service that asked
+             for both would otherwise have its callback entered
+             and then be immediately displaced by the loop's
+             first message, and the first call would never
+             return. Nothing asks for both today; this is what
+             stops the day it does from being a mystery. */
+        else if (frame->IsEnumerationRequested) {
+            CHAR enumNote[256];
+            WORD  enumCallbackSelector = WowCallbackSelector();
+            DWORD enumStackBase  = DpmiSelectorBase(
+                (WORD)VDM_REG16(tib, VTIB_SS));
+            enumNote[0] = 0;
+            WowEnumStep(tib, enumStackBase, enumCallbackSelector, WOWENUM_FIRST, 0,
+                         enumNote, sizeof enumNote);
+            cursor = LogPut(cursor, "WOWENUM: "); cursor = LogPut(cursor, enumNote);
+            cursor = LogPut(cursor, "\r\n");
+        }
+        else if (frame->IsModalDialog) {
+            CHAR modalNote[512];
+            WORD  modalCallbackSelector = WowCallbackSelector();
+            DWORD modalStackBase  = DpmiSelectorBase(
+                (WORD)VDM_REG16(tib, VTIB_SS));
+            modalNote[0] = 0;
+            cursor = LogPut(cursor, "WOWDLG: the caller is PARKED inside"
+                        " DialogBox; the modal loop has it\r\n");
+            WowLogFlush(base, &cursor);
+            WowDlgStep(tib, modalStackBase, modalCallbackSelector, &g_Running,
+                        modalNote, sizeof modalNote);
+            cursor = LogPut(cursor, "WOWDLG: "); cursor = LogPut(cursor, modalNote);
+            cursor = LogPut(cursor, "\r\n");
+        }
+        WowLogFlush(base, &cursor);
+        { *cursorIo = cursor; *exitCodeOut = 1; return HOST_FLOW_RETURN; }
+    }
+    *cursorIo = cursor; return HOST_FLOW_NEXT;
+}
+
+
+/* A USER.EXE id. GetMessage with nothing queued first yields to another runnable task (when the
+   scheduler is on), then waits here for the host's input; everything else goes to WowUserCall. */
+static INT Wow32ServiceUser(PSTR *cursorIo, PSTR const base, WOW32_FRAME *frame, volatile BYTE * const tib, INT *exitCodeOut)
+{
+    PSTR cursor = *cursorIo;
+    if (!frame->IsKernel && frame->StubSegment == g_WowUserSegment && g_WowUserSegment) {
+        CHAR note[224];
+        /* ── ★★ KEEP THE REAL WINDOWS ALIVE. (GH #128, session 42) ──
+             They belong to this thread, so nothing about them happens
+             -- no paint, no move, no click, no title bar -- unless
+             this thread dispatches, and a WOW32 BOP is the only
+             regular moment it is not inside the guest. Bounded, so a
+             flood of mouse moves cannot starve the thing we are here
+             to run. */
+        WowWinPump(WOW_PUMP_BUDGET_BRIEF);
+        /* ── (E) s92 (#306): GetMessage WITH NOTHING TO GET, AND A TASK THAT HAS
+             NEVER RUN. The idle yield (D) is krnl386's WowWaitForMsgAndEvent --
+             which only WOWEXEC's loop calls. An APPLICATION idles here, in our
+             GetMessage, which blocks in the host; so a task it launched (Calc's
+             WinHelp, a program started from Program Manager) stayed parked at
+             its launch forever. Real USER yields inside an empty GetMessage, so
+             this does too -- to a FRESH task only (one already running gets its
+             turn at (D) or when this one retires), parked AT THIS BOP: EIP is
+             not advanced, so on resume the GetMessage is simply issued again.
+           ⚠ Not from inside anything: no callback in flight, no nested run, no
+             modal loop -- a context swapped there would be resumed under a frame
+             the other task cannot unwind. */
+        /* ── s92 (#306): "nothing to get" is now THIS TASK's queue (wowmsg.h,
+             g_WowMsgTaker), and the task that yields here is parked WAITING FOR
+             MESSAGES: it is runnable again once one arrives for it -- which is
+             how WinHelp gets the message it posted itself while Calc ran, and
+             how a click on one task's window wakes it while another is idle
+             in the wait below (which then comes back here). */
+        WORD messageTask = WowSchedCurrentTask();
+        INT  canYield = g_WowSchedOn && frame->Id == WOWUSER_GETMESSAGE
+                    && g_WowWindowNested == 0 && !WowDlgActive()
+                    && messageTask && messageTask != WOWUSER_TASK_NONE16 && !WowSchedInterTaskLive();
+    wowSchedRetry:
+        if (canYield && !WowMsgCountFor(messageTask)) {
+            WORD yieldFrom = messageTask;
+            INT  yieldSlotIndex  = WowSchedRunnable(yieldFrom, g_WowCallDepth);
+            if (yieldSlotIndex >= 0) {
+                WORD  yieldTo = g_WowSchedSlots[yieldSlotIndex].Task;
+                DWORD yieldModeLinear = (DWORD)(ULONG_PTR)(frame->FrameBase + WOW32_OFF_MODE);
+                INT   yieldTopLevel = WowSchedTopLevel(&g_WowSchedSlots[yieldSlotIndex]);
+                WowSchedPoke(g_WowSchedSlots[yieldSlotIndex].ModeLinear, WOW32_MODE_ORDINARY);
+                WowSchedSwap(&g_WowSchedSlots[yieldSlotIndex], tib, yieldModeLinear, yieldFrom, 0);
+                g_WowSchedSlots[yieldSlotIndex].IsWaitingForMessage = 1;          /* the one that yielded */
+                g_WowSchedSlots[yieldSlotIndex].CallbackDepth = g_WowCallDepth;
+                if (yieldTopLevel) g_WowSchedCurrentBase = g_WowCallDepth;
+                WowSchedSetCurrent(yieldTo);
+                WowTaskChdir(yieldTo, &cursor);
+                ++g_WowSchedSwitches;
+                cursor = LogPut(cursor, "\n     WOWSCHED: task 0x"); cursor = LogHex(cursor, yieldFrom);
+                cursor = LogPut(cursor, " has an empty GetMessage -- YIELDING to task 0x");
+                cursor = LogHex(cursor, yieldTo);
+                cursor = LogPut(cursor, ", launched and never run or parked mid-work (#306); its GetMessage"
+                            " is re-issued when it resumes\r\n");
+                WowLogFlush(base, &cursor);
+                { *cursorIo = cursor; *exitCodeOut = 1; return HOST_FLOW_RETURN; }
+            }
+        }
+        /* ── ★★★ GetMessage BLOCKS, AND THIS IS THE BLOCK. ─────────
+             There is no "no message" answer to GetMessage: a task with
+             an empty queue waits. The waiting is done HERE rather than
+             in wowuser.h because the thing being waited for is the
+             host's keyboard event, which belongs to the host -- and
+             because a service that blocks is a service that cannot be
+             reasoned about from the id space it lives in.
+           ⚠ IT IS BOUNDED, AND THE BOUND IS THE HONEST PART. A real
+             Win16 task blocks forever; a harness run must end. So the
+             wait is finite, and when it expires wowuser.h answers
+             WM_QUIT and SAYS the wait expired -- so "the application
+             quit" is never again confused with "nobody typed".
+           ⚠ THE HOST LOCK IS NOT HELD ACROSS THE WAIT. The UI thread
+             takes it to push a keystroke, so holding it here would
+             make the thing we are waiting for impossible. */
+        if (frame->Id == WOWUSER_GETMESSAGE && !WowMsgCountFor(messageTask == WOWUSER_TASK_NONE16 ? 0 : messageTask)
+            && !WowMsgQuitFor(messageTask == WOWUSER_TASK_NONE16 ? 0 : messageTask)) {
+            INT woke = 0;
+            DWORD start = GetTickCount(), waited;
+            /* ★ SAY THE SETTING AT THE POINT OF USE, ONCE. The startup
+                 knob-read logs where the answer is decided, which is
+                 not where it matters and -- measured -- did not reach
+                 the log at all. Here it cannot be missed: the first
+                 task that blocks prints what it is waiting for, so
+                 "the guest quit after six seconds" and "the guest is
+                 waiting for you" are never the same line. */
+            if (!g_WowMsgIsWaitAnnounced) {
+                CHAR siteLine[128], *siteCursor = siteLine;
+                g_WowMsgIsWaitAnnounced = 1;
+                siteCursor = LogPut(siteCursor, "\n     WOWMSG: a blocked GetMessage waits ");
+                if (g_WowMsgWaitMs) { siteCursor = LogHex(siteCursor, g_WowMsgWaitMs);
+                                        siteCursor = LogPut(siteCursor, " ms then answers"
+                                                      " WM_QUIT"); }
+                else siteCursor = LogPut(siteCursor, "FOREVER (wowidle.txt = 0)");
+                siteCursor = LogPut(siteCursor, "\r\n");
+                LogAppend(LOG_PATH, siteLine, siteCursor); SerialOut(siteLine, siteCursor);
+            }
+            /* ── ★★★ A BLOCKED Win16 TASK IS A Win32 MESSAGE PUMP.
+                 (session 42, replacing session 41's keyboard-event
+                 wait.) The input no longer comes from the DOS 8042
+                 path -- it comes from the REAL WINDOW, and the real
+                 window's messages arrive on this thread's Win32
+                 queue. So "the Win16 queue is empty" and "wait for
+                 something to happen" are the same statement as
+                 "dispatch Win32 messages until one of them turns into
+                 a Win16 message", which is exactly what a Win16 task
+                 blocking in GetMessage is FOR.
+               ⚠ MsgWaitForMultipleObjects, not Sleep: it wakes the
+                 instant a message arrives, so a keystroke is not
+                 delayed by the poll interval, and it does not spin. */
+            {   /* ── ★ A HEARTBEAT, BECAUSE "NOT RESPONDING" IS A
+                     QUESTION ABOUT THIS LOOP. (session 43) The windows
+                     belong to this thread, so if XP calls the guest's
+                     window "Not Responding" the answer is either "this
+                     loop is not running" or "it is running and
+                     dispatching nothing" -- and those need completely
+                     different fixes. One line every two seconds says
+                     which, and a bounded count keeps a long idle from
+                     filling the log. */
+                DWORD beat = start; UINT beats = 0;
+                DWORD pumpedStart = g_WowWinPumped;
+                /* ★ Tell the freeze watchdog this stall is deliberate --
+                     see g_WowMsgInWait in wowmsg.h. Set BEFORE the loop and
+                     cleared after it on every exit path, because the
+                     alternative is a flag that stays set once and
+                     disables the watchdog for the rest of the run. */
+                g_WowMsgInWait = 1;
+                while (g_Running && !WowMsgCountFor(messageTask == WOWUSER_TASK_NONE16 ? 0 : messageTask)
+                       && !WowMsgQuitFor(messageTask == WOWUSER_TASK_NONE16 ? 0 : messageTask)
+                       && (!g_WowMsgWaitMs
+                           || GetTickCount() - start < g_WowMsgWaitMs)) {
+                    /* s92 (#306): another parked task's message arrived */
+                    if (canYield && WowSchedRunnable(messageTask, g_WowCallDepth) >= 0) { woke = 1; break; }
+                    /* ── ★★ THE IDLE WAIT, AND ITS TIMEOUT IS A
+                         LATENCY FLOOR. A WM_PAINT arriving while the
+                         guest is parked here should wake the wait
+                         through QS_ALLINPUT, and usually does --
+                         measured paint latency is 0 ms three times
+                         in five. But MsgWaitForMultipleObjects has a
+                         documented race: a message that arrives
+                         between the PeekMessage above and the wait
+                         below can leave the queue state already
+                         "seen", and the wait then sleeps the FULL
+                         timeout. The other two measurements were
+                         47 ms and 94 ms -- one and two timeouts.
+                       ⚠⚠ REFUTED, and the timeout is left at 50.
+                         Dropping it to 10 ms was tried and MEASURED:
+                         the same workload produced 0, 0, 0, 46, 93 ms
+                         against the 50 ms build's 0, 0, 0, 47, 94.
+                         Identical. So the two slow paints are NOT
+                         this wait sleeping through a lost wake-up --
+                         the guest is simply not parked here when they
+                         arrive, and the delay is its own work
+                         (raising a window also delivers WM_ACTIVATE
+                         and WM_SETFOCUS, each of which re-enters
+                         16-bit code). A shorter timeout would cost an
+                         idle guest ~100 wake-ups a second and buy
+                         nothing, so it was reverted rather than kept
+                         on the grounds that it "should" help. */
+                    if (g_IcaPending)         /* s90 #278 */
+                        WowIcaDeliver(g_DosMachine, tib, 0);
+                    if (!WowWinPump(WOW_PUMP_BUDGET))
+                        MsgWaitForMultipleObjects(0, NULL, FALSE, WOW_INPUT_WAIT_MS,
+                                                  QS_ALLINPUT);
+                    if (beats < 20 && GetTickCount() - beat >= 2000) {
+                        CHAR handlerLine[160], *handlerCursor = handlerLine;
+                        beat = GetTickCount(); ++beats;
+                        handlerCursor = LogPut(handlerCursor, "     WOWMSG: blocked 0x");
+                        handlerCursor = LogHex(handlerCursor, beat - start);
+                        handlerCursor = LogPut(handlerCursor, " ms; Win32 messages dispatched on"
+                                      " this thread since blocking 0x");
+                        handlerCursor = LogHex(handlerCursor, g_WowWinPumped - pumpedStart);
+                        handlerCursor = LogPut(handlerCursor, " (total 0x");
+                        handlerCursor = LogHex(handlerCursor, g_WowWinPumped);
+                        handlerCursor = LogPut(handlerCursor, "), Win16 queued 0x");
+                        handlerCursor = LogHex(handlerCursor, (DWORD)g_WowMsgCount);
+                        handlerCursor = LogPut(handlerCursor, "\r\n");
+                        LogAppend(LOG_PATH, handlerLine, handlerCursor); SerialOut(handlerLine, handlerCursor);
+                    }
+                }
+                g_WowMsgInWait = 0;
+            }
+            waited = GetTickCount() - start;
+            cursor = LogPut(cursor, "\n     WOWMSG: GetMessage with an empty queue"
+                        " -- BLOCKED for 0x");
+            cursor = LogHex(cursor, waited);
+            cursor = LogPut(cursor, " ms; ");
+            cursor = LogHex(cursor, (DWORD)g_WowMsgCount);
+            cursor = LogPut(cursor, " message(s) arrived\r\n");
+            if (woke) {
+                cursor = LogPut(cursor, "     WOWSCHED: a parked task's message arrived"
+                            " -- yielding to it\r\n");
+                WowLogFlush(base, &cursor);
+                goto wowSchedRetry;
+            }
+            WowLogFlush(base, &cursor);
+        }
+        /* ⚠ Same rule as ShellAbout and the file dialog: a modal
+             service does not return until a human dismisses it, and
+             the SERVICED line carrying its text is written
+             afterwards. Announce it first, or a log collected while
+             the box is up stops dead at the call before it -- which
+             has already misled a reading twice this session. */
+        if (frame->Id == WOWUSER_MESSAGEBOX) {
+            cursor = LogPut(cursor, "\n     WOWUSER: MessageBox is MODAL -- the VDM"
+                        " stops here until it is dismissed; the"
+                        " SERVICED line carries its TEXT and follows"
+                        " when it is\r\n");
+            WowLogFlush(base, &cursor);
+        }
+        {
+            INT exitCode, flow = Wow32FinishUserCall(&cursor, base, frame, note, tib, &exitCode);
+            if (flow == HOST_FLOW_RETURN) { *cursorIo = cursor; *exitCodeOut = exitCode; return HOST_FLOW_RETURN; }
+        }
+    }
+    *cursorIo = cursor; return HOST_FLOW_NEXT;
+}
+
+
+/* krnl386's second table, id 0xd1: the new task's environment -- returned once per launch, before the new task's PSP is built, and what that PSP's environment field then holds. */
+static INT Wow32ServiceKernelSecondTable(PSTR *cursorIo, PSTR const base, WOW32_FRAME *frame, volatile BYTE * const tib, INT *exitCodeOut)
+{
+    PSTR cursor = *cursorIo;
+    /* ── ★★★★ seg2 0xd1: THE NEW TASK'S ENVIRONMENT. ───────────────
+         ★ WHAT IT IS, AND HOW THAT IS KNOWN. It is called once per task
+           launch, before the new task's PSP is built (`AH=55h` follows
+           it), and what it returns is what then appears in that new PSP's
+           environment field, +0x2c -- the `PSPENV CHANGED` watch shows the
+           answer land there. A 0 answer fails the launch. So the value
+           this call returns IS the environment of the task about to run,
+           and krnl386 goes on to give it an owner as a global object of
+           its own -- a real object, not a token.
+
+         ★★ AND THAT CLOSES A FAULT WE CAUSED OURSELVES. Session 39 ran
+           `0xd1` as an EXPERIMENT (`wow32ret.txt`, `d1 00000001`) on the
+           reading that "it only has to be non-zero", and SYSEDIT then
+           died at `0x0abf:0x09f0` loading ES with 1 -- the null
+           descriptor -- read from its own `PSP+0x2c`. The 1 in that field
+           was OUR OWN EXPERIMENT VALUE, and the run log says so without
+           any new measurement: the `0xd1` answer (`ANSWERED
+           0x00000001`), then AH=55h, then
+           `PSPENV CHANGED: sel 0x0adf +0x2c 0x03c7 -> 0x00000001`, then
+           the next call in.
+           "Non-zero" was a measurement of the abort, not of the meaning.
+
+         ⚠ SO THE ANSWER MUST BE A SELECTOR THE GUEST CAN LOAD, and one
+           krnl386 owns. Two sources, in the DOS EXEC order, and the log
+           says which one was taken:
+             1. LOADPARMS.segEnv -- the far pointer at args +2/+4 is the
+                parameter block (`0x03df:0x1ce4` in the run, WOWEXEC's own
+                stack), and its first word is the environment.
+             2. Zero there means INHERIT, and the parent is the current
+                task -- whose PSP is the last one this host built, because
+                the child's does not exist yet (`AH=55h` for it comes
+                AFTER this call: log lines 5355 then 5376).
+           ⚠ And WOWEXEC's launcher is visibly playing exactly that
+             protocol: it installs 0x0aff into its OWN PSP+0x2c before the
+             launch and restores 0x03c7 after it, which is the DOS way of
+             handing an environment to a child and is why (2) is not a
+             guess.
+         ⚠ IF NEITHER SOURCE YIELDS A SELECTOR THAT RESOLVES, SAY SO AND
+           DO NOT ANSWER. Inventing a value here is how the 1 got in.
+
+         ⚠⚠ AND IT MUST BE A **COPY**. The first cut handed the source
+           selector straight back, and the run said no: loading ES with
+           0x0aff now faulted at the LOAD (`err=0x0afc`, the
+           selector's own index) instead of at the first use, because
+           WOWEXEC's launcher FREES the block as soon as LoadModule
+           returns -- `LDTSYNC idx 0x15f <- base=0 acc=0x00` one line
+           before `PSPENV CHANGED: sel 0x03bf +0x2c 0x0aff -> 0x03c7`.
+           That is the DOS EXEC protocol played out in full: build an
+           environment for the child, launch, free it, restore your own.
+           The child's copy is what the call is FOR -- on real WOW the
+           32-bit side allocates a Win16 global and copies into it. This
+           host cannot call GlobalAlloc (nothing here has ever called
+           INTO 16-bit code), so the copy lives in a host paragraph with
+           a host selector, which over-lives rather than under-lives.
+         ⚠ THE DIFFERENCE THAT LEAVES: the block is not in krnl386's
+           global arena, so krnl386's owner write for it (FarSetOwner)
+           will not find an arena entry. Recorded, not hidden. */
+    if (!frame->IsKernel && g_WowKernel2Segment && frame->StubSegment == g_WowKernel2Segment
+        && frame->Id == WOW32K2_TASKENV) {
+        WORD  parameterBlockSelector = Wow32ArgWord(frame, WOW32K2_TASKENV_ARG_BLOCK_SELECTOR), parameterBlockOffset = Wow32ArgWord(frame, WOW32K2_TASKENV_ARG_BLOCK_OFFSET);
+        DWORD parameterBlockLinear = parameterBlockSelector ? DpmiSelectorBase(parameterBlockSelector) : 0;
+        WORD  environment = 0;
+        PCSTR source = "";
+        cursor = LogPut(cursor, "\n     WOW32 seg2 0xd1 task environment: parmblock 0x");
+        cursor = LogHex(cursor, parameterBlockSelector); cursor = LogPut(cursor, ":0x"); cursor = LogHex(cursor, parameterBlockOffset);
+        if (parameterBlockLinear && HostReadable((const VOID *)(ULONG_PTR)(parameterBlockLinear + parameterBlockOffset), 2)) {
+            const volatile BYTE *pathBytes =
+                (const volatile BYTE *)(ULONG_PTR)(parameterBlockLinear + parameterBlockOffset);
+            environment = (WORD)(pathBytes[0] | (pathBytes[1] << BYTE_SHIFT));
+            source = "LOADPARMS.segEnv";
+        }
+        if (!environment && g_WowPspCount > 0) {
+            WORD  pspSelector = g_WowPspSelector[g_WowPspCount - 1];
+            DWORD pspLinear = DpmiSelectorBase(pspSelector);
+            cursor = LogPut(cursor, " segEnv=0 (inherit) parent PSP 0x");
+            cursor = LogHex(cursor, pspSelector);
+            if (pspLinear && HostReadable((const VOID *)(ULONG_PTR)pspLinear, DOS_PSP_ENVIRONMENT + sizeof(WORD))) {
+                const volatile BYTE *psp =
+                    (const volatile BYTE *)(ULONG_PTR)pspLinear;
+                environment = (WORD)(psp[DOS_PSP_ENVIRONMENT] | (psp[DOS_PSP_ENVIRONMENT + 1] << BYTE_SHIFT));
+                source = "the parent PSP's +0x2c";
+            }
+        }
+        {   DWORD environmentLinear = environment ? DpmiSelectorBase(environment) : 0;
+            DWORD cap  = (DWORD)WOW_ENV_PARAS * PARAGRAPH_SIZE_U;
+            cursor = LogPut(cursor, " src 0x"); cursor = LogHex(cursor, environment);
+            cursor = LogPut(cursor, " ("); cursor = LogPut(cursor, source[0] ? source : "nothing");
+            cursor = LogPut(cursor, ")");
+            if (environmentLinear && g_WowEnvironmentSegment &&
+                HostReadable((const VOID *)(ULONG_PTR)environmentLinear, cap)) {
+                const volatile BYTE *sourceBytes =
+                    (const volatile BYTE *)(ULONG_PTR)environmentLinear;
+                volatile BYTE *destinationBytes = (volatile BYTE *)(ULONG_PTR)
+                                   ((DWORD)g_WowEnvironmentSegment << PARAGRAPH_SHIFT);
+                DWORD index = 0, item;
+                WORD  selector;
+                /* The MS-DOS 3.0+ block: the strings, the empty string
+                   that ends them, a WORD count, then the program's own
+                   pathname. krnl386 finds its OWN exe through exactly
+                   this tail (see WowPlaceV86), so it is part of the
+                   environment and not an optional extra. */
+                while (index < cap && sourceBytes[index]) {
+                    while (index < cap && sourceBytes[index]) ++index;
+                    ++index;                          /* the string's NUL   */
+                }
+                ++index;                              /* the empty string   */
+                if (index + X86_WORD_SIZE <= cap) {
+                    index += X86_WORD_SIZE;                       /* the WORD count     */
+                    while (index < cap && sourceBytes[index]) ++index;
+                    ++index;                          /* the pathname's NUL */
+                }
+                if (index > cap) index = cap;
+                for (item = 0; item < index; ++item) destinationBytes[item] = sourceBytes[item];
+                selector = DpmiSegmentToDescriptor(g_WowEnvironmentSegment);
+                cursor = LogPut(cursor, " -> copied 0x"); cursor = LogHex(cursor, index);
+                cursor = LogPut(cursor, " bytes to 0x"); cursor = LogHex(cursor, g_WowEnvironmentSegment);
+                cursor = LogPut(cursor, ":0000 as sel 0x"); cursor = LogHex(cursor, selector);
+                if (selector) {
+                    Wow32SetReturn(frame, selector);
+                    ++g_Wow32Serviced;
+                    VDM_REG(tib, VTIB_EIP) += VDM_BOP_LENGTH;
+                    cursor = LogPut(cursor, "\r\n -> SERVICED (task environment),"
+                                " returned 0x");
+                    cursor = LogHex(cursor, frame->Result); cursor = LogPut(cursor, "\r\n");
+                    WowLogFlush(base, &cursor);
+                    cursor = base;
+                    { *cursorIo = cursor; *exitCodeOut = 1; return HOST_FLOW_RETURN; }
+                }
+                cursor = LogPut(cursor, " -- NO SELECTOR (LDT full)");
+            }
+            cursor = LogPut(cursor, " -> NO ENVIRONMENT TO COPY -- left unimplemented"
+                        " rather than invented");
+        }
+    }
+    *cursorIo = cursor; return HOST_FLOW_NEXT;
+}
+
+
+/* KERNEL WOW32_RESOLVEMODULEPATH: resolve a module name to a full path for krnl386 -- with SearchPathA,
+   the Win32 search order, which its note explains is close enough. */
+static INT Wow32ServiceResolveModulePath(PSTR *cursorIo, PSTR const base, WOW32_FRAME *frame, volatile BYTE * const tib, INT *exitCodeOut)
+{
+    PSTR cursor = *cursorIo;
+    /* ── ★★★ 0xc5 ResolveModulePath -- WHERE IS THIS MODULE? ─────────
+         Serviced here rather than in wow32.h because the answer is a
+         16:16 far pointer: it needs memory the guest can reach and a
+         selector for it, and both live on this side. See the note on
+         WOW32_RESOLVEMODULEPATH for how the two call sites pin the
+         resolve/release pair and prove `dst` takes a POINTER.
+
+       ★ WHAT IT FIXES, MEASURED. krnl386 asks this about `SHELL.DLL`
+         while binding SYSEDIT's imports. Answered 0, it falls back to
+         composing the bare name against the CURRENT DIRECTORY and
+         opens `C:\Documents and Settings\Matthew\SHELL.DLL`, gle=2 --
+         and the whole launch fails there. The same thing happened
+         earlier to MMSYSTEM.DLL and WFWNET.DRV out of SYSTEM.INI's
+         [drivers].
+
+       ⚠ NOT-FOUND MUST STILL ANSWER 0. The fallback tail is the
+         guest's own handling for "I could not resolve this", and a
+         host that invented a path for a module that is not there
+         would turn a clean failure into a wrong filename.
+
+       ⚠ SearchPathA IS THE WIN32 ORDER, NOT WIN16'S. Close enough for
+         what krnl386 needs -- it reaches the Windows and system
+         directories, which is where the 16-bit modules are, and this
+         rig's own WOWEXEC/KRNL386 were found there. It also consults
+         the current directory, which Win16 did too. Recorded as a
+         difference rather than claimed as equivalence. */
+    if (frame->IsKernel && frame->Id == WOW32_RESOLVEMODULEPATH && g_WowPathSegment) {
+        volatile BYTE *source = Wow32ArgPointer(frame, WOW32_RESOLVEMODULEPATH_ARG_SOURCE);
+        volatile BYTE *destination = Wow32ArgPointer(frame, WOW32_RESOLVEMODULEPATH_ARG_DESTINATION);
+        CHAR name[300], full[300];
+        INT item;
+        cursor = LogPut(cursor, "  WOW32 0xc5 ResolveModulePath ");
+        if (!source) {
+            /* (dst, NULL) is the RELEASE half of the pair. Nothing to
+               free -- the scratch is a fixed paragraph -- but it must
+               still be answered, and it must say so in the log rather
+               than look like a resolve that found nothing. */
+            cursor = LogPut(cursor, "RELEASE");
+            Wow32SetReturn(frame, 1);
+        } else {
+            DWORD length = 0; PSTR filePart = 0;
+            for (item = 0; item < (INT)sizeof name - 1 && source[item]; ++item)
+                name[item] = (CHAR)source[item];
+            name[item] = 0;
+            cursor = LogPut(cursor, "\""); cursor = LogPut(cursor, name); cursor = LogPut(cursor, "\" -> ");
+            if (name[0])
+                length = SearchPathA(NULL, name, NULL, sizeof full, full, &filePart);
+            if (length && length < sizeof full) {       /* krnl386 opens this via DOS: 8.3 only */
+                WowShorten(full, sizeof full);
+                for (length = 0; full[length]; ++length) ;
+            }
+            if (!length || length >= sizeof full || !destination) {
+                cursor = LogPut(cursor, "NOT FOUND (krnl386 will fall back to its own"
+                            " name, as it does today)");
+                Wow32SetReturn(frame, 0);
+            } else {
+                volatile BYTE *pathBytes = (volatile BYTE *)(ULONG_PTR)
+                                    ((DWORD)g_WowPathSegment << PARAGRAPH_SHIFT);
+                WORD selector = DpmiSegmentToDescriptor(g_WowPathSegment);
+                for (item = 0; item <= (INT)length && item < WOW_PATH_PARAS * PARAGRAPH_SIZE - 1; ++item)
+                    pathBytes[item] = (BYTE)full[item];
+                pathBytes[item < WOW_PATH_PARAS * PARAGRAPH_SIZE - 1 ? item : WOW_PATH_PARAS * PARAGRAPH_SIZE - 1] = 0;
+                if (!selector) {
+                    cursor = LogPut(cursor, "NO SELECTOR (LDT full)");
+                    Wow32SetReturn(frame, 0);
+                } else {
+                    Wow32PokeWord(destination,     0);        /* offset  */
+                    Wow32PokeWord(destination + X86_FAR_POINTER_SEGMENT, selector);      /* segment */
+                    cursor = LogPut(cursor, "\""); cursor = LogPut(cursor, full);
+                    cursor = LogPut(cursor, "\" at 0x"); cursor = LogHex(cursor, selector);
+                    cursor = LogPut(cursor, ":0000");
+                    Wow32SetReturn(frame, 1);
+                }
+            }
+        }
+        cursor = LogPut(cursor, "\r\n");
+        ++g_Wow32Serviced;
+        VDM_REG(tib, VTIB_EIP) += VDM_BOP_LENGTH;
+        cursor = LogPut(cursor, " -> SERVICED (host path search), returned 0x");
+        cursor = LogHex(cursor, frame->Result); cursor = LogPut(cursor, "\r\n");
+        WowLogFlush(base, &cursor);
+        { *cursorIo = cursor; *exitCodeOut = 1; return HOST_FLOW_RETURN; }
+    }
+    *cursorIo = cursor; return HOST_FLOW_NEXT;
+}
+
+
+/* KERNEL WOW32_GETCURDIR: the current directory, answered through the PM transfer buffer. */
+static INT Wow32ServiceGetCurrentDirectory(PSTR *cursorIo, PSTR const base, WOW32_FRAME *frame, volatile BYTE * const tib, DOS_MACHINE * const machine, INT *exitCodeOut)
+{
+    PSTR cursor = *cursorIo;
+    if (frame->IsKernel && frame->Id == WOW32_GETCURDIR && g_PmTransferSegment) {
+        DWORD directoryOffset  = Wow32ArgWord(frame, WOW32_GETCURDIR_ARG_BUFFER_OFFSET);
+        WORD  directorySelector = Wow32ArgWord(frame, WOW32_GETCURDIR_ARG_BUFFER_SELECTOR);
+        DWORD drive  = Wow32ArgWord(frame, WOW32_GETCURDIR_ARG_DRIVE) & BYTE_MASK;
+        DWORD savedAx = VDM_REG(tib, VTIB_EAX), savedDx = VDM_REG(tib, VTIB_EDX);
+        DWORD savedDs = VDM_REG(tib, VTIB_DS),  savedSi = VDM_REG(tib, VTIB_ESI);
+        DWORD directoryBase = DpmiSelectorBase(directorySelector);
+        volatile BYTE *transfer = (volatile BYTE *)(ULONG_PTR)
+                            ((DWORD)g_PmTransferSegment << PARAGRAPH_SHIFT);
+        INT item;
+        for (item = 0; item < WOW32_GETCURDIR_BUFFER_SIZE; ++item) transfer[item] = 0;
+        VDM_SET16(tib, VTIB_EAX, DOS_FN_GET_CURRENT_DIRECTORY << BYTE_SHIFT);
+        VDM_SET16(tib, VTIB_EDX, (WORD)drive);
+        VDM_SET16(tib, VTIB_DS,  g_PmTransferSegment);
+        VDM_SET16(tib, VTIB_ESI, 0);
+        machine->TraceCursor = cursor; DosInt21SetProtectedMode(TRUE); DosInt21(machine); DosInt21SetProtectedMode(FALSE); cursor = machine->TraceCursor;
+        {   DWORD carryFlag = VDM_REG(tib, VTIB_EFLAGS) & EFLAGS_CF_U;
+            VDM_REG(tib, VTIB_EAX) = savedAx; VDM_REG(tib, VTIB_EDX) = savedDx;
+            VDM_REG(tib, VTIB_DS)  = savedDs; VDM_REG(tib, VTIB_ESI) = savedSi;
+            cursor = LogPut(cursor, "  WOW32 0xc9 GetCurrentDirectory drive=0x");
+            cursor = LogHex(cursor, drive);
+            cursor = LogPut(cursor, " -> \""); cursor = LogPut(cursor, (PCSTR)transfer);
+            cursor = LogPut(cursor, "\" cf="); cursor = LogHex(cursor, carryFlag);
+            if (!carryFlag && directoryBase) {
+                volatile BYTE *destinationBytes = (volatile BYTE *)(ULONG_PTR)(directoryBase + directoryOffset);
+                if (MemoryReadable((ULONG_PTR)destinationBytes, WOW32_GETCURDIR_BUFFER_SIZE))
+                    for (item = 0; item < WOW32_GETCURDIR_BUFFER_SIZE; ++item) destinationBytes[item] = transfer[item];
+                else { carryFlag = 1; cursor = LogPut(cursor, " (BUFFER UNREACHABLE)"); }
+            }
+            /* DX must not come back 0xFFFF -- that is this call site's
+               failure sentinel, and it is checked before AX. */
+            Wow32SetReturn(frame, carryFlag ? DOS_ERR_INVALID_DRIVE : 0u);
+            cursor = LogPut(cursor, "\r\n");
+        }
+        ++g_Wow32Serviced;
+        VDM_REG(tib, VTIB_EIP) += VDM_BOP_LENGTH;
+        cursor = LogPut(cursor, " -> SERVICED (DOS-backed), returned 0x");
+        cursor = LogHex(cursor, frame->Result); cursor = LogPut(cursor, "\r\n");
+        WowLogFlush(base, &cursor);
+        { *cursorIo = cursor; *exitCodeOut = 1; return HOST_FLOW_RETURN; }
+    }
+    *cursorIo = cursor; return HOST_FLOW_NEXT;
+}
+
+
+/* KERNEL WOW32_FILE_READ, at a call site that may not decline it: read the file into the client's buffer. */
+static INT Wow32ServiceFileRead(PSTR *cursorIo, PSTR const base, WOW32_FRAME *frame, DOS_MACHINE * const machine, volatile BYTE * const tib, INT *exitCodeOut)
+{
+    PSTR cursor = *cursorIo;
+    /* ── DOS-DEPENDENT WOW32 SERVICES. (GH #128) ──────────────────
+         Most of the surface is pure Win32 and lives in wow32.h. A few
+         need the DOS machine, so they are answered here where it is in
+         scope. 0xc9 is the first: krnl386's INT 21h AH=47h arm calls it
+         with (drive, selector, offset) and, unlike the file family, it
+         may NOT be declined -- its call site treats DX=0xFFFF as a hard
+         error and reports failure to the caller rather than chaining to
+         DOS (tools/ne/wowdecline.py). Leaving it unimplemented is what
+         produced "Unable to open KERNEL executable": krnl386 could not
+         learn the current directory, so it never built a path to open. */
+    /* ── ★ THE READ THAT CANNOT BE DECLINED. (GH #128, session 34) ────
+         krnl386 calls 0x97 (read) from two call sites (told apart by the
+         frame's `from` word). At one the sentinel means "ask real DOS" and
+         declining is the whole answer. At the other it does NOT chain --
+         the failure goes straight back to its own caller (observed) -- so
+         here the read has to actually happen.
+         That is the read of SYSTEM.DRV's segment data, and stepping it
+         over is what left krnl386 saying "Missing 16-bit system module"
+         after it had opened the file successfully.
+       The argument layout is measured, not assumed: two calls in one run,
+         `(.. 0x40 0 0x0eaa 0x1f 5)` and `(.. 0x560 0 0 0x17 5)`, and the
+         first was followed by the chained `AH=3Fh` reading exactly 0x40
+         bytes into that same buffer. So words 4-5 are a DWORD count, 6-7 a
+         16:16 buffer pointer, 8 the handle.
+       ⚠ DX:AX IS A 32-BIT BYTE COUNT, not a flag. Failure is
+         0xFFFFFFFF in DX:AX, so a short read must return the SHORT COUNT
+         and only a real failure may return the sentinel. */
+    if (frame->IsKernel && frame->Id == WOW32_FILE_READ && !Wow32MayDecline(frame->Id, frame->CallSite)) {
+        DWORD count  = (DWORD)Wow32ArgWord(frame, WOW32_FILE_READ_ARG_COUNT)
+                   | ((DWORD)Wow32ArgWord(frame, WOW32_FILE_READ_ARG_COUNT + WOW_WORD_BYTES) << WORD_SHIFT);
+        DWORD bufferOffset = Wow32ArgWord(frame, WOW32_FILE_READ_ARG_BUFFER_OFFSET);
+        WORD  bufferSelector = Wow32ArgWord(frame, WOW32_FILE_READ_ARG_BUFFER_SELECTOR);
+        DWORD argumentHandle    = Wow32ArgWord(frame, WOW32_FILE_READ_ARG_HANDLE);
+        DWORD bufferBase = DpmiSelectorBase(bufferSelector);
+        DWORD bytesRead = 0;
+        INT isOk = 0;
+        cursor = LogPut(cursor, "\n     WOW32 0x97 read (site 0x"); cursor = LogHex(cursor, frame->CallSite);
+        cursor = LogPut(cursor, ", may NOT decline) h="); cursor = LogHex(cursor, argumentHandle);
+        cursor = LogPut(cursor, " cnt=0x"); cursor = LogHex(cursor, count);
+        cursor = LogPut(cursor, " -> 0x"); cursor = LogHex(cursor, bufferSelector);
+        cursor = LogPut(cursor, ":0x"); cursor = LogHex(cursor, bufferOffset);
+        cursor = LogPut(cursor, " lin=0x"); cursor = LogHex(cursor, bufferBase + bufferOffset);
+        if (argumentHandle < DOS_MAX_FILES && machine->FileHandles[argumentHandle] && bufferBase
+            && HostWritable((VOID *)(ULONG_PTR)(bufferBase + bufferOffset), count)) {
+            isOk = ReadFile(machine->FileHandles[argumentHandle], (VOID *)(ULONG_PTR)(bufferBase + bufferOffset),
+                          count, &bytesRead, NULL) ? 1 : 0;
+        }
+        if (isOk) { Wow32SetReturn(frame, bytesRead); ++g_Wow32Serviced;
+                  cursor = LogPut(cursor, " -> read 0x"); cursor = LogHex(cursor, bytesRead); cursor = LogPut(cursor, "b"); }
+        else    { Wow32SetReturn(frame, WOW32_FILE_READ_FAILED_U); ++g_Wow32Unimplemented;
+                  cursor = LogPut(cursor, " -> FAILED (bad handle/selector/buffer)"); }
+        cursor = LogPut(cursor, "\r\n");
+        WowLogFlush(base, &cursor);
+        VDM_REG(tib, VTIB_EIP) += VDM_BOP_LENGTH;
+        { *cursorIo = cursor; *exitCodeOut = 1; return HOST_FLOW_RETURN; }
+    }
+    *cursorIo = cursor; return HOST_FLOW_NEXT;
+}
+
+
+/* The Win16 scheduler at a KERNEL call: switch tasks at a launch (here, while the frame is still the
+   creator's) and at WowWaitForMsgAndEvent, krnl386's idle yield. */
+static INT Wow32ScheduleKernelCall(PSTR *cursorIo, PSTR const base, WOW32_FRAME *frame, volatile BYTE * const tib, INT *exitCodeOut)
+{
+    PSTR cursor = *cursorIo;
+    if (g_WowSchedOn && frame->IsKernel) {
+        DWORD modeLinear = (DWORD)(ULONG_PTR)(frame->FrameBase + WOW32_OFF_MODE);
+        WORD  current     = WowSchedCurrentTask();
+        /* (A) THE LAUNCH -- AND THE SWITCH HAS TO HAPPEN HERE.
+             ⚠ MEASURED THE HARD WAY. The first cut saved this frame,
+               let the new task run first (as it does today) and meant to
+               hand the creator back at the task's WaitEvent. It faulted
+               in SwitchToTask, because THE FRAME'S MEMORY IS THE NEW
+               TASK'S OWN STACK: the epilogue pops it, SP moves up, and
+               the task pushes straight back over it. By WaitEvent the
+               frame is gone. Switching HERE is the only ordering that
+               works, and it is also the one that leaves the new task's
+               stack frozen and untouched while the creator runs -- which
+               is exactly what makes resuming it later sound.
+             So: park the new task at this instruction, and send the
+               creator home through epilogue mode 25. */
+        INT freedSlotIndex = (frame->Id == WOW32_TASK_LAUNCH) ? WowSchedFree() : -1;
+        if (frame->Id == WOW32_TASK_LAUNCH && freedSlotIndex >= 0) {
+            DWORD taskBase = DpmiSelectorBase(current);
+            WORD  taskInstance = 0;
+            INT   isFromTdb = 0;
+            if (taskBase) {
+                const volatile BYTE *task = (const volatile BYTE *)(ULONG_PTR)taskBase;
+                taskInstance = (WORD)(task[WOW_TDB_INSTANCE] | (task[WOW_TDB_INSTANCE + 1] << BYTE_SHIFT));
+                isFromTdb = taskInstance != 0;
+            }
+            /* ★ LoadModule's result is the new task's instance handle, and
+                 InitTask has NOT run yet, so TDB+0x1c is still zero here.
+                 The fallback is Win16's own invariant, not a guess about
+                 this one program: a task's SS and DS are two aliases of one
+                 descriptor, so its instance handle is its stack selector
+                 with the low bits clear. The stock oracle shows it twice
+                 (SS=0x16bf/hInst=0x16be, SS=0x03af/hInst=0x03ae) and our
+                 own task a third time. It is VERIFIED at (C) below against
+                 the value krnl386 itself writes, and a mismatch is loud. */
+            if (!taskInstance) taskInstance = (WORD)(VDM_REG(tib, VTIB_SS) & WOW_INSTANCE_FROM_SELECTOR);
+            WowSchedSave(&g_WowSchedSlots[freedSlotIndex], tib, modeLinear, current, VDM_BOP_LENGTH);
+            g_WowSchedSlots[freedSlotIndex].IsFresh = 1;          /* s92: not run yet (#306) */
+            g_WowSchedLaunchChild = current;            /* the parent is the next caller */
+            WowTaskDirectoryHere(current);             /* #164: its launch directory */
+            Wow32SetReturn(frame, taskInstance);
+            Wow32PokeWord(frame->FrameBase + WOW32_OFF_MODE, WOW32_MODE_SWITCHBACK);
+            ++g_WowSchedSwitches;
+            cursor = LogPut(cursor, "\n     WOWSCHED: task 0x"); cursor = LogHex(cursor, current);
+            cursor = LogPut(cursor, " parked at its launch; creator sent home through"
+                        " epilogue mode 25 with LoadModule result 0x");
+            cursor = LogHex(cursor, taskInstance);
+            cursor = LogPut(cursor, isFromTdb ? " (TDB+0x1c)" : " (SS&~1 -- verified at the"
+                                                  " resume)");
+            cursor = LogPut(cursor, "\r\n");
+            WowLogFlush(base, &cursor);
+            VDM_REG(tib, VTIB_EIP) += VDM_BOP_LENGTH;
+            { *cursorIo = cursor; *exitCodeOut = 1; return HOST_FLOW_RETURN; }
+        }
+        /* ── (D) ★★★ A TASK ASKS TO WAIT FOR A MESSAGE. THAT IS THE
+               YIELD, AND IT IS THE MOMENT THAT WAS MISSING. ────────
+             Moment (C) resumes the parked task when the creator
+             RETIRES. WOWEXEC never retires -- it registers its
+             classes, opens its windows and settles into its message
+             loop, so the current-task word never reaches 0 and a
+             task parked at its launch waits forever. That is
+             exactly what SYSEDIT.EXE does today: it gets a task
+             database, a launch frame and a task id, and never runs.
+
+           ★ WowWaitForMsgAndEvent IS the Win16 "I have nothing to do"
+             primitive -- krnl386 export 262, and the only thing
+             WOWEXEC's pump calls when the queue is empty. A task
+             blocking on it is a task offering the CPU, so this is
+             where a cooperative scheduler is supposed to act, and it
+             needs no new lever: the frame is already a WOW32 frame
+             with a mode word and a return hole.
+
+           ★ THE WAIT RETURNS 0, AND THAT IS OBSERVED, not chosen: on
+             a non-zero answer WOWEXEC waits again; on zero it goes on
+             to PeekMessage. So 0 is "carry on and look", which
+             is what a task that has just been given its turn back
+             should do.
+
+           ★ s92 (#306): NO LONGER TWO TASKS ONLY. Every task that is not
+             running sits in g_WowSchedSlots; this yield goes ROUND ROBIN to the
+             next one (WowSchedPick). Round robin and not krnl386's own priority
+             order (TDB+0x08): every Win16 task here runs at the same priority, and
+             the yield only happens when the running one
+             has nothing to do. The other new yield is at GetMessage -- see
+             "(E)" at the USER dispatch -- for a task launched and never run. */
+        else if (frame->Id == WOW32_WOWWAITFORMSGANDEVENT
+                 && current != 0 && current != WOWUSER_TASK_NONE16 && !WowSchedInterTaskLive()
+                 && (freedSlotIndex = WowSchedPick(current)) >= 0) {
+            WORD toTask = g_WowSchedSlots[freedSlotIndex].Task;
+            /* Written into the WAITING task's frame now; its epilogue
+               reads them whenever it is resumed, off its own stack. */
+            Wow32SetReturn(frame, 0);
+            Wow32PokeWord(frame->FrameBase + WOW32_OFF_MODE, WOW32_MODE_ORDINARY);
+            INT isTopLevel = WowSchedTopLevel(&g_WowSchedSlots[freedSlotIndex]);
+            WowSchedPoke(g_WowSchedSlots[freedSlotIndex].ModeLinear, WOW32_MODE_ORDINARY);
+            WowSchedSwap(&g_WowSchedSlots[freedSlotIndex], tib, modeLinear, current, VDM_BOP_LENGTH);
+            if (isTopLevel) g_WowSchedCurrentBase = g_WowCallDepth;
+            WowSchedSetCurrent(toTask);
+            WowTaskChdir(toTask, &cursor);           /* #164 */
+            ++g_WowSchedSwitches;
+            cursor = LogPut(cursor, "\n     WOWSCHED: task 0x"); cursor = LogHex(cursor, current);
+            cursor = LogPut(cursor, " waited for a message -- YIELDING to parked task 0x");
+            cursor = LogHex(cursor, toTask);
+            cursor = LogPut(cursor, " ([0x228] follows the context)\r\n");
+            WowLogFlush(base, &cursor);
+            /* EIP is NOT advanced here: the whole context has been
+               replaced, and the resumed one already points where it
+               should. Advancing would step the OTHER task's EIP. */
+            { *cursorIo = cursor; *exitCodeOut = 1; return HOST_FLOW_RETURN; }
+        }
+    }
+    *cursorIo = cursor; return HOST_FLOW_NEXT;
+}
+
+
+/* (F) s92 (#306), launch-first: WinExec/LoadModule return only after the new task has run to its first yield, so the parent's next call is where it yields to the child. */
+static INT Wow32RunLaunchedTaskFirst(PSTR *cursorIo, PSTR const base, WOW32_FRAME *frame, volatile BYTE * const tib, INT *exitCodeOut)
+{
+    PSTR cursor = *cursorIo;
+    /* ── (F) s92 (#306): LAUNCH-FIRST. Win16's WinExec/LoadModule does not return
+         before the new task has run to its first yield (on real WOW the task has
+         its own thread and the creator waits for it). USER's WinHelp() depends on
+         it: it starts WINHELP.EXE and at once looks for the "MS_WINHELP" window;
+         with the new task merely parked the window did not exist and Calc and
+         Notepad said "Not enough memory available" (runs/s92/gate3). So the
+         PARENT's next call is where it yields: parked AT this BOP (re-issued on
+         resume), marked runnable at the current callback depth; the child runs,
+         and its first empty GetMessage at that same depth (E) hands back.
+       ⚠ Not for the BOOT launch of WOWEXEC (g_WowSchedShell still 0) -- that creator
+         retires, moment (C), and yielding there killed every launch (gate4) --
+         nor for WOWEXEC's own launches, which every shelf program was measured
+         with. Never inside a C-stack nested run or a modal loop. */
+    if (g_WowSchedOn && g_WowSchedLaunchChild) {
+        WORD freshCurrentTask = WowSchedCurrentTask();
+        if (freshCurrentTask && freshCurrentTask != WOWUSER_TASK_NONE16 && freshCurrentTask != g_WowSchedLaunchChild) {
+            WORD child = g_WowSchedLaunchChild;
+            INT  freshIndex, freshSlotIndex = -1;
+            g_WowSchedLaunchChild = 0;
+            for (freshIndex = 0; freshIndex < WOWSCHED_MAX; ++freshIndex)
+                if (g_WowSchedSlots[freshIndex].IsUsed && g_WowSchedSlots[freshIndex].IsFresh
+                    && g_WowSchedSlots[freshIndex].Task == child) freshSlotIndex = freshIndex;
+            if (freshSlotIndex >= 0 && g_WowSchedShell && freshCurrentTask != g_WowSchedShell
+                && g_WowWindowNested == 0 && !WowDlgActive() && !WowSchedInterTaskLive()) {
+                DWORD freshModeLinear = (DWORD)(ULONG_PTR)(frame->FrameBase + WOW32_OFF_MODE);
+                WowSchedPoke(g_WowSchedSlots[freshSlotIndex].ModeLinear, WOW32_MODE_ORDINARY);
+                WowSchedSwap(&g_WowSchedSlots[freshSlotIndex], tib, freshModeLinear, freshCurrentTask, 0);
+                g_WowSchedSlots[freshSlotIndex].IsRunnable = 1;          /* the parent, mid-work */
+                g_WowSchedSlots[freshSlotIndex].CallbackDepth  = g_WowCallDepth;
+                g_WowSchedCurrentBase = g_WowCallDepth;             /* the child's top level */
+                WowSchedSetCurrent(child);
+                WowTaskChdir(child, &cursor);
+                ++g_WowSchedSwitches;
+                cursor = LogPut(cursor, "\n     WOWSCHED: task 0x"); cursor = LogHex(cursor, freshCurrentTask);
+                cursor = LogPut(cursor, " launched task 0x"); cursor = LogHex(cursor, child);
+                cursor = LogPut(cursor, " -- LAUNCH-FIRST at depth 0x"); cursor = LogHex(cursor, (DWORD)g_WowCallDepth);
+                cursor = LogPut(cursor, ": the child runs to its first yield before the"
+                            " parent's call (id 0x");
+                cursor = LogHex(cursor, frame->Id); cursor = LogPut(cursor, ") is serviced (#306)\r\n");
+                WowLogFlush(base, &cursor);
+                { *cursorIo = cursor; *exitCodeOut = 1; return HOST_FLOW_RETURN; }
+            }
+        }
+    }
+    *cursorIo = cursor; return HOST_FLOW_NEXT;
+}
+
 static INT DpmiServicePmIntBody(DOS_MACHINE *machine, volatile BYTE *tib, DWORD vector,
                                     UINT steps)
 {
@@ -2388,160 +3393,13 @@ static INT DpmiServicePmIntBody(DOS_MACHINE *machine, volatile BYTE *tib, DWORD 
                     g_WowCallRetarget = WowSchedRetarget;
                     g_WowCallUntarget = WowSchedUntarget;
                 }
-                /* ── (F) s92 (#306): LAUNCH-FIRST. Win16's WinExec/LoadModule does not return
-                     before the new task has run to its first yield (on real WOW the task has
-                     its own thread and the creator waits for it). USER's WinHelp() depends on
-                     it: it starts WINHELP.EXE and at once looks for the "MS_WINHELP" window;
-                     with the new task merely parked the window did not exist and Calc and
-                     Notepad said "Not enough memory available" (runs/s92/gate3). So the
-                     PARENT's next call is where it yields: parked AT this BOP (re-issued on
-                     resume), marked runnable at the current callback depth; the child runs,
-                     and its first empty GetMessage at that same depth (E) hands back.
-                   ⚠ Not for the BOOT launch of WOWEXEC (g_WowSchedShell still 0) -- that creator
-                     retires, moment (C), and yielding there killed every launch (gate4) --
-                     nor for WOWEXEC's own launches, which every shelf program was measured
-                     with. Never inside a C-stack nested run or a modal loop. */
-                if (g_WowSchedOn && g_WowSchedLaunchChild) {
-                    WORD freshCurrentTask = WowSchedCurrentTask();
-                    if (freshCurrentTask && freshCurrentTask != WOWUSER_TASK_NONE16 && freshCurrentTask != g_WowSchedLaunchChild) {
-                        WORD child = g_WowSchedLaunchChild;
-                        INT  freshIndex, freshSlotIndex = -1;
-                        g_WowSchedLaunchChild = 0;
-                        for (freshIndex = 0; freshIndex < WOWSCHED_MAX; ++freshIndex)
-                            if (g_WowSchedSlots[freshIndex].IsUsed && g_WowSchedSlots[freshIndex].IsFresh
-                                && g_WowSchedSlots[freshIndex].Task == child) freshSlotIndex = freshIndex;
-                        if (freshSlotIndex >= 0 && g_WowSchedShell && freshCurrentTask != g_WowSchedShell
-                            && g_WowWindowNested == 0 && !WowDlgActive() && !WowSchedInterTaskLive()) {
-                            DWORD freshModeLinear = (DWORD)(ULONG_PTR)(frame.FrameBase + WOW32_OFF_MODE);
-                            WowSchedPoke(g_WowSchedSlots[freshSlotIndex].ModeLinear, WOW32_MODE_ORDINARY);
-                            WowSchedSwap(&g_WowSchedSlots[freshSlotIndex], tib, freshModeLinear, freshCurrentTask, 0);
-                            g_WowSchedSlots[freshSlotIndex].IsRunnable = 1;          /* the parent, mid-work */
-                            g_WowSchedSlots[freshSlotIndex].CallbackDepth  = g_WowCallDepth;
-                            g_WowSchedCurrentBase = g_WowCallDepth;             /* the child's top level */
-                            WowSchedSetCurrent(child);
-                            WowTaskChdir(child, &cursor);
-                            ++g_WowSchedSwitches;
-                            cursor = LogPut(cursor, "\n     WOWSCHED: task 0x"); cursor = LogHex(cursor, freshCurrentTask);
-                            cursor = LogPut(cursor, " launched task 0x"); cursor = LogHex(cursor, child);
-                            cursor = LogPut(cursor, " -- LAUNCH-FIRST at depth 0x"); cursor = LogHex(cursor, (DWORD)g_WowCallDepth);
-                            cursor = LogPut(cursor, ": the child runs to its first yield before the"
-                                        " parent's call (id 0x");
-                            cursor = LogHex(cursor, frame.Id); cursor = LogPut(cursor, ") is serviced (#306)\r\n");
-                            WowLogFlush(base, &cursor);
-                            return 1;
-                        }
-                    }
+                {
+                    INT exitCode, flow = Wow32RunLaunchedTaskFirst(&cursor, base, &frame, tib, &exitCode);
+                    if (flow == HOST_FLOW_RETURN) return exitCode;
                 }
-                if (g_WowSchedOn && frame.IsKernel) {
-                    DWORD modeLinear = (DWORD)(ULONG_PTR)(frame.FrameBase + WOW32_OFF_MODE);
-                    WORD  current     = WowSchedCurrentTask();
-                    /* (A) THE LAUNCH -- AND THE SWITCH HAS TO HAPPEN HERE.
-                         ⚠ MEASURED THE HARD WAY. The first cut saved this frame,
-                           let the new task run first (as it does today) and meant to
-                           hand the creator back at the task's WaitEvent. It faulted
-                           in SwitchToTask, because THE FRAME'S MEMORY IS THE NEW
-                           TASK'S OWN STACK: the epilogue pops it, SP moves up, and
-                           the task pushes straight back over it. By WaitEvent the
-                           frame is gone. Switching HERE is the only ordering that
-                           works, and it is also the one that leaves the new task's
-                           stack frozen and untouched while the creator runs -- which
-                           is exactly what makes resuming it later sound.
-                         So: park the new task at this instruction, and send the
-                           creator home through epilogue mode 25. */
-                    INT freedSlotIndex = (frame.Id == WOW32_TASK_LAUNCH) ? WowSchedFree() : -1;
-                    if (frame.Id == WOW32_TASK_LAUNCH && freedSlotIndex >= 0) {
-                        DWORD taskBase = DpmiSelectorBase(current);
-                        WORD  taskInstance = 0;
-                        INT   isFromTdb = 0;
-                        if (taskBase) {
-                            const volatile BYTE *task = (const volatile BYTE *)(ULONG_PTR)taskBase;
-                            taskInstance = (WORD)(task[WOW_TDB_INSTANCE] | (task[WOW_TDB_INSTANCE + 1] << BYTE_SHIFT));
-                            isFromTdb = taskInstance != 0;
-                        }
-                        /* ★ LoadModule's result is the new task's instance handle, and
-                             InitTask has NOT run yet, so TDB+0x1c is still zero here.
-                             The fallback is Win16's own invariant, not a guess about
-                             this one program: a task's SS and DS are two aliases of one
-                             descriptor, so its instance handle is its stack selector
-                             with the low bits clear. The stock oracle shows it twice
-                             (SS=0x16bf/hInst=0x16be, SS=0x03af/hInst=0x03ae) and our
-                             own task a third time. It is VERIFIED at (C) below against
-                             the value krnl386 itself writes, and a mismatch is loud. */
-                        if (!taskInstance) taskInstance = (WORD)(VDM_REG(tib, VTIB_SS) & WOW_INSTANCE_FROM_SELECTOR);
-                        WowSchedSave(&g_WowSchedSlots[freedSlotIndex], tib, modeLinear, current, VDM_BOP_LENGTH);
-                        g_WowSchedSlots[freedSlotIndex].IsFresh = 1;          /* s92: not run yet (#306) */
-                        g_WowSchedLaunchChild = current;            /* the parent is the next caller */
-                        WowTaskDirectoryHere(current);             /* #164: its launch directory */
-                        Wow32SetReturn(&frame, taskInstance);
-                        Wow32PokeWord(frame.FrameBase + WOW32_OFF_MODE, WOW32_MODE_SWITCHBACK);
-                        ++g_WowSchedSwitches;
-                        cursor = LogPut(cursor, "\n     WOWSCHED: task 0x"); cursor = LogHex(cursor, current);
-                        cursor = LogPut(cursor, " parked at its launch; creator sent home through"
-                                    " epilogue mode 25 with LoadModule result 0x");
-                        cursor = LogHex(cursor, taskInstance);
-                        cursor = LogPut(cursor, isFromTdb ? " (TDB+0x1c)" : " (SS&~1 -- verified at the"
-                                                              " resume)");
-                        cursor = LogPut(cursor, "\r\n");
-                        WowLogFlush(base, &cursor);
-                        VDM_REG(tib, VTIB_EIP) += VDM_BOP_LENGTH;
-                        return 1;
-                    }
-                    /* ── (D) ★★★ A TASK ASKS TO WAIT FOR A MESSAGE. THAT IS THE
-                           YIELD, AND IT IS THE MOMENT THAT WAS MISSING. ────────
-                         Moment (C) resumes the parked task when the creator
-                         RETIRES. WOWEXEC never retires -- it registers its
-                         classes, opens its windows and settles into its message
-                         loop, so the current-task word never reaches 0 and a
-                         task parked at its launch waits forever. That is
-                         exactly what SYSEDIT.EXE does today: it gets a task
-                         database, a launch frame and a task id, and never runs.
-
-                       ★ WowWaitForMsgAndEvent IS the Win16 "I have nothing to do"
-                         primitive -- krnl386 export 262, and the only thing
-                         WOWEXEC's pump calls when the queue is empty. A task
-                         blocking on it is a task offering the CPU, so this is
-                         where a cooperative scheduler is supposed to act, and it
-                         needs no new lever: the frame is already a WOW32 frame
-                         with a mode word and a return hole.
-
-                       ★ THE WAIT RETURNS 0, AND THAT IS OBSERVED, not chosen: on
-                         a non-zero answer WOWEXEC waits again; on zero it goes on
-                         to PeekMessage. So 0 is "carry on and look", which
-                         is what a task that has just been given its turn back
-                         should do.
-
-                       ★ s92 (#306): NO LONGER TWO TASKS ONLY. Every task that is not
-                         running sits in g_WowSchedSlots; this yield goes ROUND ROBIN to the
-                         next one (WowSchedPick). Round robin and not krnl386's own priority
-                         order (TDB+0x08): every Win16 task here runs at the same priority, and
-                         the yield only happens when the running one
-                         has nothing to do. The other new yield is at GetMessage -- see
-                         "(E)" at the USER dispatch -- for a task launched and never run. */
-                    else if (frame.Id == WOW32_WOWWAITFORMSGANDEVENT
-                             && current != 0 && current != WOWUSER_TASK_NONE16 && !WowSchedInterTaskLive()
-                             && (freedSlotIndex = WowSchedPick(current)) >= 0) {
-                        WORD toTask = g_WowSchedSlots[freedSlotIndex].Task;
-                        /* Written into the WAITING task's frame now; its epilogue
-                           reads them whenever it is resumed, off its own stack. */
-                        Wow32SetReturn(&frame, 0);
-                        Wow32PokeWord(frame.FrameBase + WOW32_OFF_MODE, WOW32_MODE_ORDINARY);
-                        INT isTopLevel = WowSchedTopLevel(&g_WowSchedSlots[freedSlotIndex]);
-                        WowSchedPoke(g_WowSchedSlots[freedSlotIndex].ModeLinear, WOW32_MODE_ORDINARY);
-                        WowSchedSwap(&g_WowSchedSlots[freedSlotIndex], tib, modeLinear, current, VDM_BOP_LENGTH);
-                        if (isTopLevel) g_WowSchedCurrentBase = g_WowCallDepth;
-                        WowSchedSetCurrent(toTask);
-                        WowTaskChdir(toTask, &cursor);           /* #164 */
-                        ++g_WowSchedSwitches;
-                        cursor = LogPut(cursor, "\n     WOWSCHED: task 0x"); cursor = LogHex(cursor, current);
-                        cursor = LogPut(cursor, " waited for a message -- YIELDING to parked task 0x");
-                        cursor = LogHex(cursor, toTask);
-                        cursor = LogPut(cursor, " ([0x228] follows the context)\r\n");
-                        WowLogFlush(base, &cursor);
-                        /* EIP is NOT advanced here: the whole context has been
-                           replaced, and the resumed one already points where it
-                           should. Advancing would step the OTHER task's EIP. */
-                        return 1;
-                    }
+                {
+                    INT exitCode, flow = Wow32ScheduleKernelCall(&cursor, base, &frame, tib, &exitCode);
+                    if (flow == HOST_FLOW_RETURN) return exitCode;
                 }
                 /* ── ★ #306 (s90): WowWaitForMsgAndEvent WITH NOBODY TO YIELD TO MUST
                      WAIT. The arm above handles it when another task is parked; with
@@ -2569,185 +3427,17 @@ static INT DpmiServicePmIntBody(DOS_MACHINE *machine, volatile BYTE *tib, DWORD 
                     } else cursor = base;
                     return 1;
                 }
-                /* ── DOS-DEPENDENT WOW32 SERVICES. (GH #128) ──────────────────
-                     Most of the surface is pure Win32 and lives in wow32.h. A few
-                     need the DOS machine, so they are answered here where it is in
-                     scope. 0xc9 is the first: krnl386's INT 21h AH=47h arm calls it
-                     with (drive, selector, offset) and, unlike the file family, it
-                     may NOT be declined -- its call site treats DX=0xFFFF as a hard
-                     error and reports failure to the caller rather than chaining to
-                     DOS (tools/ne/wowdecline.py). Leaving it unimplemented is what
-                     produced "Unable to open KERNEL executable": krnl386 could not
-                     learn the current directory, so it never built a path to open. */
-                /* ── ★ THE READ THAT CANNOT BE DECLINED. (GH #128, session 34) ────
-                     krnl386 calls 0x97 (read) from two call sites (told apart by the
-                     frame's `from` word). At one the sentinel means "ask real DOS" and
-                     declining is the whole answer. At the other it does NOT chain --
-                     the failure goes straight back to its own caller (observed) -- so
-                     here the read has to actually happen.
-                     That is the read of SYSTEM.DRV's segment data, and stepping it
-                     over is what left krnl386 saying "Missing 16-bit system module"
-                     after it had opened the file successfully.
-                   The argument layout is measured, not assumed: two calls in one run,
-                     `(.. 0x40 0 0x0eaa 0x1f 5)` and `(.. 0x560 0 0 0x17 5)`, and the
-                     first was followed by the chained `AH=3Fh` reading exactly 0x40
-                     bytes into that same buffer. So words 4-5 are a DWORD count, 6-7 a
-                     16:16 buffer pointer, 8 the handle.
-                   ⚠ DX:AX IS A 32-BIT BYTE COUNT, not a flag. Failure is
-                     0xFFFFFFFF in DX:AX, so a short read must return the SHORT COUNT
-                     and only a real failure may return the sentinel. */
-                if (frame.IsKernel && frame.Id == WOW32_FILE_READ && !Wow32MayDecline(frame.Id, frame.CallSite)) {
-                    DWORD count  = (DWORD)Wow32ArgWord(&frame, WOW32_FILE_READ_ARG_COUNT)
-                               | ((DWORD)Wow32ArgWord(&frame, WOW32_FILE_READ_ARG_COUNT + WOW_WORD_BYTES) << WORD_SHIFT);
-                    DWORD bufferOffset = Wow32ArgWord(&frame, WOW32_FILE_READ_ARG_BUFFER_OFFSET);
-                    WORD  bufferSelector = Wow32ArgWord(&frame, WOW32_FILE_READ_ARG_BUFFER_SELECTOR);
-                    DWORD argumentHandle    = Wow32ArgWord(&frame, WOW32_FILE_READ_ARG_HANDLE);
-                    DWORD bufferBase = DpmiSelectorBase(bufferSelector);
-                    DWORD bytesRead = 0;
-                    INT isOk = 0;
-                    cursor = LogPut(cursor, "\n     WOW32 0x97 read (site 0x"); cursor = LogHex(cursor, frame.CallSite);
-                    cursor = LogPut(cursor, ", may NOT decline) h="); cursor = LogHex(cursor, argumentHandle);
-                    cursor = LogPut(cursor, " cnt=0x"); cursor = LogHex(cursor, count);
-                    cursor = LogPut(cursor, " -> 0x"); cursor = LogHex(cursor, bufferSelector);
-                    cursor = LogPut(cursor, ":0x"); cursor = LogHex(cursor, bufferOffset);
-                    cursor = LogPut(cursor, " lin=0x"); cursor = LogHex(cursor, bufferBase + bufferOffset);
-                    if (argumentHandle < DOS_MAX_FILES && machine->FileHandles[argumentHandle] && bufferBase
-                        && HostWritable((VOID *)(ULONG_PTR)(bufferBase + bufferOffset), count)) {
-                        isOk = ReadFile(machine->FileHandles[argumentHandle], (VOID *)(ULONG_PTR)(bufferBase + bufferOffset),
-                                      count, &bytesRead, NULL) ? 1 : 0;
-                    }
-                    if (isOk) { Wow32SetReturn(&frame, bytesRead); ++g_Wow32Serviced;
-                              cursor = LogPut(cursor, " -> read 0x"); cursor = LogHex(cursor, bytesRead); cursor = LogPut(cursor, "b"); }
-                    else    { Wow32SetReturn(&frame, WOW32_FILE_READ_FAILED_U); ++g_Wow32Unimplemented;
-                              cursor = LogPut(cursor, " -> FAILED (bad handle/selector/buffer)"); }
-                    cursor = LogPut(cursor, "\r\n");
-                    WowLogFlush(base, &cursor);
-                    VDM_REG(tib, VTIB_EIP) += VDM_BOP_LENGTH;
-                    return 1;
+                {
+                    INT exitCode, flow = Wow32ServiceFileRead(&cursor, base, &frame, machine, tib, &exitCode);
+                    if (flow == HOST_FLOW_RETURN) return exitCode;
                 }
-                if (frame.IsKernel && frame.Id == WOW32_GETCURDIR && g_PmTransferSegment) {
-                    DWORD directoryOffset  = Wow32ArgWord(&frame, WOW32_GETCURDIR_ARG_BUFFER_OFFSET);
-                    WORD  directorySelector = Wow32ArgWord(&frame, WOW32_GETCURDIR_ARG_BUFFER_SELECTOR);
-                    DWORD drive  = Wow32ArgWord(&frame, WOW32_GETCURDIR_ARG_DRIVE) & BYTE_MASK;
-                    DWORD savedAx = VDM_REG(tib, VTIB_EAX), savedDx = VDM_REG(tib, VTIB_EDX);
-                    DWORD savedDs = VDM_REG(tib, VTIB_DS),  savedSi = VDM_REG(tib, VTIB_ESI);
-                    DWORD directoryBase = DpmiSelectorBase(directorySelector);
-                    volatile BYTE *transfer = (volatile BYTE *)(ULONG_PTR)
-                                        ((DWORD)g_PmTransferSegment << PARAGRAPH_SHIFT);
-                    INT item;
-                    for (item = 0; item < WOW32_GETCURDIR_BUFFER_SIZE; ++item) transfer[item] = 0;
-                    VDM_SET16(tib, VTIB_EAX, DOS_FN_GET_CURRENT_DIRECTORY << BYTE_SHIFT);
-                    VDM_SET16(tib, VTIB_EDX, (WORD)drive);
-                    VDM_SET16(tib, VTIB_DS,  g_PmTransferSegment);
-                    VDM_SET16(tib, VTIB_ESI, 0);
-                    machine->TraceCursor = cursor; DosInt21SetProtectedMode(TRUE); DosInt21(machine); DosInt21SetProtectedMode(FALSE); cursor = machine->TraceCursor;
-                    {   DWORD carryFlag = VDM_REG(tib, VTIB_EFLAGS) & EFLAGS_CF_U;
-                        VDM_REG(tib, VTIB_EAX) = savedAx; VDM_REG(tib, VTIB_EDX) = savedDx;
-                        VDM_REG(tib, VTIB_DS)  = savedDs; VDM_REG(tib, VTIB_ESI) = savedSi;
-                        cursor = LogPut(cursor, "  WOW32 0xc9 GetCurrentDirectory drive=0x");
-                        cursor = LogHex(cursor, drive);
-                        cursor = LogPut(cursor, " -> \""); cursor = LogPut(cursor, (PCSTR)transfer);
-                        cursor = LogPut(cursor, "\" cf="); cursor = LogHex(cursor, carryFlag);
-                        if (!carryFlag && directoryBase) {
-                            volatile BYTE *destinationBytes = (volatile BYTE *)(ULONG_PTR)(directoryBase + directoryOffset);
-                            if (MemoryReadable((ULONG_PTR)destinationBytes, WOW32_GETCURDIR_BUFFER_SIZE))
-                                for (item = 0; item < WOW32_GETCURDIR_BUFFER_SIZE; ++item) destinationBytes[item] = transfer[item];
-                            else { carryFlag = 1; cursor = LogPut(cursor, " (BUFFER UNREACHABLE)"); }
-                        }
-                        /* DX must not come back 0xFFFF -- that is this call site's
-                           failure sentinel, and it is checked before AX. */
-                        Wow32SetReturn(&frame, carryFlag ? DOS_ERR_INVALID_DRIVE : 0u);
-                        cursor = LogPut(cursor, "\r\n");
-                    }
-                    ++g_Wow32Serviced;
-                    VDM_REG(tib, VTIB_EIP) += VDM_BOP_LENGTH;
-                    cursor = LogPut(cursor, " -> SERVICED (DOS-backed), returned 0x");
-                    cursor = LogHex(cursor, frame.Result); cursor = LogPut(cursor, "\r\n");
-                    WowLogFlush(base, &cursor);
-                    return 1;
+                {
+                    INT exitCode, flow = Wow32ServiceGetCurrentDirectory(&cursor, base, &frame, tib, machine, &exitCode);
+                    if (flow == HOST_FLOW_RETURN) return exitCode;
                 }
-                /* ── ★★★ 0xc5 ResolveModulePath -- WHERE IS THIS MODULE? ─────────
-                     Serviced here rather than in wow32.h because the answer is a
-                     16:16 far pointer: it needs memory the guest can reach and a
-                     selector for it, and both live on this side. See the note on
-                     WOW32_RESOLVEMODULEPATH for how the two call sites pin the
-                     resolve/release pair and prove `dst` takes a POINTER.
-
-                   ★ WHAT IT FIXES, MEASURED. krnl386 asks this about `SHELL.DLL`
-                     while binding SYSEDIT's imports. Answered 0, it falls back to
-                     composing the bare name against the CURRENT DIRECTORY and
-                     opens `C:\Documents and Settings\Matthew\SHELL.DLL`, gle=2 --
-                     and the whole launch fails there. The same thing happened
-                     earlier to MMSYSTEM.DLL and WFWNET.DRV out of SYSTEM.INI's
-                     [drivers].
-
-                   ⚠ NOT-FOUND MUST STILL ANSWER 0. The fallback tail is the
-                     guest's own handling for "I could not resolve this", and a
-                     host that invented a path for a module that is not there
-                     would turn a clean failure into a wrong filename.
-
-                   ⚠ SearchPathA IS THE WIN32 ORDER, NOT WIN16'S. Close enough for
-                     what krnl386 needs -- it reaches the Windows and system
-                     directories, which is where the 16-bit modules are, and this
-                     rig's own WOWEXEC/KRNL386 were found there. It also consults
-                     the current directory, which Win16 did too. Recorded as a
-                     difference rather than claimed as equivalence. */
-                if (frame.IsKernel && frame.Id == WOW32_RESOLVEMODULEPATH && g_WowPathSegment) {
-                    volatile BYTE *source = Wow32ArgPointer(&frame, WOW32_RESOLVEMODULEPATH_ARG_SOURCE);
-                    volatile BYTE *destination = Wow32ArgPointer(&frame, WOW32_RESOLVEMODULEPATH_ARG_DESTINATION);
-                    CHAR name[300], full[300];
-                    INT item;
-                    cursor = LogPut(cursor, "  WOW32 0xc5 ResolveModulePath ");
-                    if (!source) {
-                        /* (dst, NULL) is the RELEASE half of the pair. Nothing to
-                           free -- the scratch is a fixed paragraph -- but it must
-                           still be answered, and it must say so in the log rather
-                           than look like a resolve that found nothing. */
-                        cursor = LogPut(cursor, "RELEASE");
-                        Wow32SetReturn(&frame, 1);
-                    } else {
-                        DWORD length = 0; PSTR filePart = 0;
-                        for (item = 0; item < (INT)sizeof name - 1 && source[item]; ++item)
-                            name[item] = (CHAR)source[item];
-                        name[item] = 0;
-                        cursor = LogPut(cursor, "\""); cursor = LogPut(cursor, name); cursor = LogPut(cursor, "\" -> ");
-                        if (name[0])
-                            length = SearchPathA(NULL, name, NULL, sizeof full, full, &filePart);
-                        if (length && length < sizeof full) {       /* krnl386 opens this via DOS: 8.3 only */
-                            WowShorten(full, sizeof full);
-                            for (length = 0; full[length]; ++length) ;
-                        }
-                        if (!length || length >= sizeof full || !destination) {
-                            cursor = LogPut(cursor, "NOT FOUND (krnl386 will fall back to its own"
-                                        " name, as it does today)");
-                            Wow32SetReturn(&frame, 0);
-                        } else {
-                            volatile BYTE *pathBytes = (volatile BYTE *)(ULONG_PTR)
-                                                ((DWORD)g_WowPathSegment << PARAGRAPH_SHIFT);
-                            WORD selector = DpmiSegmentToDescriptor(g_WowPathSegment);
-                            for (item = 0; item <= (INT)length && item < WOW_PATH_PARAS * PARAGRAPH_SIZE - 1; ++item)
-                                pathBytes[item] = (BYTE)full[item];
-                            pathBytes[item < WOW_PATH_PARAS * PARAGRAPH_SIZE - 1 ? item : WOW_PATH_PARAS * PARAGRAPH_SIZE - 1] = 0;
-                            if (!selector) {
-                                cursor = LogPut(cursor, "NO SELECTOR (LDT full)");
-                                Wow32SetReturn(&frame, 0);
-                            } else {
-                                Wow32PokeWord(destination,     0);        /* offset  */
-                                Wow32PokeWord(destination + X86_FAR_POINTER_SEGMENT, selector);      /* segment */
-                                cursor = LogPut(cursor, "\""); cursor = LogPut(cursor, full);
-                                cursor = LogPut(cursor, "\" at 0x"); cursor = LogHex(cursor, selector);
-                                cursor = LogPut(cursor, ":0000");
-                                Wow32SetReturn(&frame, 1);
-                            }
-                        }
-                    }
-                    cursor = LogPut(cursor, "\r\n");
-                    ++g_Wow32Serviced;
-                    VDM_REG(tib, VTIB_EIP) += VDM_BOP_LENGTH;
-                    cursor = LogPut(cursor, " -> SERVICED (host path search), returned 0x");
-                    cursor = LogHex(cursor, frame.Result); cursor = LogPut(cursor, "\r\n");
-                    WowLogFlush(base, &cursor);
-                    return 1;
+                {
+                    INT exitCode, flow = Wow32ServiceResolveModulePath(&cursor, base, &frame, tib, &exitCode);
+                    if (flow == HOST_FLOW_RETURN) return exitCode;
                 }
                 /* ── ★ ExitKernelThunk: krnl386 SAYS IT IS DONE, SO STOP. ──────
                      krnl386 does not expect to be returned to from this call:
@@ -2777,139 +3467,9 @@ static INT DpmiServicePmIntBody(DOS_MACHINE *machine, volatile BYTE *tib, DWORD 
                     cursor = LogHex(cursor, g_WowKernel2Segment);
                     cursor = LogPut(cursor, " (learned from the stub's own bytes in the file)");
                 }
-                /* ── ★★★★ seg2 0xd1: THE NEW TASK'S ENVIRONMENT. ───────────────
-                     ★ WHAT IT IS, AND HOW THAT IS KNOWN. It is called once per task
-                       launch, before the new task's PSP is built (`AH=55h` follows
-                       it), and what it returns is what then appears in that new PSP's
-                       environment field, +0x2c -- the `PSPENV CHANGED` watch shows the
-                       answer land there. A 0 answer fails the launch. So the value
-                       this call returns IS the environment of the task about to run,
-                       and krnl386 goes on to give it an owner as a global object of
-                       its own -- a real object, not a token.
-
-                     ★★ AND THAT CLOSES A FAULT WE CAUSED OURSELVES. Session 39 ran
-                       `0xd1` as an EXPERIMENT (`wow32ret.txt`, `d1 00000001`) on the
-                       reading that "it only has to be non-zero", and SYSEDIT then
-                       died at `0x0abf:0x09f0` loading ES with 1 -- the null
-                       descriptor -- read from its own `PSP+0x2c`. The 1 in that field
-                       was OUR OWN EXPERIMENT VALUE, and the run log says so without
-                       any new measurement: the `0xd1` answer (`ANSWERED
-                       0x00000001`), then AH=55h, then
-                       `PSPENV CHANGED: sel 0x0adf +0x2c 0x03c7 -> 0x00000001`, then
-                       the next call in.
-                       "Non-zero" was a measurement of the abort, not of the meaning.
-
-                     ⚠ SO THE ANSWER MUST BE A SELECTOR THE GUEST CAN LOAD, and one
-                       krnl386 owns. Two sources, in the DOS EXEC order, and the log
-                       says which one was taken:
-                         1. LOADPARMS.segEnv -- the far pointer at args +2/+4 is the
-                            parameter block (`0x03df:0x1ce4` in the run, WOWEXEC's own
-                            stack), and its first word is the environment.
-                         2. Zero there means INHERIT, and the parent is the current
-                            task -- whose PSP is the last one this host built, because
-                            the child's does not exist yet (`AH=55h` for it comes
-                            AFTER this call: log lines 5355 then 5376).
-                       ⚠ And WOWEXEC's launcher is visibly playing exactly that
-                         protocol: it installs 0x0aff into its OWN PSP+0x2c before the
-                         launch and restores 0x03c7 after it, which is the DOS way of
-                         handing an environment to a child and is why (2) is not a
-                         guess.
-                     ⚠ IF NEITHER SOURCE YIELDS A SELECTOR THAT RESOLVES, SAY SO AND
-                       DO NOT ANSWER. Inventing a value here is how the 1 got in.
-
-                     ⚠⚠ AND IT MUST BE A **COPY**. The first cut handed the source
-                       selector straight back, and the run said no: loading ES with
-                       0x0aff now faulted at the LOAD (`err=0x0afc`, the
-                       selector's own index) instead of at the first use, because
-                       WOWEXEC's launcher FREES the block as soon as LoadModule
-                       returns -- `LDTSYNC idx 0x15f <- base=0 acc=0x00` one line
-                       before `PSPENV CHANGED: sel 0x03bf +0x2c 0x0aff -> 0x03c7`.
-                       That is the DOS EXEC protocol played out in full: build an
-                       environment for the child, launch, free it, restore your own.
-                       The child's copy is what the call is FOR -- on real WOW the
-                       32-bit side allocates a Win16 global and copies into it. This
-                       host cannot call GlobalAlloc (nothing here has ever called
-                       INTO 16-bit code), so the copy lives in a host paragraph with
-                       a host selector, which over-lives rather than under-lives.
-                     ⚠ THE DIFFERENCE THAT LEAVES: the block is not in krnl386's
-                       global arena, so krnl386's owner write for it (FarSetOwner)
-                       will not find an arena entry. Recorded, not hidden. */
-                if (!frame.IsKernel && g_WowKernel2Segment && frame.StubSegment == g_WowKernel2Segment
-                    && frame.Id == WOW32K2_TASKENV) {
-                    WORD  parameterBlockSelector = Wow32ArgWord(&frame, WOW32K2_TASKENV_ARG_BLOCK_SELECTOR), parameterBlockOffset = Wow32ArgWord(&frame, WOW32K2_TASKENV_ARG_BLOCK_OFFSET);
-                    DWORD parameterBlockLinear = parameterBlockSelector ? DpmiSelectorBase(parameterBlockSelector) : 0;
-                    WORD  environment = 0;
-                    PCSTR source = "";
-                    cursor = LogPut(cursor, "\n     WOW32 seg2 0xd1 task environment: parmblock 0x");
-                    cursor = LogHex(cursor, parameterBlockSelector); cursor = LogPut(cursor, ":0x"); cursor = LogHex(cursor, parameterBlockOffset);
-                    if (parameterBlockLinear && HostReadable((const VOID *)(ULONG_PTR)(parameterBlockLinear + parameterBlockOffset), 2)) {
-                        const volatile BYTE *pathBytes =
-                            (const volatile BYTE *)(ULONG_PTR)(parameterBlockLinear + parameterBlockOffset);
-                        environment = (WORD)(pathBytes[0] | (pathBytes[1] << BYTE_SHIFT));
-                        source = "LOADPARMS.segEnv";
-                    }
-                    if (!environment && g_WowPspCount > 0) {
-                        WORD  pspSelector = g_WowPspSelector[g_WowPspCount - 1];
-                        DWORD pspLinear = DpmiSelectorBase(pspSelector);
-                        cursor = LogPut(cursor, " segEnv=0 (inherit) parent PSP 0x");
-                        cursor = LogHex(cursor, pspSelector);
-                        if (pspLinear && HostReadable((const VOID *)(ULONG_PTR)pspLinear, DOS_PSP_ENVIRONMENT + sizeof(WORD))) {
-                            const volatile BYTE *psp =
-                                (const volatile BYTE *)(ULONG_PTR)pspLinear;
-                            environment = (WORD)(psp[DOS_PSP_ENVIRONMENT] | (psp[DOS_PSP_ENVIRONMENT + 1] << BYTE_SHIFT));
-                            source = "the parent PSP's +0x2c";
-                        }
-                    }
-                    {   DWORD environmentLinear = environment ? DpmiSelectorBase(environment) : 0;
-                        DWORD cap  = (DWORD)WOW_ENV_PARAS * PARAGRAPH_SIZE_U;
-                        cursor = LogPut(cursor, " src 0x"); cursor = LogHex(cursor, environment);
-                        cursor = LogPut(cursor, " ("); cursor = LogPut(cursor, source[0] ? source : "nothing");
-                        cursor = LogPut(cursor, ")");
-                        if (environmentLinear && g_WowEnvironmentSegment &&
-                            HostReadable((const VOID *)(ULONG_PTR)environmentLinear, cap)) {
-                            const volatile BYTE *sourceBytes =
-                                (const volatile BYTE *)(ULONG_PTR)environmentLinear;
-                            volatile BYTE *destinationBytes = (volatile BYTE *)(ULONG_PTR)
-                                               ((DWORD)g_WowEnvironmentSegment << PARAGRAPH_SHIFT);
-                            DWORD index = 0, item;
-                            WORD  selector;
-                            /* The MS-DOS 3.0+ block: the strings, the empty string
-                               that ends them, a WORD count, then the program's own
-                               pathname. krnl386 finds its OWN exe through exactly
-                               this tail (see WowPlaceV86), so it is part of the
-                               environment and not an optional extra. */
-                            while (index < cap && sourceBytes[index]) {
-                                while (index < cap && sourceBytes[index]) ++index;
-                                ++index;                          /* the string's NUL   */
-                            }
-                            ++index;                              /* the empty string   */
-                            if (index + X86_WORD_SIZE <= cap) {
-                                index += X86_WORD_SIZE;                       /* the WORD count     */
-                                while (index < cap && sourceBytes[index]) ++index;
-                                ++index;                          /* the pathname's NUL */
-                            }
-                            if (index > cap) index = cap;
-                            for (item = 0; item < index; ++item) destinationBytes[item] = sourceBytes[item];
-                            selector = DpmiSegmentToDescriptor(g_WowEnvironmentSegment);
-                            cursor = LogPut(cursor, " -> copied 0x"); cursor = LogHex(cursor, index);
-                            cursor = LogPut(cursor, " bytes to 0x"); cursor = LogHex(cursor, g_WowEnvironmentSegment);
-                            cursor = LogPut(cursor, ":0000 as sel 0x"); cursor = LogHex(cursor, selector);
-                            if (selector) {
-                                Wow32SetReturn(&frame, selector);
-                                ++g_Wow32Serviced;
-                                VDM_REG(tib, VTIB_EIP) += VDM_BOP_LENGTH;
-                                cursor = LogPut(cursor, "\r\n -> SERVICED (task environment),"
-                                            " returned 0x");
-                                cursor = LogHex(cursor, frame.Result); cursor = LogPut(cursor, "\r\n");
-                                WowLogFlush(base, &cursor);
-                                cursor = base;
-                                return 1;
-                            }
-                            cursor = LogPut(cursor, " -- NO SELECTOR (LDT full)");
-                        }
-                        cursor = LogPut(cursor, " -> NO ENVIRONMENT TO COPY -- left unimplemented"
-                                    " rather than invented");
-                    }
+                {
+                    INT exitCode, flow = Wow32ServiceKernelSecondTable(&cursor, base, &frame, tib, &exitCode);
+                    if (flow == HOST_FLOW_RETURN) return exitCode;
                 }
                 /* ── ★★★ USER'S OWN ID SPACE. See src/wow/wowuser.h. ──────────
                      Deliberately a separate dispatcher behind a separate check:
@@ -2923,359 +3483,9 @@ static INT DpmiServicePmIntBody(DOS_MACHINE *machine, volatile BYTE *tib, DWORD 
                     cursor = LogHex(cursor, g_WowUserSegment);
                     cursor = LogPut(cursor, " (learned from its own stub, not from the module table)");
                 }
-                if (!frame.IsKernel && frame.StubSegment == g_WowUserSegment && g_WowUserSegment) {
-                    CHAR note[224];
-                    /* ── ★★ KEEP THE REAL WINDOWS ALIVE. (GH #128, session 42) ──
-                         They belong to this thread, so nothing about them happens
-                         -- no paint, no move, no click, no title bar -- unless
-                         this thread dispatches, and a WOW32 BOP is the only
-                         regular moment it is not inside the guest. Bounded, so a
-                         flood of mouse moves cannot starve the thing we are here
-                         to run. */
-                    WowWinPump(WOW_PUMP_BUDGET_BRIEF);
-                    /* ── (E) s92 (#306): GetMessage WITH NOTHING TO GET, AND A TASK THAT HAS
-                         NEVER RUN. The idle yield (D) is krnl386's WowWaitForMsgAndEvent --
-                         which only WOWEXEC's loop calls. An APPLICATION idles here, in our
-                         GetMessage, which blocks in the host; so a task it launched (Calc's
-                         WinHelp, a program started from Program Manager) stayed parked at
-                         its launch forever. Real USER yields inside an empty GetMessage, so
-                         this does too -- to a FRESH task only (one already running gets its
-                         turn at (D) or when this one retires), parked AT THIS BOP: EIP is
-                         not advanced, so on resume the GetMessage is simply issued again.
-                       ⚠ Not from inside anything: no callback in flight, no nested run, no
-                         modal loop -- a context swapped there would be resumed under a frame
-                         the other task cannot unwind. */
-                    /* ── s92 (#306): "nothing to get" is now THIS TASK's queue (wowmsg.h,
-                         g_WowMsgTaker), and the task that yields here is parked WAITING FOR
-                         MESSAGES: it is runnable again once one arrives for it -- which is
-                         how WinHelp gets the message it posted itself while Calc ran, and
-                         how a click on one task's window wakes it while another is idle
-                         in the wait below (which then comes back here). */
-                    WORD messageTask = WowSchedCurrentTask();
-                    INT  canYield = g_WowSchedOn && frame.Id == WOWUSER_GETMESSAGE
-                                && g_WowWindowNested == 0 && !WowDlgActive()
-                                && messageTask && messageTask != WOWUSER_TASK_NONE16 && !WowSchedInterTaskLive();
-                wowSchedRetry:
-                    if (canYield && !WowMsgCountFor(messageTask)) {
-                        WORD yieldFrom = messageTask;
-                        INT  yieldSlotIndex  = WowSchedRunnable(yieldFrom, g_WowCallDepth);
-                        if (yieldSlotIndex >= 0) {
-                            WORD  yieldTo = g_WowSchedSlots[yieldSlotIndex].Task;
-                            DWORD yieldModeLinear = (DWORD)(ULONG_PTR)(frame.FrameBase + WOW32_OFF_MODE);
-                            INT   yieldTopLevel = WowSchedTopLevel(&g_WowSchedSlots[yieldSlotIndex]);
-                            WowSchedPoke(g_WowSchedSlots[yieldSlotIndex].ModeLinear, WOW32_MODE_ORDINARY);
-                            WowSchedSwap(&g_WowSchedSlots[yieldSlotIndex], tib, yieldModeLinear, yieldFrom, 0);
-                            g_WowSchedSlots[yieldSlotIndex].IsWaitingForMessage = 1;          /* the one that yielded */
-                            g_WowSchedSlots[yieldSlotIndex].CallbackDepth = g_WowCallDepth;
-                            if (yieldTopLevel) g_WowSchedCurrentBase = g_WowCallDepth;
-                            WowSchedSetCurrent(yieldTo);
-                            WowTaskChdir(yieldTo, &cursor);
-                            ++g_WowSchedSwitches;
-                            cursor = LogPut(cursor, "\n     WOWSCHED: task 0x"); cursor = LogHex(cursor, yieldFrom);
-                            cursor = LogPut(cursor, " has an empty GetMessage -- YIELDING to task 0x");
-                            cursor = LogHex(cursor, yieldTo);
-                            cursor = LogPut(cursor, ", launched and never run or parked mid-work (#306); its GetMessage"
-                                        " is re-issued when it resumes\r\n");
-                            WowLogFlush(base, &cursor);
-                            return 1;
-                        }
-                    }
-                    /* ── ★★★ GetMessage BLOCKS, AND THIS IS THE BLOCK. ─────────
-                         There is no "no message" answer to GetMessage: a task with
-                         an empty queue waits. The waiting is done HERE rather than
-                         in wowuser.h because the thing being waited for is the
-                         host's keyboard event, which belongs to the host -- and
-                         because a service that blocks is a service that cannot be
-                         reasoned about from the id space it lives in.
-                       ⚠ IT IS BOUNDED, AND THE BOUND IS THE HONEST PART. A real
-                         Win16 task blocks forever; a harness run must end. So the
-                         wait is finite, and when it expires wowuser.h answers
-                         WM_QUIT and SAYS the wait expired -- so "the application
-                         quit" is never again confused with "nobody typed".
-                       ⚠ THE HOST LOCK IS NOT HELD ACROSS THE WAIT. The UI thread
-                         takes it to push a keystroke, so holding it here would
-                         make the thing we are waiting for impossible. */
-                    if (frame.Id == WOWUSER_GETMESSAGE && !WowMsgCountFor(messageTask == WOWUSER_TASK_NONE16 ? 0 : messageTask)
-                        && !WowMsgQuitFor(messageTask == WOWUSER_TASK_NONE16 ? 0 : messageTask)) {
-                        INT woke = 0;
-                        DWORD start = GetTickCount(), waited;
-                        /* ★ SAY THE SETTING AT THE POINT OF USE, ONCE. The startup
-                             knob-read logs where the answer is decided, which is
-                             not where it matters and -- measured -- did not reach
-                             the log at all. Here it cannot be missed: the first
-                             task that blocks prints what it is waiting for, so
-                             "the guest quit after six seconds" and "the guest is
-                             waiting for you" are never the same line. */
-                        if (!g_WowMsgIsWaitAnnounced) {
-                            CHAR siteLine[128], *siteCursor = siteLine;
-                            g_WowMsgIsWaitAnnounced = 1;
-                            siteCursor = LogPut(siteCursor, "\n     WOWMSG: a blocked GetMessage waits ");
-                            if (g_WowMsgWaitMs) { siteCursor = LogHex(siteCursor, g_WowMsgWaitMs);
-                                                    siteCursor = LogPut(siteCursor, " ms then answers"
-                                                                  " WM_QUIT"); }
-                            else siteCursor = LogPut(siteCursor, "FOREVER (wowidle.txt = 0)");
-                            siteCursor = LogPut(siteCursor, "\r\n");
-                            LogAppend(LOG_PATH, siteLine, siteCursor); SerialOut(siteLine, siteCursor);
-                        }
-                        /* ── ★★★ A BLOCKED Win16 TASK IS A Win32 MESSAGE PUMP.
-                             (session 42, replacing session 41's keyboard-event
-                             wait.) The input no longer comes from the DOS 8042
-                             path -- it comes from the REAL WINDOW, and the real
-                             window's messages arrive on this thread's Win32
-                             queue. So "the Win16 queue is empty" and "wait for
-                             something to happen" are the same statement as
-                             "dispatch Win32 messages until one of them turns into
-                             a Win16 message", which is exactly what a Win16 task
-                             blocking in GetMessage is FOR.
-                           ⚠ MsgWaitForMultipleObjects, not Sleep: it wakes the
-                             instant a message arrives, so a keystroke is not
-                             delayed by the poll interval, and it does not spin. */
-                        {   /* ── ★ A HEARTBEAT, BECAUSE "NOT RESPONDING" IS A
-                                 QUESTION ABOUT THIS LOOP. (session 43) The windows
-                                 belong to this thread, so if XP calls the guest's
-                                 window "Not Responding" the answer is either "this
-                                 loop is not running" or "it is running and
-                                 dispatching nothing" -- and those need completely
-                                 different fixes. One line every two seconds says
-                                 which, and a bounded count keeps a long idle from
-                                 filling the log. */
-                            DWORD beat = start; UINT beats = 0;
-                            DWORD pumpedStart = g_WowWinPumped;
-                            /* ★ Tell the freeze watchdog this stall is deliberate --
-                                 see g_WowMsgInWait in wowmsg.h. Set BEFORE the loop and
-                                 cleared after it on every exit path, because the
-                                 alternative is a flag that stays set once and
-                                 disables the watchdog for the rest of the run. */
-                            g_WowMsgInWait = 1;
-                            while (g_Running && !WowMsgCountFor(messageTask == WOWUSER_TASK_NONE16 ? 0 : messageTask)
-                                   && !WowMsgQuitFor(messageTask == WOWUSER_TASK_NONE16 ? 0 : messageTask)
-                                   && (!g_WowMsgWaitMs
-                                       || GetTickCount() - start < g_WowMsgWaitMs)) {
-                                /* s92 (#306): another parked task's message arrived */
-                                if (canYield && WowSchedRunnable(messageTask, g_WowCallDepth) >= 0) { woke = 1; break; }
-                                /* ── ★★ THE IDLE WAIT, AND ITS TIMEOUT IS A
-                                     LATENCY FLOOR. A WM_PAINT arriving while the
-                                     guest is parked here should wake the wait
-                                     through QS_ALLINPUT, and usually does --
-                                     measured paint latency is 0 ms three times
-                                     in five. But MsgWaitForMultipleObjects has a
-                                     documented race: a message that arrives
-                                     between the PeekMessage above and the wait
-                                     below can leave the queue state already
-                                     "seen", and the wait then sleeps the FULL
-                                     timeout. The other two measurements were
-                                     47 ms and 94 ms -- one and two timeouts.
-                                   ⚠⚠ REFUTED, and the timeout is left at 50.
-                                     Dropping it to 10 ms was tried and MEASURED:
-                                     the same workload produced 0, 0, 0, 46, 93 ms
-                                     against the 50 ms build's 0, 0, 0, 47, 94.
-                                     Identical. So the two slow paints are NOT
-                                     this wait sleeping through a lost wake-up --
-                                     the guest is simply not parked here when they
-                                     arrive, and the delay is its own work
-                                     (raising a window also delivers WM_ACTIVATE
-                                     and WM_SETFOCUS, each of which re-enters
-                                     16-bit code). A shorter timeout would cost an
-                                     idle guest ~100 wake-ups a second and buy
-                                     nothing, so it was reverted rather than kept
-                                     on the grounds that it "should" help. */
-                                if (g_IcaPending)         /* s90 #278 */
-                                    WowIcaDeliver(g_DosMachine, tib, 0);
-                                if (!WowWinPump(WOW_PUMP_BUDGET))
-                                    MsgWaitForMultipleObjects(0, NULL, FALSE, WOW_INPUT_WAIT_MS,
-                                                              QS_ALLINPUT);
-                                if (beats < 20 && GetTickCount() - beat >= 2000) {
-                                    CHAR handlerLine[160], *handlerCursor = handlerLine;
-                                    beat = GetTickCount(); ++beats;
-                                    handlerCursor = LogPut(handlerCursor, "     WOWMSG: blocked 0x");
-                                    handlerCursor = LogHex(handlerCursor, beat - start);
-                                    handlerCursor = LogPut(handlerCursor, " ms; Win32 messages dispatched on"
-                                                  " this thread since blocking 0x");
-                                    handlerCursor = LogHex(handlerCursor, g_WowWinPumped - pumpedStart);
-                                    handlerCursor = LogPut(handlerCursor, " (total 0x");
-                                    handlerCursor = LogHex(handlerCursor, g_WowWinPumped);
-                                    handlerCursor = LogPut(handlerCursor, "), Win16 queued 0x");
-                                    handlerCursor = LogHex(handlerCursor, (DWORD)g_WowMsgCount);
-                                    handlerCursor = LogPut(handlerCursor, "\r\n");
-                                    LogAppend(LOG_PATH, handlerLine, handlerCursor); SerialOut(handlerLine, handlerCursor);
-                                }
-                            }
-                            g_WowMsgInWait = 0;
-                        }
-                        waited = GetTickCount() - start;
-                        cursor = LogPut(cursor, "\n     WOWMSG: GetMessage with an empty queue"
-                                    " -- BLOCKED for 0x");
-                        cursor = LogHex(cursor, waited);
-                        cursor = LogPut(cursor, " ms; ");
-                        cursor = LogHex(cursor, (DWORD)g_WowMsgCount);
-                        cursor = LogPut(cursor, " message(s) arrived\r\n");
-                        if (woke) {
-                            cursor = LogPut(cursor, "     WOWSCHED: a parked task's message arrived"
-                                        " -- yielding to it\r\n");
-                            WowLogFlush(base, &cursor);
-                            goto wowSchedRetry;
-                        }
-                        WowLogFlush(base, &cursor);
-                    }
-                    /* ⚠ Same rule as ShellAbout and the file dialog: a modal
-                         service does not return until a human dismisses it, and
-                         the SERVICED line carrying its text is written
-                         afterwards. Announce it first, or a log collected while
-                         the box is up stops dead at the call before it -- which
-                         has already misled a reading twice this session. */
-                    if (frame.Id == WOWUSER_MESSAGEBOX) {
-                        cursor = LogPut(cursor, "\n     WOWUSER: MessageBox is MODAL -- the VDM"
-                                    " stops here until it is dismissed; the"
-                                    " SERVICED line carries its TEXT and follows"
-                                    " when it is\r\n");
-                        WowLogFlush(base, &cursor);
-                    }
-                    if (WowUserCall(&frame, note, sizeof note)) {
-                        ++g_Wow32Serviced;
-                        VDM_REG(tib, VTIB_EIP) += VDM_BOP_LENGTH;
-                        cursor = LogPut(cursor, " -> SERVICED (USER), returned 0x");
-                        cursor = LogHex(cursor, frame.Result);
-                        if (note[0]) { cursor = LogPut(cursor, " -- "); cursor = LogPut(cursor, note); }
-                        cursor = LogPut(cursor, "\r\n");
-                        /* ── ★★★★★ AND NOW THE OTHER DIRECTION. (session 40) ────
-                             The answer is already in the return hole and EIP is
-                             already past the BOP, so what gets parked here is the
-                             guest EXACTLY as it will be resumed -- see the ordering
-                             note in WowCallEnter. Everything after this point in
-                             the run belongs to the 16-bit procedure until its
-                             `retf` reaches our stub. */
-                        if (frame.CallbackProcedure) {
-                            WORD  callbackSelector = WowCallbackSelector();
-                            DWORD callbackStackBase = DpmiSelectorBase(
-                                (WORD)VDM_REG16(tib, VTIB_SS));
-                            INT argumentIndex, callbackAbsent = 0;
-                            cursor = LogPut(cursor, "WOWCALL: -> 0x");
-                            cursor = LogHex(cursor, frame.CallbackProcedure >> WORD_SHIFT);
-                            cursor = LogPut(cursor, ":0x"); cursor = LogHex(cursor, frame.CallbackProcedure & WORD_MASK);
-                            cursor = LogPut(cursor, "(");
-                            for (argumentIndex = 0; argumentIndex < frame.CallbackArgumentCount; ++argumentIndex) {
-                                if (argumentIndex) cursor = LogPut(cursor, " ");
-                                cursor = LogHex(cursor, frame.CallbackArguments[argumentIndex]);
-                            }
-                            cursor = LogPut(cursor, ") ds=0x"); cursor = LogHex(cursor, frame.CallbackDataSelector);
-                            if (frame.CallbackMessage) {
-                                cursor = LogPut(cursor, " [hwnd=0x"); cursor = LogHex(cursor, frame.CallbackWindow);
-                                cursor = LogPut(cursor, " msg=0x"); cursor = LogHex(cursor, frame.CallbackMessage);
-                                cursor = LogPut(cursor, "]");
-                            }
-                            cursor = LogPut(cursor, " ss=0x");
-                            cursor = LogHex(cursor, VDM_REG16(tib, VTIB_SS));
-                            cursor = LogPut(cursor, ":0x");
-                            cursor = LogHex(cursor, VDM_REG16(tib, VTIB_ESP));
-                            cursor = LogPut(cursor, " ret=0x"); cursor = LogHex(cursor, callbackSelector);
-                            cursor = LogPut(cursor, ":0000");
-                            /* ⚠ lParam is 0 and that is a NAMED GAP, not an
-                                 oversight -- WM_CREATE's lParam is an
-                                 LPCREATESTRUCT and this host has never built one.
-                                 Saying so on the line is what stops a later reader
-                                 taking the zero for a measurement. */
-                            if (frame.CallbackMessage == WM_CREATE16 && frame.CallbackBlobLength)
-                                cursor = LogPut(cursor, " [lParam -> a CREATESTRUCT on the"
-                                            " guest's own stack]");
-                            else if (frame.CallbackMessage == WM_CREATE16)
-                                cursor = LogPut(cursor, " [lParam=0: NO CREATESTRUCT -- a"
-                                            " procedure that reads it will fault]");
-                            /* ── ★ IS THE PROCEDURE'S SEGMENT ACTUALLY LOADED? ──
-                                 A Win16 code segment is loaded on demand, and
-                                 until it is, its descriptor's PRESENT bit is
-                                 clear. Writing that selector into the TIB's CS
-                                 kills the VDM silently; see WOWCALL_RETF_OFF.
-                                 Say which one it is, because "not present" is a
-                                 fact about the guest's loader and belongs in the
-                                 log next to the call it changes. */
-                            { WORD procedureCs = (WORD)(frame.CallbackProcedure >> WORD_SHIFT);
-                              WORD procedureIndex = (WORD)(DPMI_SELECTOR_INDEX(procedureCs));
-                              callbackAbsent = (procedureIndex && procedureIndex < DPMI_LDT_MAX
-                                          && !(g_Ldt[procedureIndex].Access & X86_DESCRIPTOR_PRESENT));
-                              if (callbackAbsent)
-                                  cursor = LogPut(cursor, " [code segment NOT PRESENT --"
-                                              " entering via the RETF trampoline"
-                                              " so krnl386 loads it]"); }
-                            if (!callbackSelector)
-                                cursor = LogPut(cursor, " -- NO RETURN SELECTOR (LDT full);"
-                                            " the call was NOT made");
-                            else if (!WowCallEnter(tib, callbackStackBase, callbackSelector, frame.CallbackProcedure,
-                                                    frame.CallbackDataSelector, frame.CallbackArguments, frame.CallbackArgumentCount,
-                                                    (DWORD)(ULONG_PTR)
-                                                        (frame.FrameBase + WOW32_OFF_RET),
-                                                    frame.CallbackReturnMode, frame.CallbackSink,
-                                                    frame.CallbackWindow, frame.CallbackMessage,
-                                                    frame.CallbackBlob, frame.CallbackBlobLength,
-                                                    frame.CallbackBlobArgument, callbackAbsent))
-                                cursor = LogPut(cursor, " -- REFUSED (depth, or an unusable"
-                                            " stack/procedure); the call was NOT"
-                                            " made and the guest keeps the answer"
-                                            " above");
-                            else {
-                                /* The action belongs to the frame we have just
-                                   pushed; setting it here rather than through
-                                   WowCallEnter's argument list keeps that list
-                                   about the CALL and not about what follows it. */
-                                if (g_WowCallDepth > 0) {
-                                    g_WowCallFrames[g_WowCallDepth - 1].Action = frame.CallbackAction;
-                                    g_WowCallFrames[g_WowCallDepth - 1].ActionArgument = frame.CallbackActionArgument;
-                                }
-                                cursor = LogPut(cursor, " -- ENTERED, depth ");
-                                cursor = LogHex(cursor, (DWORD)g_WowCallDepth);
-                                if (g_WowCallDepth > 0 && g_WowCallFrames[g_WowCallDepth - 1].PreviousTask) {
-                                    cursor = LogPut(cursor, " [INTER-TASK: runs as task 0x");
-                                    cursor = LogHex(cursor, WowSchedCurrentTask());
-                                    cursor = LogPut(cursor, " on its own stack, from task 0x");
-                                    cursor = LogHex(cursor, g_WowCallFrames[g_WowCallDepth - 1].PreviousTask);
-                                    cursor = LogPut(cursor, "]");
-                                }
-                            }
-                            cursor = LogPut(cursor, "\r\n");
-                        }
-                        /* ── ★★★★★ OR THE CALLER DOES NOT RESUME AT ALL. ───────
-                             (session 57) DialogBox is defined as not returning
-                             until EndDialog, so its BOP does not complete here:
-                             the modal loop takes over, and the guest carries on
-                             inside the dialog's own procedure instead of after
-                             the call it made. The context that is parked is the
-                             one this handler has already prepared -- EIP past
-                             the BOP -- so when the loop finally runs out, the
-                             guest is standing exactly where DialogBox returns
-                             to, with the answer in its hole.
-                           ⚠ `else if`, NOT a second `if`. A service that asked
-                             for both would otherwise have its callback entered
-                             and then be immediately displaced by the loop's
-                             first message, and the first call would never
-                             return. Nothing asks for both today; this is what
-                             stops the day it does from being a mystery. */
-                        else if (frame.IsEnumerationRequested) {
-                            CHAR enumNote[256];
-                            WORD  enumCallbackSelector = WowCallbackSelector();
-                            DWORD enumStackBase  = DpmiSelectorBase(
-                                (WORD)VDM_REG16(tib, VTIB_SS));
-                            enumNote[0] = 0;
-                            WowEnumStep(tib, enumStackBase, enumCallbackSelector, WOWENUM_FIRST, 0,
-                                         enumNote, sizeof enumNote);
-                            cursor = LogPut(cursor, "WOWENUM: "); cursor = LogPut(cursor, enumNote);
-                            cursor = LogPut(cursor, "\r\n");
-                        }
-                        else if (frame.IsModalDialog) {
-                            CHAR modalNote[512];
-                            WORD  modalCallbackSelector = WowCallbackSelector();
-                            DWORD modalStackBase  = DpmiSelectorBase(
-                                (WORD)VDM_REG16(tib, VTIB_SS));
-                            modalNote[0] = 0;
-                            cursor = LogPut(cursor, "WOWDLG: the caller is PARKED inside"
-                                        " DialogBox; the modal loop has it\r\n");
-                            WowLogFlush(base, &cursor);
-                            WowDlgStep(tib, modalStackBase, modalCallbackSelector, &g_Running,
-                                        modalNote, sizeof modalNote);
-                            cursor = LogPut(cursor, "WOWDLG: "); cursor = LogPut(cursor, modalNote);
-                            cursor = LogPut(cursor, "\r\n");
-                        }
-                        WowLogFlush(base, &cursor);
-                        return 1;
-                    }
+                {
+                    INT exitCode, flow = Wow32ServiceUser(&cursor, base, &frame, tib, &exitCode);
+                    if (flow == HOST_FLOW_RETURN) return exitCode;
                 }
                 /* ── ★★★ SHELL.DLL'S OWN ID SPACE. See src/wow/wowshell.h. ────
                      A fourth table, behind a fourth check, for the reason the
@@ -3292,37 +3502,9 @@ static INT DpmiServicePmIntBody(DOS_MACHINE *machine, volatile BYTE *tib, DWORD 
                     cursor = LogPut(cursor, " (learned from its own stub, not from the module"
                                 " table)");
                 }
-                if (!frame.IsKernel && g_WowShellSegment && frame.StubSegment == g_WowShellSegment) {
-                    CHAR note[320];
-                    /* The About box runs a modal loop on this thread, so drain
-                       what is already queued for the guest's windows first --
-                       same reason the USER branch pumps. */
-                    WowWinPump(WOW_PUMP_BUDGET_BRIEF);
-                    /* ── ⚠ SAY IT BEFORE IT BLOCKS, NOT AFTER. ────────────────
-                         A modal service does not return until a human dismisses
-                         it, and the "SERVICED" line is written afterwards -- so
-                         while the box is up the log's last line is the LoadIcon
-                         before it, and a reader collecting the log at that moment
-                         sees a run that appears to have STOPPED at a call that
-                         completed fine. Measured, on the first run that opened
-                         one. This line is written and flushed first, so the log
-                         says what the host is waiting for while it waits. */
-                    if (frame.Id == WOWSHELL_SHELLABOUT) {
-                        cursor = LogPut(cursor, "\n     WOWSHELL: ShellAbout is MODAL -- the VDM"
-                                    " stops here until the box is dismissed; the"
-                                    " SERVICED line follows when it is\r\n");
-                        WowLogFlush(base, &cursor);
-                    }
-                    if (WowShellCall(&frame, note, sizeof note)) {
-                        ++g_Wow32Serviced;
-                        VDM_REG(tib, VTIB_EIP) += VDM_BOP_LENGTH;
-                        cursor = LogPut(cursor, " -> SERVICED (SHELL), returned 0x");
-                        cursor = LogHex(cursor, frame.Result);
-                        if (note[0]) { cursor = LogPut(cursor, " -- "); cursor = LogPut(cursor, note); }
-                        cursor = LogPut(cursor, "\r\n");
-                        WowLogFlush(base, &cursor);
-                        return 1;
-                    }
+                {
+                    INT exitCode, flow = Wow32ServiceShell(&cursor, base, &frame, tib, &exitCode);
+                    if (flow == HOST_FLOW_RETURN) return exitCode;
                 }
                 /* ── ★★★ COMMDLG.DLL'S OWN ID SPACE. See src/wow/wowcommdlg.h. ─
                      The fifth table, behind the fifth check. Same shape as
@@ -3338,32 +3520,9 @@ static INT DpmiServicePmIntBody(DOS_MACHINE *machine, volatile BYTE *tib, DWORD 
                     cursor = LogPut(cursor, " (learned from its own stub, not from the module"
                                 " table)");
                 }
-                if (!frame.IsKernel && g_WowCommonDialogSegment && frame.StubSegment == g_WowCommonDialogSegment) {
-                    CHAR note[416];
-                    WowWinPump(WOW_PUMP_BUDGET_BRIEF);
-                    /* ⚠ Same reason as ShellAbout: a modal service does not return
-                         until a human dismisses it, and the SERVICED line is
-                         written afterwards. Say it before it blocks, or the log
-                         looks like a run that stopped at the call before. */
-                    if (frame.Id == WOWCDLG_GETOPENFILENAME
-                        || frame.Id == WOWCDLG_GETSAVEFILENAME
-                        || frame.Id == WOWCDLG_CHOOSEFONT
-                        || frame.Id == WOWCDLG_CHOOSECOLOR) {
-                        cursor = LogPut(cursor, "\n     WOWCOMMDLG: this common dialog is MODAL --"
-                                    " the VDM stops here until it is dismissed;"
-                                    " the SERVICED line follows when it is\r\n");
-                        WowLogFlush(base, &cursor);
-                    }
-                    if (WowCommdlgCall(&frame, note, sizeof note)) {
-                        ++g_Wow32Serviced;
-                        VDM_REG(tib, VTIB_EIP) += VDM_BOP_LENGTH;
-                        cursor = LogPut(cursor, " -> SERVICED (COMMDLG), returned 0x");
-                        cursor = LogHex(cursor, frame.Result);
-                        if (note[0]) { cursor = LogPut(cursor, " -- "); cursor = LogPut(cursor, note); }
-                        cursor = LogPut(cursor, "\r\n");
-                        WowLogFlush(base, &cursor);
-                        return 1;
-                    }
+                {
+                    INT exitCode, flow = Wow32ServiceCommonDialog(&cursor, base, &frame, tib, &exitCode);
+                    if (flow == HOST_FLOW_RETURN) return exitCode;
                 }
                 /* ── ★★ KEYBOARD.DRV'S OWN ID SPACE. See src/wow/wowkbd.h. ────
                      The sixth table, behind the sixth check, same shape as the
@@ -3404,33 +3563,9 @@ static INT DpmiServicePmIntBody(DOS_MACHINE *machine, volatile BYTE *tib, DWORD 
                     cursor = LogPut(cursor, " (learned from its own stub, not from the module"
                                 " table)");
                 }
-                if (!frame.IsKernel && g_WowGdiSegment && frame.StubSegment == g_WowGdiSegment) {
-                    CHAR note[320];
-                    if (WowGdiCall(&frame, note, sizeof note)) {
-                        ++g_Wow32Serviced;
-                        VDM_REG(tib, VTIB_EIP) += VDM_BOP_LENGTH;
-                        cursor = LogPut(cursor, " -> SERVICED (GDI), returned 0x");
-                        cursor = LogHex(cursor, frame.Result);
-                        if (note[0]) { cursor = LogPut(cursor, " -- "); cursor = LogPut(cursor, note); }
-                        cursor = LogPut(cursor, "\r\n");
-                        /* ⛔ s89: AND GDI'S ENUMERATIONS RUN. This branch never acted on
-                             f.enumreq -- only USER's did -- so LineDDA and
-                             EnumFontFamilies armed a walk that never started: Charmap
-                             got "60 fonts" and not one callback, i.e. an empty list.
-                             Same first step as USER's branch. */
-                        if (frame.IsEnumerationRequested) {
-                            CHAR enumNote[256];
-                            WORD  enumCallbackSelector = WowCallbackSelector();
-                            DWORD enumStackBase  = DpmiSelectorBase(
-                                (WORD)VDM_REG16(tib, VTIB_SS));
-                            enumNote[0] = 0;
-                            WowEnumStep(tib, enumStackBase, enumCallbackSelector, WOWENUM_FIRST, 0, enumNote, sizeof enumNote);
-                            cursor = LogPut(cursor, "WOWENUM: "); cursor = LogPut(cursor, enumNote);
-                            cursor = LogPut(cursor, "\r\n");
-                        }
-                        WowLogFlush(base, &cursor);
-                        return 1;
-                    }
+                {
+                    INT exitCode, flow = Wow32ServiceGdi(&cursor, base, &frame, tib, &exitCode);
+                    if (flow == HOST_FLOW_RETURN) return exitCode;
                 }
                 /* ── ★ SOUND.DRV'S OWN ID SPACE (s90, #299). See src/wow/wowsound.h. */
                 if (!frame.IsKernel && !g_WowSoundSegment
