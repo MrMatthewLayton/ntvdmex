@@ -6,6 +6,9 @@
 
 #include "host_types.h"
 #include "host_state.h"
+#include "host_irq.h"
+#include "host_video.h"
+#include "host_diag.h"
 #include "host_io.h"
 #include "host_bios.h"
 #include "host_dpmi.h"
@@ -24,17 +27,13 @@ static VOID WowIcaDeliver(DOS_MACHINE *machine, volatile BYTE *tib, UINT steps);
 static VOID ModeYTimelineReport(VOID);          /* fwd: north star 1, with the mode-Y remap */
 static INT  ModeYInterpServes(VOID);      /* fwd: north star 1, design C */
 static VOID ModeYRingDump(PCSTR why);  /* fwd: north star 1, design C */
-static VOID ModeYRingNoteIrq(UINT vector, WORD cs, WORD ip, WORD ss, WORD sp);
 static INT InterpreterMemoryPageOk(UINT32 linear);        /* fwd: page-validity guard, defined with V86HostRead8 */
 static VOID ExecMachineSave(INT depth);    /* fwd: defined with CloseProgramNow */
 static BYTE  g_FaultTable[DOS_FLTSITE_N * DPMI_FAULT_TABLE_ENTRY] __attribute__((aligned(16)));
 static BYTE  g_FaultStack[DPMI_FAULT_STK_SIZE] __attribute__((aligned(16)));   /* #205 */
 static struct _DPMI_DESCRIPTOR { DWORD Base, Limit; BYTE Access, Flags; } g_Ldt[DPMI_LDT_MAX];
-static INT AsyncVectorIsOurStub(UINT irq);
 static VOID HostPitGenerate(VOID);         /* fwd: the crystal half (g_PitCs only)  */
 static VOID HostPitDeliver(VOID);          /* fwd: the attempt half (g_Lock, by TRY) */
-static INT  V86DeliverDeviceIrq(volatile BYTE *tib);  /* fwd: shared by the main and nested V86 loops */
-static INT  DpmiAsyncInjectPm(UINT irq, CONTEXT *context);
 static VOID MouseChildExited(VOID);          /* fwd: see g_MouseWantRelease */
 static HANDLE StdioPebHandle(HANDLE proc, UINT offset);
 static VOID HostRecordFinish(VOID);        /* below: patches the header, logs */
@@ -116,7 +115,6 @@ static INT g_PmIrq0Latch;
 static DWORD g_UiTickSkips;
 static DWORD g_UiHookPresents, g_UiTimerPresents;
 static DWORD g_Irq1Checks, g_Irq1NoIf, g_Irq1In08, g_Irq1In09;
-static DWORD g_Irq1AsyncInjected;
 static DWORD g_Irq1AsyncRetry;
 static CRITICAL_SECTION g_PitCs;
 static INT g_PmVehPass;
@@ -133,11 +131,9 @@ static BYTE g_BreakpointDone[DPMI_BP_MAX];
 static volatile LONG g_DpmiWatchdogGeneration;
 static INT g_Headless;
 static DWORD g_EventIo;
-static LONGLONG g_Irq0Start, g_Irq0TimePrevious;
 static DWORD g_Irq0IoPrevious, g_Irq0WorstGapMs, g_Irq0WorstGapIo;
 static DWORD g_Irq0WorstCs, g_Irq0WorstIp;
 static DWORD g_Irq0NoteCs, g_Irq0NoteIp;
-static DWORD g_Irq0RaiseCount, g_Irq0AttemptsCount, g_Irq0NieCount, g_Irq0YieldCount;
 static DWORD g_Irq0NormalCount, g_Irq0NormalMicroseconds, g_Irq0NormalIo;
 static DWORD g_Irq0WorstRaise, g_Irq0WorstAttempts, g_Irq0WorstNie, g_Irq0WorstYield;
 static DWORD g_Irq0WorstPerMicroseconds;
@@ -149,8 +145,6 @@ static DWORD g_EventIntPending;
 static DWORD g_EventIoString;
 static DWORD g_Irq1Injected;
 static DWORD g_PmIrqReflects;
-static DWORD g_IrqNInjected;
-static DWORD g_IrqNRefuseTotal;
 static DWORD g_EventHistogram[EV_HIST_MAX];
 static DWORD g_V86MicrosecondsTotal, g_HostMicrosecondsEvent[EV_HIST_MAX];
 static DWORD g_BopHistogram[BYTE_VALUES];
@@ -198,15 +192,8 @@ static WORD g_Int15StubOffset;
 static DWORD g_PrintScreenJobs, g_PrintScreenErrors;
 static BYTE g_PrintScreenStatus;
 static DWORD g_IrqNRetryTry, g_IrqNRetryOk, g_IrqNRetryWhy;
-static DWORD g_IrqRaisedAny;
-static DWORD g_QiBits;
-static INT g_QiKeysAsync;
-static volatile LONG g_AsyncContextWrite;
 static INT g_BehaveDos622;
 static DWORD g_PauseCount, g_PauseCooperative, g_PauseMs;
-static DWORD g_QiCalls;
-static volatile LONG g_QiStatus;
-static DWORD g_AsyncNestBlocked;
 static DWORD g_Irq0IsrSince;
 static DWORD g_Irq0IsrBlocks;
 static DWORD g_Irq0IsrTimeouts;
@@ -214,22 +201,8 @@ static DWORD g_Irq0IsrStrict;
 static DWORD g_Irq0IsrAuto;
 static INT g_Irq0AutoEoi;
 static DWORD g_Irq0ResyncDrop;
-static DWORD g_IfvCensus[IFV_PATHS][8];
-static DWORD g_IfvShadow[PIC_LINES];
-static DWORD g_IfvStarveT0, g_IfvStarveMaximumMs, g_IfvStarveCount;
-static INT g_IfvStarveOpen;
-static LONG g_IfvTraceCount;
-static DWORD g_IfvReenter[PIC_LINES];
-static DWORD g_AsyncPmInjected;
-static DWORD g_AsyncInjectedLine[PIC_LINES];
-static DWORD g_PmWatch[DPMI_WATCH_MAX];
 static INT g_PmWatchCount;
-static BYTE g_PmWatchRel[DPMI_WATCH_MAX];
 static DWORD g_PmCooperativeLine[PIC_LINES_PER_CHIP];
-static DWORD g_PmInjectDecl[2], g_PmInjectDeclTl[IRQ0TL_SECS];
-static DWORD g_AsyncEarlyBailLogged;
-static INT g_AsyncSiteCount;
-static INT g_AsyncSiteFull;
 static PCSTR g_FloppyImage;
 static HANDLE g_Stdio;
 static PCSTR g_StdioHow;
@@ -343,11 +316,7 @@ static DWORD g_WowSyncWrites;
 static VOID DsProbeLoad(VOID);
 static UINT LauncherCompilerVariables(PCSTR environment, DWORD environmentCapacity, PSTR out, DWORD outCapacity);
 static VOID HmaTry(VOID);
-static VOID Irq0Latch(VOID);
-static INT PmTickTake(VOID);
-static VOID TickDeliveredNote(VOID);
 static VOID Irq0DeliveredNote(VOID);
-static VOID SkipIfSiteNote(DWORD codeSegment, DWORD instructionPointer, DWORD stub);
 static PSTR ExecBegin(DOS_MACHINE *machine, volatile BYTE *tib, PSTR cursor);
 static VOID CriticalSnapshot(volatile BYTE *tib);
 static VOID CriticalRaise(DOS_MACHINE *machine, volatile BYTE *tib, PSTR *logCursor);
@@ -364,21 +333,8 @@ static INT DosPrnOut(PVOID context, BYTE character);
 static INT KeyboardActionEntry(INT keyboardAction);
 static INT Int15Hooked(VOID);
 static VOID DosAuxOut(PVOID context, BYTE character);
-static UINT IrqPmVector(UINT irq);
-static INT Irq0CanDeliver(VOID);
-static VOID Irq0Ack(VOID);
 static INT Irq0PmClaim(VOID);
 static VOID Irq0PmUnclaim(VOID);
-static VOID IfvNote(INT path, DWORD flags);
-static DWORD PmWatchAddress(INT index);
-static VOID PmInjectDeclineNote(INT why, WORD cs, DWORD eip);
-static INT AsyncInjectIrq(UINT irq);
-static INT AsyncVectorIsOurStub(UINT irq);
-static VOID HostIrqSink(PVOID context, BYTE irq);
-static INT IfOrVif(DWORD flags);
-static INT IsOurStubCsIp(DWORD cs, DWORD ip);
-static VOID VdmStateSample(PCSTR label, volatile BYTE *tib, INT *budget);
-static VOID InjectInt(volatile BYTE *tib, UINT vector);
 static INT DosTerminate(DOS_MACHINE *machine, PVOID tib, PSTR *logCursor, PSTR base);
 static INT HostHasFloppy(VOID);
 static INT HostHasCdrom(VOID);
@@ -402,7 +358,6 @@ static VOID CpuSpeedTimelineDump(PCSTR tag);
 static VOID CpuSpeedRecompute(VOID);
 static DWORD WINAPI CpuSpeedThread(LPVOID param);
 static VOID PlanesDumpBeside(PCSTR bitmapPath);
-static DWORD WINAPI QueueIrqProbeThread(LPVOID parameter);
 static DWORD WINAPI HeartbeatThread(LPVOID parameter);
 static VOID HostRecordFinish(VOID);
 static VOID AsyncWhyReport(VOID);
@@ -509,7 +464,6 @@ static VOID ModeYPmRun(volatile BYTE *tib);
 static VOID InterpreterMemoryBadNote(UINT32 linear, INT write);
 static UINT32 HostGuestPc(VOID);
 static VOID ModeYRingDump(PCSTR why);
-static VOID ModeYRingNoteIrq(UINT vector, WORD cs, WORD ip, WORD ss, WORD sp);
 static VOID HostProfileStart(VOID);
 static VOID HostProfileDump(VOID);
 static INT32 HostInterpPaced(volatile BYTE *tib, INT32 cap);
@@ -582,7 +536,6 @@ static INT DpmiReflectIrqToRm(DOS_MACHINE *machine, volatile BYTE *tib, UINT vec
 static INT DpmiServicePmIntBody(DOS_MACHINE *machine, volatile BYTE *tib, DWORD vector, UINT steps);
 static INT DpmiServicePmInt(DOS_MACHINE *machine, volatile BYTE *tib, DWORD vector, UINT steps);
 static VOID DpmiEnsurePmReturnSelector(VOID);
-static INT DpmiAsyncInjectPm(UINT irq, CONTEXT *context);
 static INT WowCall16Sync(DWORD proc, WORD ds, const WORD *args, INT argumentCount, WORD hwnd, WORD message, WORD *result);
 static DWORD ShimGlobal16(INT operation, DWORD firstArgument, DWORD secondArgument);
 static INT DpmiNestedFault(volatile BYTE *tib, DWORD event, DWORD eip);
@@ -597,7 +550,6 @@ static INT DpmiInjectPmMouseCallback(DOS_MACHINE *machine, volatile BYTE *tib, U
 static VOID DpmiClientTeardown(VOID);
 static INT DpmiRunPmInterp(DOS_MACHINE *machine, volatile BYTE *tib);
 static VOID DosWowPublish(volatile BYTE *handlerArea, volatile BYTE *controlTable, UINT currentDrive);
-static INT V86DeliverDeviceIrq(volatile BYTE *tib);
 static INT V86BiosBop(volatile BYTE *tib, UINT bopNumber, PSTR *logCursor, PSTR base);
 
 #endif

@@ -1,12 +1,22 @@
 /* host_irq.c -- interrupt injection: the asynchronous IRQ path into V86 and protected mode,
  *   IF/VIF, and the host's IRQ sink.
  *
- * Part of the host's single translation unit: #included by main.c after host_internal.h. */
+ * Its own translation unit (#335): declared in host_irq.h. */
+#include "host_state.h"
+#include "log.h"
+#include "host_irq.h"
+#include "host_video.h"
+#include "host_timing.h"
+#include "host_dpmi.h"
+#include "host_diag.h"
+#include "host_bios.h"
+#include "host_input.h"
+
 
 static DWORD g_KeyIrqLogged = 0;           /* bounded KEYIRQ account; see HostIrqSink */
-static DWORD    g_Irq1AsyncInjected;        /* IRQ1s placed on the ASYNC path (see above) */
+DWORD    g_Irq1AsyncInjected;        /* IRQ1s placed on the ASYNC path (see above) */
 static DWORD          g_IrqNRefuseLog = 0; /* bounded refusal-log budget (see the gate)  */
-static VOID SkipIfSiteNote(DWORD codeSegment, DWORD instructionPointer, DWORD stub)
+VOID SkipIfSiteNote(DWORD codeSegment, DWORD instructionPointer, DWORD stub)
 {
     INT index;
     for (index = 0; index < SKIPIF_SITES; ++index) {
@@ -19,10 +29,10 @@ static VOID SkipIfSiteNote(DWORD codeSegment, DWORD instructionPointer, DWORD st
 }
 /* The PROTECTED-mode vector a DPMI client hooks for a line: DPMI 0.9 reflects hardware
    interrupts at the PIC's own vector numbers, 08h-0Fh and 70h-77h. */
-static UINT IrqPmVector(UINT irq) { return irq < PIC_LINES_PER_CHIP ? PIC_MASTER_VECTOR_BASE + irq : PIC_SLAVE_VECTOR_BASE + (irq - PIC_LINES_PER_CHIP); }
-static DWORD          g_IrqRaisedAny = 0;
-static DWORD          g_QiBits       = 0;
-static INT            g_QiKeysAsync = 0;   /* opt-in: async-deliver IRQ1 (see HostIrqSink) */
+UINT IrqPmVector(UINT irq) { return irq < PIC_LINES_PER_CHIP ? PIC_MASTER_VECTOR_BASE + irq : PIC_SLAVE_VECTOR_BASE + (irq - PIC_LINES_PER_CHIP); }
+DWORD          g_IrqRaisedAny = 0;
+DWORD          g_QiBits       = 0;
+INT            g_QiKeysAsync = 0;   /* opt-in: async-deliver IRQ1 (see HostIrqSink) */
 /* ── ⚠⚠ ONE THREAD MAY OWN THE GUEST'S CONTEXT AT A TIME, AND UNTIL THE COURIER
      THERE WAS ONLY EVER ONE. AsyncInjectIrq() reads the context, computes an IRET
      frame from it and writes it back; two threads doing that concurrently would each
@@ -38,9 +48,9 @@ static INT            g_QiKeysAsync = 0;   /* opt-in: async-deliver IRQ1 (see Ho
      order is sound -- and the second by holding this.
    ⚠ The CPU throttle also suspends this thread, and that stays safe without taking
      this: it only READS the context, and suspend counts nest. */
-static volatile LONG  g_AsyncContextWrite   = 0;   /* 1 while a thread owns the guest CONTEXT */
-static DWORD          g_QiCalls      = 0;
-static volatile LONG  g_QiStatus     = 0;  /* NTSTATUS of the last queue call */
+volatile LONG  g_AsyncContextWrite   = 0;   /* 1 while a thread owns the guest CONTEXT */
+DWORD          g_QiCalls      = 0;
+volatile LONG  g_QiStatus     = 0;  /* NTSTATUS of the last queue call */
 /* ASYNC INJECTION, DONE OURSELVES. VdmQueueInterrupt turned out to be transition-only, so
    the kernel will not break a spinning guest out for us. But a suspended thread's CONTEXT is
    readable and writable even while it sits inside VdmStartExecution, and for a V86 thread
@@ -68,7 +78,7 @@ static volatile LONG  g_QiStatus     = 0;  /* NTSTATUS of the last queue call */
    holds. A handler that switches stacks, or never returns, would latch this forever, so it
    also times out. This is a guard, not a PIC -- the real fix is the PIC VDD (resume item 4),
    which also gets us IRQ masking. */
-static DWORD          g_AsyncNestBlocked = 0;   /* refused: line masked or in service */
+DWORD          g_AsyncNestBlocked = 0;   /* refused: line masked or in service */
 static VOID AsyncWhyNote(UINT irq, UINT why)
 {
     g_AsyncWhy = (LONG)why;
@@ -94,17 +104,17 @@ static VOID AsyncWhyNote(UINT irq, UINT why)
      clear -- how long a VIF-only gate would have held every line off.
      s81 run 1 (p_irq8): live IF was 1 in every sample; the nested IRQ 8s came through
      path 2, which the first cut did not count -- hence S and the delivery trace. */
-static DWORD g_IfvCensus[IFV_PATHS][8];
-static DWORD g_IfvShadow[PIC_LINES];
-static DWORD g_IfvStarveT0, g_IfvStarveMaximumMs, g_IfvStarveCount;
-static INT   g_IfvStarveOpen;
+DWORD g_IfvCensus[IFV_PATHS][8];
+DWORD g_IfvShadow[PIC_LINES];
+DWORD g_IfvStarveT0, g_IfvStarveMaximumMs, g_IfvStarveCount;
+INT   g_IfvStarveOpen;
 static INT   g_VifLiveSeen;   /* a live V86 frame has shown VIF set: VME is keeping it */
 static DWORD IfvState(DWORD flags)
 {
     DWORD virtualIf = (*(volatile DWORD *)(ULONG_PTR)FIXED_NTVDMSTATE_LINEAR >> 9) & 1u;
     return ((flags >> 7) & 4u) | ((flags & EFLAGS_VIF) ? 2u : 0u) | virtualIf;
 }
-static VOID IfvNote(INT path, DWORD flags)
+VOID IfvNote(INT path, DWORD flags)
 {
     INT virtualInterruptFlag = (flags & EFLAGS_VIF) != 0;
     g_IfvCensus[path][IfvState(flags)]++;
@@ -129,10 +139,10 @@ static VOID IfvTrace(UINT irq, INT path, DWORD flags, DWORD codeSegment, DWORD i
     g_IfvTrace[index].State = (BYTE)IfvState(flags); g_IfvTrace[index].Flags = flags;
     g_IfvTrace[index].Cs = (WORD)codeSegment; g_IfvTrace[index].Ip = (WORD)instructionPointer;
 }
-static DWORD g_AsyncPmInjected = 0;             /* delivered                              */
-static DWORD g_AsyncInjectedLine[PIC_LINES];            /* ...and which IRQ line each one was      */
+DWORD g_AsyncPmInjected = 0;             /* delivered                              */
+DWORD g_AsyncInjectedLine[PIC_LINES];            /* ...and which IRQ line each one was      */
 static DWORD g_AsyncPmBail2 = 0;           /* PM async attempts that did not commit  */
-static DWORD g_PmWatch[DPMI_WATCH_MAX];     /* linear addresses to watch (whitespace-separated) */
+DWORD g_PmWatch[DPMI_WATCH_MAX];     /* linear addresses to watch (whitespace-separated) */
 /* ── ★★★ A GUEST'S OWN OFFSETS ARE THE ONLY ONES WORTH WRITING DOWN. ────────────────
      pmwatch.txt took absolute linear addresses, and an extended guest IS NOT LOADED AT
      A FIXED ADDRESS: ZAR's LE code object came up at 0x03f70000 on one run and
@@ -149,14 +159,14 @@ static DWORD g_PmWatch[DPMI_WATCH_MAX];     /* linear addresses to watch (whites
      zero when the file is parsed. A watch whose base is not known yet reads as
      `????????` rather than as address 0x3c878, which would be a wrong answer wearing a
      right one's clothes. */
-static BYTE  g_PmWatchRel[DPMI_WATCH_MAX]; /* 1 = offset from g_LeLoadBase */
-static DWORD PmWatchAddress(INT index)
+BYTE  g_PmWatchRel[DPMI_WATCH_MAX]; /* 1 = offset from g_LeLoadBase */
+DWORD PmWatchAddress(INT index)
 {
     if (!g_PmWatchRel[index]) return g_PmWatch[index];
     return g_LeLoadBase ? g_LeLoadBase + g_PmWatch[index] : 0;
 }
-static DWORD g_PmInjectDecl[2], g_PmInjectDeclTl[IRQ0TL_SECS];
-static VOID PmInjectDeclineNote(INT why, WORD cs, DWORD eip)
+DWORD g_PmInjectDecl[2], g_PmInjectDeclTl[IRQ0TL_SECS];
+VOID PmInjectDeclineNote(INT why, WORD cs, DWORD eip)
 {
     g_PmInjectDecl[why]++;
     if (g_Irq0Start) {
@@ -175,8 +185,8 @@ static VOID PmInjectDeclineNote(INT why, WORD cs, DWORD eip)
 #define ASYNC_SITE_MAX 96
 static DWORD g_AsyncSiteEip[ASYNC_SITE_MAX];
 static WORD  g_AsyncSiteCs[ASYNC_SITE_MAX];
-static INT   g_AsyncSiteCount = 0;
-static INT   g_AsyncSiteFull = 0;
+INT   g_AsyncSiteCount = 0;
+INT   g_AsyncSiteFull = 0;
 /* 1 = not seen before (and now recorded). Runs on the timer/UI thread only, so the
    table needs no lock: AsyncInjectIrq() bails at why=20 unless the CPU thread is
    inside guest execution, which is precisely when it is not in here. */
@@ -228,7 +238,7 @@ static VOID AsyncEarlyBail(UINT irq, UINT why)
     lineCursor = LogPut(lineCursor, "\r\n"); LogAppend(LOG_PATH, lineBuffer, lineCursor); SerialOut(lineBuffer, lineCursor);
 }
 enum { ASYNC_FIRST_DEVICE_IRQ = 2 };   /* IRQ 0 and 1 (timer, keyboard) have their own paths */
-static INT AsyncInjectIrq(UINT irq)
+INT AsyncInjectIrq(UINT irq)
 {
     if (irq >= PIC_LINES) { AsyncEarlyBail(irq, ASYNC_WHY_BAD_IRQ); return 0; }
     CONTEXT context;
@@ -546,14 +556,14 @@ static INT AsyncInjectIrq(UINT irq)
     return isOk;
 }
 
-static INT AsyncVectorIsOurStub(UINT irq)
+INT AsyncVectorIsOurStub(UINT irq)
 {
     UINT vector = VddPicVector(&g_Pic, (BYTE)irq);
     WORD segment = PeekWord(IVT_SEGMENT_ADDRESS(vector)), offset = PeekWord(IVT_OFFSET_ADDRESS(vector));
     return segment == DOS_HDLR_SEG && (offset == DOS_IRET_STUB_OFF || offset == DOS_HDLR_INT09_STUB_OFF);
 }
 
-static VOID HostIrqSink(PVOID context, BYTE irq)
+VOID HostIrqSink(PVOID context, BYTE irq)
 {
     (VOID)context;
     /* Every raise, counted by line. sb_blocks reached 1 while irqn_inj AND irqn_refused
@@ -802,7 +812,7 @@ static VOID HostIrqSink(PVOID context, BYTE irq)
    that only looks at IF -- forever. Skyroads does exactly that inside its INT 1Ch
    handler. A 16-bit FLAGS image pushed on the guest stack is unaffected: VME pushes the
    virtual flag into the IF bit position. */
-static INT IfOrVif(DWORD flags) { return (flags & (EFLAGS_IF_U | EFLAGS_VIF)) != 0; }
+INT IfOrVif(DWORD flags) { return (flags & (EFLAGS_IF_U | EFLAGS_VIF)) != 0; }
 /* ── #206: OUR BIOS STUBS ARE OUR STUBS TOO. ──────────────────────────────────────────
      Inside one of our INT stubs the live IF is the stub's -- the INT that vectored in
      cleared it -- and the guest's own is the FLAGS the stub will IRET to, at SS:SP+4.
@@ -811,7 +821,7 @@ static INT IfOrVif(DWORD flags) { return (flags & (EFLAGS_IF_U | EFLAGS_VIF)) !=
      every BIOS call returned at once; not once INT 15h AH=86h waits by re-executing
      its BOP, because a real BIOS takes interrupts during that wait. */
 #define DOS_BIOS_STUB_N 14            /* entries in WinMain's bios_ints[] (s91: +2Ah, 5Ch) */
-static INT IsOurStubCsIp(DWORD cs, DWORD ip)
+INT IsOurStubCsIp(DWORD cs, DWORD ip)
 {
     if (cs == DOS_HDLR_SEG) return 1;
     return cs == DOS_CTAB_SEG && ip >= DOS_BIOS_STUBS && ip < DOS_BIOS_STUBS + DOS_BIOS_STUB_N * DOS_BIOS_STUB_SIZE;
@@ -834,7 +844,7 @@ static INT GuestIfEnabled(volatile BYTE *tib)
    one the kernel virtualises in [0x714]; this sampler is how we identify which
    bit carries it -- compare a known-IF=1 moment (a BOP, where the guest's own
    FLAGS are on its stack) against an I/O reflect in the same run. */
-static VOID VdmStateSample(PCSTR label, volatile BYTE *tib, INT *budget)
+VOID VdmStateSample(PCSTR label, volatile BYTE *tib, INT *budget)
 {
     CHAR buffer[128], *cursor = buffer;
     if (*budget <= 0) return;
@@ -849,7 +859,7 @@ static VOID VdmStateSample(PCSTR label, volatile BYTE *tib, INT *budget)
     LogAppend(LOG_PATH, buffer, cursor); SerialOut(buffer, cursor);
 }
 
-static VOID InjectInt(volatile BYTE *tib, UINT vector)
+VOID InjectInt(volatile BYTE *tib, UINT vector)
 {
     WORD ss = (WORD)VDM_REG(tib, VTIB_SS),  sp = (WORD)VDM_REG(tib, VTIB_ESP);
     WORD cs = (WORD)VDM_REG(tib, VTIB_CS),  ip = (WORD)VDM_REG(tib, VTIB_EIP);
@@ -877,7 +887,7 @@ static VOID InjectInt(volatile BYTE *tib, UINT vector)
     VDM_SET16(tib, VTIB_CS,  PeekWord(IVT_SEGMENT_ADDRESS(vector)));  /* IVT[vec].segment */
 }
 enum { QIRQ_PROBE_IRQ = 5 };   /* qimode bit 2: the device line the probe raises */
-static DWORD WINAPI QueueIrqProbeThread(LPVOID parameter)
+DWORD WINAPI QueueIrqProbeThread(LPVOID parameter)
 {
     INT round;
     (VOID)parameter;
@@ -925,7 +935,7 @@ static DWORD WINAPI QueueIrqProbeThread(LPVOID parameter)
      acknowledge/EOI rule, one-per-turn).
    ⚠ Returns 1 if an interrupt was injected, so a caller that must let the handler IRET
      before doing anything else can tell. */
-static INT V86DeliverDeviceIrq(volatile BYTE *tib)
+INT V86DeliverDeviceIrq(volatile BYTE *tib)
 {
     INT injected = 0;
 /* Device IRQs (SB block completion on 5, etc.): same IF gating as IRQ0/1,

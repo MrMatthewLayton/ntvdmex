@@ -108,7 +108,6 @@ static CHAR             g_TextFontLive[NTVDMEX_PATH_MAX];
 #include "host_internal.h"
 #include "host_diag.c"
 #include "host_timing.c"
-#include "host_irq.c"
 #include "host_bios.c"
 #include "host_dos.c"
 #include "host_mouse.c"

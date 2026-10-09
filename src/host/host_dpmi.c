@@ -2564,7 +2564,7 @@ static VOID DpmiEnsurePmReturnSelector(VOID)
      -- so the interrupted CS:EIP:SS:ESP:EFLAGS are saved here and restored there.
    ► ONE IN FLIGHT AT A TIME, claimed with an interlocked compare-exchange, because this
      runs on a different thread from the one that clears it. */
-static INT DpmiAsyncInjectPm(UINT irq, CONTEXT *context)
+INT DpmiAsyncInjectPm(UINT irq, CONTEXT *context)
 {
     if (g_PmClientExited) return 0;          /* nothing left to interrupt */
     UINT interruptVector = IrqPmVector(irq);               /* 08h-0Fh, or 70h-77h for the slave */

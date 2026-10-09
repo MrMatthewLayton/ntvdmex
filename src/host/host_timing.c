@@ -62,7 +62,7 @@ static VOID PmOwedSample(LONG owed)
     else              bucket = 8;
     g_PmOwedHistogram[bucket]++;
 }
-static VOID Irq0Latch(VOID)
+VOID Irq0Latch(VOID)
 {
     if (g_Irq0Pending < IRQ0_PENDING_MAX) InterlockedIncrement(&g_Irq0Pending);
     if (g_PmTickOwed < PM_TICK_OWED_MAX)  InterlockedIncrement(&g_PmTickOwed);
@@ -70,7 +70,7 @@ static VOID Irq0Latch(VOID)
 }
 /* Consume one owed tick. Returns 0 if none is owed, i.e. "the client is up to date --
    do not manufacture time it has not been billed for". */
-static INT PmTickTake(VOID)
+INT PmTickTake(VOID)
 {
     if (g_PmTickOwed <= 0) return 0;
     InterlockedDecrement(&g_PmTickOwed);
@@ -88,7 +88,7 @@ static INT   g_AsyncTriedThisSync = 0;   /* see HostIrqSink: one attempt per PIT
      either way -- so bucket the interval. QPC, because a tick period is smaller than
      GetTickCount's granularity. */
 static DWORD g_TickGap[12], g_TickGapMaximumMicroseconds, g_TickGapOver;   /* >11.6ms = a block */
-static VOID TickDeliveredNote(VOID)
+VOID TickDeliveredNote(VOID)
 {
     static LARGE_INTEGER frequency, prev;
     LARGE_INTEGER now;
@@ -130,7 +130,7 @@ static CRITICAL_SECTION g_PitCs;
    guest -- the last one being how we caught the BIOS tick starving during an I/O
    storm (iobench case 1 could not accumulate 5 ticks in 30 s). */
 static DWORD          g_EventIo         = 0;  /* port-I/O events serviced            */
-static LONGLONG       g_Irq0Start, g_Irq0TimePrevious;
+LONGLONG       g_Irq0Start, g_Irq0TimePrevious;
 static DWORD          g_Irq0NoteCs, g_Irq0NoteIp;      /* set by the caller      */
 /* ── ★★ WHICH OF THREE MECHANISMS MAKES A LONG GAP? (Skyroads wobble, s61) ────────
      The s60 root-cause note reads the 8-20 ms gaps as ASYNC DELIVERY starving, and
@@ -168,7 +168,7 @@ static DWORD          g_Irq0NoteCs, g_Irq0NoteIp;      /* set by the caller     
                               is the lock that HostPitSync waits on.
      A gap is ANOMALOUS when it spans at least two programmed periods -- the same
      "the guest missed a tick" test, expressed in the guest's own units. */
-static DWORD          g_Irq0RaiseCount, g_Irq0AttemptsCount, g_Irq0NieCount, g_Irq0YieldCount;
+DWORD          g_Irq0RaiseCount, g_Irq0AttemptsCount, g_Irq0NieCount, g_Irq0YieldCount;
 static DWORD          g_Irq0PrRaise, g_Irq0PrAttempts, g_Irq0PrNie, g_Irq0PrYield;
 static VOID Irq0DeliveredNote(VOID)
 {
@@ -227,8 +227,8 @@ static DWORD          g_Irq0SkipIf  = 0;  /* ...because the guest had interrupts
 static DWORD          g_Irq0SkipStub= 0;  /* ...because we were inside our INT 08h stub */
 static DWORD          g_PitLatchDumps = 0;   /* PIT-LATCH poll-ring dumps printed (max 2) */
 static DWORD          g_EventIntPending    = 0;  /* event-3 interrupt-pending notifications */
-static DWORD          g_IrqNInjected      = 0;  /* device IRQs (2-7) injected into the guest */
-static DWORD          g_IrqNRefuseTotal = 0;
+DWORD          g_IrqNInjected      = 0;  /* device IRQs (2-7) injected into the guest */
+DWORD          g_IrqNRefuseTotal = 0;
 static DWORD g_EventHistogram[EV_HIST_MAX];
 /* ── #238: WHERE THE CPU THREAD IS WHEN IT IS NOT IN THE GUEST. (s85) ─────────────────
      3DBench's 1 kHz timer: 84% of async attempts bailed `not_in_exec`, with only ~410
@@ -303,7 +303,7 @@ enum { IRQ0_ISR_GAP_RESET_MS = 100 };   /* Irq0CanDeliver: a stall this long res
 /* Can IRQ0 be delivered now? The PIC's answer, plus safety net 1. Called at both
    delivery sites (cooperative exec loop and the async courier). */
 static DWORD g_Irq0LastAttempt = 0;   /* GetTickCount()|1 at the last delivery attempt */
-static INT Irq0CanDeliver(VOID)
+INT Irq0CanDeliver(VOID)
 {
     DWORD now = GetTickCount() | 1, gap = now - g_Irq0LastAttempt;
     g_Irq0LastAttempt = now;
@@ -357,7 +357,7 @@ static INT Irq0CanDeliver(VOID)
 /* Acknowledge IRQ0 at delivery: hold it in service unless the vector is one of our
    never-EOIing stubs or the fallback is engaged. (Our INT 08h BOP is NOT such a stub:
    it EOIs, as the BIOS handler does.) */
-static VOID Irq0Ack(VOID)
+VOID Irq0Ack(VOID)
 {
     if (g_Irq0AutoEoi || AsyncVectorIsOurStub(PIC_IRQ_TIMER)) {
         VddPicAcknowledgeAutoEoi(&g_Pic, 0);

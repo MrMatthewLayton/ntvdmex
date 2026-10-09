@@ -90,9 +90,9 @@ static volatile DWORD g_DpmiLastEvent  = 0;  /* VTIB_EVENT reported by the last 
 static volatile DWORD g_DpmiLastVector = 0;  /* vector serviced on the last iteration         */
 static volatile LONG  g_VehAny       = 0;  /* # PM-context exceptions delivered to the VEH  */
 static volatile LONG  g_VehFatal     = 0;  /* # of those that took the non-reflect fatal path */
-static LONG g_IfvTraceCount;
-static DWORD g_IfvReenter[PIC_LINES];
-static DWORD g_AsyncEarlyBailLogged = 0;
+LONG g_IfvTraceCount;
+DWORD g_IfvReenter[PIC_LINES];
+DWORD g_AsyncEarlyBailLogged = 0;
 /* ► WHICH CLAUSE SAID NO, PER LINE. `attempts` and `delivered` give the shortfall as one
      subtraction and no reason for it; this names every refusal. Read bucket 14 (the CPU
      thread was in HOST code) against 10 (an injection still in flight) and 7/8 (the client

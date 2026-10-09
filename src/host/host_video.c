@@ -1181,7 +1181,7 @@ static VOID ModeYRingDump(PCSTR why)
 }
 /* An injected interrupt, as a ring entry: cs=FFFE, ip=vector, ss:sp = the cs:ip it
    interrupted. Only once mode Y has been interpreted -- the ring is its instrument. */
-static VOID ModeYRingNoteIrq(UINT vector, WORD cs, WORD ip, WORD ss, WORD sp)
+VOID ModeYRingNoteIrq(UINT vector, WORD cs, WORD ip, WORD ss, WORD sp)
 {
     UINT index, byteIndex;
     (VOID)ss; (VOID)sp;
