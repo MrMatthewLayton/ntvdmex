@@ -1,9 +1,29 @@
 /* wowmmedia.c -- ★ MMSYSTEM.DLL's OWN ID SPACE (WOW32's "MMEDIA" table).  #278, s90.
  *
- * The code of wowmmedia.h (#335): its functions and state, in their original order. Part of
- * the host's single translation unit: #included by main.c straight after wowmmedia.h. */
+ * The code of wowmmedia.h (#335): its functions and state, in their original order;
+ * its own translation unit, declared in wowmmedia.h. */
+#include "host_state.h"
+#include "log.h"
+#include "ne.h"
+#include "wow32.h"
+#include "wowanchors.h"
+#include "wowsched.h"
+#include "wowcall.h"
+#include "wowmsg.h"
+#include "wowres.h"
+#include "wowwin.h"
+#include "wowgdi.h"
+#include "wowuser.h"
+#include "wowdlg.h"
+#include "wowenum.h"
+#include "wowshell.h"
+#include "wowcommdlg.h"
+#include "wowkbd.h"
+#include "wowsound.h"
+#include "wowmmedia.h"
 
-static INT WowMultimediaCall(WOW32_FRAME *frame, PSTR note, INT noteCapacity)
+
+INT WowMultimediaCall(WOW32_FRAME *frame, PSTR note, INT noteCapacity)
 {
     INT noteLength = 0;
     if (noteCapacity) note[0] = 0;

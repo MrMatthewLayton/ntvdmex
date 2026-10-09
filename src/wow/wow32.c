@@ -13,13 +13,13 @@ static VOID Wow32CurrentDirectorySet(PCSTR dir);  /* #164: main.c's per-task dir
    is wrong now that USER's GetDC has to mint a GDI token, so the helpers moved
    to the header everything already includes instead of the dependency being
    worked around with forward declarations. */
-static VOID WowNotePut(PSTR buffer, INT capacity, PINT length, PCSTR text)
+VOID WowNotePut(PSTR buffer, INT capacity, PINT length, PCSTR text)
 {
     while (*text && *length < capacity - 1) buffer[(*length)++] = *text++;
     buffer[*length] = 0;
 }
 
-static VOID WowNoteHex(PSTR buffer, INT capacity, PINT length, DWORD value, INT digits)
+VOID WowNoteHex(PSTR buffer, INT capacity, PINT length, DWORD value, INT digits)
 {
     static const CHAR hexDigits[] = HEX_DIGITS_LOWER;
     INT index;
@@ -57,7 +57,7 @@ static WORD Wow32ArgWord(PCWOW32_FRAME frame, INT offset)
 }
 
 /* Argument DWORD at byte offset `off`. */
-static DWORD Wow32ArgDword(PCWOW32_FRAME frame, INT offset)
+DWORD Wow32ArgDword(PCWOW32_FRAME frame, INT offset)
 {
     return (DWORD)Wow32ArgWord(frame, offset) | ((DWORD)Wow32ArgWord(frame, offset + WOW_WORD_BYTES) << WORD_SHIFT);
 }
@@ -127,7 +127,7 @@ static INT Wow32FarPut(PCWOW32_FRAME frame, volatile BYTE *base,
 }
 
 /* ★ The return value goes in the stack hole, NOT in AX/DX -- see the header note. */
-static VOID Wow32SetReturn(PWOW32_FRAME frame, DWORD value)
+VOID Wow32SetReturn(PWOW32_FRAME frame, DWORD value)
 {
     Wow32PokeWord(frame->FrameBase + WOW32_OFF_RET,     (WORD)(value & WORD_MASK));
     Wow32PokeWord(frame->FrameBase + WOW32_OFF_RET + WOW_WORD_BYTES, (WORD)(value >> WORD_SHIFT));
@@ -268,7 +268,7 @@ static DWORD Wow32Flat(PCWOW32_FRAME frame, DWORD farPointer)
 /* Call a 32-bit function with n DWORDs, a[0] first. ESP is restored by hand, so a
    STDCALL target (which pops) and a CDECL one (which does not) both come back
    with the stack where it was. */
-static DWORD WowGenericThunkInvoke(DWORD procedure, PCDWORD arguments, INT count)
+DWORD WowGenericThunkInvoke(DWORD procedure, PCDWORD arguments, INT count)
 {
     DWORD result;
     __asm__ __volatile__ (

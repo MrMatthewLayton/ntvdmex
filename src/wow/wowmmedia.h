@@ -34,4 +34,6 @@
 #define WOWMM_CALLPROC32_ARG_DEVICE     24
 #define WOWMM_CALLPROC32_ARGUMENTS      5
 
+/* Defined in wowmmedia.c (#335). */
+INT WowMultimediaCall(WOW32_FRAME *frame, PSTR note, INT noteCapacity);
 #endif /* NTVDMEX_WOWMMEDIA_H */

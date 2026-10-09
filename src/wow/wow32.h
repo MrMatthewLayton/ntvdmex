@@ -592,4 +592,10 @@ typedef struct _WOW32_DECLINE_SITE { WORD Id; WORD CallSite; } WOW32_DECLINE_SIT
 #define WOW_GT_MAX_PARAMETERS 32
 #define WOW32_RAW_ARGUMENTS_MAX 0x200   /* the furthest a raw argument read may reach */
 
+/* Defined in wow32.c (#335). */
+VOID WowNotePut(PSTR buffer, INT capacity, PINT length, PCSTR text);
+VOID WowNoteHex(PSTR buffer, INT capacity, PINT length, DWORD value, INT digits);
+DWORD Wow32ArgDword(PCWOW32_FRAME frame, INT offset);
+VOID Wow32SetReturn(PWOW32_FRAME frame, DWORD value);
+DWORD WowGenericThunkInvoke(DWORD procedure, PCDWORD arguments, INT count);
 #endif /* NTVDMEX_WOW32_H */
