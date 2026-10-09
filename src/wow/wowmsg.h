@@ -226,4 +226,6 @@ extern WOWMSG g_WowMsgReplay;
 VOID WowMsgRead(const volatile BYTE *bytes, PWOWMSG message);
 VOID WowMsgWrite(volatile BYTE *bytes, PCWOWMSG message);
 INT WowMsgPostMove(WORD window, WORD message, WORD wParam, DWORD lParam, DWORD time, WORD pointX, WORD pointY);
+extern INT g_WowMsgIsWaitAnnounced;
+INT WowMsgCountFor(WORD task);
 #endif /* NTVDMEX_WOWMSG_H */

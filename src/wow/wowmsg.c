@@ -1,7 +1,20 @@
 /* wowmsg.c -- ★ THE WIN16 MESSAGE QUEUE. GH #128, session 41.
  *
- * The code of wowmsg.h (#335): its functions and state, in their original order. Part of
- * the host's single translation unit: #included by main.c straight after wowmsg.h. */
+ * The code of wowmsg.h (#335): its functions and state, in their original order;
+ * its own translation unit, declared in wowmsg.h. */
+#include "host_state.h"
+#include "log.h"
+#include "ne.h"
+#include "wow32.h"
+#include "wowanchors.h"
+#include "wowsched.h"
+#include "wowcall.h"
+#include "wowmsg.h"
+#include "wowres.h"
+#include "wowwin.h"
+#include "wowgdi.h"
+#include "wowuser.h"
+
 
 /* ★ AND IT IS A KNOB NOW (session 43, `wowidle.txt`): **0 means forever**, which
      is what a real Win16 task does and what an interactive session needs. A
@@ -10,7 +23,7 @@
      impossible to type into. The bound stays the default so an unattended run
      still finishes. */
 DWORD g_WowMsgWaitMs = WOWMSG_WAIT_MS;
-static INT   g_WowMsgIsWaitAnnounced    = 0;   /* the setting is announced once, at first use */
+INT   g_WowMsgIsWaitAnnounced    = 0;   /* the setting is announced once, at first use */
 
 /* ── ★★★ "THE GUEST IS PARKED HERE ON PURPOSE", FOR THE FREEZE WATCHDOG. ──────
      Non-zero while the exec thread is inside the blocking GetMessage wait.
@@ -186,7 +199,7 @@ INT WowMsgTake(WORD window, WORD filterMin, WORD filterMax, INT isRemove, PWOWMS
 }
 
 /* s92 (#306): how many queued messages are `task`'s (all of them for task 0). */
-static INT WowMsgCountFor(WORD task)
+INT WowMsgCountFor(WORD task)
 {
     INT position, count = 0;
     for (position = 0; position < g_WowMsgCount; ++position)

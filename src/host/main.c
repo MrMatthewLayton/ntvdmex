@@ -37,7 +37,6 @@
 #include "../wow/wowcall.h" /* GH #128: ...and the OTHER direction -- calling 16-bit code */
 #include "../wow/wowcall.c"
 #include "../wow/wowmsg.h" /* GH #128: ...and the MESSAGE QUEUE the loop turns on */
-#include "../wow/wowmsg.c"
 #include "../wow/wowres.h" /* GH #128: ...and the guest's OWN menu and icons */
 #include "../wow/wowwin.h" /* GH #128: ...and a Win16 window IS a real Win32 window */
 /* ⚠ wowgdi.h COMES BEFORE wowuser.h, and the order is load-bearing: USER's
