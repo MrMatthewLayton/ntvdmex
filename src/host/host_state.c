@@ -470,3 +470,38 @@ BYTE *g_WowShadow = NULL;
    ⚠ Its own stack, below 0301's default one (the code segment at FF00), so a reflection
      can never land on a frame that call is using. */
 DWORD g_PmIrqRmReflects = 0, g_PmIrqRmFail = 0;
+
+/* The shared tables that had anonymous types (#335). */
+SKIP_IF_SITE g_SkipIfSite[SKIPIF_SITES];
+IO_HOT_PORT g_IoHot[IO_HOT_MAX];
+/* DPMI PM interrupt-vector table (INT 31h 0204/0205). A client installs its own PM
+   handlers here; we store them so a get/set/restore round-trips faithfully. (We still
+   service patched INT 21h/31h ourselves -- routing to a client-installed PM handler is
+   a deeper item; storing the vectors is what real extenders' save/restore needs.) */
+/* `client` distinguishes a vector the CLIENT installed (0205 / INT 21h AH=25h) from
+   the host default we pre-load into every entry at mode-switch time. The difference is
+   load-bearing in two places: we only ROUTE an interrupt to a handler the client chose,
+   and we only INJECT IRQ0 into an INT 08h the client actually hooked -- injecting into
+   our own default would be a very confusing way to talk to ourselves. */
+PM_INTERRUPT_VECTOR g_PmInt[IVT_VECTORS];
+DPMI_MEMORY_BLOCK g_DpmiBlock[DPMI_MEMBLK_MAX];
+/* DPMI PM EXCEPTION-handler table (INT 31h 0202/0203). Separate from g_PmInt on
+   purpose: 0202/0203 address CPU exceptions 00h-1Fh, which are a different namespace
+   from the interrupt vectors 0204/0205 addresses -- a client may legitimately install
+   a #GP (0Dh) exception handler and an INT 0Dh (IRQ5) interrupt handler at once, and
+   collapsing them into one table would make each silently overwrite the other.
+   Doom's DOS/4GW makes 45 of these calls -- the biggest single block of UNSUP in the
+   session-16 trace -- installing its own fault handlers before it runs the game. */
+PM_EXCEPTION_VECTOR g_PmException[X86_EXCEPTIONS];
+/* DPMI 0303 real-mode callbacks: each slot records the client's PM handler (sel:off)
+   and the RMCS buffer (sel:off) to marshal register state through. g_PmReturnSelector is a
+   code selector based at DOS_HDLR_SEG (0x500) so the PM handler's IRET lands on the
+   planted DPMI_PMRET catcher; allocated lazily on the first 0303. */
+DPMI_CALLBACK g_Callbacks[DPMI_CB_SLOTS];
+IFV_TRACE_ENTRY g_IfvTrace[IFV_TRACE_MAX];
+PM_INJECT_SITE g_PmInjectSite[PMINJ_SITES];
+/* --- menu + status bar (scaffold; most items are stubs for now) ------------ */
+I33_FUNCTION_COUNT g_MouseI33Ax[I33_AXN];
+I33_CALL_SITE g_MouseI33Site[I33_SITEN];
+RETRACE_SITE g_RetraceSite[RT_SITES];
+ISV_IO_HOOK g_IsvHooks[ISV_MAX_HOOKS];

@@ -103,6 +103,7 @@ add_executable(ntvdmhost
     src/host/host_audio.c
     src/host/host_install.c
     src/host/install.c
+    src/host/dpmi_svc.c
     src/host/cpuspeed.c
     src/host/pcspeaker.c
     src/host/settings.c

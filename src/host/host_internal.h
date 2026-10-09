@@ -22,33 +22,7 @@ static INT  ModeYInterpServes(VOID);      /* fwd: north star 1, design C */
 static VOID ModeYRingDump(PCSTR why);  /* fwd: north star 1, design C */
 static VOID ModeYRingNoteIrq(UINT vector, WORD cs, WORD ip, WORD ss, WORD sp);
 static INT InterpreterMemoryPageOk(UINT32 linear);        /* fwd: page-validity guard, defined with V86HostRead8 */
-static struct { WORD Cs, Ip, Stub; DWORD Count; } g_SkipIfSite[SKIPIF_SITES];
-static struct { WORD Port; DWORD Count; } g_IoHot[IO_HOT_MAX];
 static DWORD DpmiSelectorBase(WORD selector);       /* fwd: watchdog resolves the frozen selector base */
-/* DPMI PM interrupt-vector table (INT 31h 0204/0205). A client installs its own PM
-   handlers here; we store them so a get/set/restore round-trips faithfully. (We still
-   service patched INT 21h/31h ourselves -- routing to a client-installed PM handler is
-   a deeper item; storing the vectors is what real extenders' save/restore needs.) */
-/* `client` distinguishes a vector the CLIENT installed (0205 / INT 21h AH=25h) from
-   the host default we pre-load into every entry at mode-switch time. The difference is
-   load-bearing in two places: we only ROUTE an interrupt to a handler the client chose,
-   and we only INJECT IRQ0 into an INT 08h the client actually hooked -- injecting into
-   our own default would be a very confusing way to talk to ourselves. */
-static struct { WORD Selector; DWORD Offset; BYTE Client; } g_PmInt[IVT_VECTORS];
-static struct { DWORD Base, Size; BYTE Code; } g_DpmiBlock[DPMI_MEMBLK_MAX];
-/* DPMI PM EXCEPTION-handler table (INT 31h 0202/0203). Separate from g_PmInt on
-   purpose: 0202/0203 address CPU exceptions 00h-1Fh, which are a different namespace
-   from the interrupt vectors 0204/0205 addresses -- a client may legitimately install
-   a #GP (0Dh) exception handler and an INT 0Dh (IRQ5) interrupt handler at once, and
-   collapsing them into one table would make each silently overwrite the other.
-   Doom's DOS/4GW makes 45 of these calls -- the biggest single block of UNSUP in the
-   session-16 trace -- installing its own fault handlers before it runs the game. */
-static struct { WORD Selector; DWORD Offset; INT IsSet; } g_PmException[X86_EXCEPTIONS];
-/* DPMI 0303 real-mode callbacks: each slot records the client's PM handler (sel:off)
-   and the RMCS buffer (sel:off) to marshal register state through. g_PmReturnSelector is a
-   code selector based at DOS_HDLR_SEG (0x500) so the PM handler's IRET lands on the
-   planted DPMI_PMRET catcher; allocated lazily on the first 0303. */
-static struct { WORD PmSelector; DWORD PmOffset; WORD RmEs; DWORD RmDi; INT IsUsed; } g_Callbacks[DPMI_CB_SLOTS];
 static VOID ExecMachineSave(INT depth);    /* fwd: defined with CloseProgramNow */
 static BYTE  g_FaultTable[DOS_FLTSITE_N * DPMI_FAULT_TABLE_ENTRY] __attribute__((aligned(16)));
 static BYTE  g_FaultStack[DPMI_FAULT_STK_SIZE] __attribute__((aligned(16)));   /* #205 */
@@ -59,19 +33,13 @@ static VOID HostPitGenerate(VOID);         /* fwd: the crystal half (g_PitCs onl
 static VOID HostPitDeliver(VOID);          /* fwd: the attempt half (g_Lock, by TRY) */
 static INT  V86DeliverDeviceIrq(volatile BYTE *tib);  /* fwd: shared by the main and nested V86 loops */
 static INT  DpmiAsyncInjectPm(UINT irq, CONTEXT *context);
-static struct { BYTE Irq, Path, State; WORD Cs, Ip; DWORD Flags; } g_IfvTrace[IFV_TRACE_MAX];
-static struct { WORD Cs; DWORD Eip, Count; } g_PmInjectSite[PMINJ_SITES];
 static VOID MouseChildExited(VOID);          /* fwd: see g_MouseWantRelease */
 static HANDLE StdioPebHandle(HANDLE proc, UINT offset);
 static VOID HostRecordFinish(VOID);        /* below: patches the header, logs */
-/* --- menu + status bar (scaffold; most items are stubs for now) ------------ */
-static struct { WORD Ax; DWORD Count; }  g_MouseI33Ax[I33_AXN];
-static struct { DWORD Linear, Eip, Count; WORD Cs, Ax; BYTE Source; BYTE Context[12]; } g_MouseI33Site[I33_SITEN];
 static INT DpmiSelectorIs32(WORD selector);
 static VOID VideoTrapSync(VOID);             /* fwd */
 static WORD DpmiSegmentToDescriptor(WORD segment);
 static VOID HostFullscreenToggle(HWND window);
-static struct { DWORD Cs, Ip, Count; BYTE Bytes[10]; } g_RetraceSite[RT_SITES];
 static VOID ModeYGr4CloseRun(VOID);       /* defined with the GR4 counters below */
 static VOID ModeYRemapSelectBody(PVOID context, INT mask);
 static VOID InterpreterMemoryBadNote(UINT32 linear, INT write);   /* defined after v86interp.h (needs icpu) */
@@ -99,7 +67,6 @@ static INT WowCall16SyncEx(DWORD proc, WORD ds, const WORD *args, INT argumentCo
                               WORD hwnd, WORD message, WORD *result,
                               BYTE *blob, INT blobLength, INT blobArgument,
                               const INT *fix, INT fixupCount);
-static struct { HANDLE VddHandle; WORD FirstPort, LastPort; ISV_IO_HANDLERS Handlers; INT IsLive; } g_IsvHooks[ISV_MAX_HOOKS];
 /* The interpreter templates' host callbacks, then the templates themselves. */
 static inline __attribute__((always_inline)) BYTE V86HostRead8(UINT32 linear);
 static inline __attribute__((always_inline)) VOID V86HostWrite8(UINT32 linear, BYTE value);

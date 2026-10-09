@@ -198,14 +198,7 @@
 #define DPMI_FREE_INFO_LINEAR_FREE   7
 #define DPMI_FREE_INFO_PAGING_FILE   8
 #define DPMI_STATE_SAVE_SIZE         0x0040  /* 0305h: nominal, see the handler */
-static INT DpmiIsSelectorValid(WORD selector, INT indexLimit, INT isAllocated, INT isGuestOwnedTable)
-{
-    INT index = DPMI_SELECTOR_INDEX(selector);
-    if (!(selector & DPMI_SELECTOR_TI)) return 0;    /* TI = 0: GDT          */
-    if (index < 1 || index >= indexLimit) return 0;  /* null, or off the end */
-    if (!isAllocated && !isGuestOwnedTable) return 0;   /* never handed out     */
-    return 1;
-}
+INT DpmiIsSelectorValid(WORD selector, INT indexLimit, INT isAllocated, INT isGuestOwnedTable);
 
 /* ── REAL-MODE CALLBACKS: SIXTEEN, AND THEY CAN BE GIVEN BACK. (0303h/0304h) ───────────
      The spec has a host provide AT LEAST 16 callbacks per client; we had 4, and no 0304h,
@@ -224,25 +217,12 @@ static INT DpmiIsSelectorValid(WORD selector, INT indexLimit, INT isAllocated, I
 #define DPMI_CB_SLOTS      16
 #define DPMI_CB_STRIDE     4
 
-static WORD DpmiCallbackEntry(WORD base, INT slot)
-{
-    return (WORD)(base + slot * DPMI_CB_STRIDE);
-}
+WORD DpmiCallbackEntry(WORD base, INT slot);
 /* The slot whose BOP is executing at CS:IP, or -1. For the trap path. */
-static INT DpmiCallbackSlotAt(WORD base, WORD codeSegment, WORD wantedSegment, WORD instructionPointer)
-{
-    INT slot;
-    if (codeSegment != wantedSegment || instructionPointer < base) return -1;
-    slot = (instructionPointer - base) / DPMI_CB_STRIDE;
-    return (slot < DPMI_CB_SLOTS) ? slot : -1;
-}
+INT DpmiCallbackSlotAt(WORD base, WORD codeSegment, WORD wantedSegment, WORD instructionPointer);
 /* 0304h: the slot whose ADDRESS is exactly CX:DX, or -1. Stricter than the trap path:
    the client must hand back the address it was given, not something inside the stub. */
-static INT DpmiCallbackSlotOf(WORD base, WORD codeSegment, WORD wantedSegment, WORD offset)
-{
-    INT slot = DpmiCallbackSlotAt(base, codeSegment, wantedSegment, offset);
-    return (slot >= 0 && DpmiCallbackEntry(base, slot) == offset) ? slot : -1;
-}
+INT DpmiCallbackSlotOf(WORD base, WORD codeSegment, WORD wantedSegment, WORD offset);
 
 /* ── 0503h RESIZE MEMORY BLOCK: STAY PUT IF IT FITS, OTHERWISE MOVE AND COPY. ──────────
      The spec lets the host move the block (it returns a new linear address AND a new
@@ -256,13 +236,6 @@ static INT DpmiCallbackSlotOf(WORD base, WORD codeSegment, WORD wantedSegment, W
 #define DPMI_RESIZE_BAD    0
 #define DPMI_RESIZE_INPLACE 1
 #define DPMI_RESIZE_MOVE   2
-static INT DpmiResizePlan(UINT32 newSize, UINT32 committed, UINT32 *copy)
-{
-    if (copy) *copy = 0;
-    if (newSize == 0) return DPMI_RESIZE_BAD;
-    if (newSize <= committed) return DPMI_RESIZE_INPLACE;
-    if (copy) *copy = committed;                     /* new > committed: all of the old */
-    return DPMI_RESIZE_MOVE;
-}
+INT DpmiResizePlan(UINT32 newSize, UINT32 committed, UINT32 *copy);
 
 #endif /* NTVDMEX_DPMI_SVC_H */

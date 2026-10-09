@@ -56,6 +56,7 @@
 #include "vdd_mpu.h"
 #include "vdd_net.h"
 #include "../../sdk/include/ntvdmex-vdd.h"
+#include "dpmi_svc.h"
 #include "host_types.h"
 
 
@@ -204,4 +205,16 @@ extern INT g_WowWindowNested;
 extern BYTE *g_WowShadow;
 extern DWORD g_PmIrqRmReflects, g_PmIrqRmFail;
 
+extern SKIP_IF_SITE g_SkipIfSite[SKIPIF_SITES];
+extern IO_HOT_PORT g_IoHot[IO_HOT_MAX];
+extern PM_INTERRUPT_VECTOR g_PmInt[IVT_VECTORS];
+extern DPMI_MEMORY_BLOCK g_DpmiBlock[DPMI_MEMBLK_MAX];
+extern PM_EXCEPTION_VECTOR g_PmException[X86_EXCEPTIONS];
+extern DPMI_CALLBACK g_Callbacks[DPMI_CB_SLOTS];
+extern IFV_TRACE_ENTRY g_IfvTrace[IFV_TRACE_MAX];
+extern PM_INJECT_SITE g_PmInjectSite[PMINJ_SITES];
+extern I33_FUNCTION_COUNT g_MouseI33Ax[I33_AXN];
+extern I33_CALL_SITE g_MouseI33Site[I33_SITEN];
+extern RETRACE_SITE g_RetraceSite[RT_SITES];
+extern ISV_IO_HOOK g_IsvHooks[ISV_MAX_HOOKS];
 #endif

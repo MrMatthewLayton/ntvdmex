@@ -737,4 +737,30 @@ typedef struct { PVOID InByte, InWord, InStringByte, InStringWord, OutByte, OutW
    enclosing loop, start its next pass, or return from the enclosing function. */
 enum { HOST_FLOW_NEXT = 0, HOST_FLOW_BREAK, HOST_FLOW_CONTINUE, HOST_FLOW_RETURN };
 
+/* The shared tables' entry types (#335: named so the tables can be declared extern; the
+   fields are as they were). */
+typedef struct _SKIP_IF_SITE { WORD Cs, Ip, Stub; DWORD Count; } SKIP_IF_SITE, *PSKIP_IF_SITE;
+typedef const SKIP_IF_SITE *PCSKIP_IF_SITE;
+typedef struct _IO_HOT_PORT { WORD Port; DWORD Count; } IO_HOT_PORT, *PIO_HOT_PORT;
+typedef const IO_HOT_PORT *PCIO_HOT_PORT;
+typedef struct _PM_INTERRUPT_VECTOR { WORD Selector; DWORD Offset; BYTE Client; } PM_INTERRUPT_VECTOR, *PPM_INTERRUPT_VECTOR;
+typedef const PM_INTERRUPT_VECTOR *PCPM_INTERRUPT_VECTOR;
+typedef struct _DPMI_MEMORY_BLOCK { DWORD Base, Size; BYTE Code; } DPMI_MEMORY_BLOCK, *PDPMI_MEMORY_BLOCK;
+typedef const DPMI_MEMORY_BLOCK *PCDPMI_MEMORY_BLOCK;
+typedef struct _PM_EXCEPTION_VECTOR { WORD Selector; DWORD Offset; INT IsSet; } PM_EXCEPTION_VECTOR, *PPM_EXCEPTION_VECTOR;
+typedef const PM_EXCEPTION_VECTOR *PCPM_EXCEPTION_VECTOR;
+typedef struct _DPMI_CALLBACK { WORD PmSelector; DWORD PmOffset; WORD RmEs; DWORD RmDi; INT IsUsed; } DPMI_CALLBACK, *PDPMI_CALLBACK;
+typedef const DPMI_CALLBACK *PCDPMI_CALLBACK;
+typedef struct _IFV_TRACE_ENTRY { BYTE Irq, Path, State; WORD Cs, Ip; DWORD Flags; } IFV_TRACE_ENTRY, *PIFV_TRACE_ENTRY;
+typedef const IFV_TRACE_ENTRY *PCIFV_TRACE_ENTRY;
+typedef struct _PM_INJECT_SITE { WORD Cs; DWORD Eip, Count; } PM_INJECT_SITE, *PPM_INJECT_SITE;
+typedef const PM_INJECT_SITE *PCPM_INJECT_SITE;
+typedef struct _I33_FUNCTION_COUNT { WORD Ax; DWORD Count; } I33_FUNCTION_COUNT, *PI33_FUNCTION_COUNT;
+typedef const I33_FUNCTION_COUNT *PCI33_FUNCTION_COUNT;
+typedef struct _I33_CALL_SITE { DWORD Linear, Eip, Count; WORD Cs, Ax; BYTE Source; BYTE Context[12]; } I33_CALL_SITE, *PI33_CALL_SITE;
+typedef const I33_CALL_SITE *PCI33_CALL_SITE;
+typedef struct _RETRACE_SITE { DWORD Cs, Ip, Count; BYTE Bytes[10]; } RETRACE_SITE, *PRETRACE_SITE;
+typedef const RETRACE_SITE *PCRETRACE_SITE;
+typedef struct _ISV_IO_HOOK { HANDLE VddHandle; WORD FirstPort, LastPort; ISV_IO_HANDLERS Handlers; INT IsLive; } ISV_IO_HOOK, *PISV_IO_HOOK;
+typedef const ISV_IO_HOOK *PCISV_IO_HOOK;
 #endif
