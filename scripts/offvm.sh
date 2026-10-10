@@ -59,7 +59,7 @@ else
     echo "  ⚠ nasm not found: interp_test's p_o32.com check will fail"
 fi
 
-checks=0; failed=0; ran=0
+checks=0; failed=0; ran=0; skipped=0
 declare -a BROKEN=() FAILING=()
 
 for src in "$ROOT"/tests/unit/*_test.c; do
@@ -113,12 +113,18 @@ for src in "$ROOT"/tests/unit/*_test.c; do
             f="$(printf '%s' "$line" | sed -E 's/.*checks, ([0-9]+) (failed|failures).*/\1/')"
         fi
         checks=$((checks + c)); failed=$((failed + f))
+        # A case that needs a file the repository cannot hold (Microsoft's modules, a ROM)
+        # prints SKIP. It is not a failure, but it must show: a skip is a check not made.
+        k="$(printf '%s\n' "$out" | grep -cE '^\s*SKIP' || true)"
+        skipped=$((skipped + k))
+        note=""
+        [ "$k" != "0" ] && note=" ($k skipped)"
         if [ "$f" != "0" ]; then
             FAILING+=("$name ($f of $c)")
             printf '  %-20s %4s checks  %s FAILED\n' "$name" "$c" "$f"
             printf '%s\n' "$out" | grep -E '^\s+FAIL' | head -8 | sed 's/^/      /'
         else
-            printf '  %-20s %4s checks  ok\n' "$name" "$c"
+            printf '  %-20s %4s checks  ok%s\n' "$name" "$c" "$note"
         fi
     else
         # No summary line: we cannot claim it passed. Judge by exit status and say so.
@@ -132,7 +138,8 @@ for src in "$ROOT"/tests/unit/*_test.c; do
 done
 
 echo
-echo "  ran $ran test binaries: $checks checks, $failed failed"
+echo "  ran $ran test binaries: $checks checks, $failed failed, $skipped skipped"
+[ "$skipped" -gt 0 ] && echo "  (a skipped case needs a file that is not in the repository; see the test's SKIP lines)"
 if [ ${#BROKEN[@]} -gt 0 ]; then
     echo
     echo "  ${#BROKEN[@]} test(s) DID NOT COMPILE -- these are failures, not skips:"
