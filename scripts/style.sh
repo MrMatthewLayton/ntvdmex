@@ -5,6 +5,8 @@
 #   scripts/style.sh --check [FILE...]   exit 1, with the diff, if a file is not in the style
 #   scripts/style.sh --fix [FILE...]     rewrite the files that are not
 #   scripts/style.sh --test              the style tool's own tests
+#   scripts/style.sh --names [FILE...]   report names and types that break STYLE.md 1-2
+#                                        (report only: it changes nothing, and exits 0)
 #
 # With no FILE, every C source and header under src/, sdk/, tests/ and tools/. Every change
 # the tool makes is proven not to change the code; see tools/style/style.py.
@@ -18,6 +20,11 @@ cd "$(dirname "$0")/.."
 
 if [[ "${1:-}" == "--test" ]]; then
     exec python3 tools/style/test_style.py
+fi
+
+if [[ "${1:-}" == "--names" ]]; then
+    shift
+    exec python3 tools/style/names.py "$@"
 fi
 
 exec python3 tools/style/style.py "$@"

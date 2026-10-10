@@ -33,8 +33,14 @@ being committed:
 git config core.hooksPath scripts/hooks
 ```
 
-What the tool cannot judge is left to people: names (2), magic values (3), how a long
-expression is wrapped, the steps of a function, and what a comment says.
+Names and types (1, 2) are reported, not fixed: `scripts/style.sh --names` lists every
+function, global, local and member whose name breaks section 2, every C type where a Windows
+type belongs, lines over 100 columns and comparisons with `TRUE`. It reads tokens, not a
+parse tree, so treat a finding as a strong hint. CI prints the counts; it will block once
+the tree is clean against it.
+
+What the tools cannot judge is left to people: magic values (3), how a long expression is
+wrapped, the steps of a function, and what a comment says.
 
 ---
 
