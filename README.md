@@ -64,8 +64,10 @@ paste, and what to do when something goes wrong.
 
 ## Contributing
 
-Contributions are welcome. Read [docs/STYLE.md](docs/STYLE.md) (the code style) and
-[CLEAN-ROOM.md](CLEAN-ROOM.md) (what may and may not enter the repository) first.
+Contributions are welcome: start with [CONTRIBUTING.md](CONTRIBUTING.md). Every change goes
+through a pull request, and CI builds it, runs the test battery and checks the style. Please
+read [CLEAN-ROOM.md](CLEAN-ROOM.md) (what may and may not enter the repository) first, and
+report a security problem as [SECURITY.md](SECURITY.md) describes.
 
 ## License
 
