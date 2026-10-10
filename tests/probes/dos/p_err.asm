@@ -103,7 +103,7 @@ start:
         ASKERR  "err.after.5B.exists"
 
         ; ---- put the attributes back so 41h can delete it: a probe that leaves
-        ; a read-only file behind is not self-cleaning on the rig or DOSBox.
+        ; a read-only file behind is not self-cleaning on the test machine or DOSBox.
         mov     ax, 4301h
         mov     cx, 0
         mov     dx, rofile

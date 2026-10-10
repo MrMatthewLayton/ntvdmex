@@ -26,7 +26,7 @@
  *    declared width exactly: no gaps, no overlaps, nothing off the end. The
  *    widths are not invented here; they come from `tools/ne/neneeds.py`, which
  *    reads them out of the real Microsoft binaries. An offset table that does
- *    not add up is wrong by construction, and this catches it without a rig,
+ *    not add up is wrong by construction, and this catches it without a test machine,
  *    a guest, or a screenshot.
  *    [CAUTION]: THE ARGUMENT BLOCK IS REVERSED. Win16 is FAR PASCAL: arguments are
  *    pushed LEFT TO RIGHT, so the block's base is the LAST push and offset 0
@@ -537,7 +537,7 @@ static VOID WowTestConversions(VOID)
  * on the guest's behalf -- and the failure mode of getting that wrong is not a
  * wrong pixel, it is a HANG. Session 56 declined to write the loop for exactly
  * that reason. So both decisions inside it are pure functions in wowconv.h and
- * both are pinned here, off-VM, with no rig and no guest:
+ * both are pinned here, off-VM, with no test machine and no guest:
  *
  * 1. WHICH PROCEDURE drives a window -- a `#32770` dialog has no class window
  *    procedure at all, and getting the order wrong sends every message to the

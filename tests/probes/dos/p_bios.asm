@@ -110,7 +110,7 @@ start:
         xor     ah, ah
         int     1Ah
         mov     [t0], dx
-        ; ⚠ 400 units was too impatient and reported "does not advance" on the RIG
+        ; ⚠ 400 units was too impatient and reported "does not advance" on the TEST MACHINE
         ; purely because one tick takes longer than that there -- a probe artifact
         ; that looked exactly like a dead clock. Same bound as everywhere else.
         mov     si, 20000

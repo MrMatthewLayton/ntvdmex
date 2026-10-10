@@ -593,7 +593,7 @@ INT main(VOID)
         VddInputReset(&input);
     }
 
-    /* #136: KEYBOARD LAYOUTS (tables from XP's own layouts, runs/s82/kbdmap.txt). */
+    /* #136: KEYBOARD LAYOUTS (tables from XP's own layouts, s82). */
     {   WORD key;
     BYTE scanCode;
     INT shiftState;

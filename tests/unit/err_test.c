@@ -226,7 +226,7 @@ INT main(VOID)
 
     /* WIN32 -> DOS, the mapping AH=3Dh used to skip entirely. (s72):
      * Every expectation below is a pair of measured lines: the oracle's answer
-     * for the situation, and the `win32=0x..` the rig's own handler logged for
+     * for the situation, and the `win32=0x..` the test machine's own handler logged for
      * the same probe case. Before this existed AH=3Dh answered 2 for every
      * cause, so a read-only file read as "not found".
      */

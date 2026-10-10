@@ -406,7 +406,7 @@ pl_tally:
 
 ; ── PLANAR VIA WRITE MODE 0, ONE PLANE AT A TIME ──────────────────────────────
 ; ★ THIS IS THE PATH LEMMINGS ACTUALLY USES, and until this card existed nothing
-;   tested it. Measured on the rig, one Lemmings run:
+;   tested it. Measured on the test machine, one Lemmings run:
 ;       wmode hist: 00x12e5 01x1 02x0 03x0
 ;       pairs: w00/m01=2 w00/m02=4828 w00/m04=4820 w00/m08=4785 w00/m0f=4835
 ;   i.e. ~4800 writes in WRITE MODE 0 with the Map Mask selecting ONE PLANE at a
@@ -512,7 +512,7 @@ draw_planar0:
 ;   exist and they disagree for ten of the sixteen colours:
 ;       EGA compatibility:  00 01 02 03 04 05 14 07 38 39 3A 3B 3C 3D 3E 3F
 ;       identity:           00 01 02 03 04 05 06 07 08 09 0A 0B 0C 0D 0E 0F
-;   Measured on the rig, Lemmings writes DAC 0..7 and 0x14 and NEVER touches the AC
+;   Measured on the test machine, Lemmings writes DAC 0..7 and 0x14 and NEVER touches the AC
 ;   -- and gets sixteen correct colours on real hardware. That is only possible if
 ;   the real BIOS's table is not the one we assumed.
 ;

@@ -415,7 +415,7 @@ INT main(VOID)
      */
     VddPitReset(&pit);
     g_Irq0Count = 0;
-    {   INT tick, spin = 3500, reload = 12904;                  /* measured on the rig */
+    {   INT tick, spin = 3500, reload = 12904;                  /* measured on the test machine */
         value = 0x36;
         VddBusIo(&bus, 0x43, 1, 0, &value);
         value = (UINT32)(reload & 0xFF);

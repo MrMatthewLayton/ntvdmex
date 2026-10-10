@@ -62,7 +62,7 @@ start:
     sti
 
     ; --- wait for the human to actually be at the keyboard ---
-    ; The previous run of this rig started the instant it was triggered and expired
+    ; The previous run of this test machine started the instant it was triggered and expired
     ; unattended, capturing nothing. So the prompts do not begin until a key says
     ; someone is there. Up to ~3 min, then it gives up rather than wedging the watcher.
     mov dx, s_begin

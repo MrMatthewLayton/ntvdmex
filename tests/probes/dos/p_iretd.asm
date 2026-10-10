@@ -1,6 +1,6 @@
 ; p_iretd.com -- a 32-bit IRET (66 CF) in real/V86 mode, as THIS machine runs it. GH #194.
 ;
-; Separate from p_o32 on purpose: in V86 mode IRETD is IOPL-sensitive, so on the rig it
+; Separate from p_o32 on purpose: in V86 mode IRETD is IOPL-sensitive, so on the test machine it
 ; is not the CPU that answers but XP's V86 monitor emulating it -- and if the monitor
 ; refuses, the VDM may die, which must not take p_o32's answers with it.
 ;

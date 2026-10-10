@@ -1,4 +1,4 @@
-; exwin.com -- RIG-ONLY smoke test: EXEC of a Win32 console program.  GH #255.
+; exwin.com -- TEST-MACHINE-ONLY smoke test: EXEC of a Win32 console program.  GH #255.
 ;
 ; Not a p_ probe and deliberately not in the parity sweep: MS-DOS has no Win32, so
 ; no oracle can answer it, and a one-host run is a smoke test, not a pass. What it

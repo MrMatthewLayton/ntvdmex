@@ -456,8 +456,8 @@ INT main(VOID)
      * session already, and both are pinned here because a future edit to
      * DOS_SYSVARS_OFF or DOS_SDA_OFF would silently break them again.
      *
-     * Byte-for-byte from MS-DOS 6.22 (docs/research/evidence/lolprobe-msdos622.txt,
-     * a dump of the SysVars SEGMENT from offset 0, where SysVars itself is at
+     * Byte-for-byte from MS-DOS 6.22 (the List-of-Lists probe's
+     * dump of the SysVars SEGMENT from offset 0, where SysVars itself is at
      * 0x0026):
      * 0080: 00 FF FF 00 00 00 00 00 00 00 00 00 FF FF 53 02
      *                                          ^^^^^ 0x8C = FFFF, no UMBs

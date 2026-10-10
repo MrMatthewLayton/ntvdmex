@@ -505,7 +505,7 @@ INT main(VOID)
      * [INFO]: THIS IS THE ENTIRE XP WOW MODULE GRAPH, and it CLOSES: 15 modules, every
      * import resolved, nothing missing. Earlier the set was five and USER,
      * WOWEXEC and SYSEDIT stopped at SYSTEM, KEYBOARD and SHELL -- so the loader
-     * named the three files to go and fetch, and fetching them (off the rig, out
+     * named the three files to go and fetch, and fetching them (off the test machine, out
      * of %SystemRoot%\System32) closed every stop with no code change at all.
      * That is the payoff for making a failed import name its module instead of
      * just failing.

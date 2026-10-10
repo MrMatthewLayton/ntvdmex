@@ -30,7 +30,7 @@
 bits 16
 org 0x100
 
-SPIN_A  equ 0xA000                  ; ~3 s on the 3.3 GHz rig (dx units of 65536 inner)
+SPIN_A  equ 0xA000                  ; ~3 s on the 3.3 GHz test machine (dx units of 65536 inner)
 SPIN_B  equ 0x4000                  ; ~1.2 s
 
 start:

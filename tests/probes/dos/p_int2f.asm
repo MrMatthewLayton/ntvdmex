@@ -1,5 +1,4 @@
 ; p_int2f.com -- the DOS-internal INT 2Fh services COMMAND.COM needs at startup.
-;                docs/research/xp-command-com.md.
 ;
 ; ── WHAT THIS IS FOR ─────────────────────────────────────────────────────────
 ; XP's own COMMAND.COM loads and runs under NTVDMEX, gets through XMS detection

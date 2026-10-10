@@ -11,7 +11,7 @@ loader is written against what comes out.
     tools/ne/nedump.py guest/ne/*.exe --summary
 
 ⚠ The binaries are Microsoft's and are NOT in this repository. Extract your own with
-  `rigshot isne` to find them and copy them out; `guest/` is gitignored.
+  the maintainer's test harness to find them and copy them out; `guest/` is gitignored.
 """
 import struct
 import sys

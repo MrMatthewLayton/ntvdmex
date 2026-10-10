@@ -7,7 +7,7 @@
  * exists on the build machine. What it is MADE OF is integer arithmetic -- a duty
  * cycle, a Bresenham that turns that duty into whole milliseconds, and an
  * instruction budget with a microsecond debt -- and every one of those has a
- * failure mode that would look, on the rig, exactly like "the setting does
+ * failure mode that would look, on the test machine, exactly like "the setting does
  * nothing": a duty that rounds to zero, an accumulator that drifts, a debt smaller
  * than a millisecond that is discarded on every slice. Those are checked here.
  *
@@ -45,7 +45,7 @@ static UINT CpuSpeedTestIndexOf(UINT mhz)
 /* THE DETERMINISTIC HEART OF THE THROTTLE (Importance = 3):
  * CpuSpeedStep (cpuspeed.h) IS the whole control law, and here it is driven against
  * a SIMULATED clock -- no threads, no Sleep, no hardware -- so the result is
- * bit-for-bit repeatable. That is the point the user asked for: the rig could only
+ * bit-for-bit repeatable. That is the point the user asked for: the test machine could only
  * measure apparent MHz through the guest's own BIOS tick, which the throttle
  * starves, so the instrument was circular. This is not. It asserts the ONE contract
  * the throttle exists to keep -- over a window, delivered exec/wall equals the
@@ -54,7 +54,7 @@ static UINT CpuSpeedTestIndexOf(UINT mhz)
  * A "slice" is one turn of the loop: the guest executes dE us over dWall us of wall
  * time (dWall >= dE models host/trap overhead), then it is held. The wall[] pattern
  * cycles, so a descheduled OUTLIER slice is exercised -- that outlier is exactly
- * what made the old open-loop debt carry come out non-monotonic on the rig.
+ * what made the old open-loop debt carry come out non-monotonic on the test machine.
  */
 static UINT CpuSpeedTestSimulateDelivered(
     UINT dutyBp,
@@ -172,13 +172,13 @@ INT main(VOID)
     CHECK(CpuSpeedDutyBp(CpuSpeedTestIndexOf(33), 0) == 10000, "a zero reference cannot throttle (never divide by it)");
 
     /* #225: a rung's share is its real machine's Doom rate over this host's ceiling
-     * (66.4 fps per 1000 ref-MHz). The rig (ref 3704 -> 246 fps): 486DX2-66 = 33.1 fps
+     * (66.4 fps per 1000 ref-MHz). The test machine (ref 3704 -> 246 fps): 486DX2-66 = 33.1 fps
      * -> 13.5%; measured 1.8% before this, which could not finish demo3.
      */
     {   UINT duty = CpuSpeedDutyBp(CpuSpeedTestIndexOf(66), 3704);
-        CHECK(duty >= 1210 && duty <= 1240, "#225: 486DX2-66 on the rig is ~12.2% (was 1.8%)"); }
+        CHECK(duty >= 1210 && duty <= 1240, "#225: 486DX2-66 on the test machine is ~12.2% (was 1.8%)"); }
     {   UINT duty = CpuSpeedDutyBp(CpuSpeedTestIndexOf(133), 3704);
-        CHECK(duty >= 2950 && duty <= 2980, "#225: Pentium 133 on the rig is ~29.7%"); }
+        CHECK(duty >= 2950 && duty <= 2980, "#225: Pentium 133 on the test machine is ~29.7%"); }
     CHECK(CpuSpeedDutyBp(CpuSpeedTestIndexOf(600), 700) == 10000,
           "#225: a rung above a slow host's Doom ceiling (46 fps at ref 700) runs flat out");
 
@@ -254,7 +254,7 @@ INT main(VOID)
         const unsigned long long runUs = 20000000ull;                /* 20 s of simulated run */
 
         /* 1. PURE COMPUTE, STEADY SLICES: DELIVERED == REQUESTED, EXACTLY:
-         * This is the claim the rig kept failing to prove. With no trap overhead
+         * This is the claim the test machine kept failing to prove. With no trap overhead
          * each window pays to exactly E/duty, so the ratio is the duty to the bp.
          * Every duty on the trimmed ladder, against the shipped reference.
          */

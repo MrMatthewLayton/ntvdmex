@@ -2,7 +2,7 @@
 ; 4Dh, 5Ch, 67h, 6Ch, 5Bh, 41h, 39h, 3Ah, 56h.
 ;
 ; SELF-CONTAINED AND SELF-CLEANING: it creates its own file and directory, works
-; on those, and removes them.  It therefore leaves no trace on the rig or under
+; on those, and removes them.  It therefore leaves no trace on the test machine or under
 ; DOSBox, where there is no snapshot to roll back -- the oracle's copy-on-write
 ; disk protects only the oracle.
 ;

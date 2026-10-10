@@ -509,7 +509,7 @@ s_ftail:   db " ====", 13, 10, "$"
 s_waitk:   db "Press any key to exit...", 13, 10, "$"
 
 ; s72: RELATIVE, in whatever directory the test was started from. It named
-; C:\ntvdmex\ST$.TMP, the first rig layout, which no longer exists on the rig and
+; C:\ntvdmex\ST$.TMP, the first test machine layout, which no longer exists on the test machine and
 ; never existed on anyone else's machine -- the packaged smoke test reported
 ; "File I/O FAIL=21" on a host that had just opened, written and read the file
 ; it was launched from. A self-test that needs a directory of its own is not one.

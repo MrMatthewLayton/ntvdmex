@@ -13,7 +13,7 @@
  *   ./scripts/interpfuzz.sh            # HEAD's interpreter vs the working tree's
  *
  * Same seed, same digest = identical behaviour on every program tried. The rate line
- * is the benchmark (instructions per second on this Mac: relative, not the rig's).
+ * is the benchmark (instructions per second on this Mac: relative, not the test machine's).
  *
  *   interp_fuzz [programs] [steps] [seed] [bench-iters]
  *

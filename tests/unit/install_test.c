@@ -103,7 +103,7 @@ INT main(VOID)
     printf("== install: the key and value names ==\n");
 
     /* A typo in either half is an install that appears to succeed and routes
-     * nothing -- the exact failure the rig has hit from a hand-typed reg add.
+     * nothing -- the exact failure the test machine has hit from a hand-typed reg add.
      */
     CHECK(strcmp(INSTALL_KEY,
           "SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\Image File Execution "

@@ -24,7 +24,7 @@
 ;   run's figure as though it were fixed.
 ;
 ; ⚠ NOTHING HERE REPROGRAMS COUNTER 0. It is the system tick: leave it in a
-;   different mode and DOS loses time for the rest of the session, and on the rig
+;   different mode and DOS loses time for the rest of the session, and on the test machine
 ;   that outlives the probe. Counter 0 is only ever READ -- how the BIOS left it
 ;   is itself a known expectation worth checking (MEASURED: mode 2, not the mode 3
 ;   this probe was first written to expect). Mode and

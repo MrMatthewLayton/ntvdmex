@@ -3,7 +3,7 @@
 ; WHY THIS EXISTS. The speaker's synthesis is measured off-VM (audio_test.c: the
 ; tone comes back out of the mix at the frequency the PIT was programmed to, the
 ; gate bit alone is silent, a tone past 20 kHz is refused). None of that is a
-; measurement of whether it SOUNDS right, and the rig has no ears. So this is the
+; measurement of whether it SOUNDS right, and the test machine has no ears. So this is the
 ; one-file A/B: an ascending C-major scale, then a C-major arpeggio, both loud
 ; enough and long enough to hear a wrong pitch or a wrong duration.
 ;

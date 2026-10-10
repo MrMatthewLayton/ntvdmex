@@ -22,7 +22,7 @@
 ;   13h 16h 17h  FCB delete/create/rename     5Ah 5Bh creates a file
 ;   6Ch          extended open/CREATE         2Bh 2Dh set the clock
 ; The oracle also runs with snapshot=on so its disk cannot be modified, but the
-; same binary runs on the rig and under DOSBox where that protection does not
+; same binary runs on the test machine and under DOSBox where that protection does not
 ; apply -- hence the list above rather than a blind 00h-FFh sweep.
 ;
 ; nasm -f bin p_defs.asm -o p_defs.com

@@ -29,11 +29,11 @@
 ;   * PRN: an INT 17h hook answers every call with status AH=[st17] (01h = time-out)
 ;     while armed; after 200 calls it answers ready (90h) so a kernel that polls for
 ;     ever cannot hang the run. The count is reported (.n17).
-; ⚠ ON THE RIG THE DISK HALF CANNOT FAIL: the probe runs from a local folder, Win32's
+; ⚠ ON THE TEST MACHINE THE DISK HALF CANNOT FAIL: the probe runs from a local folder, Win32's
 ;   ReadFile/WriteFile there never meet a hardware error, and NTVDMEX's file I/O never
 ;   goes through INT 13h. Expect n24=0 / CF=0 for crit2.h3f.* / crit2.h40.* on the
-;   rig -- those rows are the CONTRACT, measured on 6.22 and PCem, for the off-VM
-;   tests (tests/unit/err_test.c) to be held to. The PRN half does reach the rig
+;   test machine -- those rows are the CONTRACT, measured on 6.22 and PCem, for the off-VM
+;   tests (tests/unit/err_test.c) to be held to. The PRN half does reach the test machine
 ;   (our PRN driver calls INT 17h through the IVT), and there it is a KNOWN GAP: our
 ;   driver ignores the BIOS status (#275, src/dos/dos_auxprn.asm).
 ; ⚠ NOTHING IS PRINTED WHILE ARMED: on the oracles stdout is a file on A: itself.

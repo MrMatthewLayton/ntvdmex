@@ -1,7 +1,7 @@
 ; p_o32.com -- the 32-bit operand-size (0x66) forms of 16-bit code, as THIS CPU runs them.
 ;              GH #194.
 ;
-; WHY. The real-mode interpreter (src/host/v86interp.h) stands in for the rig's CPU in
+; WHY. The real-mode interpreter (src/host/v86interp.h) stands in for the test machine's CPU in
 ; planar video modes, and it declined PUSHFD/POPFD, 32-bit segment push/pop, the 32-bit
 ; string ops, CALL/RET/RETF/LEAVE/IRETD with 0x66 -- every one a hand-back to the real
 ; CPU with A0000 unprotected. Filling them in needs the CPU's answer, including the
@@ -12,8 +12,8 @@
 ; HOW THE ANSWER IS USED TWICE. Everything between `measure` and `measure_end` is pure
 ; computation into `res` -- no INT, no I/O, no absolute segment value stored -- so the
 ; SAME BYTES can be run through the interpreter off-VM (tests/unit/interp_test.c
-; reads this .COM, runs measure..measure_end, and compares `res` with the rig's dump in
-; p_o32.ref.txt). The table at 0x103 gives it the offsets. The rig's row is the real
+; reads this .COM, runs measure..measure_end, and compares `res` with the test machine's dump in
+; p_o32.ref.txt). The table at 0x103 gives it the offsets. The test machine's row is the real
 ; CPU under XP's V86 monitor -- exactly the machine the interpreter replaces; the
 ; oracles (real mode, not V86) vote on the parts that do not depend on V86.
 ;

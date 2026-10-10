@@ -10,7 +10,7 @@
 ;   Feature Control (3CA)  0x00     0x00      0x00            0xFF
 ;
 ; ⚠ THAT TABLE WAS ITSELF WRONG WHERE IT WAS RECORDED, and this probe is what
-;   caught it: docs/research/oracle-disagreements.md had dosbox-x's Feature
+;   caught it: the oracle comparison had dosbox-x's Feature
 ;   Control as 0x70, which is its INPUT STATUS 0 value copied into the row below.
 ;   The two bytes are adjacent in p_vgareg's buffer (off 1 and off 2) and were
 ;   read off it by eye. A hand-transcribed table is a claim.
@@ -58,10 +58,10 @@
 ; * 3DA IS TWO REGISTERS.  Reading it is Input Status 1; WRITING it is Feature
 ;   Control.  Both appear here and confusing them reads as a dead probe.
 ; * ⚠⚠ ENABLING THE VERTICAL-RETRACE INTERRUPT ARMS AN IRQ ON REAL HARDWARE, and
-;   this probe runs unattended on a bare-metal rig.  Case B masks it at the PIC
+;   this probe runs unattended on a XP test machine.  Case B masks it at the PIC
 ;   for its whole duration and restores the masks afterwards, so the enable can
 ;   never deliver an interrupt to a machine with no handler for it.  Do not
-;   remove that: a probe that wedges the rig costs a physical reboot.
+;   remove that: a probe that wedges the test machine costs a physical reboot.
 ;   ⚠ AND IT MASKS BOTH PICs.  The VGA's vertical interrupt is slot IRQ2, but on
 ;     an AT master IRQ2 is the CASCADE and the slot line is rerouted to IRQ9 --
 ;     so masking only 21h bit 2 would leave the interrupt free to arrive as

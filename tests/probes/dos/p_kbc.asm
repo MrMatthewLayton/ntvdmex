@@ -26,7 +26,7 @@
 ;   60h after a D1h.
 ; * Port 92h bit 0 is the PS/2 FAST RESET, active HIGH. This probe therefore
 ;   READS 92h and never writes it. A read cannot reset anything.
-; ⚠ On the rig NTVDMEX traps these ports in user mode, so a mistake cannot reach
+; ⚠ On the test machine NTVDMEX traps these ports in user mode, so a mistake cannot reach
 ;   the physical box -- but under QEMU, dosbox-x and PCem the guest IS the
 ;   machine, and a reset there loses the run, not just the case.
 ;
@@ -241,7 +241,7 @@ start:
 ;      XMS follows -- would call the XMS entry point with A20 DISABLED. With
 ;      DOS=HIGH, HIMEM and much of DOS live in the HMA, which is only reachable
 ;      *because* A20 is on. That call is a jump into wrapped memory: a hang, on a
-;      bare-metal rig, for one bit of data.
+;      XP test machine, for one bit of data.
 ;    ⇒ So the write stays in the SAFE DIRECTION ONLY (enable), and the read-back
 ;      comes from the controller itself rather than from a driver living in the
 ;      HMA. The XMS answer is reported alongside as context, not asserted.

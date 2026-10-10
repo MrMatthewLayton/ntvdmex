@@ -155,7 +155,7 @@ INT main(VOID)
     /* RULE 3: A DEVICE IS DUPLICABLE, AND NOT ONLY INTO SLOTS 0-4:
      * Oracle: CASE=int21.45.dup.stdout SIG=CF AX=0005 CF=0
      * Real DOS duplicates the console into slot 5, which is then ALSO the
-     * console. NTVDMEX returned AX=0006 CF=1 on the rig because a device could
+     * console. NTVDMEX returned AX=0006 CF=1 on the test machine because a device could
      * only be represented below slot 5 -- so `dup(1)`, the first step of every
      * save-redirect-restore a shell performs, was impossible.
      *

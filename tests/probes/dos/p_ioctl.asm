@@ -64,7 +64,7 @@ start:
         ; ── ⚠ BL=3 (C:), NOT BL=0 ("the default drive"). ────────────────────────
         ; These three asked about whatever drive the program happened to be
         ; STARTED on -- A: on the oracle, which boots from a floppy, and C: on the
-        ; rig. So 4408 asked "is a floppy removable?" on one host and "is a hard
+        ; test machine. So 4408 asked "is a floppy removable?" on one host and "is a hard
         ; disk removable?" on the other, and the two CORRECT answers (0 and 1)
         ; were reported as NTVDMEX disagreeing with DOS.
         ;

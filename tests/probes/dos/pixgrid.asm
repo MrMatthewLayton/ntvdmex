@@ -3,7 +3,7 @@
 ;
 ; Every frame pixel alternates white (15) and blue (1) with both neighbours, so in a
 ; screenshot each frame pixel must be one uniform N x N block and the picture exactly
-; N times the mode's resolution (or, where it cannot fit, visibly scaled). A rig script
+; N times the mode's resolution (or, where it cannot fit, visibly scaled). A test script
 ; screenshots each screen and checks that.
 ;
 ; Screens, each waiting for a key (Esc ends early):

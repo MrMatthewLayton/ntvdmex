@@ -5,7 +5,7 @@
 ; (TREE, ATTRIB, XCOPY, COMMAND.COM).  Feeds GH #32 and #35.
 ;
 ; 3Bh is probed with a path that is expected to FAIL, so the probe changes no
-; state -- it runs on the rig and under DOSBox too, where nothing rolls back.
+; state -- it runs on the test machine and under DOSBox too, where nothing rolls back.
 ;
 ; nasm -f bin p_dir.asm -o p_dir.com
 
@@ -46,7 +46,7 @@ start:
         ; AX=sectors/cluster BX=free clusters CX=bytes/sector DX=total clusters.
         ; ONLY CX IS SIGNIFICANT.  Free and total cluster counts obviously vary
         ; per disk -- but so does AX (sectors per cluster): the oracle's 504 MB
-        ; FAT16 volume gives 16, DOSBox gives 64, our rig gives 8.  Declaring AX
+        ; FAT16 volume gives 16, DOSBox gives 64, our test machine gives 8.  Declaring AX
         ; significant produced a DISPUTED row that was pure volume geometry, not
         ; a difference in DOS behaviour.  Bytes-per-sector is 512 everywhere.
         POISON
@@ -60,7 +60,7 @@ start:
         POISON
         mov     ax, 3600h
         ; ⚠ Y:, NOT Z:. Z: is not a free drive letter on the panel -- DOSBox-X
-        ; always mounts it as its own utility drive, and the XP rig has it mapped
+        ; always mounts it as its own utility drive, and the XP test machine has it mapped
         ; to a network share, so on BOTH of those the drive EXISTS and the honest
         ; answer to "what does DOS say about a missing drive" never gets asked.
         ; Measured: this row read as an NTVDMEX bug (AX=0002 = 2 sectors/cluster,

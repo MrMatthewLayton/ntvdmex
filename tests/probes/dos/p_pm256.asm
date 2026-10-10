@@ -11,7 +11,7 @@
 ;      write reached the file ("PMW" + "x" + "yz").
 ;
 ; ⚠ ONE HOST: the reference DOSes run no DPMI host, so only `dpmi.present` and the
-;   real-mode row compare across hosts; the PM rows are measured on the rig and
+;   real-mode row compare across hosts; the PM rows are measured on the test machine and
 ;   held to the spec (CX:DX microseconds; a bound handle is a file).
 ;
 ; nasm -f bin p_pm256.asm -o p_pm256.com

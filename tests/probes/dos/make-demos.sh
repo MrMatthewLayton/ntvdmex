@@ -44,6 +44,6 @@ done
 # GH #49: the TSR pair. ORDER MATTERS -- p_tsr.asm `incbin`s the child, so the
 # child must exist before the parent is assembled. That is deliberate: it makes
 # the probe self-contained at run time (it writes the child to disk itself), so
-# nothing has to be staged next to it on the rig or under DOSBox.
+# nothing has to be staged next to it on the test machine or under DOSBox.
 nasm -f bin "$DIR/p_tsrc.asm" -o "$DIR/p_tsrc.com"   # hooks INT 60h, then TSRs
 nasm -f bin "$DIR/p_tsr.asm"  -o "$DIR/p_tsr.com"    # EXECs it, then calls INT 60h

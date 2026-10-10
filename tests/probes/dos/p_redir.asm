@@ -177,7 +177,7 @@ start:
         mov     ax, 3E00h
         int     21h
 
-        ; ---- self-cleaning, like p_file: nothing is left on the rig or under
+        ; ---- self-cleaning, like p_file: nothing is left on the test machine or under
         ; DOSBox, neither of which has a snapshot to roll back.
         mov     ax, 4100h
         mov     dx, f_red

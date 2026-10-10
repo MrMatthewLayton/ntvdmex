@@ -32,7 +32,7 @@
 ;   would measure the host's cache rather than its execution rate, and the throttle
 ;   is a lever on execution.
 ;
-; ── TIMING DISCIPLINE (this shape wedged the rig once -- see iobench.asm) ────────
+; ── TIMING DISCIPLINE (this shape wedged the test machine once -- see iobench.asm) ────────
 ; Do NOT poll 0040:006C directly. The host injects INT 08h from its exec loop, and
 ; that loop only gets a turn when the guest faults or BOPs; a pure memory spin on the
 ; tick therefore never advances it and cannot even be stopped by the headless

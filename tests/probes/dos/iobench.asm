@@ -22,7 +22,7 @@
 ; reflect reports for a repeated I/O -- if it is unserviced the case simply stalls
 ; until the host's headless deadline, leaving cases 1-3 in the log.
 ;
-; TIMING DISCIPLINE (learned the hard way -- this wedged the rig once): do NOT poll
+; TIMING DISCIPLINE (learned the hard way -- this wedged the test machine once): do NOT poll
 ; the BIOS tick by reading 0040:006C directly. The host injects INT 08h from its own
 ; exec loop, and that loop only regains control when the guest faults or BOPs; a pure
 ; memory spin on the tick therefore never advances it, never returns to the host, and

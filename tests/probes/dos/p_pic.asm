@@ -25,7 +25,7 @@
 ;   report "no ticks", not hang -- an absence that reads as a timeout is not data.
 ; ⚠ THE MASKED SPIN IS SELF-CALIBRATING: it first measures how long two ticks take on
 ;   THIS machine and then spins the same amount with IRQ0 masked. A fixed delay would
-;   be too short on the rig or forever on the emulated 486.
+;   be too short on the test machine or forever on the emulated 486.
 ;
 ; nasm -f bin p_pic.asm -o p_pic.com
 
@@ -386,7 +386,7 @@ start:
 ;   AL = the IRR, explicitly selected -- which also answers a second question
 ;        our code decides with no evidence: does ICW1 clear the IRR at all?
 ;
-; ⚠⚠ THIS REPROGRAMS THE MASTER PIC ON A BARE-METAL RIG. The sequence written
+; ⚠⚠ THIS REPROGRAMS THE MASTER PIC ON A BARE-METAL TEST MACHINE. The sequence written
 ;    is exactly what a PC BIOS writes (11h 08h 04h 01h: edge-triggered,
 ;    cascaded, 8086 mode, no auto-EOI), so the chip ends where it started, and
 ;    the IMR is saved beforehand and restored immediately after -- ICW1 clears

@@ -2,7 +2,7 @@
 ;
 ; Read-only subfunctions only.  5Eh AL=02/03 SET the printer setup string and
 ; 66h AL=02 SETS the code page; neither is probed, because this binary runs on
-; the rig and under DOSBox too.  Feeds GH #35 and #38.
+; the test machine and under DOSBox too.  Feeds GH #35 and #38.
 ;
 ; nasm -f bin p_rest.asm -o p_rest.com
 
@@ -52,7 +52,7 @@ start:
         POISON
         mov     ax, 3200h
         ; ⚠ Y:, NOT Z:. Z: is not a free drive letter on the panel -- DOSBox-X
-        ; always mounts it as its own utility drive, and the XP rig has it mapped
+        ; always mounts it as its own utility drive, and the XP test machine has it mapped
         ; to a network share, so on BOTH of those the drive EXISTS and the honest
         ; answer to "what does DOS say about a missing drive" never gets asked.
         ; Measured: this row read as an NTVDMEX bug (AX=0002 = 2 sectors/cluster,

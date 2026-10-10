@@ -1975,7 +1975,7 @@ INT main(VOID)
 
     /* LEMMINGS' OWN BLITTERS, REPLAYED REGISTER FOR REGISTER (Importance = 3):
      * Not invented, and not read off a datasheet: the register sequences the game
-     * was OBSERVED to program -- the rig's IO-SITE and read/write-site instruments,
+     * was OBSERVED to program -- the test machine's IO-SITE and read/write-site instruments,
      * cross-checked against the game running under genuine MS-DOS 6.22
      * (scripts/lemref.py).
      *
@@ -2117,7 +2117,7 @@ INT main(VOID)
          * every level start, unconditionally.
          *
          * [CAUTION]: THIS CORRECTS THE PINNED STORY. The per-button routine whose write site the
-         * rig named is NOT the panel painter: it repaints ONE button when the
+         * test machine named is NOT the panel painter: it repaints ONE button when the
          * SELECTED skill changes. Running ~1.5 times in a run where the player
          * changed selection once is correct, not a defect -- so "the blitter runs
          * 1.5 times instead of 12" was a question about the wrong routine.
@@ -2239,7 +2239,7 @@ INT main(VOID)
         }
 
         /* (6) THE INSTRUMENT THAT HAS TO ANSWER "DID THE BLIT RUN AT ALL":
-         * The rig's answer so far is an ABSENCE: no read site at the panel blit's
+         * The test machine's answer so far is an ABSENCE: no read site at the panel blit's
          * pc. But that report is drawn from 256-slot single-slot hashes which lost
          * 249,630 reads on the same run, so an absence there can equally mean the
          * pc collided with a busier one -- the two readings are indistinguishable,
@@ -2734,7 +2734,7 @@ INT main(VOID)
      * while clear` per line) against the 8254, and the tick that count programs is
      * what places its palette split at row 160. A poll slower than the 6.4us hblank
      * must still be told about every line it crossed -- once -- or the count runs
-     * long (measured on the rig: 320..383 lines) and the split lands too low.
+     * long (measured on the test machine: 320..383 lines) and the split lands too low.
      */
     { UINT32 value;
     UINT64 time;
@@ -2794,7 +2794,7 @@ INT main(VOID)
       /* A HOST STALL MID-COUNT: the guest is not polled for 330us (~10 lines) at
        * iteration 100. Every line crossed is a blank owed and the count must still
        * end at 320 lines' worth of real time -- one-blank repayment left +6 lines
-       * on the rig (0x310B).
+       * on the test machine (0x310B).
        */
       time = 0;
       g_FakeMicroseconds = 0;
@@ -3248,7 +3248,7 @@ INT main(VOID)
      * measured table, but six registers are not read back from there at all -- the
      * port answers from a live shadow, because the shadow is what the engine uses.
      * So the file was right and the guest still saw the old value. Measured on the
-     * rig and reproduced here: mode 3 answered SR2=0F, CR0A/0B=06/07, GR5=00,
+     * test machine and reproduced here: mode 3 answered SR2=0F, CR0A/0B=06/07, GR5=00,
      * AR10=00. Five registers; 55 of the 55 bytes of the VGA parity gap.
      *
      * [CAUTION]: THESE EXPECTATIONS COME FROM VGA_MODEDEFS, i.e. from two oracles, not from
@@ -3811,7 +3811,7 @@ INT main(VOID)
     }
 
     /* #325: a VESA 8bpp mode set loads the 256-colour default DAC, as mode 13h does --
-     * after a 16-colour mode (0Dh) colour 15 drew grey, seen on the rig.
+     * after a 16-colour mode (0Dh) colour 15 drew grey, seen on the test machine.
      */
     {   NTVDD_REGISTERS registers3;
     UINT32 mode13Colour;

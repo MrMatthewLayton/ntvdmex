@@ -14,7 +14,7 @@
  * EVERY POLL:
  *
  *     1d1df10  16.0 ns     before
- *     12e3269  20.0 ns     +25%, and on the rig 77.0M polls/run -> 73.6M
+ *     12e3269  20.0 ns     +25%, and on the test machine 77.0M polls/run -> 73.6M
  *     6e8fd70  16.1 ns     after caching it in VideoCrtcVerticalTimingRecompute() -- recovered
  *
  * [CAUTION]: THAT LAST NUMBER WAS 17.2 UNTIL I MEASURED IT HONESTLY. I first timed HEAD
@@ -26,7 +26,7 @@
  * unrelated measurements subtracted. Interleave them, always.
  *
  * [CAUTION]: NOTHING ELSE WOULD HAVE CAUGHT THAT. The off-VM battery is pass/fail and was
- * green throughout; the rig counters all looked normal because the guest still hit
+ * green throughout; the test-machine counters all looked normal because the guest still hit
  * 70 Hz -- it simply got less done between retraces. The only witness is a
  * benchmark aimed at this one port.
  *

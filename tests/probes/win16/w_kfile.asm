@@ -3,7 +3,7 @@
 ;               (GH #163)
 ;
 ; ⚠ THE SCRATCH FILE IS ABSOLUTE, under the share's debug\out\ -- a RELATIVE name from
-;   a Win16 task can land in the rig's C:\WINDOWS (s86), and this test DELETES its file
+;   a Win16 task can land in the test machine's C:\WINDOWS (s86), and this test DELETES its file
 ;   at the end through OpenFile(OF_DELETE), which is itself a case. run.sh's caller
 ;   should still check debug\out\ for W16F.TMP afterwards: if the delete case failed,
 ;   the file is left there, visibly, rather than somewhere nobody looks.

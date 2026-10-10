@@ -11,13 +11,13 @@
 ;   chain works end to end -- NE linker, relocations, the import table, the
 ;   startup handshake, and a file written out of a running Win16 task. Until a
 ;   file appears, no assertion in a later probe would mean anything.
-;   ✅ MEASURED on the bare-metal rig, 2026-09-24:
+;   ✅ MEASURED on the XP test machine, 2026-09-24:
 ;       STEP=I AX=0BAF / STEP=W / STEP=A
 ;       kernel.getversion  AX=5F03
 ;       kernel.getwinflags AX=4C25
 ;   ⚠ THOSE TWO VALUES ARE NOT YET VERIFIED -- they are OURS, and nothing has
-;     asked another machine. The oracle for them is stock ntvdm on the same rig
-;     (docs/research/stock-vdm-dump-oracle), which is the documented authority
+;     asked another machine. The oracle for them is stock ntvdm on the same test machine
+;     (a dump of stock's VDM), which is the documented authority
 ;     for everything WOW. A number this probe produces is a MEASUREMENT, not a
 ;     pass, until that comparison is run.
 ;

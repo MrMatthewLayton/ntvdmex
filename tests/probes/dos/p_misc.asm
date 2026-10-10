@@ -9,7 +9,7 @@
 ;
 ; READ-ONLY SUBFUNCTIONS ONLY.  69h AL=01 SETS the serial number and 5Dh AL=0Ah
 ; SETS the error info; neither is probed, because this binary also runs on the
-; rig and under DOSBox where nothing rolls back.
+; test machine and under DOSBox where nothing rolls back.
 ;
 ; nasm -f bin p_misc.asm -o p_misc.com
 

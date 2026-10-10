@@ -8,7 +8,7 @@
 ;
 ; The child is expected to be in the same directory as this program.  The path
 ; is deliberately relative so the same binary works on the oracle's A:, on the
-; rig's C:\test and under DOSBox's mount.
+; test machine's C:\test and under DOSBox's mount.
 ;
 ; nasm -f bin p_exec.asm -o p_exec.com
 

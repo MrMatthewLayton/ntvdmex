@@ -29,7 +29,7 @@
 ; and inject the latched IRQ by itself -- which would prove nothing. So the wait is a
 ; pure memory spin (no INT, no port I/O), and the ISRs only bump a counter and IRET:
 ; no EOI, because the EOI `OUT` would itself be a trap. The spin is bounded (~5 s on
-; the 3.3 GHz rig) so a negative result still exits cleanly through DOS and leaves a
+; the 3.3 GHz test machine) so a negative result still exits cleanly through DOS and leaves a
 ; readable log instead of hitting the harness's 30 s kill.
 ;
 ; Assemble: nasm -f bin qirq.asm -o qirq.com

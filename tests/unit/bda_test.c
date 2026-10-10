@@ -5,7 +5,7 @@
  *
  * The point of #253 is that five answers describe ONE machine: INT 11h and 0040:0010,
  * INT 12h and 0040:0013, and the EBDA as seen by 0040:000E, INT 15h AH=C1h and the C0h
- * feature byte. The interrupt arms live in main.c and are checked on the rig (p_bios,
+ * feature byte. The interrupt arms live in main.c and are checked on the test machine (p_bios,
  * p_int15); what is checked here is that the BDA side is written from the same values
  * and that the EBDA it declares does not overlap anything DOS hands out.
  *

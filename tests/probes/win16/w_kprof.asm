@@ -8,7 +8,7 @@
 ;   write -> read back the same string; delete the key (NULL string) -> the default
 ;   comes back; the private-file twin; an integer through GetPrivateProfileInt; a
 ;   whole section deleted (NULL key) -> the default again.
-; ⚠ The private file is in the rig folder, not on C:\ (one folder, nothing on C:).
+; ⚠ The private file is in the test machine folder, not on C:\ (one folder, nothing on C:).
 ; ⚠ The WIN.INI section name is not in IniFileMapping, so it goes to the file, and is
 ;   deleted again at the end.
 ; Ordinals read off guest/ne/krnl386.exe and user.exe (both name tables).

@@ -25,7 +25,7 @@
 ;       W16_TAIL "w16kstr"
 ;
 ; ⚠ EVERY ORDINAL IS READ OFF THE BINARY: guest/ne/{krnl386,user,gdi}.exe, resident +
-;   non-resident name tables (runs/s87_ide/nenames.py does it in twenty lines). Never
+;   non-resident name tables (a twenty-line script does it). Never
 ;   from memory -- lstrcmp is USER.430 in 3.1, not KERNEL, and memory says otherwise.
 ; ⚠ CALLING CONVENTION: PASCAL. Arguments are pushed LEFT TO RIGHT and the callee pops
 ;   them. A DWORD (or a far pointer) is pushed HIGH word first (segment, then offset).

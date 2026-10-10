@@ -26,7 +26,7 @@ old8    dd      0
 isr8:   inc     word [cs:ticks]
         jmp     far [cs:old8]
 
-; a long pure-CPU spin: 0x1000 x 64K `loop`s (~0.5-1 s on the rig's CPU)
+; a long pure-CPU spin: 0x1000 x 64K `loop`s (~0.5-1 s on the test machine's CPU)
 spin:   push    cx
         push    dx
         mov     dx, 1000h

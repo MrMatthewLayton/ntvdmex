@@ -6,7 +6,7 @@
 ; the DOS kernel's own current directory, which is not the launch folder.
 ; This reports DOS's current drive (AH=19h) and directory (AH=47h) as the task
 ; sees them, then creates W16REL.TXT by relative name; the harness then looks
-; for the file. Stock ntvdm on the same rig is the authority (tests/probes/win16/stock.sh).
+; for the file. Stock ntvdm on the same test machine is the authority (tests/probes/win16/stock.sh).
 ;
 ; Built on w_kernel.asm's skeleton -- see its header for every rule below.
 ; build: see tests/probes/win16/build.sh

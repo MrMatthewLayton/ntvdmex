@@ -134,8 +134,8 @@ static INT InterpTestLarLslDescriptor(WORD selector, PUINT32 accessRights, PUINT
 }
 
 /* #194: THE 0x66 STACK / STRING / CONTROL-TRANSFER FORMS, AND IRET IN PM:
- * Expectations are the SDM's where it decides, and the rig's (tests/probes/dos/p_o32.com,
- * runs/s87_dpmi) where it does not: a 32-bit PUSH sreg keeps the slot's upper half, a
+ * Expectations are the SDM's where it decides, and the test machine's (tests/probes/dos/p_o32.com,
+ * s87) where it does not: a 32-bit PUSH sreg keeps the slot's upper half, a
  * 32-bit far CALL zero-extends its CS slot, MOV r32,sreg zero-extends, and PUSHFD's
  * upper half is the NT V86 monitor's (VM|RF, VIF = IF, AC/ID as they stand).
  */
@@ -188,7 +188,7 @@ static VOID InterpTestO32Battery(VOID)
       cpu.Registers[4] = 0x0100;
       InterpTestLoad(&cpu, 0x1000, 0, bytes, sizeof bytes);
       CHECK(InterpTestStepOnce(&cpu) && (cpu.Registers[4] & 0xFFFF) == 0xFC && V86ReadMemory(0x200FC, 4) == 0x000B0297u,
-            "66 9C pushfd: 4 bytes, image 000B0297 (the rig's, IF=1)"); }
+            "66 9C pushfd: 4 bytes, image 000B0297 (the test machine's, IF=1)"); }
     { V86_CPU cpu = InterpTestMakeCpu();
     BYTE bytes[] = { 0x66, 0x9C };
       cpu.Flags = 0x0097;
@@ -196,7 +196,7 @@ static VOID InterpTestO32Battery(VOID)
       cpu.Registers[4] = 0x0100;
       InterpTestLoad(&cpu, 0x1000, 0, bytes, sizeof bytes);
       CHECK(InterpTestStepOnce(&cpu) && V86ReadMemory(0x200FC, 4) == 0x00030097u, "66 9C pushfd: IF=0 -> no VIF"); }
-    /* POPFD: loads AC and ID (they stick on the rig), the arithmetic flags, IF. */
+    /* POPFD: loads AC and ID (they stick on the test machine), the arithmetic flags, IF. */
     { V86_CPU cpu = InterpTestMakeCpu();
     BYTE bytes[] = { 0x66, 0x9D, 0x66, 0x9C };
       cpu.Flags = 0x0202;
@@ -281,7 +281,7 @@ static VOID InterpTestO32Battery(VOID)
       InterpTestPut32(0x30008, 0xC1C2C3C4u);
       InterpTestLoad(&cpu, 0x1000, 0, bytes, sizeof bytes);
       CHECK(InterpTestStepOnce(&cpu) && (cpu.Registers[1] & 0xFFFF) == 1 && (cpu.Registers[6] & 0xFFFF) == 8 && (cpu.Flags & 0x08D5) == 0x0004,
-            "repe cmpsd: stops at dword 1, CX=1, SI+8, flags = PF only (the rig's)"); }
+            "repe cmpsd: stops at dword 1, CX=1, SI+8, flags = PF only (the test machine's)"); }
     { V86_CPU cpu = InterpTestMakeCpu();
     BYTE bytes[] = { 0xF2, 0x66, 0xAF };       /* repne scasd -- p_o32 items 18/19 */
       cpu.Segments[0] = 0x2000;
@@ -523,11 +523,11 @@ static VOID InterpTestO32Battery(VOID)
     g_V86SelectorDescriptor = 0;
 }
 
-/* #194: REPLAY p_o32.com THROUGH THE INTERPRETER AND COMPARE WITH THE RIG'S CPU:
+/* #194: REPLAY p_o32.com THROUGH THE INTERPRETER AND COMPARE WITH THE TEST MACHINE'S CPU:
  * p_o32's `measure` section is pure computation into `res` (no INT, no I/O, no absolute
- * segment value stored), so the very bytes the rig ran under XP's V86 monitor can be run
- * here. p_o32.ref.txt is the rig's `BUF=res` line, recorded by
- * `dosdiff.py tests/probes/dos/p_o32.com --host ntvdmex` (runs/s87_dpmi). Equal buffers =
+ * segment value stored), so the very bytes the test machine ran under XP's V86 monitor can be run
+ * here. p_o32.ref.txt is the test machine's `BUF=res` line, recorded by
+ * `dosdiff.py tests/probes/dos/p_o32.com --host ntvdmex` (s87). Equal buffers =
  * the interpreter answers every case as the machine it stands in for does -- including
  * the parts the manual leaves to the implementation.
  *
@@ -551,7 +551,7 @@ static VOID InterpTestO32Replay(VOID)
     INT index;
     INT first = -1;
 
-    printf("== #194: p_o32.com replayed through the interpreter vs the rig ==\n");
+    printf("== #194: p_o32.com replayed through the interpreter vs the test machine ==\n");
     file = fopen("p_o32.com", "rb");
     CHECK(file != NULL, "p_o32.com present (run from tests/unit)");
 
@@ -561,7 +561,7 @@ static VOID InterpTestO32Replay(VOID)
     size = fread(comImage, 1, sizeof comImage, file);
     fclose(file);
     file = fopen("p_o32.ref.txt", "r");
-    CHECK(file != NULL, "p_o32.ref.txt present (the rig's dump)");
+    CHECK(file != NULL, "p_o32.ref.txt present (the test machine's dump)");
 
     if (!file)
         return;
@@ -589,7 +589,7 @@ static VOID InterpTestO32Replay(VOID)
     for (index = 0; index < 4; ++index)
         cpu.Segments[index] = 0x1000;
 
-    cpu.Flags = 0x0202;                                  /* IF=1, as the rig ran it */
+    cpu.Flags = 0x0202;                                  /* IF=1, as the test machine ran it */
     cpu.Registers[4] = 0xFFFC;
     g_Memory[0x1FFFC] = 0xF0;
     g_Memory[0x1FFFD] = 0xFF;   /* return to FFF0: the end */
@@ -617,12 +617,12 @@ static VOID InterpTestO32Replay(VOID)
     if (first >= 0)
     {
         INT item = first / 4;
-        printf("  first difference in item %d: interp %02X%02X%02X%02X rig %02X%02X%02X%02X (bytes, LE)\n", item,
+        printf("  first difference in item %d: interp %02X%02X%02X%02X real %02X%02X%02X%02X (bytes, LE)\n", item,
                g_Memory[0x10000 + resultOffset + 4*item], g_Memory[0x10000 + resultOffset + 4*item + 1], g_Memory[0x10000 + resultOffset + 4*item + 2], g_Memory[0x10000 + resultOffset + 4*item + 3],
                reference[4*item], reference[4*item + 1], reference[4*item + 2], reference[4*item + 3]);
     }
 
-    CHECK(first < 0 && referenceCount == resultLength, "res buffer identical to the rig's, byte for byte");
+    CHECK(first < 0 && referenceCount == resultLength, "res buffer identical to the test machine's, byte for byte");
 }
 
 INT main(VOID)

@@ -34,7 +34,7 @@ farcopy:
         pop     es                      ; destination is always our own segment
         cmp     word [fptr + 2], 0FFFFh
         je      .none
-        ; ⚠ AND A NULL POINTER IS A TERMINATOR TOO. The first rig run followed a
+        ; ⚠ AND A NULL POINTER IS A TERMINATOR TOO. The first test-machine run followed a
         ; 0000:0000 DPB pointer and dumped the INTERRUPT VECTOR TABLE -- 57A300F0
         ; ... -- which reads exactly like a populated structure. An absent chain
         ; must be visibly absent, not plausibly full.

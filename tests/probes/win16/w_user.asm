@@ -28,7 +28,7 @@
 ;   user.cxscreen.pos       0001    GetSystemMetrics(SM_CXSCREEN) > 0
 ;   user.cxscreen.raw       owed    machine fact
 ;   user.cyscreen.raw       owed    machine fact
-;   user.mousepresent       0001    GetSystemMetrics(SM_MOUSEPRESENT) nonzero (the rig has one)
+;   user.mousepresent       0001    GetSystemMetrics(SM_MOUSEPRESENT) nonzero (the test machine has one)
 ;   user.dblclick.raw       owed    GetDoubleClickTime (XP default 500 = 01F4)
 ;   user.syscolor.window    owed    GetSysColor(COLOR_WINDOW) low word (theme)
 ;

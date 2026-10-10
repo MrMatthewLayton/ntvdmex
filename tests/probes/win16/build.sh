@@ -10,8 +10,8 @@
 # docstring for why that is the whole reason this exists.
 #
 # ⚠ THE BUILT .EXE IS NOT THE TEST. Running it is: it has to be staged into
-#   demo\win16\<name>\ on the rig share and launched through the IFEO hook, which
-#   is what the rig's run script does (local-only, not in the repo).
+#   demo\win16\<name>\ on the test machine share and launched through the IFEO hook, which
+#   is what the test machine's run script does (local-only, not in the repo).
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/../../.." && pwd)"
 OUT="$ROOT/build/wintest"
@@ -34,7 +34,7 @@ for src in "$ROOT"/tests/probes/win16/w_*.asm; do
         --module "W16$mod" --desc "ntvdmex win16 probe: $name"
     # ⚠ VALIDATE WITH OUR OWN READER. nedump.py is verified against real Win16
     #   binaries, so if it cannot parse what mkne.py just wrote, krnl386 will not
-    #   either -- and that is far cheaper to learn here than on the rig.
+    #   either -- and that is far cheaper to learn here than on the test machine.
     python3 "$ROOT/tools/ne/nedump.py" "$exe" > "$OUT/$name.nedump" 2>&1 || {
         echo "  ⛔ nedump could not parse $exe -- see $OUT/$name.nedump" >&2
         exit 1

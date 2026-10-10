@@ -11,7 +11,7 @@
 ;   * on the 6.22 oracles A: is the boot floppy, so the probe HOOKS INT 13h and, only
 ;     while armed, answers drive 0 with "changed" (AH=16h) and "timeout" (everything
 ;     else) -- DOS's own driver then reports drive-not-ready through INT 24h;
-;   * on the rig A: is a real, EMPTY floppy drive: Win32 says ERROR_NOT_READY, and the
+;   * on the test machine A: is a real, EMPTY floppy drive: Win32 says ERROR_NOT_READY, and the
 ;     hook is inert because NTVDMEX's file I/O never goes through INT 13h.
 ;   DOSBox-X does not reach a BIOS disk for its mounts and has no A: -- abstained.
 ; ⚠ NOTHING IS PRINTED WHILE ARMED: on the oracles stdout is a file on A: itself.

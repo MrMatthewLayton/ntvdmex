@@ -2,7 +2,7 @@
 ;
 ; STOCK NTVDM IS THE ORACLE HERE, NOT 6.22. MS-DOS 6.22 has no LFN API (it answers
 ; AX=7100h with CF CLEAR -- p_subfn int21.716C), so this probe is only meaningful as
-; a pair: stock ntvdm and ours on the rig, same redirect --
+; a pair: stock ntvdm and ours on the test machine, same redirect --
 ;
 ;     scripts/dospair.sh tests/probes/dos/p_lfn.com
 ;

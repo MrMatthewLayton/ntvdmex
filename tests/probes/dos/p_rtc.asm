@@ -34,7 +34,7 @@
 ;   everything that runs afterwards on that machine.
 ; * ⛔ THIS PROBE ONLY READS. It never writes 71h. A write to the wrong CMOS
 ;   register can invalidate the checksum at 2Eh/2Fh and make the BIOS declare the
-;   configuration bad at the next boot -- on the rig that is a real machine with
+;   configuration bad at the next boot -- on the test machine that is a real machine with
 ;   a real battery, and the damage outlives the run.
 ; * ⚠ THE SECONDS FIELD IS NOT COMPARABLE and no case emits one. Case A compares
 ;   HOURS between two doors onto the same clock, which is stable unless a run

@@ -5,7 +5,7 @@
  * The resolver is the only thing between a DOS program's GDT and the host's own
  * memory, so what matters most here is what it REFUSES: a range that straddles two
  * regions, one past 16 MB, one that wraps. The acceptance round trip itself is
- * measured on the rig by p_int15.asm against three oracles.
+ * measured on the test machine by p_int15.asm against three oracles.
  *
  *
  *

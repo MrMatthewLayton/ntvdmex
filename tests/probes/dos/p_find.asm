@@ -4,7 +4,7 @@
 ; useful.  Feeds GH #29.
 ;
 ; WHAT IS AND IS NOT COMPARABLE ACROSS HOSTS: the files present differ on every
-; host (the oracle's A:, the rig's C:\test, DOSBox's mount), so filenames, sizes
+; host (the oracle's A:, the test machine's C:\test, DOSBox's mount), so filenames, sizes
 ; and timestamps are NOT declared significant -- only the error codes, the carry
 ; flag, and AX on success, which are properties of DOS rather than of the disk.
 ; The DTA is dumped raw so the block LAYOUT can be read off the oracle.

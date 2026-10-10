@@ -37,7 +37,7 @@
 ;            is the trap round trip, and Doom's mode-Y drawing does ~43,000 port
 ;            writes a second through exactly it.
 ;
-; ⚠⚠ CASE 5 IS KNOWN WRONG AND ITS NUMBER MUST NOT BE QUOTED. First run on the rig
+; ⚠⚠ CASE 5 IS KNOWN WRONG AND ITS NUMBER MUST NOT BE QUOTED. First run on the test machine
 ;    (2026-09-09, index 0) reported `32 iters / 32 ticks -> 0 MHz`, i.e. ~6.9 ms per
 ;    OUT. iobench.com case 3 is the SAME INSTRUCTION AT THE SAME PORT and reports
 ;    117,920 accesses in 5 ticks = 429,400/s = 2.33 us each, which is 6.9 MHz
@@ -66,7 +66,7 @@
 ;   DERIVED FIGURE, for the reason cpubench states: a derived number with no inputs
 ;   next to it is one nobody can check. If you distrust the MHz, use the iters.
 ;
-; ── TIMING DISCIPLINE (this shape wedged the rig once -- see iobench.asm) ───────
+; ── TIMING DISCIPLINE (this shape wedged the test machine once -- see iobench.asm) ───────
 ; Do NOT poll 0040:006C directly: the host injects INT 08h from its exec loop, and
 ; that loop only runs when the guest faults or BOPs, so a pure memory spin on the
 ; tick never advances it and cannot be stopped by the headless deadline. Poll with

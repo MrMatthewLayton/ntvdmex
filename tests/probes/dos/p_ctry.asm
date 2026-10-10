@@ -7,7 +7,7 @@
 ; VALUES 6.22 actually puts there are what we need, so they are dumped raw.
 ;
 ; Only the read side is probed.  Setting the country (AL=01-FEh) is skipped
-; deliberately: it changes global DOS state, and the same binary runs on the rig
+; deliberately: it changes global DOS state, and the same binary runs on the test machine
 ; and under DOSBox where there is no snapshot to roll back.
 ;
 ; nasm -f bin p_ctry.asm -o p_ctry.com
