@@ -1,70 +1,96 @@
-# Release: pushing a tag v* builds the zip from that commit and creates a DRAFT release.
+# Release: when CI passes on the release branch, publish the version VERSION names -- once.
 #
-#   git tag -a v0.1.0-alpha -m "NTVDMEX v0.1.0-alpha" && git push origin v0.1.0-alpha
+#   main  --(pull request, merge commit)-->  release  --(CI green)-->  tag v<VERSION> + release
 #
-# Nothing is published by this workflow. The maintainer downloads the draft's zip, runs it on
-# a real Windows XP machine, and only then presses Publish (docs/releasing.md).
+# The release branch only ever holds builds that work: a change reaches it from main, by pull
+# request, after the maintainer has run main's build on a real Windows XP machine
+# (docs/releasing.md). So nothing here waits for a person.
 #
-# The notes are written by hand, in docs/releases/<tag>.md, and reviewed in a pull request
-# like any other change; a tag without them fails here. A tag that is not on main fails too.
+# This workflow creates the tag and the GitHub release together. (A tag pushed with the
+# workflow's own token would not start another workflow, so they cannot be two steps.)
+# If v<VERSION> already exists, the merge was not a release and nothing happens; to release,
+# bump VERSION on main and add docs/releases/v<VERSION>.md, then promote main to release.
 
 name: Release
 
 on:
-  push:
-    tags: ['v*']
+  workflow_run:
+    workflows: [CI]
+    types: [completed]
+    branches: [release]
 
 permissions:
   contents: write
 
+concurrency:
+  group: release
+  cancel-in-progress: false
+
 jobs:
-  draft:
-    name: Build the release zip and draft the release
+  publish:
+    name: Tag and publish the release
+    if: github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'push'
     runs-on: ubuntu-24.04
+    env:
+      GH_TOKEN: ${{ github.token }}
+      SHA: ${{ github.event.workflow_run.head_sha }}
     steps:
       - uses: actions/checkout@v4
         with:
+          ref: ${{ github.event.workflow_run.head_sha }}
           fetch-depth: 0
 
-      - name: The tag is on main, and has its notes
+      - name: Which version, and is it new?
+        id: version
         run: |
-          git merge-base --is-ancestor "$GITHUB_SHA" origin/main \
-              || { echo "::error::$GITHUB_REF_NAME is not on main"; exit 1; }
-          test -f "docs/releases/$GITHUB_REF_NAME.md" \
-              || { echo "::error::docs/releases/$GITHUB_REF_NAME.md is missing"; exit 1; }
+          if [ ! -f VERSION ]; then
+              echo "No VERSION file: nothing to release."
+              echo "release=no" >> "$GITHUB_OUTPUT"
+              exit 0
+          fi
+          version="$(tr -d ' \r\n' < VERSION)"
+          tag="v$version"
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          if git rev-parse -q --verify "refs/tags/$tag" >/dev/null; then
+              echo "$tag is already released: nothing to do. To release, bump VERSION on main."
+              echo "release=no" >> "$GITHUB_OUTPUT"
+              exit 0
+          fi
+          # The commit must be the tip of release: never tag something that has moved on.
+          git fetch -q origin release
+          [ "$(git rev-parse origin/release)" = "$SHA" ] \
+              || { echo "::error::release has moved past $SHA; the next CI run will release it"; exit 1; }
+          test -f "docs/releases/$tag.md" \
+              || { echo "::error::docs/releases/$tag.md is missing -- the notes are written by hand"; exit 1; }
+          echo "release=yes" >> "$GITHUB_OUTPUT"
 
       - name: Install the toolchain
+        if: steps.version.outputs.release == 'yes'
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
               gcc-mingw-w64-i686 binutils-mingw-w64-i686 cmake nasm zip
 
-      - name: Build
-        run: ./scripts/build.sh
-
-      - name: Every import ships with Windows XP
-        run: ./scripts/check-imports.sh
-
-      - name: The off-machine battery
-        run: ./scripts/offvm.sh
-
-      - name: Package
+      - name: Build and package
+        if: steps.version.outputs.release == 'yes'
         env:
-          NTVDMEX_VERSION: ${{ github.ref_name }}
+          NTVDMEX_VERSION: ${{ steps.version.outputs.tag }}
         run: |
+          ./scripts/build.sh
+          ./scripts/check-imports.sh
           ./scripts/package.sh
           cd dist
           sha256sum "ntvdmex-$NTVDMEX_VERSION.zip" > SHA256SUMS
           cat SHA256SUMS
 
-      - name: Draft the release
+      - name: Tag and publish
+        if: steps.version.outputs.release == 'yes'
         env:
-          GH_TOKEN: ${{ github.token }}
-          TAG: ${{ github.ref_name }}
+          TAG: ${{ steps.version.outputs.tag }}
         run: |
           prerelease=""
           case "$TAG" in *-*) prerelease="--prerelease" ;; esac
-          gh release create "$TAG" --draft $prerelease \
+          gh release create "$TAG" --target "$SHA" $prerelease \
               --title "NTVDMEX $TAG" \
               --notes-file "docs/releases/$TAG.md" \
               "dist/ntvdmex-$TAG.zip" dist/SHA256SUMS
