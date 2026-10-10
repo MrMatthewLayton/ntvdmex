@@ -12,7 +12,7 @@ runs 16-bit code on the **real CPU, in Virtual-8086 mode** -- not in a software 
 | Understand how it is put together | [architecture.md](architecture.md) |
 | Know why it is built this way | [motivations-and-decisions.md](motivations-and-decisions.md) and the [decisions/](decisions/) |
 | Avoid the expensive mistakes | [lessons.md](lessons.md) |
-| Contribute code | [STYLE.md](STYLE.md) and [CLEAN-ROOM.md](../CLEAN-ROOM.md) |
+| Contribute code | [CONTRIBUTING.md](../CONTRIBUTING.md), then [STYLE.md](STYLE.md) and [CLEAN-ROOM.md](../CLEAN-ROOM.md) |
 | Find something to work on | the [issue tracker](https://github.com/MrMatthewLayton/ntvdmex/issues) |
 
 ## The working method: build from the specs, then test the apps
