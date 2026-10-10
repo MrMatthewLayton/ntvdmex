@@ -9,6 +9,7 @@
              the whitespace -- checked against deliberate mutants, as tools/fncmp is
   refusal    a stage that changes the code is refused, and the file is never written
   command    --check and --fix: exit codes, and what is written
+  names      names.py: each rule finds what it should, and nothing in code that follows it
 
 To add a rule's fixture: write NAME.in.c, run the tool on it, read the .out file it gives
 against docs/STYLE.md, and commit both once it is right.
@@ -25,6 +26,7 @@ from unittest import mock
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
+import names                                                     # noqa: E402
 import order                                                     # noqa: E402
 import restyle                                                   # noqa: E402
 import style                                                     # noqa: E402
@@ -172,6 +174,72 @@ class Command(unittest.TestCase):
         self.assertEqual(self.run_main('x.c')[0], 2)
         self.assertEqual(self.run_main('--check', '--fix')[0], 2)
         self.assertEqual(self.run_main('--chek')[0], 2)
+
+
+GOOD_NAMES = """
+typedef struct _NAMES_PAIR
+{
+    DWORD LeftValue;
+    BYTE (*ReadByte)(PVOID context);
+} NAMES_PAIR;
+
+static INT g_NamesCount;
+extern BOOL g_NamesReady;
+
+static INT NamesSum(PNAMES_PAIR pair, INT itemCount)
+{
+    INT itemIndex;
+    INT total = NamesHelper(itemCount) + g_NamesCount;
+
+    CHECK(*NamesTick() == 1, "a macro call is not a declaration");
+
+    for (itemIndex = 0; itemIndex < itemCount; itemIndex++)
+    {
+        total += (INT)pair->LeftValue;
+    }
+
+    if (g_NamesReady)
+        return total;
+
+    return 0;
+}
+"""
+
+
+class Names(unittest.TestCase):
+
+    def findings(self, text, path='src/x.c'):
+        found = names.Findings()
+        names.check_file(path, text, found)
+        return sorted((rule, message.split('`')[1] if '`' in message else message)
+                      for _, _, rule, message in found.items)
+
+    def test_code_in_the_style_has_no_findings(self):
+        self.assertEqual(self.findings(GOOD_NAMES), [])
+
+    def test_each_rule(self):
+        cases = [
+            ('static INT names_sum(INT count)\n{\n    return count;\n}\n', ('N1', 'names_sum')),
+            ('static INT namesCount;\n', ('N2', 'namesCount')),
+            ('VOID NamesRun(VOID)\n{\n    INT i;\n}\n', ('N3', 'i')),
+            ('VOID NamesRun(INT Count)\n{\n}\n', ('N3', 'Count')),
+            ('typedef struct _N\n{\n    DWORD dwValue;\n} N;\n', ('N4', 'dwValue')),
+            ('static unsigned g_NamesValue;\n', ('N5', 'unsigned')),
+            ('static LPDWORD g_NamesPointer;\n', ('N5', 'LPDWORD')),
+            ('static INT g_N;\n/* ' + 'x' * 100 + ' */\n', ('N6', '106 columns')),
+            ('VOID NamesRun(BOOL isOn)\n{\n    if (isOn == TRUE)\n        NamesStop();\n}\n',
+             ('N7', 'compared with TRUE -- test the BOOL itself')),
+        ]
+        for text, expected in cases:
+            with self.subTest(expected):
+                self.assertIn(expected, self.findings(text))
+
+    def test_exports_and_mirrors_keep_their_names(self):
+        exported = '__declspec(dllexport) VOID WINAPI call_ica_hw_interrupt(INT line)\n{\n}\n'
+        self.assertEqual(self.findings(exported), [])
+        mirror = 'typedef struct _W\n{\n    WORD wFormatTag;\n} W;\n'
+        self.assertEqual(self.findings(mirror, 'src/vdd/audio_wave.c'), [])
+        self.assertEqual(self.findings(mirror, 'src/vdd/other.c'), [('N4', 'wFormatTag')])
 
 
 if __name__ == '__main__':

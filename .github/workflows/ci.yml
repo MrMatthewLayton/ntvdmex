@@ -3,7 +3,8 @@
 #   build    the XP-32 cross build (mingw-w64 i686), with the warnings that have caught real
 #            defects as errors, and the check that every import ships with Windows XP
 #   battery  the off-machine unit tests (scripts/offvm.sh), built natively
-#   style    scripts/style.sh --check, and the style tool's own tests
+#   style    scripts/style.sh --check, and the style tool's own tests; the names-and-types
+#            report (scripts/style.sh --names), which does not fail the run yet
 #
 # What CI cannot do is run NTVDMEX: that needs a real Windows XP machine. The maintainer runs
 # that check before merging; see docs/testing.md.
@@ -79,3 +80,7 @@ jobs:
 
       - name: Every C file is in the house style
         run: ./scripts/style.sh --check
+
+      # Report only, until the tree is clean against it; then it blocks like the rest.
+      - name: Names and types (report)
+        run: ./scripts/style.sh --names --summary
