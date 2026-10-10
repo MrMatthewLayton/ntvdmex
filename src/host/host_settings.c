@@ -110,7 +110,7 @@ INT          g_JoystickPovMap;   /* JoystickGamepad: map the pad's D-pad
 PCSTR g_ShellOverride;               /* #203: cfg\shell.txt beat DosPrompt */
 static const INT UITICK_MS[UITICK_CHOICES] = { UITICK_AUTO, 5, 10, 15, 20 };   /* Settings combo index -> ms */
 /* EVERY SETTING SAYS ITS VALUE AND WHERE IT CAME FROM. (GH #144):
- * See knob-with-two-sources: the reported DOS version sat at 5.00 on the rig from a
+ * See knob-with-two-sources: the reported DOS version sat at 5.00 on the test machine from a
  * registry value nobody could see, because only the FILE override ever printed. A
  * file override changes a machine variable, not g_Settings, so it is noted here at the
  * point it is read; SettingsLogSources() prints the lot once they have all run.
@@ -336,7 +336,7 @@ VOID SettingsApply(HWND window, const NTVDMEX_SETTINGS *settings, INT live)
      * setting -- DOS already reaches the host's A: -- so only IMAGE mode (chosen, or
      * forced because this PC has no floppy drive) names a file here. A blank image
      * path means an EMPTY drive: NULL falls through to FLOPPY_IMG_PATH, which exists
-     * only on the test rig (the harness's disk), so on a user's PC it is simply absent.
+     * only on the test machine (the harness's disk), so on a user's PC it is simply absent.
      */
     g_FloppyImage     = ((!settings->Values[SET_FLOPPYPHYS] || !HostHasFloppy()) && settings->Strings[SET_STR_FLOPPYA][0])
                      ? settings->Strings[SET_STR_FLOPPYA] : NULL;
@@ -425,7 +425,7 @@ VOID SettingsApply(HWND window, const NTVDMEX_SETTINGS *settings, INT live)
     /* [CAUTION]: THROTTLE GRANULARITY AND CORE-AFFINITY ARE NO LONGER SETTINGS (session 60).
      * Granularity defaults to AUTO (g_CpuSpeedGranularityMs = 0), which is the behaviour
      * that made a slow speed smooth, so it needs no control; cpugran.txt still
-     * overrides it for the rig. Affinity defaults OFF and stays a file knob
+     * overrides it for the test machine. Affinity defaults OFF and stays a file knob
      * (cpuaff.txt) because measured it broke the guest's timer -- exposed for a
      * future re-test, not for a user to find.
      */

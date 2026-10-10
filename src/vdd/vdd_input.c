@@ -178,10 +178,10 @@
 /* #136: KEYBOARD LAYOUTS, TAKEN FROM WINDOWS XP'S OWN TABLES:
  * The table above is the US BIOS. A layout only changes what the PLAIN and SHIFT
  * columns produce for some keys, so each layout is an overlay of (scan code, plain,
- * shift) in the DOS code page. The rows were NOT typed from memory: `rigshot kbdmap
+ * shift) in the DOS code page. The rows were NOT typed from memory: `kbdmap
  * <KLID>` asked XP (LoadKeyboardLayout -> ToAsciiEx -> CharToOem) what every scan
- * code produces on the rig, and the tables are the differences from its US answer
- * (runs/s82/kbdmap.txt; the US dump matches this BIOS table except Shift+Tab and
+ * code produces on the test machine, and the tables are the differences from its US answer
+ * (s82; the US dump matches this BIOS table except Shift+Tab and
  * keypad 5, where the BIOS deliberately differs). Dead keys (German ^ and the accent
  * key, French ^) keep the US character: composition is not modelled. Ctrl and Alt
  * columns are unchanged, except that a letter which MOVED (German Y/Z, French A/Q/

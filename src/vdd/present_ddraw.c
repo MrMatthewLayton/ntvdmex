@@ -1022,7 +1022,7 @@ static VOID PresentFullscreen(PPRESENT_DDRAW presenter)
      * drawn into the back buffer's DC by GDI's StretchDIBits in COLORONCOLOR mode --
      * the same exact-pixel routine, and the same picture (PresentSnapshotDib, with Scale2x),
      * as the GDI renderer. [CAUTION] Not a hand-written per-pixel stretch into video memory:
-     * that was tried first and was unplayably slow on the rig (it read VRAM back to
+     * that was tried first and was unplayably slow on the test machine (it read VRAM back to
      * copy repeated rows). Bilinear keeps the driver's stretch, which IS bilinear.
      */
     if (presenter->Filter != PRESENT_FILTER_BILINEAR && presenter->SnapshotWidth > 0 && presenter->SnapshotHeight > 0)

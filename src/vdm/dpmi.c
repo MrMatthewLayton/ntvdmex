@@ -237,7 +237,7 @@ INT DpmiSwitchToProtectedMode(
      * forever, so its interrupt-assist never delivers and it just sets VIP and
      * defers". The V86 path learned that and has a knob for it (g_qi_vif); the
      * protected-mode path was never given one and has always entered with VIF clear.
-     * That fits what the rig shows: with our own asynchronous injection disabled a PM
+     * That fits what the test machine shows: with our own asynchronous injection disabled a PM
      * guest receives ZERO timer ticks and spins for ever, while stock ntvdm runs the
      * same client to Doom's title screen. If the kernel is willing to deliver to a PM
      * VDM at all, VIF is the flag it asks about.

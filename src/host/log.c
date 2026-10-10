@@ -66,7 +66,7 @@
  * several files. The flag is per-process, which is per-run.
  *
  * [CAUTION]: MoveFileEx over an existing target: on a share the target can be open elsewhere
- * (the rig's watcher tails the log), in which case the shift fails and the run
+ * (the test watcher tails the log), in which case the shift fails and the run
  * simply overwrites as it always did -- rotation is best-effort and must never
  * stop the log itself from being written.
  */
@@ -79,7 +79,7 @@
 /* THE A/B SWITCH FOR "IS THE INSTRUMENT THE PROBLEM?" (Importance = 2):
  * Set from `wowquiet.txt` on the share (see main.c). It silences the trace
  * ENTIRELY, which is the point: this project cannot measure feel from the dev
- * machine -- the headless rig cannot see input lag -- so the only honest
+ * machine -- the headless test machine cannot see input lag -- so the only honest
  * instrument for "does it feel slow" is a one-file A/B in the user's hands.
  *
  * [CAUTION]: IT IS A MEASUREMENT MODE, NOT A PRODUCT MODE. Every session's debugging

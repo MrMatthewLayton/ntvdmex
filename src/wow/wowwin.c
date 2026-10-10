@@ -543,7 +543,7 @@ static LRESULT CALLBACK WowWinProc(HWND window, UINT message, WPARAM wParam, LPA
          * for the rest of the session.
          *
          * [INFO]: STOCK ntvdm WAS MEASURED DOING EXACTLY THIS. Same program, same three
-         * drags, cross-process GetGUIThreadInfo (`rigshot capture`):
+         * drags, cross-process GetGUIThreadInfo (`capture`):
          *   after the drags   stock hwndCapture = the CANVAS   (same as ours)
          *   after Alt         stock hwndCapture = the TOP-LEVEL, menuowner set,
          *                     GUI_INMENUMODE   (ours: unchanged, no menu)
@@ -688,7 +688,7 @@ static LRESULT CALLBACK WowWinProc(HWND window, UINT message, WPARAM wParam, LPA
      * moved from inside its WM_SIZE (Packager's "View:" label) left the strip it
      * vacated on screen: its erase ran (measured: the strip visible in the DC, the
      * class brush applied) and USER32's own move/size machinery still put the old
-     * pixels back afterwards (runs/s92/drv). One full repaint at the end is what
+     * pixels back afterwards (s92). One full repaint at the end is what
      * makes the final picture right whatever happened mid-drag.
      */
     case WM_EXITSIZEMOVE:

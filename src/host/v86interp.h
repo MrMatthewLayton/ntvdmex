@@ -40,7 +40,7 @@
 #include "v86cpu.h"     /* the CPU state and the constants its users share */
 
 /* #183: THE HOT HELPERS ARE FORCED INLINE. (s87):
- * A rig profile of mybench.com (CPU-bound, multi-plane mask) found V86Add, V86Subtract,
+ * A test-machine profile of mybench.com (CPU-bound, multi-plane mask) found V86Add, V86Subtract,
  * V86Logic, V86Alu, grw, srw, V86ReadMemory, V86WriteMemory and V86DecodeModrm all compiled as SEPARATE
  * functions: istep() is so large that GCC's large-function-growth limit refuses to
  * inline anything more into it, so every interpreted `add si,3` paid about ten cdecl
@@ -129,8 +129,8 @@ V86_INLINE VOID V86WriteMemory(UINT32 linear, int width, UINT32 value)
  * instruction, it is everything up to the next event with A0000 unprotected (the
  * s68 scasb lesson). Address size stays 16-bit throughout: SP/SI/DI/CX, never ESP.
  * - WHAT THE MANUAL LEAVES OPEN WAS MEASURED, NOT RECALLED -- tests/probes/dos/p_o32.com
- *   on the rig's own CPU under XP's V86 monitor, the machine this interpreter stands in
- *   for (runs/s87_dpmi; the same bytes are replayed through this file off-VM by
+ *   on the test machine's own CPU under XP's V86 monitor, the machine this interpreter stands in
+ *   for (s87; the same bytes are replayed through this file off-VM by
  *   interp_test.c against tests/unit/p_o32.ref.txt):
  *   - `66 PUSH sreg` writes the selector as a WORD: the slot's upper half is left as
  *     it was (sentinel DEAD survived). Intel allows either; this CPU keeps it.
@@ -588,7 +588,7 @@ V86_INLINE int V86Condition(V86_CPU *cpu, int condition)
  * never in the A0000 window, so V86HostRead8 returns the mapped byte) and testable
  * off-VM against a flat array. `cb` is the linear address of CS:IP.
  * #183 (s87): ...AND, WHEN THE HOST SAYS IT IS SAFE, THROUGH A POINTER:
- * A rig profile put V86HostRead8's own range/page checks at ~12% of the interpreter: they
+ * A test-machine profile put V86HostRead8's own range/page checks at ~12% of the interpreter: they
  * ran once per code BYTE. An includer that defines V86I_CODE_PTR provides
  *   const volatile BYTE *V86HostCodePointer(uint32_t lin);
  * = a pointer good for the 16 bytes at `lin` (one plain-RAM page, never the A0000
@@ -1819,7 +1819,7 @@ static int V86Step(V86_CPU *cpu)
      *
      * [WARNING]: THESE WERE UNMODELLED, AND THE BAIL LEAKED A WHOLE FRAME OF VRAM WRITES.
      * (s68, Lemmings.) In a planar mode the host is the CPU and A0000 is left
-     * UNPROTECTED in V86 (the page trap freezes the rig -- see video_trap_sync).
+     * UNPROTECTED in V86 (the page trap freezes the test machine -- see video_trap_sync).
      * Lemmings erases its sprites by `repne scasb` over an 800-byte dirty map and
      * a `rep movsb` latch copy master->page for every cell it finds. The scasb
      * bailed here, VdmRunGuest then kept the guest on the real CPU until the NEXT

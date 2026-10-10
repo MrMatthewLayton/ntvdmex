@@ -5,10 +5,10 @@
  * krnl386.exe is a 16-bit DLL that cannot call Win32, so it reaches a 32-bit
  * companion (real Windows: wow32.dll inside ntvdm.exe) through a native BOP.
  * Every call arrives at the same BOP with a function ID on the stack, so the whole
- * interface is a small integer namespace -- 82 function IDs, enumerated in
- * docs/research/wow32-call-surface.md.
+ * interface is a small integer namespace -- 82 function IDs, each named in this
+ * file.
  *
- * THE FRAME, AS MEASURED AT THE BOP ON THE LIVE RIG (`@ss:sp` dumps).
+ * THE FRAME, AS MEASURED AT THE BOP ON THE LIVE TEST MACHINE (`@ss:sp` dumps).
  *
  * Relative to the BP the 16-bit side has set up when the BOP executes:
  *
@@ -33,7 +33,7 @@
  * [INFO]: AND THE RETURN VALUE IS NOT A REGISTER. Whatever we leave in AX/DX is
  * overwritten when the guest resumes; the DWORD the caller receives is the one
  * in a four-byte stack slot at [bp-16] (low word) and [bp-14] (high). Confirmed
- * on hardware: in the rig's `@ss:sp` dump those two words held stale stack
+ * on hardware: in the test machine's `@ss:sp` dump those two words held stale stack
  * (0x0047, 0x0000) at the BOP -- an uninitialised return slot.
  * Getting this wrong is silent: the guest reads garbage and blames itself.
  *
@@ -88,7 +88,7 @@
  * The return path the 16-bit side takes after the BOP is selected by a word on
  * the guest stack, at [bp-24], which the 32-bit side is expected to write. The
  * guest always arrives with it ZERO, and zero is the ordinary return. The
- * frame below BP at the BOP, as dumped on the rig:
+ * frame below BP at the BOP, as dumped on the test machine:
  *
  *   bp-2 bx | -4 es | -6 cx | -8 fs | -10 gs | -12 ds | -16 the RETURN SLOT
  *   | -18 si | -20 di | -22 bp | -24 THE MODE (0 on arrival)
@@ -97,7 +97,7 @@
  * launch call `0x74`. That call is made on the NEW task's stack, with the
  * creating task's SS:SP carried in DI and CX (both saved in the frame above).
  * Returned through mode 25, the creator comes back on its own stack, with its
- * BP and its current-task word restored -- observed on the rig as krnl386's
+ * BP and its current-task word restored -- observed on the test machine as krnl386's
  * creating task carrying on. So "this task's turn is over, put its creator
  * back" is one word.
  *
@@ -396,8 +396,8 @@
  * [CAUTION]: A WOW LAUNCH DOES NOT CARRY THE PROGRAM ON ITS COMMAND LINE. Windows starts
  * the VDM as `ntvdm -f -i1 -w -a <krnl386>` and the application is delivered
  * out of band; real ntvdm gets it from the Win32 GetNextVDMCommand, which
- * returns FALSE/0x57 for us (measured -- see docs/research/). On the rig it
- * comes from target.txt, which is the harness's channel for the same fact.
+ * returns FALSE/0x57 for us (measured). On the maintainer's test
+ * machine it comes from target.txt, the test harness's channel for the same fact.
  *
  * [INFO]: EMPTY IS A LEGITIMATE STATE and it has a correct answer: "no command", which
  * is NOT the same as an error. See the 0x70 case.

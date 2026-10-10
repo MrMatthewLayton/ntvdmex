@@ -2,7 +2,7 @@
  *
  * Build a DOS Program Segment Prefix (+ a minimal environment) in
  * conventional memory. Pure logic over a `base` pointer (same convention as
- * dos_mcb.h). Ported from the M2.1 PSP setup in tools/vdmhost/vdmhost.c.
+ * dos_mcb.h). Ported from the M2.1 PSP setup in the first spike (vdmhost).
  * Verified off-VM by tests/unit/mcb_test.c.
  *
  *

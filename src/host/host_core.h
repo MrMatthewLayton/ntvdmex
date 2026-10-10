@@ -19,10 +19,10 @@
 #include "../ntvdmex_types.h"
 #include "host_strings.h"   /* defines only: the strings that are not log text */
 
-/* ONE FOLDER HOLDS THE WHOLE RIG. (s61, at the user's instruction) (Importance = 2):
+/* ONE FOLDER HOLDS EVERYTHING. (s61, at the user's instruction) (Importance = 2):
  * Everything this host reads or writes lives under ONE directory, and NOTHING is
- * written to C:. Before this, the rig was spread over five places -- 52 knob and
- * flag files loose in the share ROOT, results and screenshots beside them, and
+ * written to C:. Before this, the test setup was spread over five places -- 52 knob and
+ * flag files loose in one folder's root, results and screenshots beside them, and
  * C:\ntvdmex holding the log, target.txt, autoexit, sb.raw, PRINTOUT.TXT,
  * SERIAL*.TXT, the floppy image and three probe logs -- plus C:\test and C:\game
  * recreated per run and rt.bat dropped into C:\WINDOWS. The user cleared the box
@@ -32,7 +32,6 @@
  *   <dir>\cfg\        everything we READ: knobs, flags, target.txt, the floppy image
  *   <dir>\debug\out\  everything we WRITE: the log, screenshots, traces, probe dumps
  *   <dir>\bin\        this binary                       (bm\ = the pre-s73 name)
- *   <dir>\debug\rig\  the harness                       (scripts' business, not ours)
  *   <dir>\demo\msdos\ the user's games and demos, run IN PLACE (never copied)
  *
  * [CAUTION]: The directories are created at startup: a knob read may legitimately find
@@ -41,7 +40,7 @@
  * debug\ is created before debug\out\ -- CreateDirectoryA makes ONE level.
  */
 /* THE FOLDER IS WHEREVER THE HOST WAS EXTRACTED. (s71, the 17th deliverable) (Importance = 1):
- * This was a compile-time string naming the rig's share, so a copy of NTVDMEX on any
+ * This was a compile-time string naming one machine's shared folder, so a copy of NTVDMEX on any
  * other machine wrote its log nowhere, read no knobs and found no target -- a zip
  * that "works on my machine" and nowhere else. The root is now derived once from
  * the host's own path: the exe lives in <root>\bin\ (or the older <root>\bm\), so

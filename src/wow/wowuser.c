@@ -836,7 +836,7 @@ static VOID WowUserEnsureSystemClasses(VOID)
          *     WM_PAINT reaches the guest, and the modal loop below waits
          *     forever for a message the OS quietly consumed.
          *
-         * MEASURED, TASKMAN on the rig, session 57. The modal loop ran, the
+         * MEASURED, TASKMAN on the test machine, session 57. The modal loop ran, the
          * dialog and its eight controls were built, and a click on Cancel at
          * its measured screen position produced:
          *     WOWDLG/win32: msg=0x0201 hwnd=0x003600e6 -> win16 0x01c0
@@ -1487,7 +1487,7 @@ PWOWUSER_CLASS WowUserFindClass(PCSTR name)
 
 /* s91 (TASKMAN): A WIN16 HANDLE FOR ANY WINDOW, AS WOW GIVES ONE:
  * Real WOW hands a 16-bit program a handle for every window on the desktop, so a
- * Win16 Task List lists the XP desktop's windows (stock, runs/stockshot/
+ * Win16 Task List lists the XP desktop's windows (stock, stock
  * s91_taskman_stock.bmp: cmd.exe, Notepad, Program Manager). Ours issued handles
  * only for the guest's own windows, so GetWindow(GW_HWNDFIRST) named nothing and
  * TASKMAN's list was empty. An alias is a window record pointing at the real HWND
@@ -4051,7 +4051,7 @@ INT WowUserCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
              * move". On a window that is not yet visible that costs nothing,
              * because showing it paints everything. On a window we have ALREADY
              * shown it is a disaster, and this is exactly what it looked like
-             * on the rig: the dialog's old pixels LEFT BEHIND at the top-left
+             * on the test machine: the dialog's old pixels LEFT BEHIND at the top-left
              * corner, and at its real position a window with the DESKTOP
              * WALLPAPER showing through its client area -- painted once at an
              * address it no longer occupied.
@@ -5920,7 +5920,7 @@ INT WowUserCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
              *
              * [CAUTION]: THE GUEST'S BYTES ARE COPIED FIRST. wowconv takes plain memory
              * on purpose: the moment it touched a `volatile` guest pointer it
-             * would stop being testable without a rig, which is the whole
+             * would stop being testable without a test machine, which is the whole
              * point of the file.
              */
             static BYTE sourceBuffer[WOWUSER_BITMAPCOREHEADER_SIZE + WOWUSER_MAX_PALETTE * WOWUSER_RGBTRIPLE_SIZE];
@@ -7057,7 +7057,7 @@ INT WowUserCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
 
         /* [CAUTION]: Restore BEFORE raising: a minimised window is still WS_VISIBLE, and
          * SetForegroundWindow on one leaves an icon in front. Same trap
-         * rigshot hit (SW_RESTORE, not SW_SHOW).
+         * screenshot hit (SW_RESTORE, not SW_SHOW).
          */
         if (IsIconic(window->Window32))
             ShowWindow(window->Window32, SW_RESTORE);
@@ -9303,7 +9303,7 @@ INT WowUserCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
          * defaults fall back to in Win16. WM_CLOSE on a FRAME is DestroyWindow -- OURS:
          * Program Manager's X reached Win32's DefFrameProc, which destroyed the real
          * window only, and the task sat in GetMessage with no window, host and all
-         * (runs/s92/inst1_now.log). WM_PAINT erases what is owed; WM_CTLCOLOR is 0.
+         * (s92). WM_PAINT erases what is owed; WM_CTLCOLOR is 0.
          */
         if (message16 == WM_CLOSE && isFrameProc)
         {
@@ -11134,7 +11134,7 @@ INT WowUserCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
      * Win16 puts both in USER.EXE (ordinals 282 and 283), which is why they are
      * here rather than next to the other palette calls.
      *
-     * [CAUTION]: On this rig's 32bpp display a realized palette changes nothing, and that
+     * [CAUTION]: On this test machine's 32bpp display a realized palette changes nothing, and that
      * is exactly why they are worth answering rather than leaving to the
      * sentinel: MS Paint calls them before nearly every drawing operation and a
      * guest whose SelectPalette "fails" may take a different path.

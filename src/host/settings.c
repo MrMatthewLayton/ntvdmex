@@ -56,7 +56,7 @@ const SET_DEF g_SetDefinitions[SET_COUNT] = {
 
 /* [CAUTION]: 1x, NOT 2x. This defaulted to "2x" for as long as it did nothing; the moment
  * it became live that default would have made every clean machine open a
- * 1280x800 client -- wider than the 1024x768 desktop the test rig runs. The
+ * 1280x800 client -- wider than the 1024x768 desktop the test machine runs. The
  * rule at the top of this file is that THE DEFAULTS ARE THE SHIPPED BEHAVIOUR,
  * and the shipped behaviour is one pixel per pixel.
  */
@@ -77,7 +77,7 @@ const SET_DEF g_SetDefinitions[SET_COUNT] = {
  * smoothing now comes only from Scaler / Filtering.
  *
  * [WARNING]: A NEW REGISTRY NAME, DELIBERATELY. The old "Renderer" value was stored for months
- * while it did nothing, so machines carry whatever was once clicked -- the rig had 1.
+ * while it did nothing, so machines carry whatever was once clicked -- the test machine had 1.
  * Honouring it made the user's fullscreen suddenly blurry (s81 check, "a regression").
  * A value chosen when it meant nothing must not start meaning something.
  */
@@ -110,7 +110,7 @@ const SET_DEF g_SetDefinitions[SET_COUNT] = {
 /* s73: OFF by default. With the Auto screen update every guest frame is blitted at
  * the moment it completes; making that blit also wait for the monitor's blank
  * delays the NEXT frame's render to a random phase and cost 3% of BOUNCEBX's
- * frames on the rig. Stock NTVDM does not vsync its blit either, and it is smooth.
+ * frames on the test machine. Stock NTVDM does not vsync its blit either, and it is smooth.
  */
 { "VSync",             IDC_S_VSYNC,       SK_CHECK,      0,  0,   1, NULL },
 { "BlinkTextCursor",   IDC_S_BLINKCURSOR, SK_CHECK,      1,  0,   1, NULL },
@@ -221,7 +221,7 @@ const SET_DEF g_SetDefinitions[SET_COUNT] = {
 { "MpuAddress",        IDC_S_MPUADDR,     SK_COMBO,      3,  0,   4, "300|310|320|330|340" },
 /* s84 (user): #218's smart hide becomes one of three. Default Smart = the behaviour since
  * #218. [WARNING] A NEW NAME, DELIBERATELY: "ShowHostCursor" was an old 0/1 checkbox (644a6e0),
- * and the rig still carried a 0 that read as "Always" the first time this row used that
+ * and the test machine still carried a 0 that read as "Always" the first time this row used that
  * name -- and "HideHostCursor" meant something else again.
  */
 { "HostCursorMode",    IDC_S_HOSTCURSOR,  SK_COMBO,      2,  0,   2, "Always|Never|Smart" },

@@ -292,7 +292,7 @@ static WORD g_WowKernel2Segment = 0;
  * WOW path every BOP writes a multi-line block -- a Solitaire startup is 2.7 MB
  * -- so the same shape is back, on a path nobody has costed.
  *
- * [CAUTION]: The dev machine CANNOT settle this: the headless rig cannot see input lag.
+ * [CAUTION]: The dev machine CANNOT settle this: the headless test machine cannot see input lag.
  * So it is a one-file A/B for the person who can feel it -- `touch wowquiet.txt`
  * for the fast run, delete it for the instrumented one, same binary both times.
  *
@@ -310,7 +310,7 @@ static WORD g_WowKernel2Segment = 0;
  * -- [CAUTION] ALSO REFUTED, same round: `SerialOut` does WriteFile + FlushFileBuffers
  * per line at 115200 baud, which would block until the bytes were physically
  * out of the UART and would have been a spectacular per-line cost. It is NOT
- * gated by this flag, so it looked like the answer. `mode` on the rig lists
+ * gated by this flag, so it looked like the answer. `mode` on the test machine lists
  * only `CON:` -- THERE IS NO COM1 -- so g_Serial is INVALID_HANDLE_VALUE and
  * SerialOut has been a no-op all along. Measured before it was believed.
  */
@@ -549,7 +549,7 @@ static PSTR DpmiInt31CallRealModeFar(
      * interrupt and trace flags clear"). Deliberately: this is the entry
      * state ZAR's INT 66h (Miles) handler was proven on in s81, with its
      * SB IRQ 5 delivered INTO this nested call -- and our own stubs do
-     * not care. Clearing it is a change to make with ZAR on the rig.
+     * not care. Clearing it is a change to make with ZAR on the test machine.
      */
     if (simulatedVector >= 0)
         VDM_REG(tib,VTIB_EFLAGS) |= (DWORD)(rmcsRegisters.Flags & EFLAGS_STATUS_DF_U);  /* CF PF AF ZF SF DF OF */
@@ -1538,7 +1538,7 @@ static VOID DpmiInt31AllocateDosMemory(
                  * line so far, in a 2 KB stack buffer: p_dpmi31's
                  * 0100h/0101h loop on the pre-#248 host fragmented the
                  * chain, hit ENOMEM, and the host died with an AV at
-                 * an EIP made of ASCII (runs/s87_dpmi). Stop with room
+                 * an EIP made of ASCII (s87). Stop with room
                  * to spare and say so.
                  */
                 if (cursor - base > 1600)
@@ -2968,7 +2968,7 @@ static INT Wow32ServiceResolveModulePath(
      * [CAUTION]: SearchPathA IS THE WIN32 ORDER, NOT WIN16'S. Close enough for
      * what krnl386 needs -- it reaches the Windows and system
      * directories, which is where the 16-bit modules are, and this
-     * rig's own WOWEXEC/KRNL386 were found there. It also consults
+     * test machine's own WOWEXEC/KRNL386 were found there. It also consults
      * the current directory, which Win16 did too. Recorded as a
      * difference rather than claimed as equivalence.
      */
@@ -3403,7 +3403,7 @@ static INT Wow32RunLaunchedTaskFirst(
      * its own thread and the creator waits for it). USER's WinHelp() depends on
      * it: it starts WINHELP.EXE and at once looks for the "MS_WINHELP" window;
      * with the new task merely parked the window did not exist and Calc and
-     * Notepad said "Not enough memory available" (runs/s92/gate3). So the
+     * Notepad said "Not enough memory available" (s92). So the
      * PARENT's next call is where it yields: parked AT this BOP (re-issued on
      * resume), marked runnable at the current callback depth; the child runs,
      * and its first empty GetMessage at that same depth (E) hands back.
@@ -5221,7 +5221,7 @@ static PSTR WowCallbackModalPump(
          * the loop delivers next). WM_CLOSE, and (s92) WM_PAINT / WM_ERASEBKGND:
          * TASKMAN's DLGPROC answers FALSE to WM_PAINT and nothing ever erased
          * the dialog, so the Task List showed the desktop behind it
-         * (runs/s92/untitled2.bmp). DefDlgProc's paint is the dialog colour.
+         * (s92). DefDlgProc's paint is the dialog colour.
          */
         if (g_WowDlgIsDialogCall[g_WowCallDepth] && (WORD)result == 0
             && (g_WowDlgMessage[g_WowCallDepth] == WM_CLOSE
@@ -7959,7 +7959,7 @@ static INT DpmiServiceWowBop(
     }
     /* STEP OVER AND KEEP GOING, RATHER THAN STOPPING THE GUEST:
      * Returning -1 here halts the run at the first unimplemented service,
-     * so each rig round reveals exactly one BOP. Stepping over turns the
+     * so each test-machine round reveals exactly one BOP. Stepping over turns the
      * wall into a TRACE: one run lists every service krnl386 asks for, in
      * order, which is the shape of the work rather than the next item of it.
      *

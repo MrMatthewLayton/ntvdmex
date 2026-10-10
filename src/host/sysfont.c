@@ -72,7 +72,7 @@ static INT SysFontOpen(
 
 /* THE CODE PAGE 437 TERMINAL, READ FROM ITS FILE. GDI picks "Terminal" by the
  * machine's OEM code page -- on a UK XP that is 850, whose font has accented letters
- * where 437 has some box pieces and the Greek/maths symbols (measured on the rig:
+ * where 437 has some box pieces and the Greek/maths symbols (measured on the test machine:
  * the charset probe showed A A A (c) where | | + belong). XP keeps the 437 fonts on
  * every locale, so the
  * faces are read straight out of their files (CGA80WOA.FON 8x8, VGAOEM.FON 8x12): an NE file whose RT_FONT resources are
@@ -524,7 +524,7 @@ PCSTR SysFontBuildInto(PCSTR faceName, SYSFONT_TABLES *tables, SYSFONT_REPORT *r
 
     SysFontOpen(dc, (BYTE *)bits, &fixedsys,  "Fixedsys", ANSI_CHARSET, 0);
     /* Terminal at code page 437, from its files; by name only if a file is missing. */
-    /* Measured on the rig's UK XP: CGA80WOA.FON is the 437 Terminal 8x8 (by name GDI
+    /* Measured on the test machine's UK XP: CGA80WOA.FON is the 437 Terminal 8x8 (by name GDI
      * gave CGA80850.FON, code page 850); VGAOEM.FON and EGA80WOA.FON are 437 8x12.
      * DOSAPP.FON there has no 8-wide face at all.
      */

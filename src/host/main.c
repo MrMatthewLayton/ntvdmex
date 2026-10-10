@@ -1,7 +1,7 @@
 /* NTVDMEX -- An NTVDM replacement for Microsoft Windows
  *
  * The clean DOS VDM host (windowed). Orchestrates the pipeline the
- * tools/vdmhost spike proved, now wired through the src/ modules:
+ * first spike (vdmhost) proved, now wired through the src/ modules:
  *   log -> CSRSS handshake (csrss) -> V86 bring-up (v86) -> load + build the DOS
  *   process (dos_loader/dos_psp/dos_mcb) -> service INT 21h/10h + I/O in V86,
  *   routing screen output to the video VDD and presenting via DirectDraw.
@@ -487,13 +487,13 @@ INT       g_WowEntering = 0;   /* the guest is krnl386, not DOS */
 /* #211: TWO BUSY GUESTS MUST NOT STARVE THE MACHINE:
  * The thread that runs the guest is ABOVE_NORMAL (execprio), and a DOS program that
  * polls its keyboard keeps it busy for ever -- QBasic idling in its editor is a whole
- * core. Measured on the 2-core rig (s81): QBasic in one host and Skyroads in another
- * took both cores, and every NORMAL process -- cmd, tasklist, the rig's own harness
+ * core. Measured on the 2-core test machine (s81): QBasic in one host and Skyroads in another
+ * took both cores, and every NORMAL process -- cmd, tasklist, the test machine's own harness
  * -- stopped dead until the hosts were killed.
  * - So while ANOTHER NTVDMEX is running, a host whose window is not in the foreground
  *   drops its guest to BELOW_NORMAL, and gets its own priority back when it is brought
  *   forward. A host running alone is never touched: its priority is exactly what it was,
- *   which is what the Skyroads timing guard and every rig measurement assume.
+ *   which is what the Skyroads timing guard and every test-machine measurement assume.
  */
 HANDLE g_ExecThread;                        /* the exec (guest) thread */
 INT    g_ExecPriorityForeground = THREAD_PRIORITY_NORMAL;
@@ -850,7 +850,7 @@ INT WINAPI WinMain(
      * this process can touch winmm. winmm asks "am I under WOW?" ONCE and caches the
      * answer (0x76b616ec), and the host's own audio and timer code loads winmm early:
      * loaded at the WOW branch below, the shims arrived after the question had been
-     * answered "no", and NotifyCallbackData kept returning 0 (runs/s90/sr4).
+     * answered "no", and NotifyCallbackData kept returning 0 (s90).
      */
     if (LaunchIsWow(GetCommandLineA()))
         WowShimsLoad();
@@ -954,7 +954,7 @@ INT WINAPI WinMain(
      *   CONOUT$ would DOUBLE every line -- and would do it into the redirect
      *   target, where it is not merely ugly but wrong. Flush whatever is still in
      *   the line buffer instead. The log copy below is unconditional either way:
-     *   it is a different sink and the one the rig harness reads.
+     *   it is a different sink and the one the test harness reads.
      */
     StdioFlush();
     cursor = TaskReportExitToCsrss(cursor, base, &machine);

@@ -33,7 +33,7 @@
  * CALIBRATION. Every scaling constant below is MEASURED, not guessed: driven into
  * both this core and a reference one from an identical register stream, one
  * variable at a time, and read back out of the spectrum. `tools/oplref/oplprobe.c`
- * is that rig and each constant names the experiment that produced it, so any of
+ * is that test machine and each constant names the experiment that produced it, so any of
  * them can be re-derived in seconds rather than argued about. What the measurement
  * is allowed to give us is a PHYSICAL quantity -- a dB slope, a modulation index in
  * radians, an envelope speed in units per sample -- which is what the datasheet

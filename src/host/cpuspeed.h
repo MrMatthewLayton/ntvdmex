@@ -4,7 +4,7 @@
  *
  * WHY A THROTTLE IS THE ONLY LEVER:
  * DOS programs pace themselves in one of three ways, and the mode-12h demo sweep
- * (docs/research/demo-sweep-findings.md) sorted every demo into one of them:
+ * sorted every demo into one of them:
  *
  * vsync-paced (`WAIT &H3DA,8`)   -- fixed by the retrace work (#55)
  * busy-wait-paced (`FOR i = 0 TO delay`)  -- reachable ONLY from here
@@ -109,7 +109,7 @@
  * 620,007,424 iterations in 37 BIOS ticks. It is THAT BOX'S number and nobody
  * else's -- which is the entire reason cpuref.txt exists.
  *
- * [CAUTION]: It is also a FILE KNOB (cpuref.txt on the share) so the rig can be re-
+ * [CAUTION]: It is also a FILE KNOB (cpuref.txt on the share) so the test machine can be re-
  * calibrated without a rebuild -- this is the sort of constant that is wrong
  * on somebody else's machine by construction.
  */
@@ -117,12 +117,12 @@
  * RATE AGAIN, MEASURED. --------------------------------------------------------
  * The duty is delivered ACCURATELY now (session 60: the closed-loop invariant
  * holds guest execution to `duty` of wall time, delivered_bp tracks duty_bp to
- * ~10% across the whole ladder on the rig, proven by a deterministic test). So the
+ * ~10% across the whole ladder on the test machine, proven by a deterministic test). So the
  * reference has one honest job left: set what a speed LABEL means. apparent =
  * native x duty, and duty = mhz/ref, so apparent = mhz x native/ref -- which equals
  * the label exactly when ref == native. So ref IS the native rate.
  *
- * [INFO]: MEASURED 2026-09-09 on the rig (mixbench.com ALU case, Unlimited): 3704 MHz.
+ * [INFO]: MEASURED 2026-09-09 on the test machine (mixbench.com ALU case, Unlimited): 3704 MHz.
  * "66 MHz" then delivers duty 66/3704 = 178 bp, and ALU runs at 3704 x 0.0178 =
  * 66 MHz. The label is honest for COMPUTE.
  *
@@ -152,7 +152,7 @@
  * here) -- honest for a pure arithmetic loop, and ruinous for a game: Doom's guest
  * time is dominated by traps and emulated video, not ALU, so unthrottled it runs as
  * a Pentium II-350 (121 fps), and 66/3704 gave the 486DX2 rung a 1.8% share it could
- * not finish demo3 in. Measured on the rig (s84, runs/s84/td/): throttled, fps is
+ * not finish demo3 in. Measured on the test machine (s84): throttled, fps is
  * LINEAR in the share -- fps = 2134 x duty / E, with E = 8.67 s of guest time for the
  * whole demo -- so 246 fps at a 100% share, i.e. 0.0664 fps per host ALU-MHz.
  *
@@ -175,7 +175,7 @@
 #define CPUSPEED_FPS_PER_KMHZ10     730u
 
 /* #225: A REAL-MODE PROGRAM GETS ITS OWN SHARE:
- * The ladder above is Doom's: 32-bit protected-mode code, verified on the rig (the
+ * The ladder above is Doom's: 32-bit protected-mode code, verified on the test machine (the
  * 486DX2-66 run counted 62.0 s of Doom time in 63.3 s of wall, incl. load; no
  * interpreted slices). At that share Skyroads -- 16-bit real-mode code -- drew ~16
  * frames/s in-game where a real 486DX2-66 drew ~35 (user, rounds 11-14), with its
@@ -201,7 +201,7 @@
  *
  * [CAUTION]: THE FIRST CUT SPREAD THIS OVER UNIFORM 1 ms SLOTS with a Bresenham, deciding
  * per millisecond whether the guest got that one. It was correct arithmetic and
- * it MEASURED 6x SLOWER where it had asked for 87x (rig sweep, 3661 -> 602 MHz
+ * it MEASURED 6x SLOWER where it had asked for 87x (test-machine sweep, 3661 -> 602 MHz
  * at a 1.15% duty). The reason is that the mechanism has a fixed cost per slot:
  * a SuspendThread / GetThreadContext / ResumeThread round trip and a Sleep whose
  * real granularity is 1-2 ms, so a 1 ms hold delivered about half a millisecond
@@ -227,7 +227,7 @@
  * [CAUTION]: THROUGHPUT WAS ALREADY ROUGHLY RIGHT AND THE FEATURE WAS STILL UNUSABLE. The
  *  user's report after the calibration work: "66 MHz is still unplayable." The
  *  counters say why, and it is not the amount of work delivered -- it is the SHAPE
- *  of the delivery. Measured at index 11 on the rig:
+ *  of the delivery. Measured at index 11 on the test machine:
  *      ran_us=1551  wall_us=1954  run_ms=44  held_ms=3982
  *  i.e. the guest runs ~1.55 ms, is frozen ~140 ms, and repeats: **about SEVEN
  *  BURSTS A SECOND**. A game rendering 35 frames a second gets its whole second's
@@ -325,7 +325,7 @@
 /* WHERE THE 1 ms RUN-PHASE FLOOR KICKS IN (see the throttle loop). Above this
  * duty the immediate-catch hold is too small to swamp the per-period catch cost, so
  * the guest must run a Sleep-able chunk first; below it, an immediate catch already
- * earns a large hold and the floor would over-run. Rig-tuned against ref 3704: 8 MHz
+ * earns a large hold and the floor would over-run. Tuned on the test machine against ref 3704: 8 MHz
  * (22 bp) must NOT floor -- it over-runs 1.5x if it does -- and 16 MHz (44 bp) must;
  * the threshold sits between. Keyed on duty, which already carries the reference.
  */

@@ -3,7 +3,7 @@
  * Load a DOS program image (MZ .EXE or flat .COM) into
  * conventional memory. Pure logic over a `base` pointer (same convention as
  * dos_mcb.h): base=NULL for the host's absolute V86 addressing, a byte buffer
- * for off-VM tests. Ported from the M2.3 loader in tools/vdmhost/vdmhost.c.
+ * for off-VM tests. Ported from the M2.3 loader in the first spike (vdmhost).
  * Verified off-VM by tests/unit/mcb_test.c.
  *
  *
@@ -221,7 +221,7 @@ static inline WORD DosImageParagraphs(_In_reads_bytes_(bytesRead) PCBYTE file, _
  * 10h (PSP) + 1Eh + 200h = 22Eh; max 10h gives 3Eh; min F000h is refused with
  * AX=0008 and never runs; min/max 0/0 puts CS 1Eh paragraphs below the block's
  * end; max FFFFh takes the whole largest block. Every child used to get 8AE2h
- * paragraphs -- all of it -- on the rig.
+ * paragraphs -- all of it -- on the test machine.
  * Inputs: the file, and `largest` = the largest free block in paragraphs. Out:
  * *allocation (paragraphs to allocate, PSP included) and *loadHigh (1 = load high).
  * Returns 0, or 8 (DOS's "insufficient memory") when even minalloc will not fit.

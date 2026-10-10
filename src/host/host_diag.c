@@ -37,7 +37,7 @@
  * so sharing a file with the main thread's firehose leaves a shared-resource
  * explanation alive for every silence it reports. On its own path, an empty file
  * means the THREAD did not run and a populated one means it did -- which is the
- * distinction session 32 could not make and spent four rig runs failing to settle.
+ * distinction session 32 could not make and spent four test-machine runs failing to settle.
  * LogAppend opens with FILE_SHARE_READ|FILE_SHARE_WRITE and appends, so this was
  * never likely; "never likely" is not the same as ruled out.
  */
@@ -204,7 +204,7 @@ VOID DsProbeLoad(VOID)
  * subtraction and no reason for it; this names every refusal. Read bucket 14 (the CPU
  * thread was in HOST code) against 10 (an injection still in flight) and 7/8 (the client
  * has interrupts off) -- they need three completely different fixes, and session 23
- * spent a rig run on the one fix that could not have helped any of them. On its own
+ * spent a test-machine run on the one fix that could not have helped any of them. On its own
  * (s85) so the headless forced exit prints it too: 3DBench's runs end that way, and
  * #238 was diagnosed without it.
  */
@@ -801,7 +801,7 @@ fatalDump:
  * fatal dump at FIRST chance. Real-mode runs only log there and pass the fault
  * on -- so if no SEH frame claims it, it arrives here, where WER used to eat it
  * and the log just stopped. Same dump, same clean exit, so the batch and the
- * rig watcher collect the evidence either way.
+ * test watcher collect the evidence either way.
  */
 LONG WINAPI HostUnhandledFilter(EXCEPTION_POINTERS *pointers)
 {
@@ -843,7 +843,7 @@ DWORD WINAPI DpmiWatchdog(LPVOID param)
     /* AN INSTRUMENT MUST BE ABLE TO PREEMPT WHAT IT INSTRUMENTS (Importance = 2):
      * The thread that RUNS THE GUEST is raised to THREAD_PRIORITY_ABOVE_NORMAL (or
      * HIGHEST with execprio>=2) so the audio pump cannot preempt guest code. This
-     * thread was left at NORMAL -- and the rig is a SINGLE-CORE box. So the moment
+     * thread was left at NORMAL -- and the test machine is a SINGLE-CORE box. So the moment
      * the guest stops yielding, which is the only moment this thread exists for, it
      * is the lowest-priority runnable thread in the process and gets nothing.
      *
@@ -858,7 +858,7 @@ DWORD WINAPI DpmiWatchdog(LPVOID param)
     SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_HIGHEST);
     cursor = LogPut(cursor, "STAGE3-DPMI: watchdog started at THREAD_PRIORITY_HIGHEST; sampling host PM-loop heartbeat\r\n");
     /* - LOG, don't just serial. SerialOut writes COM1, which exists on the QEMU dev VM
-     * and NOT on the bare-metal box -- so on the rig these lines went nowhere. That
+     * and NOT on the XP test machine -- so on the test machine these lines went nowhere. That
      * cost us a wrong conclusion about Doom (session 15): the absence of wd[] samples
      * in result_doom.log was read as "it died before the first 250 ms sample", when in
      * fact the samples were never written anywhere. Every diagnostic must reach the
@@ -991,7 +991,7 @@ DWORD WINAPI DpmiWatchdog(LPVOID param)
 
             /* [CAUTION]: AND NO SerialOut IN THIS LOOP. FlushFileBuffers on a comm handle has
              * no timeout (only WriteFile does), so it is the one unbounded call on
-             * this path -- and COM1 does not exist on the bare-metal rig, so these
+             * this path -- and COM1 does not exist on the XP test machine, so these
              * lines never went anywhere useful anyway. A debug sink that can block
              * the thread it instruments is worse than no sink.
              */

@@ -15,7 +15,7 @@
  * feeds the transmitter back into the receiver. It is how every serial driver
  * ever written self-tests, it is what MSD does to decide a port exists, and it
  * needs no cable, no peer and no host device. That makes it the one part of a
- * UART whose correctness can be established completely, on a bare rig, with a
+ * UART whose correctness can be established completely, on a bare test machine, with a
  * twelve-line DOS program -- so it is implemented exactly, including the modem
  * control lines looping to the modem status lines, rather than approximated.
  * A port that passes its own loopback test is a port a driver will believe in.

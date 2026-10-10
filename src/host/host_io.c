@@ -65,7 +65,7 @@
  * host that never sees INT 5Ch never loads it).
  *
  * [INFO]: LANA NUMBERS: a DOS program says lana 0 and means "the network". NT's lanas are
- * whatever NCBENUM lists (on the rig: not necessarily 0), so DOS lana N is the Nth
+ * whatever NCBENUM lists (on the test machine: not necessarily 0), so DOS lana N is the Nth
  * enumerated one; past the end is NRC_BRIDGE (23h, invalid adapter).
  *
  * [INFO]: A Win32 lana must be RESET before use and a DOS program often never does (its
@@ -241,7 +241,7 @@ BYTE NetSubmit(PVOID context, NETBIOS_REQUEST *request)
  * this says what happened.
  *
  * [CAUTION]: THE LIST IS A FILE, NOT THE REGISTRY, AND THAT IS THE PROJECT'S OWN RULE:
- * the share's text knobs override the registry ON PURPOSE, because a test rig
+ * the share's text knobs override the registry ON PURPOSE, because a test machine
  * needs to change one without an installer. The registry path
  * (HKLM\...\VirtualDeviceDrivers, MS's own) belongs with the vddsvc veneer,
  * which ADR-0008 defers.
@@ -1168,7 +1168,7 @@ VOID IsvBop(volatile BYTE *tib, DWORD subfunction, PSTR *logCursor)
     if (subfunction == 0)                                       /* RegisterModule */
     {
         /* [CAUTION]: COPIED OUT FIRST. A V86 string lives below linear 64 KB, and GetProcAddress
-         * takes any "name" pointer under 0x10000 for an ORDINAL -- the first rig run
+         * takes any "name" pointer under 0x10000 for an ORDINAL -- the first test-machine run
          * answered ERROR_INVALID_ORDINAL for a routine stock found at once.
          */
         CHAR dllBuffer[MAX_PATH];

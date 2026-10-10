@@ -8,9 +8,8 @@
  * (pass base=NULL for the host's absolute V86 addressing, a buffer for tests).
  * Verified off-VM by tests/unit/mcb_test.c.
  *
- * SYNC: the tools/vdmhost spike still carries an inline copy of AH=48/49/4A (kept
- * in step by hand) until it is retired in favour of this module; the clean host
- * (src/) uses this file directly. Originated as a port of the spike at 4aa6f44.
+ * Originated as a port of the first spike (vdmhost) at 4aa6f44; the host uses this
+ * file directly.
  *
  * MCB layout (16 bytes, immediately preceding the block it owns):
  *   [0]    signature: 'M' (member) or 'Z' (last block in the chain)
@@ -86,7 +85,7 @@
  * #207: THE CHAIN STARTS ABOVE SysVars, AS IT DOES ON EVERY REAL DOS (Importance = 1):
  * It used to start at 0x5F (env 0x60, DOS filler 0x70), BELOW SysVars' segment 0x72.
  * MEM /D does not walk the kernel's data: it prints fixed rows and derives two of them
- * from AH=52h (measured, runs/s81_mem/oracle_memd.txt vs ntvdmex_memd3.log):
+ * from AH=52h (measured on 6.22 and on NTVDMEX, s81):
  *     00070 .. SysVars seg      "IO     System Data"   (6.22: 0070..0116 = 2,656)
  *     SysVars seg .. ES:BX-2    "MSDOS  System Data"   (6.22: 0116..0253 = 5,072)
  * With the first MCB at 0x5F the MSDOS row was 0x5F-0x72 paragraphs -- NEGATIVE,

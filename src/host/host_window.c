@@ -128,8 +128,8 @@
  * free to truncate. The window is a DOS machine whatever happens to be running
  * inside it, so the title says exactly that and nothing else.
  */
-/* User, s84: "Windows NT Virtual DOS Machine" (was "Microsoft Windows XP ..."). The rig
- * harness finds the window by this string -- scripts/bm/*.bat and rigshot.c follow it.
+/* User, s84: "Windows NT Virtual DOS Machine" (was "Microsoft Windows XP ..."). The
+ * maintainer's test harness finds the window by this string.
  */
 #define VDM_WIN_TITLE           "Windows NT Virtual DOS Machine"
 
@@ -194,7 +194,7 @@ enum                                         /* wired command IDs */
     /* The View menu's two CHECKBOX settings (the combos are ranges, below). */
     IDM_VIEW_VSYNC, IDM_VIEW_BLINK,
     IDM_VIEW_HOSTCURSOR,                     /* RETIRED by #218; kept so later ids keep their numbers */
-    /* #155. APPENDED, not beside IDM_CAP_SHOT: the rig scripts post these ids as
+    /* #155. APPENDED, not beside IDM_CAP_SHOT: the test scripts post these ids as
      * NUMBERS (textedit.bat: 14-18), and an insertion renumbers everything after it.
      */
     IDM_CAP_AUDIO, IDM_CAP_FOLDER,
@@ -634,7 +634,7 @@ static INT g_AutoFullscreenDone = 0;
  * queue call's NTSTATUS, which is the whole experimental record.
  */
 /* SYNTHETIC KEYPRESSES (qimode bit 5). The "press a key and it hangs" regression cannot be
- * reproduced from here -- the rig has no remote input -- so drive the exact same path the UI
+ * reproduced from here -- the test machine has no remote input -- so drive the exact same path the UI
  * thread uses for a real key: push a make code into the 0x60 FIFO, raise IRQ1, then the break
  * code, repeatedly. If the in-service interlock is wrong this will hang the guest just as a
  * human would, and if it is right the run completes with the key counts advancing.
@@ -2156,7 +2156,7 @@ VOID InputCaptureSet(HWND window, INT isOn)
          * mouse system-wide, and a host that wedges while captured leaves a computer
          * that is running, pingable, and completely unusable.
          * Reported by the user, 2026-09-09, twice in one session: "that basically
-         * crashed Windows, and I had to restart the rig", then "NTVDMEX jams the rig".
+         * crashed Windows, and I had to restart the test machine", then "NTVDMEX jams the test machine".
          * - AND WHAT IT BUYS IS SMALL: swallowing Win, Alt+Tab and Ctrl/Alt+Esc so the
          *   guest keeps focus. Losing that means Alt+Tab works again -- which is an
          *   ESCAPE ROUTE from a misbehaving guest, not a regression. The trade is not
@@ -3147,7 +3147,7 @@ static VOID HostFollowFrame(HWND window)
  * [CAUTION]: NOT WIN16 (-w): its windows are real desktop windows and one WOW VDM hosts several
  * tasks, so "the window lost focus" does not mean "this program is in the background".
  *
- * [CAUTION]: NOT HEADLESS: the rig harness runs unattended with nothing focused.
+ * [CAUTION]: NOT HEADLESS: the test harness runs unattended with nothing focused.
  */
 static VOID HostPauseSet(INT isOn)
 {
@@ -3704,7 +3704,7 @@ static LRESULT CALLBACK HostWindowProcedure(HWND window, UINT message, WPARAM wP
              * seconds and sets mode 13h in the last fraction of it, so a 2 s cadence
              * caught exactly ONE frame -- blank text mode, two distinct colours. At
              * ~300 ms the 40-frame budget spans a whole run and straddles the switch,
-             * which is the only way to SEE what the guest drew: the rig has no VNC and
+             * which is the only way to SEE what the guest drew: the test machine has no VNC and
              * `screendump` is QEMU-only, so these BMPs are the only eyes we have.
              */
             /* - THE CADENCE IS A KNOB, BECAUSE 40 FRAMES x 300 ms ONLY SEES THE FIRST
@@ -3726,7 +3726,7 @@ static LRESULT CALLBACK HostWindowProcedure(HWND window, UINT message, WPARAM wP
                  * `C:\Documents an07 Settings\...`, a directory that does not exist.
                  *
                  * [CAUTION]: AND IT FAILED IN SILENCE FOR THREE SESSIONS: save_bmp returns <0,
-                 * cap_seq simply does not advance, and nothing is logged. The rig has
+                 * cap_seq simply does not advance, and nothing is logged. The test machine has
                  * no VNC, so these BMPs are the only eyes on a graphical run --
                  * "the guest drew nothing" and "we could not write the file" looked
                  * identical, which is the exact failure this codebase keeps paying
@@ -4381,7 +4381,7 @@ static LRESULT CALLBACK HostWindowProcedure(HWND window, UINT message, WPARAM wP
              * The Windows equivalent of e.preventDefault() for a keystroke is a
              * WH_KEYBOARD_LL hook returning nonzero -- and we HAVE that (LowLevelKeyboardProcedure,
              * llkbd.txt) -- but it is off by default because that hook is system-wide
-             * and jammed the rig twice (see InputCaptureSet). This is the safe
+             * and jammed the test machine twice (see InputCaptureSet). This is the safe
              * equivalent: Explorer opens the Start menu on the WIN key-UP only if no
              * other key was pressed while WIN was held, so -- WIN still down here --
              * inject ONE benign keystroke. Explorer then sees WIN+Ctrl, not a lone
@@ -4990,7 +4990,7 @@ DWORD WINAPI UiThread(LPVOID argument)
     MakeStatus(g_Window, instance);                     /* native themed status bar */
     /* AND NOW RE-SIZE TO THE STATUS BAR'S REAL HEIGHT (Importance = 1):
      * The window was created against PRESENT_STATUS_HEIGHT, a compile-time GUESS at
-     * how tall a comctl32 status bar is. The real one measures 23 on the rig, not
+     * how tall a comctl32 status bar is. The real one measures 23 on the test machine, not
      * 22 -- so the client area was a pixel short of the framebuffer and the guest
      * picture lost a row at EVERY scale. Invisible until the View menu made the
      * window resize live and 1x came back one pixel taller than it started.

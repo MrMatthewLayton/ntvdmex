@@ -27,7 +27,7 @@
  * Every thunk frame carries an EPILOGUE MODE word (bp-24, WOW32_OFF_MODE) that
  * the 16-bit side always pushes as 0; the non-zero modes are for the 32-bit side
  * to choose. Returning mode 25 from 0x74 brings the CREATOR back instead -- on
- * its own stack, its BP restored, current again (session 38, on the rig). So
+ * its own stack, its BP restored, current again (session 38, on the test machine). So
  * "end this task's turn and put its creator back" is one word on the stack.
  *
  * THE THREE MOMENTS:

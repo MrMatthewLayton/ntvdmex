@@ -5,7 +5,7 @@
  * LogPut/LogHex/LogDump build text into a caller-owned buffer; LogWrite/LogAppend flush
  * it to a file. Header-only static-inline (no shared state); the writers take the
  * log path explicitly rather than hard-coding it (the spike hard-coded
- * C:\ntvdmex\vdmhost.log). Ported from tools/vdmhost/vdmhost.c. No CRT -- only
+ * C:\ntvdmex\vdmhost.log). Ported from the first spike (vdmhost). No CRT -- only
  * kernel32 file APIs, so it loads on XP.
  *
  *

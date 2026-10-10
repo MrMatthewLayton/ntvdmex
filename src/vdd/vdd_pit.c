@@ -116,7 +116,7 @@
  * tick from the CRT: load counter 0 with 0xFFFF in mode 0, count 320 hblanks on
  * 0x3DA bit 0, latch, and use 0xFFFF - latch as the reload (guest CS:15BB..1643 in
  * the real-DOS dump). The user's by-hand run got 0x4BB9 (61.5 Hz -- "the music is
- * slower"), the headless rig 0xC40C (23.8 Hz), every run a different number,
+ * slower"), the headless test machine 0xC40C (23.8 Hz), every run a different number,
  * because the read-back was `total_clocks % 0xFFFF` at the latch: uniformly random.
  * - So keep the instant of the load (`load_clocks`) and derive the counting element
  *   from the clocks since it, per mode (Intel 8254 datasheet, 231164-005):
@@ -129,7 +129,7 @@
  * [CAUTION]: s69 HISTORY: this model was shipped, blamed for a blank screen, and reverted. The
  * blank screen was never the count -- it was IRQ0 re-entering the game's timer ISR
  * (the host auto-EOI'd IRQ0; see irq0_ack in the host) once the tick was correct.
- * Both halves are now fixed; see docs/STATE.md session 70.
+ * Both halves were fixed in session 70.
  */
 static INT PitOutPin(BYTE mode, UINT32 reload, UINT64 elapsed);
 
@@ -1189,7 +1189,7 @@ INT VddPitInitialize(PVDD_BUS bus, PVOID context)
      * builds g_pit as a zeroed global and calls init; it does NOT call reset on
      * the startup path, so a default written only into reset is a default the
      * running host never gets. Putting mode 2 in reset alone left Read-Back
-     * still reporting mode 0 on the rig -- the change measured as having done
+     * still reporting mode 0 on the test machine -- the change measured as having done
      * nothing, which is how a fix that is not wired up looks.
      */
     if (!state->Mode && !state->ProgrammedMode)

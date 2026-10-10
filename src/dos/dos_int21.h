@@ -5,7 +5,7 @@
  * One BOP per INT 21h surfaces here; DosInt21() reads the guest registers from
  * the VDM_TIB, services the call (console, Win32-backed file I/O, memory via
  * dos_mcb.h, misc), and returns CF on the FLAGS the INT pushed on the V86 stack.
- * Ported from tools/vdmhost/vdmhost.c; the memory calls now delegate to the shared
+ * Ported from the first spike (vdmhost); the memory calls now delegate to the shared
  * dos_mcb.h allocator instead of an inline copy.
  *
  *

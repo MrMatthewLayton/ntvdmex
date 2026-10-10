@@ -54,8 +54,8 @@
 #define WOWUSER_GETWINDOWWORD               0x85
 #define WOWUSER_SETWINDOWWORD               0x86
 
-/* The message loop. Every id here is named by USER's own export table
- * (docs/research/wow-user-surface.md) and every one of them is a call this run
+/* The message loop. Every id here is named by USER's own export table,
+ * and every one of them is a call this run
  * already makes -- see the frontier note in src/wow/wowmsg.h.
  */
 #define WOWUSER_POSTQUITMESSAGE             0x06
@@ -198,7 +198,7 @@
 
 /* THE LAYOUT CLUSTER -- WHAT MAKES NOTEPAD USABLE. (session 44) (Importance = 3):
  * Every id here was named by the RUN and confirmed against USER's own export
- * table (`docs/research/wow-user-surface.md`), not chosen from a list: the host
+ * table, not chosen from a list: the host
  * log records each unimplemented USER call with the return address it came
  * from, and `tools/ne/neimports.py` matches that against NOTEPAD.EXE's own
  * NE import relocations. Four agreed both ways:
@@ -383,7 +383,7 @@
 /* 0x21 GetClientRect -- WHY MS PAINT LAID ITSELF OUT WRONG (Importance = 5):
  * The single call behind "the way it paints is completely wrong". Measured
  * against STOCK ntvdm running the SAME PBRUSH.EXE on the SAME box, via
- * `rigshot tree`, with both frames at an identical 1252x688 client:
+ * `tree`, with both frames at an identical 1252x688 client:
  *
  *     child      stock (the oracle)     ours
  *     pbPaint    at(128,2) 1100x604     at(7,4)    1682x976
@@ -585,7 +585,7 @@
  * palette were hidden -- so it never resized them, and they kept the size they
  * were CREATED at, which came from Paint's fallback window height of 974
  * (`SM_CYFULLSCREEN - SM_CYMENU`, the default it passes to `GetProfileInt`
- * because this rig's WIN.INI has no `[Paintbrush] height`). That is why they
+ * because this test machine's WIN.INI has no `[Paintbrush] height`). That is why they
  * were ~1.35x too large and fell below the bottom of a 688-tall client.
  *
  * [INFO]: Windows 3.1 Paintbrush can genuinely hide both (View > Tools and Linesize,

@@ -1,7 +1,7 @@
 /* NTVDMEX -- An NTVDM replacement for Microsoft Windows
  *
  * See dos_int21.h. Faithful port of the INT 21h handlers from
- * tools/vdmhost/vdmhost.c; AH=48/49/4A delegate to the shared dos_mcb.h allocator.
+ * the first spike (vdmhost); AH=48/49/4A delegate to the shared dos_mcb.h allocator.
  *
  *
  *
@@ -288,7 +288,7 @@
  *   ANSI code page: this host never calls SetFileApisToOEM, so 3Dh, 4Eh and 71xxh all
  *   agree with each other about what a byte above 7Fh names. Stock NTVDM converts DOS
  *   names with the OEM code page (its file APIs are set to OEM -- from the NT design, NOT
- *   measured here). For ASCII the two are identical, and on the rig (CP437 OEM / 1252
+ *   measured here). For ASCII the two are identical, and on the test machine (CP437 OEM / 1252
  *   ANSI) they differ only above 7Fh -- a non-ASCII long name is the place to look if a
  *   program and stock disagree about one.
  *
@@ -3438,8 +3438,8 @@ INT DosInt21(PDOS_MACHINE machine)
          * sub-function. XP's COMMAND.COM uses it as a PRIVATE QUERY with AL as a
          * selector and reads the answer out of AL -- AL=5 and AL=7 at start-up,
          * AL=2 elsewhere (the INT 21h trace). NTDOS.SYS is the only implementation,
-         * so stock ntvdm on the rig is the only oracle --
-         * `debug\rig\dosstock.bat P_INT53.COM`, which
+         * so stock ntvdm on the test machine is the only oracle --
+         * a stock-ntvdm run of P_INT53.COM, which
          * drops the IFEO key and PROVES it back. Real MS-DOS cannot be asked: the
          * documented form BUILDS a DPB from a caller-supplied BPB, and a fabricated
          * pointer HANGS 6.22 (measured twice).
@@ -3468,7 +3468,7 @@ INT DosInt21(PDOS_MACHINE machine)
          * THE SHELL'S CONTEXT, stock's AX=5305h returns AL=0 -- and our probe measured AL=1.
          *
          * **AL=5 IS CONTEXT-DEPENDENT, and the 8/8 "agreement" is an agreement about
-         * the context we measured in.** The prime suspect is the measurement rig
+         * the context we measured in.** The prime suspect is the test machine
          * itself: probe.inc reports through INT 21h AH=02 and every stock run is
          * captured with `> file`, so the oracle was asked "are you interactive?"
          * with its own output redirected. `tests/probes/dos/p_int53f.asm` asks the same
@@ -3625,7 +3625,7 @@ INT DosInt21(PDOS_MACHINE machine)
          * leaves our FindFirstFile handle alive -- and Windows will not remove a
          * directory with a search open in it. 6.22's COMMAND.COM searches inside
          * a directory on `cd`, and `rmdir` of that (empty) directory then failed
-         * with "Invalid path, not directory, or directory not empty" (runs/s91,
+         * with "Invalid path, not directory, or directory not empty" (s91,
          * chain11b). Close the guest's unfinished searches and try once more.
          */
         if (!isOk && function == DOS_FN_RMDIR)
@@ -3727,7 +3727,7 @@ INT DosInt21(PDOS_MACHINE machine)
          * This refused anything that was not a FILE, so `dup(1)` -- the first
          * step of every save-redirect-restore sequence a shell performs --
          * came back error 6 and the restore could never happen. Found by
-         * running tests/probes/dos/p_redir.asm on the rig against the same probe
+         * running tests/probes/dos/p_redir.asm on the test machine against the same probe
          * on the oracle; the two disagreed on one line:
          *   oracle : CASE=int21.45.dup.stdout AX=0005 CF=0
          *   NTVDMEX: CASE=int21.45.dup.stdout AX=0006 CF=1
@@ -4463,7 +4463,7 @@ INT DosInt21(PDOS_MACHINE machine)
              * The host hands back whatever case and length the directory was
              * entered with ("...\ntvdmex\demo\win16"). DOS's CDS holds an upper-case
              * 8.3 path, and stock NTVDM answers exactly that -- measured beside
-             * ours by tests/probes/win16/w_cwd on the rig: ours `...\ntvdmex\demo\...`,
+             * ours by tests/probes/win16/w_cwd on the test machine: ours `...\ntvdmex\demo\...`,
              * stock `...\NTVDMEX\DEMO\...`.
              */
             {   CHAR shortPath[DOS_INT21_PATH_SIZE];

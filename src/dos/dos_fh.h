@@ -60,7 +60,7 @@
  * Measured on the 6.22 oracle (tests/probes/dos/p_redir.asm):
  *   CASE=int21.45.dup.stdout SIG=CF AX=0005 CF=0
  * i.e. real DOS duplicates stdout into slot 5, which is then ALSO the console.
- * Ours returned AX=0006 CF=1 on the rig, because a device was only ever
+ * Ours returned AX=0006 CF=1 on the test machine, because a device was only ever
  * representable in a slot below 5.
  *
  * So the "is a device" bit spans the low DOS_DEV_SLOTS entries, not five. 32

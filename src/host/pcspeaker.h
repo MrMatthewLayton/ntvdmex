@@ -30,7 +30,7 @@
  *
  * [CAUTION]: OPENED LAZILY, ON THE FIRST TONE. Same rule as the disk images: a blocking
  * Win32 call at startup, before the host has a window, presents as a hang and
- * not as an error, and that has wedged the test rig before. A guest that never
+ * not as an error, and that has wedged the test machine before. A guest that never
  * beeps never opens it.
  *
  * [CAUTION]: AND IT MUST BE STOPPED ON THE WAY OUT. The driver keeps sounding after the

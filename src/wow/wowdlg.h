@@ -16,7 +16,7 @@
  * side is expected to park the caller, run the dialog, and complete the
  * original call with EndDialog's result. That is exactly what this file does.
  *
- * MEASURED CONSEQUENCE OF NOT DOING IT (s56, TASKMAN on the rig): the dialog
+ * MEASURED CONSEQUENCE OF NOT DOING IT (s56, TASKMAN on the test machine): the dialog
  * and all eight of its controls are built, `STAGE2: complete` follows, and
  * there is NO WINDOW -- because TASKMAN's WinMain is `DialogBox(...); return;`
  * and we handed control straight back to it.

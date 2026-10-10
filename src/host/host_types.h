@@ -18,7 +18,7 @@
 
 /* HOW "JUST OPEN NTVDMEX" WORKS, AND WHY IT NEEDS A FOUR-BYTE DOS PROGRAM (Importance = 1):
  * Run with no arguments -- double-clicked, or from a shortcut -- this process CANNOT
- * become a VDM. Measured on the rig, 2026-09-25:
+ * become a VDM. Measured on the test machine, 2026-09-25:
  *
  *     STAGE0: cmdline=["...\bin\ntvdmhost.exe" ]
  *     STAGE1: VdmRegisterWithKernel NTSTATUS=0xc0000022        <- STATUS_ACCESS_DENIED
@@ -52,7 +52,7 @@
 #define LAUNCH_STUB_NAME        "ntvdmex.com"
 
 /* s84: open Settings at startup on the tab numbered in this file (0 = MS-DOS), so the
- * rig can photograph each page without clicking at coordinates. Test-only.
+ * test machine can photograph each page without clicking at coordinates. Test-only.
  */
 #define SETSHOT_PATH            CFG_("setshot.txt")
 
@@ -179,7 +179,7 @@
  * at 6.22's COMMAND.COM, DOS/4GW's data segment starts at 0x2530 and its selector-table
  * pointer ([0AA2h]) is 0x2FD2: the reflect of its first raw INT 21h zeroed it, and its
  * next allocation stored through ES=0 (#GP, exit FFh). Under XP's larger shell the
- * program sits 448 bytes higher and the frame missed. Watched on the rig: the byte
+ * program sits 448 bytes higher and the frame missed. Watched on the test machine: the byte
  * went 0xAF -> 0x00 across exactly that reflect.
  * - The stack now lives in the HOST image (g_FaultStack), where no guest can own it --
  *   like the class table g_FaultTable beside it. 64 KB because the selector's limit is
@@ -560,7 +560,7 @@
  * [CAUTION]: 0x12 WAS THE SECOND CHOICE, AND THE GUEST OVERWROTE IT. Segment 0050 is not
  * ours: linear 0500..05FF is the DOS/BIOS communication area, and 0050:0010..0021
  * are BASIC's documented slots -- 0010 its DS, 0012 the saved INT 1Ch vector, 0016
- * INT 23h, 001A INT 24h. QBasic IS BASIC: measured on the rig (s71, headless
+ * INT 23h, 001A INT 24h. QBasic IS BASIC: measured on the test machine (s71, headless
  * qbclick.bat) the bytes at 0050:0012 read `3a 00 50 00` = 0050:003A, our INT 1Ch
  * stub, stored there by QB at start-up. The handler's RETF then executed data, the
  * return BOP was never reached, the callback stayed "in flight" for the whole run
@@ -584,7 +584,7 @@
  * This function used to try. It does not any more, because relaunching stock
  * ntvdm is not merely unimplemented -- it is impossible through this mechanism,
  * and leaving hopeful code here would be the "does nothing, reports success"
- * shape the rest of this project bans. What was eliminated, on the rig
+ * shape the rest of this project bans. What was eliminated, on the test machine
  * (2026-08-26, GH #129):
  *
  * 1. SPAWN `System32\ntvdm.exe` DIRECTLY -- cannot: the IFEO Debugger value is

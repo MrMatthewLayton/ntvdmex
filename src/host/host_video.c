@@ -1420,7 +1420,7 @@ VOID VideoTrapSync(VOID)
 }
 
 /* NORTH STAR 1: MODE Y'S MULTI-PLANE STORES GO THROUGH THE ADDRESS GENERATOR (Importance = 3):
- * (s80, design C of docs/research/modey-cost-measurement.md -- the user's choice.)
+ * (s80: design C of the three that were measured -- the user's choice.)
  * The remap serves a SINGLE-plane mask exactly: A0000 is that plane's own section and
  * a native store lands where the hardware would put it. Two cases have no mapping at
  * all, because one virtual page cannot store into several planes:
@@ -1498,7 +1498,7 @@ enum
  * raises an access violation that takes the whole host down -- exactly the "NTVDMEX
  * can jam the machine" failure this project has a standing rule against.
  *
- * [INFO]: MEASURED (s69, user's live rig): Lemmings' sprite blitter faulted reading guest
+ * [INFO]: MEASURED (s69, user's live test machine): Lemmings' sprite blitter faulted reading guest
  * linear 0xd4013 -- es=0xa000 in the code, yet the interpreter's effective address
  * landed in the 0xD0000 UMB hole. Whatever the root cause of the bad address, the
  * host must DEGRADE, not die: an unmapped read is 0xFF on real hardware (floating
@@ -1752,7 +1752,7 @@ INT ModeYPmNeedsInterp(VOID)
  *   (that instruction, and what follows until the next trap, runs natively -- counted),
  *   or at a cap. Everything Doom does between drawers stays on the real CPU: interpreting
  *   the whole renderer while the mask happens to be multi-plane would cost it its frame
- *   rate (docs/research/modey-cost-measurement.md).
+ *   rate (measured, s80).
  */
 #define MYPM_CAP    400000L
 
@@ -1760,7 +1760,7 @@ INT ModeYPmNeedsInterp(VOID)
  * Doom's quit prompt leaves the map mask multi-plane, so every 3DAh read of I_WaitVBL
  * trapped straight in here -- and a poll loop never RETURNS and never touches the
  * aperture, so each run went to MYPM_CAP: 400,000 interpreted instructions, ~27 ms on
- * the rig, holding g_Lock. No tick could be placed (the cooperative check is in the PM
+ * the test machine, holding g_Lock. No tick could be placed (the cooperative check is in the PM
  * loop; the async arm needs g_Lock) and the mixer waited behind the lock too. Measured:
  * 54 IRQ0s in the 1.45 s wait (37/s against the 140 Doom programmed), each 27 ms apart,
  * all at the poll loop's EIP. Real hardware takes the interrupt between instructions.
@@ -2026,7 +2026,7 @@ enum
 /* #183: WHERE DOES THE HOST'S TIME GO? A SAMPLING PROFILER, OPT-IN:
  * The interpreter's cost was estimated from the outside (instructions/s, us/s), and a
  * change aimed at the estimate -- a jump table for opcode dispatch, +42% off-VM --
- * moved the rig by nothing. So measure the inside: a thread suspends the exec thread
+ * moved the test machine by nothing. So measure the inside: a thread suspends the exec thread
  * about every millisecond, reads its EIP, and if it lies in our own image counts it in
  * a 16-byte bucket. Suspending a thread that holds a lock is safe here because the
  * sampler takes none. Buckets are RVAs; `nm -n` on the same build names them.

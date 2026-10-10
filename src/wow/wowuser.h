@@ -10,9 +10,7 @@
  * happens; two files with two dispatchers, chosen by the stub's own segment, is how
  * it stops happening.
  *
- * The surface is enumerated in docs/research/wow-user-surface.md -- 441 ids, 262 of
- * them named by USER's own export table, regenerable with
- *   tools/ne/wowmap.py guest/ne/user.exe --md
+ * USER's surface is 441 ids, 262 of them named by its own export table.
  *
  * THE Win16 WNDCLASS (documented; checked against what WOWEXEC passes):
  * 26 bytes. The block WOWEXEC hands RegisterClass reads back sensibly at every
@@ -154,7 +152,7 @@
 
 /* [CAUTION]: ONE AT A TIME, IN ORDER. The nested run that calls the program pumps Win32
  * messages, and each input event retrieved there calls this hook again -- measured
- * six deep on the rig, which reaches the nesting limit and drops events. So an
+ * six deep on the test machine, which reaches the nesting limit and drops events. So an
  * event that arrives while one is being recorded is queued and handed over, in
  * order, when the outer call returns.
  */
@@ -946,7 +944,7 @@ extern INT (*g_WowUserSend16Blob)(WORD window16, WORD message, WORD wParam, PBYT
  * This host's BIOS equipment word claims ONE parallel port and NO serial ports
  * -- deliberately, because writing COM1..COM4 into the BDA would be inventing
  * hardware nothing answers for, and COMM.DRV's LibMain returns whatever is at
- * that BDA slot (docs/STATE.md, session 36). So there is no port to open, and
+ * that BDA slot (session 36). So there is no port to open, and
  * IE_BADID (-2) is exactly what Windows returns for a port id that does not
  * exist. CARDFILE uses these to AUTODIAL; it gets a clean refusal and works
  * without a modem, which is the same thing a real machine with no COM port

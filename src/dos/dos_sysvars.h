@@ -146,7 +146,7 @@
 /* #48: THE DEVICE DRIVER CHAIN:
  * NUL (inline in SysVars) used to TERMINATE the chain: "we install no drivers". But
  * DOS's own drivers are not installed, they are IO.SYS, and every DOS has them --
- * MEM /D on 6.22 lists, in chain order (runs/s81_mem/oracle_memd.txt):
+ * MEM /D on 6.22 lists, in chain order (s81):
  *     CON AUX PRN CLOCK$ "A: - C:" COM1 LPT1 LPT2 LPT3 COM2 COM3 COM4
  * and the order of the first five is pinned by measured pointers, not by that
  * listing alone: SysVars+0x0C = CON at 0070:0023, +0x08 = CLOCK$ at 0070:0059, the

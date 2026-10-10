@@ -255,7 +255,7 @@ INT  VddInputBiosTranslate(PINPUT_STATE state, BYTE scanCode);   /* -> KB_ACT_* 
  * to out[] (room for 6) and returns how many; *no_repeat is set for the two keys
  * whose make must not be auto-repeated. [CAUTION] The Win32 side of the mapping (45h not
  * extended = Pause) is from the documentation and this file's own NumLock note,
- * not measured on the rig.
+ * not measured on the test machine.
  */
 INT  VddInputHostKeyBytes(
     BYTE rawScanCode,

@@ -3,7 +3,7 @@
  * Drive XP's kernel VDM machinery to run real-mode code in Virtual-8086
  * mode. Wraps the undocumented NtVdmControl path (memory map, VdmInitialize, the
  * self-allocated VDM_TIB, the entry CONTEXT, and the VdmStartExecution/event loop).
- * Ported from tools/vdmhost/vdmhost.c; the contract lives in ntvdm.h.
+ * Ported from the first spike (vdmhost); the contract lives in ntvdm.h.
  *
  * Sequence the host uses: VdmSetupMemory() -> VdmRegisterWithKernel() -> VdmGetTib(),
  * then build the DOS process in low memory, VdmSetEntry(), and loop on VdmRunGuest().

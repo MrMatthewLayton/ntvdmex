@@ -19,7 +19,7 @@
  * this half of the project can be measured at all.
  *
  * WHO IMPLEMENTS THE REST OF THE LOOP -- SETTLED BY A RUN (Importance = 2):
- * `docs/research/wow-user-surface.md` names 385 of USER's 441 ids and neither
+ * Of USER's 441 ids, 385 have been named, and neither
  * `TranslateMessage` nor `DispatchMessage` is among them, which reads like "they
  * are 16-bit code inside USER.EXE". [CAUTION] THE RUN REFUTES THAT. With GetMessage
  * answered, the loop turns and the two calls arrive here as ordinary WOW32 BOPs.

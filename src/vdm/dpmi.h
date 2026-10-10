@@ -4,8 +4,8 @@
  *
  * Reuses the kernel VDM monitor's protected-mode support (ADR-0004): the SAME
  * VdmStartExecution runs PM when the CONTEXT's EFLAGS.VM bit is clear and CS/SS/
- * DS/ES hold LDT selectors. See docs/research/dpmi-under-ntvdmcontrol.md for the
- * recovered mechanism (mode switch = VM bit at VTIB_EFLAGS+0x398; LDT install =
+ * DS/ES hold LDT selectors. The mechanism, as
+ * observed (mode switch = VM bit at VTIB_EFLAGS+0x398; LDT install =
  * NtVdmControl service 10 with the NtSetLdtEntries 6-dword block).
  *
  * SPIKE STATUS: proving the real->PM switch round-trips. INT 2Fh AX=1687h is

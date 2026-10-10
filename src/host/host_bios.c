@@ -33,7 +33,7 @@ static HANDLE g_Serial = INVALID_HANDLE_VALUE;
  * [CAUTION]: DO NOT CALL IT LPT1.PRN. `LPT1` is a RESERVED WIN32 DEVICE NAME -- reserved
  * with any extension, in any directory -- so CreateFileA("C:\ntvdmex\LPT1.PRN")
  * opens the actual parallel port rather than a file, and fails when nothing is
- * attached. Measured on the rig: INT 17h reported ready, the probe passed every
+ * attached. Measured on the test machine: INT 17h reported ready, the probe passed every
  * status check, and no file existed. Same list bites CON, PRN, AUX, NUL and
  * COM1-9. The name below is deliberately not on it.
  */
@@ -207,7 +207,7 @@ VOID SerialInitialize(VOID)
          * default DCB said, and on a REAL serial port with no cable a handshake line
          * that never asserts makes WriteFile wait for a peer that does not exist.
          * The dev VM has COM1 captured by QEMU and never showed it; the bare-metal
-         * rig has real hardware. A debug sink that can block the process it is
+         * test machine has real hardware. A debug sink that can block the process it is
          * instrumenting is worse than no sink.
          */
         deviceControlBlock.fOutxCtsFlow = FALSE;
@@ -331,7 +331,7 @@ INT KeyboardActionEntry(INT keyboardAction)
         if ((segment | offset) == 0)
             return -1;
 
-        /* MEASURED (p_ivtkbd, rig): a fresh VDM has IVT[05h] = F000:FF54 (`E9 3D A4`, a
+        /* MEASURED (p_ivtkbd, test machine): a fresh VDM has IVT[05h] = F000:FF54 (`E9 3D A4`, a
          * jump deeper into the VDM's ROM) and IVT[1Bh] = F000:FF53 (`CF`). The jump's
          * target is not ours to vouch for, so the VDM's ROM is never entered from
          * here: the call is made only once a guest, a TSR or a DOS has hooked the
@@ -475,7 +475,7 @@ static UINT      g_DiskStatus;      /* AH=01h's last-status byte */
 
 /* #238: THE PACER WOKE 485 TIMES A SECOND, NOT 1000. (s85):
  * Sleep(1) on XP, even under timeBeginPeriod(1), sleeps until the SECOND timer
- * interrupt -- ~2 ms. Measured on the rig (3DBench, runs/s85/3db/pace): 483-494 wakes
+ * interrupt -- ~2 ms. Measured on the test machine (3DBench, s85): 483-494 wakes
  * per second, every second. And the pacer is the only thread whose async attempt can
  * land on a guest that runs without trapping: the exec thread's own attempts bail
  * `not_in_exec` by construction (it cannot suspend itself), and the cooperative gate

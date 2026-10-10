@@ -62,7 +62,7 @@
  * and every thunk module has an id space ALL ITS OWN -- 0x81 is VkKeyScan here
  * and something else entirely in USER. Implementing them in the wrong file
  * compiles, dispatches from the wrong table, and answers a question nobody
- * asked. (docs/STATE.md: gate on the BOP's own CS.)
+ * asked. (Gate on the BOP's own CS.)
  */
 /* GetKeyNameText(lParam, lpszBuffer, nMaxCount) -- 4+4+2 = 10, reversed. */
 #define WOWKBD_GETKEYNAMETEXT               0x0085

@@ -168,7 +168,7 @@
 #define QIMODE_PATH                 CFG_("qimode.txt")
 
 /* FIXED_NTVDMSTATE ([0x714]) initial value override, hex, up to 8 digits. Absent = 0.
- * Exists so the rig can try a different starting word without a rebuild -- see the
+ * Exists so the test machine can try a different starting word without a rebuild -- see the
  * note at the VdmRegisterWithKernel call for why the word must be INITIALISED at all.
  */
 #define VDMSTATE_PATH               CFG_("vdmstate.txt")
@@ -231,7 +231,7 @@
 #define CPUREF_PATH                 CFG_("cpuref.txt")
 
 /* Decimal index into g_CpuSpeedMhz, overriding the registry for one run. This is how
- * the rig sweeps every speed in a single batch without touching HKCU.
+ * the test machine sweeps every speed in a single batch without touching HKCU.
  */
 #define CPUSPD_PATH                 CFG_(KNOB_FILE_CPUSPD)
 
@@ -268,7 +268,7 @@
  * XMS handed out more memory than the machine has, and SysVars+0x45 reported the
  * pool, so MEM and AH=88h disagreed (#48). HIMEM on 6.22 reports the extended memory
  * minus the 64 KB HMA it keeps for itself -- the oracle's MEM: total 15,232K, XMS free
- * 15,168K (runs/s81_mem/oracle_memd.txt). Derived from CMOS_EXTENDED_KB so the four views
+ * 15,168K (s81). Derived from CMOS_EXTENDED_KB so the four views
  * (88h, CMOS, SysVars+0x45, XMS) are one number and cannot drift again.
  *
  * [CAUTION]: AN OBSERVABLE CHANGE: XMS AH=08h now says 15296 KB, 1088 KB less than before. No
@@ -323,7 +323,7 @@
  * - #247: "on" now means EVERY vector -- our stubs too -- runs from the IVT (RmcsSimIntRoute
  *   in dpmi_rmcs.h). The flag restores the pre-#247 ROUTING: 21h/33h/10h host-side,
  *   everything else not run. (Not the pre-#247 marshalling: the full register write-back
- *   and the INT 21h carry stay fixed either way.) The rig's rollback lever for the routing.
+ *   and the INT 21h carry stay fixed either way.) The test machine's rollback lever for the routing.
  */
 #define SIMINTREFL_OFF_FLAG         CFG_("simintrefl_off.flag")
 
@@ -528,7 +528,7 @@ static VOID StartupLoadCpuSpeedKnob(VOID)
            * should have rejected.
            *
            * [INFO]: MEASURED 2026-09-09: `echo 13 > cpuspd.txt` came back
-           * `STAGE2: cpuspeed idx=00000001 mhz=00000ce4` -- 3300 MHz. The rig
+           * `STAGE2: cpuspeed idx=00000001 mhz=00000ce4` -- 3300 MHz. The test machine
            * sweep this knob exists to drive therefore never tested the slow half
            * of the ladder even once, and cpuswp.bat only ever swept 0-6.
            * - The CPUREF reader four lines above already does it correctly. Same
@@ -654,7 +654,7 @@ static VOID StartupBuildDriveTables(
          * GetDiskFreeSpaceA("A:\\") on a machine whose floppy drive is empty
          * raises XP's "There is no disk in drive A:" box and BLOCKS on it --
          * at host startup, with no window up and nothing in the log, so it
-         * presents as a hang and not as an error. It wedged the rig on the
+         * presents as a hang and not as an error. It wedged the test machine on the
          * first run of this code. SEM_FAILCRITICALERRORS makes the call fail
          * instead of asking, and DRIVE_REMOVABLE is skipped outright: a DPB
          * for a drive whose media can vanish is not worth the risk here.
@@ -664,7 +664,7 @@ static VOID StartupBuildDriveTables(
         /* s71: EVERY DRIVE THE MACHINE HAS, CLASSIFIED ONCE:
          * Fixed and RAM disks get a DPB measured off the volume; a REMOVABLE drive
          * (A:) gets a DPB with floppy defaults and its media is NEVER touched here
-         * (the "no disk in drive A:" box is modal and wedged the rig once); CD-ROM
+         * (the "no disk in drive A:" box is modal and wedged the test machine once); CD-ROM
          * and network drives are redirector drives -- a CDS entry with the network
          * flag and no DPB, which is how MSCDEX and a redirector present them.
          */
@@ -761,7 +761,7 @@ static VOID StartupBuildDriveTables(
          * The field is what SYSINIT read from INT 15h AH=88h at boot, before
          * HIMEM loaded (RBIL: "extended memory size in K"). 6.22 says so itself:
          * MEM /D there prints Extended 15,597,568 = 65,536 used + 15,532,032 free
-         * (runs/s81_mem/oracle_memd.txt) -- the total is this field (15232K), the
+         * (s81) -- the total is this field (15232K), the
          * free is HIMEM's AH=08h, and the 64K "used" is the HMA, which XMS never
          * counts. Ours said 16384 (the pool) while AH=88h and CMOS 17h/30h said
          * 15360 -- one machine with two sizes. Now all three are CMOS_EXTENDED_KB and the
@@ -1004,7 +1004,7 @@ static PSTR StartupConfigureAh53Answers(PSTR cursor)
      * before. This is deliberately NOT a fix.
      *
      * [CAUTION]: And it prints unconditionally, with its source -- the dosver knob had two
-     * sources and logged a line only when one of them won, which is how the rig
+     * sources and logged a line only when one of them won, which is how the test machine
      * reported DOS 5.00 to every guest for an unknown number of sessions.
      */
     { PCSTR int53Source = "built-in (measured vs stock ntvdm, 2026-09-25)";
@@ -1896,7 +1896,7 @@ static VOID StartupLoadCsrssApplication(
      * measurements: the launch matrix's stock column reported DPMI output under
      * `p_ver.com` because a run had reused a stale target.
      * - THE TEST HARNESS IS UNAFFECTED, and that is measured rather than hoped:
-     *   on the rig CSRSS hands back `title=[]` with no program name at all
+     *   on the test machine CSRSS hands back `title=[]` with no program name at all
      *   (STAGE1: program C:\test\ -- an empty tail), so the override still
      *   applies there. It stops applying exactly when someone actually asked for
      *   a program, which is the only case that was ever wrong.
@@ -1906,7 +1906,7 @@ static VOID StartupLoadCsrssApplication(
      * launcher's CreateProcess -- no title heuristics, no quote-splitting, no join
      * with the current directory, and target.txt is not consulted. The title and
      * target.txt paths below remain for the shapes where this fetch does not answer
-     * (the rig harness's dosstub.com + target.txt, where the queued command IS the
+     * (the test harness's dosstub.com + target.txt, where the queued command IS the
      * stub and the file names the real target -- kept by a stub-named check).
      */
     if (g_Fetch2Ok)
@@ -2017,7 +2017,7 @@ static VOID StartupTakeCsrssCommand(PSTR *cursorIo, DWORD *errorIo)
         cursor = LogPut(cursor, " codepage=0x");           cursor = LogHex(cursor, g_CommandInfo.CodePage);
         cursor = LogPut(cursor, "\r\n");
         /* THE VDM'S STANDARD HANDLES COME FROM CSRSS, NOT FROM INHERITANCE.
-         * (GH #131) Measured on the rig: an IFEO-substituted process gets NO
+         * (GH #131) Measured on the test machine: an IFEO-substituted process gets NO
          * inherited handles at all -- GetStdHandle reports FILE_TYPE_UNKNOWN
          * and AttachConsole(ATTACH_PARENT_PROCESS) fails -- so the obvious
          * route ("we are cmd's child, use its stdout") simply does not work
@@ -2130,7 +2130,7 @@ static VOID StartupWowSelectorStage(VOID)
 static PSTR StartupCheckInheritedVdmState(PSTR cursor)
 {
     /* [WARNING] FIXED_NTVDMSTATE ([0x714]) IS INHERITED GARBAGE UNTIL SOMEONE WRITES IT.
-     * (2026-09-12: "no DOS app runs on the rig" after a REBOOT, host gone in <1 s.)
+     * (2026-09-12: "no DOS app runs on the test machine" after a REBOOT, host gone in <1 s.)
      * VdmInitialize does not define this word; it holds whatever the machine's
      * real-mode boot left in physical low memory, so it changes PER BOOT. Since the
      * Sep 9 boot it read 0xc0003232 and everything worked; after this morning's
@@ -2248,7 +2248,7 @@ static INT StartupLatchWowLaunch(PSTR *cursorIo, CHAR *report, INT *exitCodeOut)
      * DOS, so our IFEO Debugger hook catches both -- and we implement only the DOS
      * half. Left unhandled, installing NTVDMEX breaks every Win16 program on the
      * machine. This is the guard that makes "leave it installed" safe.
-     * - MEASURED, not assumed (both captured on the rig, 2026-08-26):
+     * - MEASURED, not assumed (both captured on the test machine, 2026-08-26):
      *   DOS : ntvdmhost.exe "...\ntvdm.exe" -f -i20
      *   WOW : ntvdmhost.exe "...\ntvdm.exe" -f -i1 -w -a ...\krnl386.exe
      *   `-w` is the discriminator and `-a <krnl386>` is the WOW bootstrap. A second,
@@ -2323,7 +2323,7 @@ INT StartupClaimInstance(INT *exitCodeOut)
      * ERROR_ALREADY_EXISTS whenever cfg\ exists -- i.e. always, after the first run
      * -- and CreateMutexA does NOT clear the last-error value when it succeeds. So
      * the guard read the DIRECTORY's error, concluded another host was running, and
-     * exited: the rig went silent, no log at all, and the run timed out.
+     * exited: the test machine went silent, no log at all, and the run timed out.
      * Clear it first and latch it immediately. Same do-nothing-and-look-fine shape
      * as everything else this file warns about.
      */
@@ -2344,7 +2344,7 @@ INT StartupClaimInstance(INT *exitCodeOut)
      * Stock XP runs one ntvdm.exe per DOS window, and so do we now. The mutex below
      * was a one-host-only guard (s63); it is now a CLAIM ON AN INSTANCE NUMBER. The
      * first host takes instance 1 under the original name and changes nothing --
-     * same log, same debug\out\, so the rig harness is untouched. A host started
+     * same log, same debug\out\, so the test harness is untouched. A host started
      * while it runs takes the lowest free number N and writes to debug\out\N\.
      * - What the old guard protected is covered elsewhere now: the keyboard hook and
      *   the cursor clip are held only while a window has captured the mouse (and only
@@ -2458,7 +2458,7 @@ INT StartupRunInstallVerb(INT *exitCodeOut)
             /* [CAUTION]: `verb == 0`, NOT `verb != 2`. The first cut wrote the latter, which
              * makes INSTALL and UNINSTALL both ask to be installed -- and it
              * reported "INSTALLED" cheerfully while doing it, because the message
-             * is composed from the same wrong flag. Caught on the rig by the
+             * is composed from the same wrong flag. Caught on the test machine by the
              * BEHAVIOURAL half of the gate, not by the registry read.
              */
             INT isOk;
@@ -2530,8 +2530,8 @@ static VOID StartupLoadTarget(
             CloseHandle(thread);
             tempPath[tempLength < sizeof(tempPath) ? tempLength : sizeof(tempPath) - 1] = 0;
             /* [CAUTION] A PROGRAM PATH MAY CONTAIN SPACES, AND THIS SPLIT ON THE FIRST ONE.
-             * Every path the rig used to hand us was C:\game\X.EXE or C:\test\X.COM,
-             * so "first space starts the arguments" was never wrong -- until the rig
+             * Every path the test machine used to hand us was C:\game\X.EXE or C:\test\X.COM,
+             * so "first space starts the arguments" was never wrong -- until the test machine
              * moved into the share folder, whose path contains "Documents and
              * Settings". Measured, first run after the move:
              *
@@ -2668,7 +2668,7 @@ static VOID StartupFetchWowCommand(
      * `ntvdm -f -i<n> -w -a krnl386.exe`, the first fetch above returns FALSE
      * err=0x57 (measured, s3x), and until today the name came ONLY from
      * cfg\target.txt -- the harness's channel -- so on any machine without
-     * that file a double-clicked Win16 program ran nothing, and on the rig it
+     * that file a double-clicked Win16 program ran nothing, and on the test machine it
      * ran whatever the file happened to name last. Stock WOW gets it exactly
      * the way stock DOS does: WOWEXEC's WowGetNextVDMCommand (WOW32 0x70) is
      * wow32.dll calling GetNextVDMCommand with VDM_FLAG_WOW, and CSRSS answers
@@ -2703,7 +2703,7 @@ static VOID StartupFetchWowCommand(
     commandInfo2.Reserved = reservedBuffer2;
     commandInfo2.ReservedLen = sizeof reservedBuffer2;
     commandInfo2.StartupInfo.cb = sizeof(STARTUPINFOA);
-    /* - THE SHAPE IS MEASURED, NOT ASSUMED (rig, s73). WOW|FIRST|DONT_WAIT alone
+    /* - THE SHAPE IS MEASURED, NOT ASSUMED (test machine, s73). WOW|FIRST|DONT_WAIT alone
      * answers FALSE err=0x490 (ERROR_NOT_FOUND), with either task id. What
      * answers TRUE is GET_FIRST_COMMAND|WOW -- the same handshake stock ntvdm's
      * cmdGetStartInfo makes for DOS, and like the DOS one it fills Title/CurDir
@@ -3048,7 +3048,7 @@ VOID StartupStartGuest(
     /* Session 11: the kernel's deliverability test for a V86 frame on a VME CPU follows
      * EFLAGS.VIF, not IF (observed: VIP set and delivery deferred). Starting the guest with
      * VIF clear makes every hardware interrupt undeliverable from the kernel's point of
-     * view -- it just sets VIP and defers. Opt-in until the rig confirms it.
+     * view -- it just sets VIP and defers. Opt-in until the test machine confirms it.
      */
     if (g_QiVif)
         VDM_REG(tib, VTIB_EFLAGS) |= EFLAGS_VIF;
@@ -3741,7 +3741,7 @@ PSTR StartupAttachDevices(PSTR cursor)
      * 3F0h-3F7h were claimed by nothing, so the Main Status Register read FFh
      * -- RQM=1 with DIO=1 -- and the datasheet's own command-write loop
      * (`and al,0C0h / cmp al,80h / jne`) never matched and never exited.
-     * MEASURED on the rig before this existed: fdc.cmdwait = 01C0 here against
+     * MEASURED on the test machine before this existed: fdc.cmdwait = 01C0 here against
      * 0080 on 6.22/QEMU and on PCem's real AMI BIOS alike. Same shape as the
      * MC146818's UIP bit two devices above. IRQ6 stays dormant unless a guest
      * both gates it through DOR bit 3 and unmasks it at the PIC, which starts
@@ -3853,7 +3853,7 @@ PSTR StartupAttachDevices(PSTR cursor)
       g_Comm.Ports[1].Irq = COMM_COM2_IRQ;
       g_Comm.Ports[1].IsFitted = 1;
       /* #245 (s90): COM3 AND COM4 ARE FITTED BECAUSE STOCK DECLARES THEM. Measured
-       * with tests/probes/dos/p_com34 under XP's own NTVDM on the rig: INT 11h
+       * with tests/probes/dos/p_com34 under XP's own NTVDM on the test machine: INT 11h
        * AX=C823 (FOUR serial ports, bits 9-11) and BDA 0040:0000 = 03F8 02F8 03E8
        * 02E8. The question #181 left open is answered by the oracle that defines
        * "ntvdm superset", and the device has had the slots since s85.
@@ -4296,7 +4296,7 @@ VOID StartupBuildDos(
      * that INTs it to 0000:0000, where it executes the interrupt vector table
      * itself as code. Point any such vector at the shared IRET stub.
      * MEASURED BEFORE FIXING, and the measurement narrowed the fix: on the
-     * bare-metal rig most unclaimed vectors are NOT null -- they carry the VDM's
+     * XP test machine most unclaimed vectors are NOT null -- they carry the VDM's
      * own BIOS entries (INT 13h read F000:5595, INT 11h F000:F84D). Planting over
      * those would swap a working handler for a bare IRET, i.e. a silent
      * "success", which is the very failure mode this issue exists to remove. So
@@ -4411,7 +4411,7 @@ VOID StartupBuildDos(
          * from cmd.exe, or a user typing `command` there. It is not "the shell we
          * chose", so the rule above did not apply, and on the default 6.22 it said
          * "Incorrect DOS version" and quit where stock runs it (launch matrix row 5,
-         * runs/s91/chain18b). Same image test and same per-process 5.00 as the
+         * s91). Same image test and same per-process 5.00 as the
          * EXEC path gives a second XP shell; the name check is the second factor
          * that keeps an innocent guest from being told DOS 5.
          */
@@ -4424,7 +4424,7 @@ VOID StartupBuildDos(
     /* SAY WHICH VERSION IS IN FORCE, AND WHERE IT CAME FROM. EVERY RUN (Importance = 1):
      * This printed a line ONLY when `dosver.txt` overrode, so the persistent source
      * -- HKCU\Software\NTVDMEX\DosVersionMajor/Minor, written by the Settings dialog
-     * -- was completely silent. The rig was found reporting **5.00 to every DOS
+     * -- was completely silent. The test machine was found reporting **5.00 to every DOS
      * guest** from that registry value, with no `dosver.txt` anywhere, on a project
      * whose entire parity method diffs against a 6.22 oracle (`p_ver.com`:
      * `int21.30 AX=0005`). Deleting the file, which is what every note about this
@@ -4580,7 +4580,7 @@ VOID StartupLoadProgram(
      * answer is the second one. `COMMAND.COM` IS the shell; it becomes the guest like
      * any other DOS program, and MS-DOS 6.22's copy already works here: banner,
      * prompt, `ver`, and a real `dir` listing with volume serial and free space
-     * (measured on the rig, s78).
+     * (measured on the test machine, s78).
      *
      * [CAUTION]: STRICTLY BELOW EVERYTHING ELSE, and that placement is the whole design. CSRSS's
      * AppName, `target.txt`, an absolute title and a relative title have all been
@@ -4844,7 +4844,7 @@ INT StartupRegisterVdm(
      * and reported a clean exit: the package smoke test passed without running the
      * self-test. Stock ntvdm consumes the real command in its exec-BOP path with a
      * second GetNextVDMCommand, VDM_FLAG_DOS | VDM_FLAG_FIRST_TASK.
-     * - MEASURED on the rig, both launch shapes (STAGE1: fetch2 lines, s72):
+     * - MEASURED on the test machine, both launch shapes (STAGE1: fetch2 lines, s72):
      *   AppName = C:\DOCUME~1\...\bm\selftest.com   (full short path, AppLen incl. NUL)
      *   CmdLine = "hello world\r\n"                     (the tail ONLY; "\r\n" when none)
      *   CurDirectory = the launcher's cwd; Env = its Win32 environment block (0x46c);
@@ -4908,7 +4908,7 @@ INT StartupConfigure(PSTR *cursorIo, CHAR *report, INT *exitCodeOut)
     /* NO MODAL HARDWARE-ERROR BOXES, EVER, FOR THE WHOLE PROCESS:
      * Every Win32 call that touches a drive with no media -- A: with the door
      * open, an ejected CD -- raises XP's "There is no disk in drive" box unless
-     * told not to, and that box has wedged the rig from inside host start-up
+     * told not to, and that box has wedged the test machine from inside host start-up
      * once already. Now that the guest can select and search those drives
      * (INT 21h AH=0Eh, 47h, 4Eh...), the mode must cover every call, not just
      * the two sites that wrapped it. The errors still come back as errors.
@@ -4963,7 +4963,7 @@ INT StartupConfigure(PSTR *cursorIo, CHAR *report, INT *exitCodeOut)
     /* SETTINGS FIRST, TEST FILES SECOND:
      * Load the stored configuration here, at the TOP of the knob block, so every
      * file knob below it still overrides. That ordering is the whole contract (see
-     * settings.h): the rig configures this host by writing files and re-launching,
+     * settings.h): the test machine configures this host by writing files and re-launching,
      * and a setting clicked in a dialog on that machine must never silently change
      * what a headless measurement is measuring.
      */
@@ -5402,7 +5402,7 @@ INT StartupConfigure(PSTR *cursorIo, CHAR *report, INT *exitCodeOut)
      *   distinguish the two are described in various places and this project has
      *   been bitten repeatedly by building on a documented claim instead of a
      *   measured one. Log the raw string; diff a DOS launch against a Win16 launch
-     *   on the rig; write the detector against what the diff actually shows.
+     *   on the test machine; write the detector against what the diff actually shows.
      */
     cursor = LogPut(cursor, "STAGE0: root=["); cursor = LogPut(cursor, NTVDMEX_DIR); cursor = LogPut(cursor, "] (derived from the host's own path)\r\n");
     HmaTry();

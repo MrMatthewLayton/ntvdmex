@@ -70,7 +70,7 @@
  * is exactly the case none of them has been seen to exercise. Changing it is its own
  * ticket, with its own gate.
  *
- * [CAUTION]: `reflect_on` = 0 (cfg\simintrefl_off.flag) is the pre-#247 shape, kept as the rig's
+ * [CAUTION]: `reflect_on` = 0 (cfg\simintrefl_off.flag) is the pre-#247 shape, kept as the test machine's
  * rollback lever: 21h/33h/10h host-side whoever owns them, everything else not run.
  *
  * [CAUTION]: A NULL VECTOR IS NOT RUN. 0000:0000 is the IVT itself; executing it as code is the

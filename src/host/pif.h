@@ -5,7 +5,7 @@
  * real PIF's bytes (tests/unit/pif_test.c).
  *
  * WHY. Explorer launches a .PIF by queuing the PIF ITSELF as the VDM's program
- * (measured on the rig, s85: `command fetch ... app=[C:\QB45\QB.PIF] args=[]`). Stock
+ * (measured on the test machine, s85: `command fetch ... app=[C:\QB45\QB.PIF] args=[]`). Stock
  * NTVDM reads it and runs the program it names. We handed the PIF's bytes to
  * COMMAND.COM as a program, which is the "sidescrolling cursor" the user saw, and
  * QuickBASIC's `/L` (needed for CALL ABSOLUTE) never arrived.

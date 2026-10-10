@@ -238,7 +238,7 @@
  * the last record"); Wine's EnumMetaFile16 BREAKS at META_EOF without calling,
  * i.e. 0. Either way the walk ends at EOF -- nothing after it is a record.
  *
- * [INFO]: s92, MEASURED: stock does NOT pass it -- w_mfenum under stock ntvdm on the rig
+ * [INFO]: s92, MEASURED: stock does NOT pass it -- w_mfenum under stock ntvdm on the test machine
  * makes 5 calls for a 5-record metafile, the last one 041B (Rectangle); ours made 6
  * with 0000 last. Wine had it right.
  */

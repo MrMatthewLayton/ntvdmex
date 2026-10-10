@@ -4,8 +4,8 @@
  *
  * The clean home for the declarations the DOS VDM host needs: the structures and
  * functions ntvdm.exe uses but Microsoft never published, recovered by reverse-
- * engineering XP's ntvdm/basesrv/ntoskrnl (see docs/research/ntvdmcontrol-and-v86.md
- * and ntvdmcontrol's ground-truth offsets). Promoted out of the tools/vdmhost spike
+ * engineering XP's ntvdm/basesrv/ntoskrnl, the offsets confirmed at run time. Promoted
+ * out of the first spike
  * (M2.6) so there is one documented source of truth instead of scattered globals.
  *
  * Everything here is a *declaration* (types, constants, function pointer types,
@@ -26,7 +26,7 @@
 #define VDM_GET_FIRST_COMMAND       0x100
 #define VDM_GET_ENVIRONMENT         0x400
 
-/* VDMState flags, as the code's own call shapes name them (rig, s73). */
+/* VDMState flags, as the code's own call shapes name them (test machine, s73). */
 #define VDM_FLAG_FIRST_TASK         0x01
 #define VDM_FLAG_WOW                0x02
 #define VDM_FLAG_DOS                0x04            /* Also: a DOS VDM reporting its exit */
@@ -42,8 +42,8 @@
 #define VDM_SVC_VdmInitialize       3
 #define VDM_SVC_VdmStartExecution   0               /* NtVdmControl(0, NULL) runs the V86 CONTEXT */
 
-/* VdmQueueInterrupt -- the ASYNC preemption lever (RE'd from XP ntoskrnl this session;
- * see docs/research/dpmi-under-ntvdmcontrol.md). ServiceData is NOT a pointer: it is a
+/* VdmQueueInterrupt -- the ASYNC preemption lever (its contract as observed
+ * on XP at run time). ServiceData is NOT a pointer: it is a
  * THREAD HANDLE. The target thread must be in the calling process and the process must be a VDM
  * (EPROCESS.VdmObjects set by VdmInitialize). The kernel then queues an APC to that
  * thread, which is what breaks a guest out of V86 execution without waiting for it to
@@ -69,7 +69,7 @@
  * VdmQueueInterrupt's APC consults to decide WHICH vector a pending hardware
  * interrupt becomes, and it is the only path by which the kernel will inject an
  * interrupt into a guest that is not trapping. The layout, and how the kernel
- * treats it (Kernel RE sessions; confirmed by delivery on the rig):
+ * treats it (Kernel RE sessions; confirmed by delivery on the test machine):
  *
  *   deliverable = IRR & ~(IMR | delayed);  blocked by any bit set in ISR
  *   vector      = ICA_BASE + line;  lines are scanned from ICA_HIPRI (rotation)
@@ -202,7 +202,7 @@
 /* PM-fault reflect block (GH #18, real-CPU protected mode):
  * When a raw (non-BOP) protected-mode #GP faults, the NT kernel reflects the fault
  * through this VDM_TIB block (Kernel RE sessions 4-7, confirmed by the behaviour
- * below on the rig): when the nest counter is 0 it saves the interrupted CS/EIP and
+ * below on the test machine): when the nest counter is 0 it saves the interrupted CS/EIP and
  * resumes the guest at the handler selector with EIP=0x1000:
  *   +0x634 word  nesting counter -- MUST be 0 for the "first level, save CS:EIP" path;
  *                the kernel inc's it, so the host re-arms it to 0 before each PM entry.

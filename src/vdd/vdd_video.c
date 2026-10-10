@@ -1428,7 +1428,7 @@ static BYTE VideoModeCellHeight(BYTE mode)
  * character table) and INT 1Fh (8x8 characters 80h-FFh) are pointers a program
  * READS -- to draw text itself, or to find the font the BIOS will draw with -- and
  * nothing in src/ wrote either: the IVT held whatever the VDM started with, which
- * on the rig is the real machine's BIOS, not the tables our INT 10h draws from.
+ * on the test machine is the real machine's BIOS, not the tables our INT 10h draws from.
  * Written through the bus so the off-VM battery's flat memory gets them too.
  */
 static VOID VideoSetVector(PVIDEO_STATE state, BYTE vector, WORD segment, WORD offset)
@@ -2882,7 +2882,7 @@ static VOID VideoVesa(PVIDEO_STATE state, PNTVDD_REGISTERS registers)
              * VGA compatible", as QEMU's SeaVGABIOS does) and ZARMMX stopped seeing VESA
              * at all: its VESA 1 renderer draws through the banked window at A0000, which
              * D5 set says may not exist, so it filtered out every mode and fell back to
-             * 320x200 (headless A/B, runs/s84/zarvesa/: 0xBB -> VGA, 0x9B -> 640x480).
+             * 320x200 (headless A/B, s84: 0xBB -> VGA, 0x9B -> 640x480).
              * Our window DOES work -- 4F05 banking drove ZAR's VESA 1 in s74c -- so for
              * the window D5 clear is the true answer, and it is what the period card
              * says too (Tseng ET4000 under PCem: 1Fh/1Bh, D5 clear).
@@ -3173,7 +3173,7 @@ static VOID VideoVesa(PVIDEO_STATE state, PNTVDD_REGISTERS registers)
              */
             /* #325: AND THE 256-COLOUR DEFAULT PALETTE, as a mode 13h set loads it.
              * A 4F02 left the DAC as the previous mode had it, so after a 16-colour
-             * mode (0Dh) colour 15 drew grey -- seen on the rig as a grey VESA
+             * mode (0Dh) colour 15 drew grey -- seen on the test machine as a grey VESA
              * checkerboard. AH=12h BL=31h (palette loading off) is still honoured
              * inside VideoLoadDefaultPalette.
              */
@@ -5897,7 +5897,7 @@ static VOID VideoLoadModeDefinition(PVIDEO_STATE state, BYTE mode)
          * registers are not read back from `*_reg[]` at all -- the read paths
          * answer from a live shadow, because that shadow is what the rendering
          * engine actually uses -- so the table set the file and the guest still
-         * saw the old value. MEASURED, on the rig and reproduced off-VM: after
+         * saw the old value. MEASURED, on the test machine and reproduced off-VM: after
          * INT 10h mode 3 we answered SR2=0F (want 03), CR0A/0B=06/07 (want
          * 0D/0E), GR5=00 (want 10), AR10=00 (want 0C). Five registers, 55 of the
          * VGA parity gap's 55 bytes, ONE defect.
@@ -6069,7 +6069,7 @@ static VOID VideoCrtcLineCompareUpdate(PVIDEO_STATE state)
  * harder than it does anything else: Lemmings reads 0x3DA 73.8 MILLION times in a
  * 45-second run, 1.6M/s, and in its menu phase it does essentially nothing else.
  * MEASURED: that put the per-poll cost up from 16.0ns to 20.0ns off-VM, and on the
- * rig the guest got through 77.0M polls per run before and 73.6M after -- 4.4% fewer
+ * test machine the guest got through 77.0M polls per run before and 73.6M after -- 4.4% fewer
  * in the same wall time, paid by every guest that waits on retrace.
  * The inputs change only when the guest writes the CRTC, so the answer is cached
  * there and the hot path just reads it. Same numbers, none of the arithmetic.
@@ -7372,7 +7372,7 @@ static VOID VideoStatusIn(PVOID context, WORD port, BYTE width, UINT32 *value)
          * than one blank per line boundary it crosses. So the residual stands: a
          * host stall of N lines inside a count is repaid ONE line; the rest is
          * real time the guest lost. With the interpreter port path now syncing the
-         * PIT (main.c iio_out) the rig measured 320.7..322.7 lines on four runs.
+         * PIT (main.c iio_out) the test machine measured 320.7..322.7 lines on four runs.
          * - A poll more than VIDEO_HBL_DEBT_MAX lines after the previous one is not a
          *   line counter (the attribute flip-flop reset before a palette write,
          *   once a frame) and owes nothing.
@@ -7509,7 +7509,7 @@ VOID VddVideoInstallFonts(PVIDEO_STATE state)
     VideoVbePmInstall(state);                    /* #53: the 4F0Ah block, beside them */
     /* #266: THE SAVE POINTER TABLE, AND 0040:00A8 POINTING AT IT:
      * 0040:00A8 was never written: it held whatever the VDM started with -- on the
-     * rig the real machine's BIOS tables, which describe a different card than the
+     * test machine the real machine's BIOS tables, which describe a different card than the
      * one our INT 10h programs. Layout per IBM / RBIL "Video Save Pointer Table":
      * +00 video parameter table         +04 dynamic save area (0: none)
      * +08 alpha font override (0)       +0C graphics font override (0)
@@ -7937,7 +7937,7 @@ static VOID VideoRenderCga(PVIDEO_STATE state)
  * exactly one thing: a stationary full-screen picture. That is what the test card
  * draws, what the mode-12h demos draw, and what QBasic's BUBBLES draws -- so the
  * whole planar suite passed while Lemmings' GAMEPLAY was garbled, because Lemmings
- * SCROLLS. Measured on the rig, mid-level: `IsCrtcSeen=01 CrtcStart=0x000002c2`.
+ * SCROLLS. Measured on the test machine, mid-level: `IsCrtcSeen=01 CrtcStart=0x000002c2`.
  * The game had panned 706 bytes into the buffer and we were still rendering from
  * the top of it.
  *

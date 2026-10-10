@@ -242,7 +242,7 @@ INT   g_PmWatchCount      = 0;
  * mechanisms: that one, and the cooperative DpmiInjectPmIrq() the PM loop runs (the
  * per-pass latch at #2b, and the catch-up batch on the catcher's return). Putting an
  * async-only counter next to `raises` invites reading it as the total, which is a
- * units error of exactly the kind that has cost this project rig runs before.
+ * units error of exactly the kind that has cost this project test-machine runs before.
  * Count the cooperative arm per VECTOR and print both arms against `raises`, so the
  * line answers the question it appears to answer.
  */
@@ -608,7 +608,7 @@ VOID DpmiInstall(INT index)
          * this". A descriptor WE allocate after the shadow was created is zero in the
          * shadow and non-zero in g_Ldt[], which reads as the guest having zeroed it --
          * and the sync then pushes those zeros into the real LDT, destroying a live
-         * descriptor. Measured on the rig the moment the shadow shipped: three
+         * descriptor. Measured on the test machine the moment the shadow shipped: three
          * LDTSYNC lines saying "guest wrote base=0 limit=0 acc=0" for indices the
          * guest had never touched. Keeping both sides in step here is what makes the
          * difference test mean what it says.
@@ -725,7 +725,7 @@ VOID DpmiInstallFaultTrampoline(VOID)
      * Only class 6 was filled, and a class left ZERO is a class the kernel has
      * nowhere to send -- so it terminates the VDM instead. That is not a theory:
      * session 32 measured the WOW run stopping dead and then proved, by asking the
-     * rig for a `tasklist` four seconds in, that **ntvdmhost.exe is already gone**.
+     * test machine for a `tasklist` four seconds in, that **ntvdmhost.exe is already gone**.
      * The process is killed, silently, with no fault line and no teardown line --
      * which is also the whole explanation for the "watchdog logs one sample and
      * stops" that has been on the books since session 31: wd[0] lands at 250 ms and
@@ -3852,7 +3852,7 @@ INT DpmiAsyncInjectPm(UINT irq, CONTEXT *context)
  * routine, where 0x57 is ALSO the WOW callback id, so it was logged
  * "UNIMPLEMENTED, STEPPED OVER", never delivered, and the guest re-faulted on the
  * same instruction until the loop's budget ran out.
- * - MEASURED, Sound Recorder (runs/s90/sr1_host.log): MMSYSTEM's init far-calls
+ * - MEASURED, Sound Recorder (s90): MMSYSTEM's init far-calls
  *   its segment 8 before it is loaded -- #NP, error code 0x0C44, at 0C77:041E --
  *   inside a nested run. krnl386's #NP handler is what LOADS the segment; it was
  *   never called, and the BOP was "stepped over" 309,601 times.
@@ -3915,7 +3915,7 @@ INT DpmiNestedFault(volatile BYTE *tib, DWORD event, DWORD eip)
          * (0x57 is also a WOW id) -- and the #GP at the next byte went to krnl386's
          * handler: "Application Error", the task killed. MEASURED, Media Player's
          * WM_INITDIALOG (sent through the nested run): `INT 21h AX=5700h` at
-         * 0B77:0D07, err 0x010A (runs/s92/drv/w16drive_s92mpo_host.log).
+         * 0B77:0D07, err 0x010A (s92).
          *
          * The main loop's arm, reduced to the case measured: a 16-bit, BASED code and
          * stack selector, the bytes really `CD vec`, not the FP-emulator range. The

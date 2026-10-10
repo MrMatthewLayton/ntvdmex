@@ -105,7 +105,7 @@ INT X86IsInstructionStart(const BYTE *bytes, UINT offset, UINT length, INT isDef
 /* May the `CD nn` at b[off] be rewritten to a BOP?
  *
  * - THE TWO ERRORS USED TO BE SYMMETRIC. THEY ARE NOT ANY MORE, AND THAT IS THE
- *   WHOLE OF THIS RULE.  Both failures were measured on the rig, one after the other:
+ *   WHOLE OF THIS RULE.  Both failures were measured on the test machine, one after the other:
  *     accepted a false one  -> Doom died in R_InitTextureMapping (five sessions lost)
  *     refused a real one    -> the run died inside DOS/4GW's own startup, at its
  *                              `mov ah,30h / int 21h` DOS-version check, 54,000 log

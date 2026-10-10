@@ -2261,7 +2261,7 @@ INT WowGdiCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
                 Wow32PokeWord(blob + WOWGDI_CBI_OFF_WBYTES,  (WORD)(SHORT)bitmap.bmWidthBytes);
                 blob[WOWGDI_CBI_OFF_PLANES]  = (BYTE)bitmap.bmPlanes;
                 /* [CAUTION]: REFUTED, session 45. We report bmBitsPixel as the OS
-                 * gives it -- 0x20 on this rig -- and 32bpp is a depth Win16
+                 * gives it -- 0x20 on this test machine -- and 32bpp is a depth Win16
                  * never had (it knew 1/4/8/16/24), and this is the ONLY
                  * pixel-format number MS Paint can see. Reporting 24 instead
                  * changed NOTHING: still 33 bitmaps at `planes=1 bpp=1`. So

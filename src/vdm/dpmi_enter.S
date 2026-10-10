@@ -11,7 +11,7 @@
  * CONTEXT, sets VTIB_EVENT, and resumes at our saved return address -- so from C
  * this function simply "returns" once the guest stops, like VdmRunGuest().
  *
- * Recovered from XP ntvdm (see docs/research/dpmi-under-ntvdmcontrol.md, VM run 10).
+ * Observed against XP's ntvdm at run time (VM run 10).
  * VTIB register fields: EDI=0x374 ESI=0x378 EBX=0x37C EDX=0x380 ECX=0x384 EAX=0x388
  * EBP=0x38C EIP=0x390 CS=0x394 EFLAGS=0x398 ESP=0x39C SS=0x3A0; GS=0x364 FS=0x368
  * ES=0x36C DS=0x370. Host-save CONTEXT base = TIB+0x0C. VTIB_EVENT=0x5A8. */

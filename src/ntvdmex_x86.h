@@ -342,7 +342,7 @@
  * test reads VIF, NOT IF: with VME on, a V86 frame counts as interruptible only
  * when EFlags & EFLAGS_VIF is set. A guest started with IF=1 but VIF=0 therefore looks to the
  * kernel like interrupts are disabled forever, so its interrupt-assist never delivers
- * and it just sets VIP (bit 20) and defers -- which is exactly what the rig showed.
+ * and it just sets VIP (bit 20) and defers -- which is exactly what the test machine showed.
  */
 #define EFLAGS_VIF                      0x80000
 #define EFLAGS_VIF_U                    0x00080000u

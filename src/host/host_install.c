@@ -21,7 +21,7 @@
  * We install by pointing ntvdm.exe's IFEO Debugger value at ourselves, so a
  * host that wedges on startup breaks EVERY DOS and Win16 launch on the box,
  * and the fix needs a registry edit with no working VDM to make it from.
- * Session 52 wedged the rig twice in one day, both on a blocking Win32 call
+ * Session 52 wedged the test machine twice in one day, both on a blocking Win32 call
  * before the host had a window; neither could be recovered remotely.
  * The counter is raised on every start and cleared THE MOMENT THE HOST HAS A
  * WINDOW (recovery_started, on the UI thread) -- that is the point past which the
@@ -401,7 +401,7 @@ INT InstallPerform(INT want, INT force, PSTR message, DWORD cap)
     InstallSelfPath(self, sizeof self);
     InstallRead(current, sizeof current);
     havePrevious = InstallPreviousRead(prev, sizeof prev);
-    /* #195, measured on the rig: installing from copy B saved copy A (bin\) as "the
+    /* #195, measured on the test machine: installing from copy B saved copy A (bin\) as "the
      * value to restore", so uninstalling from A "restored" A itself and then failed its
      * own read-back. A saved value that is another NTVDMEX is not somebody else's
      * setting to give back -- ignore it (and never save one, below).
@@ -525,7 +525,7 @@ INT InstallPerform(INT want, INT force, PSTR message, DWORD cap)
  * read the prose. package/smoke.bat did exactly that -- it grepped /status for
  * "installed as this machine", a sentence only /install ever prints -- so it
  * declared NTVDMEX uninstalled the moment after install.bat said otherwise. Two
- * layers that have to agree about a string, don't. (s72, found by hand on the rig.)
+ * layers that have to agree about a string, don't. (s72, found by hand on the test machine.)
  */
 INSTALL_STATE InstallStatusText(PSTR message, DWORD cap)
 {

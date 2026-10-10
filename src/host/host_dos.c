@@ -49,7 +49,7 @@
  * nothing is synthesised. Drive 0 (A:) comes from FLOPPY_IMG_PATH.
  *
  * [CAUTION]: OPENED LAZILY, ON THE FIRST DISK CALL, AND NEVER AT STARTUP. Opening media
- * at startup is how the LPT1 spool wedged the rig this morning: a blocking
+ * at startup is how the LPT1 spool wedged the test machine this morning: a blocking
  * Win32 call before the host has a window presents as a hang, not an error.
  * SetErrorMode for the same reason. A guest that never touches INT 13h never
  * pays for this and never risks it.
@@ -162,7 +162,7 @@ INT            g_BehaveDos622 = 0;
  * the process. A copy here would be a second place for the path to be, and
  * the first thing a second place does is go stale.
  *
- * [CAUTION]: THE HARNESS PATH STAYS THE FALLBACK. The rig drops FLOPPY.IMG at the
+ * [CAUTION]: THE HARNESS PATH STAYS THE FALLBACK. The test machine drops FLOPPY.IMG at the
  * literal above and re-launches; if an empty setting overrode that, every
  * headless disk measurement would start reporting "drive not ready" on a
  * machine where nothing had changed.

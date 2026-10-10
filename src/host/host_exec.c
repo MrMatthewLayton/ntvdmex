@@ -798,7 +798,7 @@ static INT NtvdmServiceGuestBop(
                  * shorter than 7 characters -> 9. Mirrored, not invented.
                  */
                 static INT namedOnce = 0;
-                /* [CAUTION]: programPathBuffer FIRST, not g_Application2. On the rig CSRSS names
+                /* [CAUTION]: programPathBuffer FIRST, not g_Application2. On the test machine CSRSS names
                  * `dosstub.com` -- the harness stub -- and `target.txt` names the
                  * real program, so g_Application2 would hand the shell the stub. programPathBuffer
                  * is what we actually LOADED, which is the program either way.
@@ -1877,7 +1877,7 @@ VOID HostRunExecLoop(
          * So in headless mode bound it by wall clock: the host self-exits, rt.bat returns,
          * the watcher survives. (The PM loop got this in v69; the real-mode loop needs it
          * too -- a real-mode hang was the one path that could still permanently wedge the
-         * rig.) GetTickCount per iteration is cheap; the loop runs once per event/BOP.
+         * test machine.) GetTickCount per iteration is cheap; the loop runs once per event/BOP.
          */
         if (g_Headless && GetTickCount() - rmStartTick > PM_HEADLESS_MS)
         {
@@ -1929,7 +1929,7 @@ VOID HostRunExecLoop(
          * we synthesise an interrupt frame ourselves -- so a guest that has interrupts
          * enabled still looks disabled to the kernel, which then just sets VIP and defers.
          * With VIP set and VIF clear the guest's next IRET faults into a dispatch that
-         * refuses to deliver and re-arms VIP: a livelock, measured on the rig as the guest
+         * refuses to deliver and re-arms VIP: a livelock, measured on the test machine as the guest
          * frozen on the IRET at DOS_HDLR_SEG:0x0003. Keeping the two flags in step is what
          * lets the kernel dispatch instead of deferring.
          */

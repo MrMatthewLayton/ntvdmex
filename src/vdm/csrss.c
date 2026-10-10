@@ -1,6 +1,6 @@
 /* NTVDMEX -- An NTVDM replacement for Microsoft Windows
  *
- * See csrss.h. Faithful port from tools/vdmhost/vdmhost.c.
+ * See csrss.h. Faithful port from the first spike (vdmhost).
  *
  *
  *

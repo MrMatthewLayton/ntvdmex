@@ -972,7 +972,7 @@ static INT DpmiHandleReflectedFault(
          * `exec loop exited -> flushing` that read exactly like the client
          * choosing to exit. It was not quitting; we were stopping it.
          *
-         * [INFO]: THE FRAME IS ALREADY BUILT, AND NOT BY US. Measured on the rig
+         * [INFO]: THE FRAME IS ALREADY BUILT, AND NOT BY US. Measured on the test machine
          * (session 34, against krnl386's deliberate `0f ff` at 0x01cf:0xc5f0
          * whose every field was known in advance): the kernel switches to
          * [TIB+0x638]:0x1000, pushes 0x10 bytes, and what it pushes IS the
@@ -2144,7 +2144,7 @@ static VOID DpmiRunClient(
          * s84 opened the arm on `g_PmTickOwed > 0` as well, on the theory
          * that the quit wait's backlog was stuck here. The real cause was
          * ModeYPmRun holding g_Lock (stop reason `irq`), and isolated on the
-         * menu-quit route (runs/s85/owed/, interleaved x3) the owed-count arm
+         * menu-quit route (s85, interleaved x3) the owed-count arm
          * bought nothing: quit window 139/s either way, REPLAYED_LOUD 48-50
          * with it against 44-45 without, plus ~5,800 injections declined per
          * run in DOS/4GW's 16-bit start-up. Latch only.

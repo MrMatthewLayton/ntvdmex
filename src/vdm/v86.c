@@ -1,8 +1,8 @@
 /* NTVDMEX -- An NTVDM replacement for Microsoft Windows
  *
  * See v86.h. Faithful port of the V86/NtVdmControl glue from the
- * tools/vdmhost spike (offsets/sequences recovered from XP ntvdm; see
- * docs/research/ntvdmcontrol-and-v86.md).
+ * first spike (offsets and sequences confirmed at run time against
+ * XP's ntvdm).
  *
  *
  *

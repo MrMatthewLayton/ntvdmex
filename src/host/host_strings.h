@@ -6,7 +6,7 @@
  * environment names the host reads or writes, and the text the user reads: menus, message
  * boxes, the Settings dialog. One name per string, defined once (docs/STYLE.md section 3).
  *
- * Not here: log and trace text, whose wording IS the log format (rig scripts parse it); a
+ * Not here: log and trace text, whose wording IS the log format (test scripts parse it); a
  * long message written where it is shown (its #define is at the site); string tables kept
  * as tables (a switch from a setting to its explanation, the Win16 module list).
  *
@@ -51,7 +51,7 @@
 
 /* Files, programs and environment names: */
 #define HOST_OUT_SUBDIRECTORY                   "debug\\out\\"
-#define HOST_HARNESS_STUB_NAME                  "dosstub.com"           /* The rig harness's launch stub */
+#define HOST_HARNESS_STUB_NAME                  "dosstub.com"           /* The test harness's launch stub */
 #define HOST_COMMAND_COM                        "COMMAND.COM"
 #define HOST_CMD_EXE                            "CMD.EXE"
 #define HOST_DEFAULT_SHELL_PATH                 "C:\\WINDOWS\\SYSTEM32\\COMMAND.COM"

@@ -243,7 +243,7 @@ INT WowCommdlgCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
         /* s90: NULL means "the current directory" in Win16's COMMDLG -- that is where
          * Windows 3.1 always opened. XP's comdlg32 instead prefers the folder last used
          * by this EXECUTABLE, and every Win16 program here is ntvdmhost.exe, so Sound
-         * Recorder's Open dialog came up in Doom's folder (runs/s90/srp0.png). The
+         * Recorder's Open dialog came up in Doom's folder (s90). The
          * guest's DOS current directory IS this process's (INT 21h AH=47 reads it).
          */
         /* s91: an EMPTY string means the same -- Media Player passes one, and
@@ -709,7 +709,7 @@ INT WowCommdlgCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
      *
      * [CAUTION]: PRINTER FONTS NEED A PRINTER DC, and hDC here is a Win16 GDI token for a
      * DC this host may not have; the flag is narrowed to screen fonts and the
-     * line says so. On a machine with no printer (the rig) stock's comdlg32
+     * line says so. On a machine with no printer (the test machine) stock's comdlg32
      * would show screen fonts only anyway.
      *
      * [CAUTION]: CF_USESTYLE's lpszStyle is a guest buffer comdlg32 writes into directly.

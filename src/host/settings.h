@@ -11,7 +11,7 @@
  *
  * THE TEXT FILES STILL WIN, AND THAT IS DELIBERATE:
  * Precedence is: built-in default  <  registry  <  text file on the share.
- * The rig drives this host by writing those files and re-launching it; if the
+ * The test machine drives this host by writing those files and re-launching it; if the
  * registry silently overrode them, every headless measurement would start reporting
  * whatever was last clicked in a dialog on that machine -- which is exactly the class
  * of "the instrument lied" failure this project keeps paying for. A file present on
@@ -164,7 +164,7 @@ typedef struct _SET_STR_DEF
 } SET_STR_DEF;
 
 /* WHERE A VALUE CAME FROM. (GH #144):
- * The DOS version once read 5.00 on every rig run from a registry value nobody had
+ * The DOS version once read 5.00 on every test-machine run from a registry value nobody had
  * looked at, because only the FILE override ever printed a line. Every row now
  * carries its source so the startup log can say it for all of them. A file override
  * is recorded by the host (it changes a machine variable, not v[]); see

@@ -25,7 +25,7 @@
  * clear is also "wait"), so there is no default that saves it -- only the chip.
  *
  * [INFO]: MEASURED (p_fdc.asm, 2026-09-23) before a line of this was written, on the
- * bare-metal rig against two oracles that agree:
+ * XP test machine against two oracles that agree:
  *
  *     case            6.22/QEMU   PCem      NTVDMEX
  *     fdc.msr.idle    0080        0080      00FF

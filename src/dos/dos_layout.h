@@ -115,8 +115,8 @@
  * was filed as UPPER MEMORY -- which is the phantom `Upper 1,663K` with our real free block sitting in it as `Largest
  * free upper memory block 548K`, and `Conventional Free 0K` underneath.
  *
- * MS-DOS 6.22 has **0xFFFF** here (`docs/research/evidence/lolprobe-msdos622.txt`,
- * dump offset 0x8C = FF FF), i.e. "no block is upper", which is the truth on a
+ * MS-DOS 6.22 has **0xFFFF** here (the List-of-Lists probe's dump,
+ * offset 0x8C = FF FF), i.e. "no block is upper", which is the truth on a
  * machine with no UMB provider. It is the truth here too: we refuse AH=5803 for
  * exactly that reason.
  *
@@ -252,7 +252,7 @@
  * krnl386's own.  So every target must live in the SysVars segment.
  * Measured off stock ntvdm, not guessed: `lolprobe` recorded [ES:BX+6A]=0x1482
  * with a table of 4-byte entries whose segment half is the SysVars segment
- * every time (docs/research/evidence/lolprobe-stock-ntvdm.txt).
+ * every time (the List-of-Lists probe on stock ntvdm).
  *
  * [CAUTION]: WHY THIS IS NOT OPTIONAL AND WHY ITS ABSENCE WAS DANGEROUS. The whole SysVars block
  * used to be zeroed except the MCB head, so [BX+0x6A] read 0 and the six "pointers" became offsets
@@ -368,8 +368,7 @@
  *
  * INT 2Fh AX=122Eh: the tables XP's COMMAND.COM asks for at startup:
  * Five selectors (DL = 0,2,4,6,8); it zeroes ES:DI, calls, and stores whatever
- * comes back.  MEASURED on two real Microsoft kernels (tests/probes/dos/p_int2f.asm,
- * docs/research/xp-command-com.md):
+ * comes back.  MEASURED on two real Microsoft kernels (tests/probes/dos/p_int2f.asm):
  *
  *     DL=0  0001:0D8F      DL=2  0001:0B3B      DL=4  0001:0D8F   (== DL=0)
  *     DL=6  0000:0000      DL=8  03E7:0188

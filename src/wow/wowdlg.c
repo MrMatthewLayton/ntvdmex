@@ -69,7 +69,7 @@ static INT WowDlgPump(INT budget, PINT traceBudget)
         /* #305 M11 (s91): THE DIALOG MANAGER'S KEYS. DialogBox's own loop gives a modal
          * dialog Tab / Shift+Tab between its controls, Enter = the default button and
          * Esc = IDCANCEL -- without the program asking. This loop dispatched keys raw,
-         * so Esc did nothing in TASKMAN's Task List (runs/s91/chain25). The controls are
+         * so Esc did nothing in TASKMAN's Task List (s91). The controls are
          * real windows, so the OS's IsDialogMessage does the work; what it generates
          * (WM_COMMAND IDCANCEL/IDOK) reaches the dialog procedure through WowWinProc
          * like a click does. Keyboard messages only, and only for the topmost modal
@@ -407,7 +407,7 @@ INT WowDlgStep(
              * rather than at CreateWindow is what stops a guest's own
              * `MoveWindow(..., bRepaint=FALSE)` from stranding a painted
              * window at the position it started from; see the long note at the
-             * CreateWindowEx call in wowuser.h, and the rig screenshot that
+             * CreateWindowEx call in wowuser.h, and the test-machine screenshot that
              * had one Task List's pixels in the corner and another's wallpaper
              * showing through its client.
              *
@@ -425,7 +425,7 @@ INT WowDlgStep(
                 /* s93: AND THE FOCUS GOES TO THE FIRST TAB STOP, unless the
                  * procedure placed it itself (it then returns FALSE, and the focus
                  * is already inside the dialog). The note above assumed this was
-                 * the case we were in; the rig said otherwise: Program Manager's
+                 * the case we were in; the test machine said otherwise: Program Manager's
                  * "Program Item Properties" kept the focus on the dialog window,
                  * so the first keys typed were lost and Tab only then reached
                  * Description. WM_NEXTDLGCTL is the dialog manager's own way in,

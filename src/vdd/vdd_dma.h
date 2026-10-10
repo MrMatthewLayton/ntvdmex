@@ -139,8 +139,8 @@ typedef struct _DMA_STATE
      * [INFO]: MEASURED (p_dma.asm dma.page.spare80, 2026-09-23): dosbox-x AND PCem, on
      * a real AMI BIOS, both read back a written 0x5A. Only 6.22-under-QEMU
      * answers 0xFF. [CAUTION] That is NOT "QEMU is the outlier" as a general rule --
-     * counted over a session it is not even true; see
-     * docs/research/oracle-disagreements.md.
+     * counted over a session it is not even true -- the
+     * oracles disagree on it.
      *
      * [CAUTION]: We answered 0xFF, which describes an EMPTY BUS rather than a machine.
      * Indexed by the low nibble of the port; the mapped ports never reach it.

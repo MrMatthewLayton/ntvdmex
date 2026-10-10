@@ -301,7 +301,7 @@ static PSTR ReportCpuSpeedGovernor(PSTR cursor)
      * setting is reachable (below the port-trap ceiling and inside the hold cap),
      * disagreeing in the open when it is not. The control law that ties them
      * together is CpuSpeedStep, proven by a DETERMINISTIC test off-hardware
-     * (tests/unit/cpuspeed_test.c) rather than argued from a rig number read
+     * (tests/unit/cpuspeed_test.c) rather than argued from a test-machine number read
      * through the guest's own throttled clock.
      *
      * [INFO]: run_ms IS TRUE GUEST EXECUTION now: dexec is sampled resume-to-suspend, so
@@ -815,7 +815,7 @@ static PSTR ReportSbReplay(PSTR cursor, PSTR const base)
      * 8 KB of headroom, and the 24-line sbblk ledger added above eats most of what
      * was left. The first cut of this line was written into the overflow and simply
      * never appeared -- while the line immediately AFTER it did, which reads exactly
-     * like "the code did not run" and cost a wasted pair of rig runs to tell apart
+     * like "the code did not run" and cost a wasted pair of test-machine runs to tell apart
      * from a stale binary. Two counters in the same basic block cannot disagree
      * about whether they executed; when they appear to, suspect the transport.
      */
@@ -1729,7 +1729,7 @@ static PSTR ReportPlanarSites(PSTR cursor, PSTR const base, PCSTR const reportEn
              */
             /* [CAUTION]: FLUSH FIRST. This block is near the END of a report that shares one
              * char[8192], and the off-screen list above it can run to dozens of lines.
-             * On its first rig run the buffer guard below fired after the FIRST entry
+             * On its first test-machine run the buffer guard below fired after the FIRST entry
              * and silently dropped the other nine -- the table had the answer and the
              * log did not. It was caught only because `seq` is printed beside the per
              * entry counts and 12800 did not add up to 19984; without that cross-check

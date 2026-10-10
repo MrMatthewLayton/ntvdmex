@@ -497,7 +497,7 @@ INT AudioWaveStart(PAUDIO_WAVE wave, UINT32 sampleHz, PAUDIO_WAVE_FILL_ROUTINE f
     UINT32 wantBuffers = wave->BufferCount;
     UINT32 wantFrames = wave->FrameCount;
     INT wantsDirectSound = wave->WantsDirectSound;                  /* #234: preserved like the lead */
-    INT isForcedSilent = wave->IsForcedSilent;  /* #132: ditto -- the rig caught it wiped */
+    INT isForcedSilent = wave->IsForcedSilent;  /* #132: ditto -- the test machine caught it wiped */
     INT midiChoice = wave->MidiChoice;          /* #136: ditto */
 
     for (byteIndex = 0; byteIndex < sizeof(*wave); ++byteIndex)

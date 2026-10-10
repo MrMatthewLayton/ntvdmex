@@ -422,7 +422,7 @@ static WORD  g_WowShadowSelector = 0;
  * host's record of the REAL LDT.
  * Diffing against g_Ldt[] forces a lie whenever the two cannot be made equal:
  * krnl386 writes free-list links with access byte 0x0F, the kernel rejects them
- * (`INSTALL FAILED st=0xc000011a`, four per run on the rig), and the old code
+ * (`INSTALL FAILED st=0xc000011a`, four per run on the test machine), and the old code
  * then updated g_Ldt[] to match the shadow ANYWAY -- purely so the next pass
  * would not retry forever. From that moment g_Ldt[] claimed a base and limit
  * the CPU had never been told about, and DpmiSelectorBase() -- which every part of
@@ -1844,7 +1844,7 @@ INT WowPlaceV86(
      * measured). So the LOADER has to put the header there.
      *
      * [INFO]: AND THE ADDRESS IS FIXED, WHICH IS WHAT MAKES THIS POSSIBLE. Measured on the
-     * rig: SS:SP is 0x1f:0x0FFE at three breakpoints across its bring-up -- the entry SP,
+     * test machine: SS:SP is 0x1f:0x0FFE at three breakpoints across its bring-up -- the entry SP,
      * unchanged, because krnl386's calls up to that point are balanced. (An earlier
      * reading of a different layout suggested the base was call-depth dependent and
      * therefore unplaceable; it was not, and the three-point measurement is what
@@ -3779,7 +3779,7 @@ LRESULT WowControlColour(
     }
 
     /* THE DEFAULT A 3.x PROGRAM GETS, as stock's USER32 gives it (measured against
-     * stock on the rig, s89): edit and list boxes are the WINDOW colour; static
+     * stock on the test machine, s89): edit and list boxes are the WINDOW colour; static
      * text and buttons are the 3-D face inside a DIALOG (16-bit dialogs get the 3-D
      * look when its template names a font -- Charmap's labels) and the WINDOW
      * colour otherwise (Calc's display; Cardfile's card bar, Packager's headers). Scroll bars and the dialog's own

@@ -57,7 +57,7 @@
  * (4.05, an SB16, which would be T6) and it has done since the string was
  * written. It is left alone deliberately: Doom's sound is user-confirmed against
  * this exact string, T is not what a driver uses to find the card, and changing
- * it is a measurement to make on the rig, not a tidy-up to slip into a change
+ * it is a measurement to make on the test machine, not a tidy-up to slip into a change
  * that cannot be gated there. Recorded, not silently corrected.
  */
 #define DOS_SB_DEFAULT_TYPE         3

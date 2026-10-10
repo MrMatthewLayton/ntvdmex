@@ -8,7 +8,7 @@
  * startup then every DOS and every Win16 launch on the machine is broken, and
  * the fix requires editing the registry with no working VDM to do it from.
  *
- * [CAUTION]: THIS IS NOT HYPOTHETICAL. Session 52 wedged the bare-metal rig TWICE in one
+ * [CAUTION]: THIS IS NOT HYPOTHETICAL. Session 52 wedged the XP test machine TWICE in one
  * day, both times on a blocking Win32 call before the host had a window:
  * GetDiskFreeSpaceA on an empty floppy drive, and a modal "cannot find the
  * file" box under stock ntvdm. Neither could be recovered remotely -- kill,

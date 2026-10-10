@@ -40,7 +40,7 @@
  * project's 842 checks, and every defect in it was found by the user's eye.
  *
  * [CAUTION]: NOTHING IN HERE MAY TOUCH THE HOST OR THE GUEST. The moment a function here
- * needs a handle table or guest memory it stops being testable without a rig,
+ * needs a handle table or guest memory it stops being testable without a test machine,
  * which is the entire point of the file. Fetch the bytes in the caller, pass
  * them in.
  *

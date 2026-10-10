@@ -792,7 +792,7 @@ INT AsyncInjectIrq(UINT irq)
          * ba927ac measurement ("Skyroads EOIs only ~36 times a second against a 180 Hz
          * timer ... modelling IRQ0's in-service bit strictly starves it, 540 -> 15
          * ticks per 3 s") was taken before our INT 08h BOP sent the BIOS's EOI; with
-         * that EOI in place, strict IRQ0 delivers every raise on Skyroads (s70 rig:
+         * that EOI in place, strict IRQ0 delivers every raise on Skyroads (s70 test machine:
          * raises == strict acks, 0 blocked, 0 timeouts, V86STR/ui_gap on baseline).
          * And "gated by the guest's own IF discipline" was the bug: Lemmings' timer
          * ISR does `sti` before it spins for the retrace. See Irq0Ack.
@@ -1104,10 +1104,10 @@ VOID HostIrqSink(PVOID context, BYTE irq)
          * (intpend stayed 1, irqn_inj stayed 0). Session 11's RE found the missing
          * half -- NtVdmControl(VdmQueueInterrupt, thread) queues an APC that forces
          * the thread out of V86 so those bits are read. Gated on QIMODE_PATH until the
-         * rig says which of the kernel's two delivery paths we land on.
+         * test machine says which of the kernel's two delivery paths we land on.
          */
         /* ...AND SETTING IT UNCONDITIONALLY IS WORSE THAN USELESS (measured, session 11,
-         * qirq.com on the rig): VDM_INT_HARDWARE tells the kernel a hardware interrupt
+         * qirq.com on the test machine): VDM_INT_HARDWARE tells the kernel a hardware interrupt
          * is pending and to dispatch it through its own virtual ICA -- which we have
          * never programmed (v86.c registers zeroed buffers). On VME hardware the kernel
          * then sets EFLAGS.VIP and the guest's next IRET/STI faults into a dispatch that

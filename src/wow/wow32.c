@@ -760,7 +760,7 @@ INT Wow32Call(PWOW32_FRAME frame, PWOW32_DOSDATA dosData)
      * [CAUTION]: Arguments are Pascal order: FIRST pushed is the HIGHEST offset, so
      * lpFileName (pushed last) is at 0, lpAppName at 18.
      *
-     * [INFO]: Answer it with the REAL Win32 call against the REAL file. On this rig
+     * [INFO]: Answer it with the REAL Win32 call against the REAL file. On this test machine
      * `C:\WINDOWS\SYSTEM.INI` has no `[boot]` section at all (measured), so the
      * default is what comes back -- `WOWEXEC.EXE`, which is present. That is
      * the right answer for the right reason, and a box that DOES set WOWSHELL
@@ -844,7 +844,7 @@ INT Wow32Call(PWOW32_FRAME frame, PWOW32_DOSDATA dosData)
      * `[ModuleCompatibility]` is conventionally a SYSTEM.INI section; the two
      * readings are not distinguishable from krnl386's side because the call
      * carries no filename. It is recorded rather than hidden, and it costs
-     * nothing today: this rig's SYSTEM.INI and WIN.INI have NEITHER section
+     * nothing today: this test machine's SYSTEM.INI and WIN.INI have NEITHER section
      * (measured), so both readings return the caller's default. Revisit if a
      * module ever needs a compatibility flag.
      */
@@ -1042,7 +1042,7 @@ INT Wow32Call(PWOW32_FRAME frame, PWOW32_DOSDATA dosData)
      * by answering 0.** Answering with the default turned the palette to
      * colour on the next run.
      *
-     * [CAUTION]: THE DEFAULT IS "COLOR", so a rig with no `[Paintbrush] clear` key gets
+     * [CAUTION]: THE DEFAULT IS "COLOR", so a test machine with no `[Paintbrush] clear` key gets
      * colour -- which is why searching WIN.INI for a colour key found nothing
      * and the key still turned out to be the answer. The bug was never in the
      * profile, it was that an unimplemented call cannot return a default.
@@ -1348,7 +1348,7 @@ INT Wow32Call(PWOW32_FRAME frame, PWOW32_DOSDATA dosData)
      *
      * [WARNING]: MEASURED s92: answering 1 (free it) killed EVERY Win16 launch -- krnl386 freed
      * block 0x336 while loading KEYBOARD.DRV and then reported "Missing 16-bit
-     * system module: KEYBOARD.DRV" and shut the VDM down (runs/s92/gate1). So these
+     * system module: KEYBOARD.DRV" and shut the VDM down (s92). So these
      * blocks are the 32-bit side's to keep, and 0 -- "handled, do not free" -- is
      * the answer, as the sentinel always (accidentally) gave.
      */
@@ -1428,7 +1428,7 @@ INT Wow32Call(PWOW32_FRAME frame, PWOW32_DOSDATA dosData)
      * asks this once, we answered the harness sentinel `0`, and the VERY NEXT
      * call was `WowMsgBox("Can't run 16-bit Windows program", "Insufficient
      * memory to run this application...")`. The program it wanted is the one
-     * the host was launched for -- on the rig, `SYSEDIT.EXE`.
+     * the host was launched for -- on the test machine, `SYSEDIT.EXE`.
      *
      * [INFO]: AND `0` IS A HARD ERROR, NOT "NOTHING TO DO". WOWEXEC distinguishes:
      *     ret == 0                  -> an error box
@@ -1565,7 +1565,7 @@ INT Wow32Call(PWOW32_FRAME frame, PWOW32_DOSDATA dosData)
          * SetCurrentDirectory with this buffer, which failed on the empty string,
          * so WOWEXEC stayed in C:\WINDOWS for LoadModule and the new task inherited
          * it -- a relative CreateFile landed in C:\WINDOWS. Stock (w_cwd under
-         * stock.sh, the same rig) gives the task the folder it was launched from,
+         * stock.sh, the same test machine) gives the task the folder it was launched from,
          * which is CSRSS's cur= for the launch. So that is what goes here.
          */
         if (g_WowCommandDirectory[0])

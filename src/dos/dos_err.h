@@ -99,7 +99,7 @@
  * wall; the sharing half was fixed then and the mapping half was left.
  *
  * [CAUTION]: BOTH SIDES OF EVERY ROW ARE MEASURED. The DOS side is the oracle CASE= line
- * quoted beside it; the WIN32 side is what the rig actually reported, read off
+ * quoted beside it; the WIN32 side is what the test machine actually reported, read off
  * the handler's own `win32=0x..` log during the run that closed these rows:
  *
  *   INT21 AH=3d [ZZNOSUCH.XYZ]    FAILED win32=0x2 -> AX=0x2

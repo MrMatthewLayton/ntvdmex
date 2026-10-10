@@ -96,7 +96,7 @@
 
 /* THE TICK COURIER: A RETRY THAT IS NOT TIED TO THE RAISE CADENCE. (s61) (Importance = 3):
  * MEASURED, in-game, 45 s, Unlimited, synthetic keys (the fair A/B is in
- * docs/STATE.md SESSION 61). Across the 75 gaps where Skyroads missed at least one
+ * session 61). Across the 75 gaps where Skyroads missed at least one
  * of its own 180 Hz ticks:
  *
  *     IRQ0s the 8254 generated                192
@@ -472,7 +472,7 @@ INT   g_Irq0AutoEoi      = 0;   /* fallback engaged: this guest does not EOI IRQ
  * g_Lock every millisecond and had to win to keep the clock moving. Now generation
  * runs under its own micro-lock (g_PitCs, see HostPitGenerate) and never blocks
  * on g_Lock at all -- so the pacer no longer NEEDS to outrank anything, and at
- * HIGHEST it did active harm: on the single-core rig it starved the ~64 Hz present
+ * HIGHEST it did active harm: on the single-core test machine it starved the ~64 Hz present
  * thread, which the user saw as stepped palette fades and dropped in-game frames.
  * Dropped to NORMAL, the run was user-confirmed "absolutely perfect".
  *
@@ -507,7 +507,7 @@ DWORD    g_CpuSpeedPeriodMs;    /* what auto actually chose, or the setting */
 HANDLE        g_CpuSpeedRelease;     /* auto-reset: wakes the park early */
 
 /* PIN THE GUEST TO ONE CORE. (user request, 2026-09-09) (Importance = 2):
- * The rig is an Intel Core 2 Duo E8600 -- TWO cores -- and this host runs at least
+ * The test machine is an Intel Core 2 Duo E8600 -- TWO cores -- and this host runs at least
  * five threads across them: the exec thread in V86, the UI thread, the PIT pacer at
  * 1 kHz, the audio pump, and the throttle. Three reasons that matters here:
  *
@@ -592,7 +592,7 @@ static MMRESULT g_PitPaceTimer;
 
 /* THE GUEST IS ONLY CHARGED FOR TIME IT WAS ACTUALLY EXECUTING (Importance = 3):
  *
- * [CAUTION]: THE BUG THIS FIXES, MEASURED ON THE RIG 2026-09-09 WITH tests/probes/dos/mixbench:
+ * [CAUTION]: THE BUG THIS FIXES, MEASURED ON THE TEST MACHINE 2026-09-09 WITH tests/probes/dos/mixbench:
  *  at index 11 -- the menu says 66 MHz -- five shapes of work were delivered at
  *      ALU 68   MEM 209   VID13 92   VID12 23   PORT 1     (MHz apparent)
  *  The ALU figure is right because ALU code is what CPUSPEED_REF_MHZ was
@@ -1757,7 +1757,7 @@ DWORD WINAPI CpuSpeedThread(LPVOID param)
      * TWICE) with one invariant: guest EXECUTION time E held to `duty` of WALL time
      * T. A deterministic test drives the identical CpuSpeedStep against a
      * simulated clock (tests/unit/cpuspeed_test.c), so the accuracy is proven
-     * off-hardware rather than argued from a rig number that reads the guest's own
+     * off-hardware rather than argued from a test-machine number that reads the guest's own
      * throttled clock.
      * - E EXCLUDES BOTH HOLDS AND HOST SERVICING, for free. ExecMicrosecondsNow() counts only
      *   wall time spent INSIDE VdmRunGuest, and it is sampled at RESUME and at SUSPEND:
@@ -1858,7 +1858,7 @@ DWORD WINAPI CpuSpeedThread(LPVOID param)
          * of SwitchToThread yields, measured ~hundreds of us). If the run phase is
          * so short that the hold it earns is smaller than that catch cost, the catch
          * cost itself becomes the throttle and the guest gets LESS than asked --
-         * measured on the rig, the fast settings delivered 0.37-0.62x while the slow
+         * measured on the test machine, the fast settings delivered 0.37-0.62x while the slow
          * ones (whose holds dwarf the catch cost) were dead on.
          *
          * So let the guest run a Sleep-able chunk -- at least 1 ms -- every period.
@@ -1876,7 +1876,7 @@ DWORD WINAPI CpuSpeedThread(LPVOID param)
          * earned hold enormous and OVER-shoots (measured: 8 MHz delivered 3x with the
          * floor, dead-on without it). So the floor applies only above a duty where the
          * immediate-catch hold would otherwise be swamped by the catch cost. The
-         * threshold is rig-tuned (8 MHz = 14 bp fails with the floor, 33 MHz = 56 bp
+         * threshold is tuned on the test machine (8 MHz = 14 bp fails with the floor, 33 MHz = 56 bp
          * needs it) and keyed on the DUTY, which already folds in the reference.
          */
         {   DWORD runMicroseconds = g_CpuSpeedGranularityMs
@@ -2634,7 +2634,7 @@ DWORD WINAPI HeadlessDeadlineThread(LPVOID parameter)
 }
 
 /* See OtherHostsRunning. From the UI timer, at most twice a second.
- * - PRIORITY ALONE WAS MEASURED NOT TO BE ENOUGH (s81 rig, interleaved A/B): with QBasic
+ * - PRIORITY ALONE WAS MEASURED NOT TO BE ENOUGH (s81 test machine, interleaved A/B): with QBasic
  *   idling in a background host at BELOW_NORMAL, the foreground Skyroads went from
  *   n8=0 max_ms=6 (alone, twice) to n8=0xb2/0xab with one 2.7 s stall -- and holding
  *   the background guest to 10% speed through the CPU-speed duty cycle changed nothing
