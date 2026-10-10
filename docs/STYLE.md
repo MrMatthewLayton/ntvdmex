@@ -211,8 +211,12 @@ static BOOL DosDiskGeometryFromBpb(
     _Out_ PDOS_DISK_GEOMETRY geometry)
 {
     DWORD totalSectors;
+
     geometry->IsValid = FALSE;
-    if (!bootSector) return FALSE;
+
+    if (!bootSector)
+        return FALSE;
+
     ...
 }
 ```

@@ -174,3 +174,7 @@ tools/score/probe-cache.json
 
 # Maintainer-only notes on the test machine (local, #322 phase 5)
 /docs/wiki/
+
+# Claude Code: the skill in .claude/skills/ is shared; personal settings and worktrees are not.
+/.claude/settings.local.json
+/.claude/worktrees/
