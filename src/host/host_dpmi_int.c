@@ -5924,7 +5924,7 @@ static INT DpmiServiceInt21(
 
         if (g_PmTransferSegment && (ah == DOS_FN_OPEN || ah == DOS_FN_READ || ah == DOS_FN_WRITE ||
                               ah == DOS_FN_DELETE || ah == DOS_FN_FILE_ATTRIBUTES || ah == DOS_FN_FIND_FIRST ||
-                              ah == DOS_FN_MKDIR || ah == DOS_FN_RMDIR || ah == DOS_FN_CHDIR))
+                              ah == DOS_FN_MKDIR || ah == DOS_FN_RMDIR || ah == DOS_FN_CHDIR || ah == DOS_FN_RENAME))
         {
             machine->TraceCursor = cursor;
             cursor = PmInt21Transfer(machine, tib, ah, cursor);

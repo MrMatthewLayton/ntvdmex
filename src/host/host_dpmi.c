@@ -2958,6 +2958,36 @@ static DWORD PmTransferStringLength(WORD selector, DWORD offset, DWORD cap)
     return length + 1;                                     /* include the NUL */
 }
 
+/* Copy `length` bytes between a PM guest pointer and the transfer buffer at
+ * `transferOffset`, either way. One window per pointer register: 56h here and the
+ * LFN calls below carry two or three pointers at once.
+ */
+static INT PmLfnCopy(WORD selector, DWORD offset, DWORD transferOffset, DWORD length, INT isIn)
+{
+    DWORD base = DpmiSelectorBase(selector);
+    DWORD index;
+    volatile BYTE *guest = (volatile BYTE *)(ULONG_PTR)(base + offset);
+    volatile BYTE *transfer = (volatile BYTE *)(ULONG_PTR)(((DWORD)g_PmTransferSegment << PARAGRAPH_SHIFT) + transferOffset);
+
+    if (!base || transferOffset + length > (DWORD)g_PmTransferParagraphs * PARAGRAPH_SIZE_U || length > PM_TRANSFER_WINDOW_SIZE)
+        return -1;
+
+    if (!length)
+        return 0;
+
+    if (!HostReadable((const VOID *)guest, length))
+        return -1;
+
+    if (isIn)
+        for (index = 0; index < length; ++index)
+            transfer[index] = guest[index];
+    else
+        for (index = 0; index < length; ++index)
+            guest[index] = transfer[index];
+
+    return 0;
+}
+
 /* Service one pointer-taking INT 21h call made from protected mode. Returns the log
  * cursor. EIP is advanced by the caller, as for every other arm.
  */
@@ -2967,8 +2997,12 @@ PSTR PmInt21Transfer(DOS_MACHINE *machine, volatile BYTE *tib, DWORD ah, PSTR cu
     WORD  dsValue = (WORD)VDM_REG16(tib, VTIB_DS);
     DWORD dxValue = VDM_REG16(tib, VTIB_EDX);
     DWORD cxValue = VDM_REG16(tib, VTIB_ECX);
+    WORD  esValue = (WORD)VDM_REG16(tib, VTIB_ES);
+    DWORD diValue = VDM_REG16(tib, VTIB_EDI);
     DWORD savedDs = VDM_REG(tib, VTIB_DS);
     DWORD savedDx = VDM_REG(tib, VTIB_EDX);
+    DWORD savedEs = VDM_REG(tib, VTIB_ES);
+    DWORD savedDi = VDM_REG(tib, VTIB_EDI);
     DWORD cap = (DWORD)g_PmTransferParagraphs * PARAGRAPH_SIZE_U;
     INT status = 0;
 
@@ -2996,6 +3030,28 @@ PSTR PmInt21Transfer(DOS_MACHINE *machine, volatile BYTE *tib, DWORD ah, PSTR cu
         {
             PCSTR name = (PCSTR)(ULONG_PTR)((DWORD)g_PmTransferSegment << PARAGRAPH_SHIFT);
             cursor = LogPut(cursor, " name=\""); cursor = LogPut(cursor, name); cursor = LogPut(cursor, "\"");
+        }
+
+        break; }
+
+    /* #327: TWO FILENAMES IN. 56h rename, DS:DX -> ES:DI. Win16 Write saves by writing
+     * a temporary file and renaming it over the document (s96 rig trace: "C:~WRI2411.TMP"
+     * created and written, then AX=5601h); with no arm here the rename failed and Write
+     * said "Cannot save file". The new name gets the ES:DI window, as in 7156h.
+     */
+    case DOS_FN_RENAME:
+    {
+        DWORD sourceLength = PmTransferStringLength(dsValue, dxValue, PM_TRANSFER_STRING_MAX);
+        DWORD targetLength = PmTransferStringLength(esValue, diValue, PM_TRANSFER_STRING_MAX);
+        status = PmLfnCopy(dsValue, dxValue, PM_TRANSFER_WINDOW_DX, sourceLength, PM_LFN_INTO_TRANSFER)
+            | PmLfnCopy(esValue, diValue, PM_TRANSFER_WINDOW_DI, targetLength, PM_LFN_INTO_TRANSFER);
+
+        if (!status)
+        {
+            PCSTR transfer = (PCSTR)(ULONG_PTR)((DWORD)g_PmTransferSegment << PARAGRAPH_SHIFT);
+            cursor = LogPut(cursor, " name=\""); cursor = LogPut(cursor, transfer + PM_TRANSFER_WINDOW_DX);
+            cursor = LogPut(cursor, "\" new=\""); cursor = LogPut(cursor, transfer + PM_TRANSFER_WINDOW_DI);
+            cursor = LogPut(cursor, "\"");
         }
 
         break; }
@@ -3043,6 +3099,13 @@ PSTR PmInt21Transfer(DOS_MACHINE *machine, volatile BYTE *tib, DWORD ah, PSTR cu
     /* Point the DOS layer at the buffer, in the terms it understands. */
     VDM_SET16(tib, VTIB_DS, g_PmTransferSegment);
     VDM_SET16(tib, VTIB_EDX, 0);
+
+    if (ah == DOS_FN_RENAME)
+    {
+        VDM_SET16(tib, VTIB_ES, g_PmTransferSegment);
+        VDM_SET16(tib, VTIB_EDI, PM_TRANSFER_WINDOW_DI);
+    }
+
     m.TraceCursor = cursor;
     DosInt21SetProtectedMode(TRUE);
     DosInt21(&m);
@@ -3050,6 +3113,12 @@ PSTR PmInt21Transfer(DOS_MACHINE *machine, volatile BYTE *tib, DWORD ah, PSTR cu
     cursor = m.TraceCursor;
     VDM_REG(tib, VTIB_DS) = savedDs;
     VDM_REG(tib, VTIB_EDX) = savedDx;
+
+    if (ah == DOS_FN_RENAME)
+    {
+        VDM_REG(tib, VTIB_ES) = savedEs;
+        VDM_REG(tib, VTIB_EDI) = savedDi;
+    }
 
     /* Results back out. A short read is what AX says, not what CX asked for. */
     if (ah == DOS_FN_READ && !(VDM_REG(tib, VTIB_EFLAGS) & EFLAGS_CF_U))
@@ -3096,32 +3165,6 @@ PSTR PmInt21Transfer(DOS_MACHINE *machine, volatile BYTE *tib, DWORD ah, PSTR cu
  * [CAUTION]: krnl386 is the PM client this serves, and nothing measured shows it issuing 71xxh;
  * this is the API made reachable, not a fix for an observed call.
  */
-static INT PmLfnCopy(WORD selector, DWORD offset, DWORD transferOffset, DWORD length, INT isIn)
-{
-    DWORD base = DpmiSelectorBase(selector);
-    DWORD index;
-    volatile BYTE *guest = (volatile BYTE *)(ULONG_PTR)(base + offset);
-    volatile BYTE *transfer = (volatile BYTE *)(ULONG_PTR)(((DWORD)g_PmTransferSegment << PARAGRAPH_SHIFT) + transferOffset);
-
-    if (!base || transferOffset + length > (DWORD)g_PmTransferParagraphs * PARAGRAPH_SIZE_U || length > PM_TRANSFER_WINDOW_SIZE)
-        return -1;
-
-    if (!length)
-        return 0;
-
-    if (!HostReadable((const VOID *)guest, length))
-        return -1;
-
-    if (isIn)
-        for (index = 0; index < length; ++index)
-            transfer[index] = guest[index];
-    else
-        for (index = 0; index < length; ++index)
-            guest[index] = transfer[index];
-
-    return 0;
-}
-
 /* How many bytes of an output window go back: all `len` of a block (kind 2), or a
  * string's length + its NUL, never more than `len` (kind 4).
  */
