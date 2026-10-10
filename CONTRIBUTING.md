@@ -14,6 +14,18 @@ reimplemented here. This page is how to get a change in.
 - Read the [architecture](docs/architecture.md) for the shape of the code, and
   [lessons.md](docs/lessons.md) before trusting a measurement.
 
+### Reading the tracker
+
+- **Labels:** `P0` > `P1` > `P2` is the priority; `epic` is a programme of several issues;
+  `good first issue` and `help wanted` are where to start. The pinned issue is the order of
+  work.
+- **"The rig"** is the maintainer's Windows XP test machine. **"Stock"** is XP's own NTVDM and
+  WOW, the reference NTVDMEX is compared with. An issue that can only be settled on real XP
+  says so; you can still work on it if you have an XP machine.
+- **Evidence an issue cites** that is not in the repository (`runs/...`, `docs/STATE.md`, a
+  session's notes) is the maintainer's own record; the issue states what it found. Session
+  numbers (`s81`) date a finding.
+
 ## Build and test
 
 Everything builds and most of it tests on macOS or Linux; see [building](docs/building.md).
