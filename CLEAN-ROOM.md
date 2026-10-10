@@ -39,6 +39,23 @@ about another program's behaviour.
 - **Third-party files**: binaries, ROM images, fonts, game data, and copyrighted
   specifications. Link to or cite them instead.
 
+## AI assistance
+
+NTVDMEX is developed with the help of AI coding assistants. That changes nothing above: an
+assistant is a tool, and its output is held to the same rules as anyone's.
+
+- **A model's word is not a source.** A model's training data cannot be inspected, so nothing
+  in NTVDMEX rests on what a model says it knows about Microsoft's code. Every behavioural
+  claim needs one of the sources listed above, and preferably a probe result.
+- **Provenance is checked, not trusted.** Assistants have been seen writing "observed" in
+  comments for behaviour no one measured. A provenance note written by an assistant is
+  checked against the probe or run it names before it is merged.
+- **Never ask for the protected components' internals.** Do not ask an assistant how
+  Microsoft's implementation of a protected area (listed below) works, and do not use the
+  answer if one is offered. Ask what the published specification says, or write a probe.
+- **The contributor answers for the change.** Using an assistant does not change what you
+  confirm when you contribute (see [Contributing](#contributing)).
+
 ## Writing about another program's behaviour
 
 Comments and documents say **what was observed and how it was measured**, never how the
