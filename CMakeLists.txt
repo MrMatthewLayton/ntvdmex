@@ -48,8 +48,12 @@ function(ntvdmex_configure_xp_target tgt)
         WINVER=0x0501
         _WIN32_WINNT=0x0501)
     # ANSI build (no UNICODE/-municode); -ffreestanding: no hosted C library.
+    # Three warnings are errors: each has caught a real defect here (a call to an undeclared
+    # function, a pointer passed as an integer, a body that only looks guarded).
     target_compile_options(${tgt} PRIVATE
-        -Wall -Wextra -ffreestanding)
+        -Wall -Wextra -ffreestanding
+        -Werror=implicit-function-declaration -Werror=int-conversion
+        -Werror=misleading-indentation)
     target_link_options(${tgt} PRIVATE
         -nostdlib -nostartfiles
         -Wl,--major-subsystem-version,5 -Wl,--minor-subsystem-version,1

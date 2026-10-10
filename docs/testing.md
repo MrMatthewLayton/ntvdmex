@@ -19,6 +19,13 @@ decoder, the NE loader and the Windows 3.x conversions.
 A test that does not compile is reported as a failure, not skipped. This is the loop to
 develop against, and it must be green before any change is merged.
 
+### Continuous integration
+
+Every pull request and every push to `main` runs, on GitHub Actions
+(`.github/workflows/ci.yml`): the cross-build for XP with the import check, this battery, and
+the style check (`scripts/style.sh --check`). A red run blocks the merge. CI cannot run
+NTVDMEX itself -- that needs a real XP machine (section 3).
+
 ## 2. Probes, compared with the real thing
 
 `tests/probes/dos/` holds small DOS programs (the CMake build assembles them into

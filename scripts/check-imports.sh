@@ -4,7 +4,8 @@
 # XP SP3, so a stray modern API (esp. the UCRT/MSVCRT the mingw toolchain defaults
 # to) can't silently break loading on XP. The M2.6 / build-toolchain requirement.
 #
-#   ./scripts/check-imports.sh build/ntvdmhost.exe build/ntvdmex.exe
+#   ./scripts/check-imports.sh                  # every binary the release zip ships
+#   ./scripts/check-imports.sh FILE...          # only these
 #
 # Exits nonzero if any import is outside the XP allowlist below.
 #
@@ -15,6 +16,14 @@ OBJDUMP="${OBJDUMP:-i686-w64-mingw32-objdump}"
 # deliberately (with the knowledge that the DLL exists on XP) -- never to wave
 # through a CRT dependency.
 ALLOW='kernel32 user32 gdi32 comctl32 advapi32 shell32 shlwapi ntdll winmm ws2_32 comdlg32 ole32 oleaut32 version winspool'
+
+# With no arguments: the binaries the release zip ships. A missing one fails the check --
+# an empty list must never read as a pass.
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+if [ "$#" -eq 0 ]; then
+    set -- "$ROOT/build/ntvdmhost.exe" "$ROOT/build/ntvdmex.exe" \
+           "$ROOT/build/wowshim/WOW32.DLL" "$ROOT/build/wowshim/NTVDM.EXE"
+fi
 
 fail=0
 for exe in "$@"; do

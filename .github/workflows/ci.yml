@@ -1,0 +1,81 @@
+# CI: every pull request, and every push to main.
+#
+#   build    the XP-32 cross build (mingw-w64 i686), with the warnings that have caught real
+#            defects as errors, and the check that every import ships with Windows XP
+#   battery  the off-machine unit tests (scripts/offvm.sh), built natively
+#   style    scripts/style.sh --check, and the style tool's own tests
+#
+# What CI cannot do is run NTVDMEX: that needs a real Windows XP machine. The maintainer runs
+# that check before merging; see docs/testing.md.
+
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: Cross-build for Windows XP
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install the toolchain
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+              gcc-mingw-w64-i686 binutils-mingw-w64-i686 cmake nasm
+
+      - name: Build
+        run: ./scripts/build.sh
+
+      - name: Every import ships with Windows XP
+        run: ./scripts/check-imports.sh
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ntvdmex-build
+          path: |
+            build/ntvdmhost.exe
+            build/ntvdmex.exe
+            build/wowshim/
+          if-no-files-found: error
+
+  battery:
+    name: Off-machine test battery
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install nasm
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends nasm
+
+      - name: Run the battery
+        run: ./scripts/offvm.sh
+
+  style:
+    name: House style
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: The style tool's own tests
+        run: ./scripts/style.sh --test
+
+      - name: Every C file is in the house style
+        run: ./scripts/style.sh --check

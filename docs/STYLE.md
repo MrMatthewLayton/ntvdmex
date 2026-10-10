@@ -25,8 +25,9 @@ scripts/style.sh --fix FILE...  # only these
 It covers the file header (6a), comment markers, titles and gutters (6), braces, one
 statement and one declaration a line, signatures and blank lines (5), and the order of a
 file (5a). Every change it makes is proven not to change the code: the comment-free tokens
-must be the same before and after, or the file is refused and left alone. To run it on each
-commit, on just the files being committed:
+must be the same before and after, or the file is refused and left alone. Continuous
+integration runs `--check` on every pull request. To run it on each commit, on just the files
+being committed:
 
 ```sh
 git config core.hooksPath scripts/hooks
