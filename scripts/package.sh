@@ -5,7 +5,9 @@
 #   ./scripts/package.sh            # uses build/ntvdmhost.exe as built
 #   ./scripts/package.sh --build    # rebuild first
 #
-# Produces dist/ntvdmex-<date>-<sha>.zip laid out so that extracting it ANYWHERE
+# Produces dist/ntvdmex-<date>-<sha>.zip -- or, for a release, dist/ntvdmex-<version>.zip
+# when NTVDMEX_VERSION is set (the release workflow sets it from the tag) -- laid out so
+# that extracting it ANYWHERE
 # on an XP box and running install.bat is the whole install:
 #
 #   install.bat uninstall.bat status.bat smoke.bat README.txt
@@ -27,12 +29,17 @@ if [[ "${1:-}" == "--build" ]]; then ./scripts/build.sh; fi
 
 HOST="$ROOT/build/ntvdmhost.exe"
 [ -f "$HOST" ] || { echo "build/ntvdmhost.exe missing -- run ./scripts/build.sh" >&2; exit 1; }
-size=$(stat -f '%z' "$HOST")
+size=$(wc -c < "$HOST" | tr -d ' ')
 [ "$size" -gt 1000000 ] || { echo "build/ntvdmhost.exe is $size bytes: that is the launcher, not the host" >&2; exit 1; }
 
 sha=$(git rev-parse --short HEAD)
 date=$(date +%Y%m%d)
-name="ntvdmex-$date-$sha"
+build_id="ntvdmex-$date-$sha"
+name="${NTVDMEX_VERSION:+ntvdmex-$NTVDMEX_VERSION}"
+name="${name:-$build_id}"
+
+# md5 on macOS, md5sum on Linux.
+md5_of() { if command -v md5 >/dev/null 2>&1; then md5 -q "$1"; else md5sum "$1" | cut -d' ' -f1; fi; }
 stage="$ROOT/dist/$name"
 rm -rf "$stage"
 mkdir -p "$stage/bin" "$stage/cfg" "$stage/debug/out"
@@ -74,8 +81,9 @@ printf 'Host calls 16-bit code ON (existence-gated). Needed for any Win16 progra
 printf '0' > "$stage/cfg/wowidle.txt"
 printf 'the last run''s log (ntvdmhost.log) and screenshots land here\r\n' > "$stage/debug/out/README.txt"
 {
-    echo "NTVDMEX $name"
-    echo "host md5: $(md5 -q "$HOST")"
+    echo "NTVDMEX ${NTVDMEX_VERSION:-(development build)}"
+    echo "build:    $build_id"
+    echo "host md5: $(md5_of "$HOST")"
     echo "built:    $(date -u +%Y-%m-%dT%H:%M:%SZ)"
     echo "commit:   $(git rev-parse HEAD)"
 } | perl -pe 's/\r?\n/\r\n/' > "$stage/VERSION.txt"

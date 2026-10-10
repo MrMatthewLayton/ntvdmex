@@ -81,13 +81,6 @@ ENVIRONMENT VARIABLES
   Alternatively set them inside QuickBASIC (Options > Set Paths: Executables,
   Libraries, Include), which saves them to QB.INI.
 
-  On the demo USB, demo\msdos\qb45 has two helpers that do this for you:
-      MKEXE CAVE    compiles CAVE.BAS straight to a working standalone CAVE.EXE
-      QB45          starts QuickBASIC with LIB set, so Run > Make EXE File works
-  !! Type QB45, not QB. Typing QB runs QB.EXE directly (.EXE beats .BAT), which
-     starts QuickBASIC WITHOUT LIB -- it still edits and runs programs fine, but
-     every EXE it builds is a broken ~4 KB file that does nothing when run.
-
 KNOWN LIMITS
   Hardware-level access is slower than a real PC (every port access is a trap),
   so timing-critical games run at roughly a 386-class pace. Running several DOS programs

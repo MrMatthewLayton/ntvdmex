@@ -43,6 +43,7 @@ See [inventory/README.md](inventory/README.md) for the list of surfaces and the 
 | [motivations-and-decisions.md](motivations-and-decisions.md) | The big decisions and what they cost |
 | [lessons.md](lessons.md) | Traps and lessons |
 | [STYLE.md](STYLE.md) | The code style |
+| [releasing.md](releasing.md) | How a release is made; the notes of each are in [releases/](releases/) |
 | [ROADMAP.md](ROADMAP.md) | Milestones and phases |
 | [GLOSSARY.md](GLOSSARY.md) | NTVDM / VDM / WOW / V86 terminology |
 | [EMULATION.md](EMULATION.md) | What is emulated, and what runs on the CPU |
