@@ -10,6 +10,9 @@
 - [ ] Run on Windows XP, if you have it: what you ran, and what happened
 
 - [ ] This contains no Microsoft code, no third-party code or disassembly, and nothing
-      from leaked source ([CLEAN-ROOM.md](https://github.com/MrMatthewLayton/ntvdmex/blob/main/CLEAN-ROOM.md))
+      from Microsoft's source code or confidential design, however it was seen
+      ([CLEAN-ROOM.md](https://github.com/MrMatthewLayton/ntvdmex/blob/main/CLEAN-ROOM.md))
+- [ ] I have **not** seen the source code or internal design of the component this
+      change reimplements -- or, if I have, I say so here, and to what
 
 The maintainer runs every change on a real XP machine before merging.
