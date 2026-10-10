@@ -1,0 +1,70 @@
+# Release: pushing a tag v* builds the zip from that commit and creates a DRAFT release.
+#
+#   git tag -a v0.1.0-alpha -m "NTVDMEX v0.1.0-alpha" && git push origin v0.1.0-alpha
+#
+# Nothing is published by this workflow. The maintainer downloads the draft's zip, runs it on
+# a real Windows XP machine, and only then presses Publish (docs/releasing.md).
+#
+# The notes are written by hand, in docs/releases/<tag>.md, and reviewed in a pull request
+# like any other change; a tag without them fails here. A tag that is not on main fails too.
+
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: write
+
+jobs:
+  draft:
+    name: Build the release zip and draft the release
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: The tag is on main, and has its notes
+        run: |
+          git merge-base --is-ancestor "$GITHUB_SHA" origin/main \
+              || { echo "::error::$GITHUB_REF_NAME is not on main"; exit 1; }
+          test -f "docs/releases/$GITHUB_REF_NAME.md" \
+              || { echo "::error::docs/releases/$GITHUB_REF_NAME.md is missing"; exit 1; }
+
+      - name: Install the toolchain
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+              gcc-mingw-w64-i686 binutils-mingw-w64-i686 cmake nasm zip
+
+      - name: Build
+        run: ./scripts/build.sh
+
+      - name: Every import ships with Windows XP
+        run: ./scripts/check-imports.sh
+
+      - name: The off-machine battery
+        run: ./scripts/offvm.sh
+
+      - name: Package
+        env:
+          NTVDMEX_VERSION: ${{ github.ref_name }}
+        run: |
+          ./scripts/package.sh
+          cd dist
+          sha256sum "ntvdmex-$NTVDMEX_VERSION.zip" > SHA256SUMS
+          cat SHA256SUMS
+
+      - name: Draft the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          prerelease=""
+          case "$TAG" in *-*) prerelease="--prerelease" ;; esac
+          gh release create "$TAG" --draft $prerelease \
+              --title "NTVDMEX $TAG" \
+              --notes-file "docs/releases/$TAG.md" \
+              "dist/ntvdmex-$TAG.zip" dist/SHA256SUMS
