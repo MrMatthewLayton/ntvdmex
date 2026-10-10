@@ -68,7 +68,7 @@ enum
 
 enum
 {
-    SETTINGS_COMBO_DROPPED_WIDTH = 130, SETTINGS_FONT_DROPPED_WIDTH = 240, SETTINGS_SLIDER_PAGE = 10, SETTINGS_ITEM_HEIGHT = 14, SETTINGS_ITEM_INSET = 3, LOGFONT_PITCH_MASK = 3
+    SETTINGS_COMBO_DROPPED_WIDTH = 130, SETTINGS_FONT_DROPPED_WIDTH = 240, SETTINGS_SLIDER_STEP = 10, SETTINGS_SLIDER_PAGE = 1,SETTINGS_ITEM_HEIGHT = 14, SETTINGS_ITEM_INSET = 3, LOGFONT_PITCH_MASK = 3
 };   /* the Settings dialog */
 
 enum
@@ -549,6 +549,21 @@ static HWND SettingsControl(INT controlId)
     return NULL;
 }
 
+/* #330 (user, 2026-10-10): A SLIDER MOVES IN WHOLE STEPS OF 10%. The trackbar holds the
+ * step number, not the percentage: holding the percentage, a drag landed on 97% or 103%
+ * and 100% could not be set exactly. A stored value between steps (a hand-edited
+ * registry value) rounds to the nearest step.
+ */
+static DWORD SettingsSliderPosition(DWORD value)
+{
+    return (value + SETTINGS_SLIDER_STEP / 2) / SETTINGS_SLIDER_STEP;
+}
+
+static DWORD SettingsSliderValue(LRESULT position)
+{
+    return (DWORD)position * SETTINGS_SLIDER_STEP;
+}
+
 static VOID SettingsFillCombos(VOID)
 {
     static PCSTR const versions[] = { "6.22", "5.00", "4.01", "3.31", "7.10" };
@@ -888,13 +903,18 @@ static VOID SettingsToDialog(const NTVDMEX_SETTINGS *settings)
         case SK_SLIDER:                      /* #291: a trackbar and its "N%" label */
         {
             HWND label = SettingsControl(definition->ControlId + IDC_S_SLIDER_VALUE_OFFSET);
-            SendMessageA(control, TBM_SETRANGE, FALSE, MAKELPARAM(definition->Low, definition->High));
+            DWORD position = SettingsSliderPosition(settings->Values[index]);
+            SendMessageA(
+                control,
+                TBM_SETRANGE,
+                FALSE,
+                MAKELPARAM(SettingsSliderPosition(definition->Low), SettingsSliderPosition(definition->High)));
             SendMessageA(control, TBM_SETPAGESIZE, 0, SETTINGS_SLIDER_PAGE);
-            SendMessageA(control, TBM_SETPOS, TRUE, (LPARAM)settings->Values[index]);
+            SendMessageA(control, TBM_SETPOS, TRUE, (LPARAM)position);
 
             if (label)
             {
-                wsprintfA(text, SETTINGS_FORMAT_PERCENT, (UINT)settings->Values[index]);
+                wsprintfA(text, SETTINGS_FORMAT_PERCENT, (UINT)SettingsSliderValue((LRESULT)position));
                 SetWindowTextA(label, text);
             }
 
@@ -1005,10 +1025,10 @@ static VOID SettingsFromDialog(NTVDMEX_SETTINGS *settings)
 
         case SK_SLIDER:
         {
-            LRESULT value = SendMessageA(control, TBM_GETPOS, 0, 0);
+            DWORD value = SettingsSliderValue(SendMessageA(control, TBM_GETPOS, 0, 0));
 
-            if ((DWORD)value >= definition->Low && (DWORD)value <= definition->High)
-                settings->Values[index] = (DWORD)value;
+            if (value >= definition->Low && value <= definition->High)
+                settings->Values[index] = value;
 
             break; }
 
@@ -1103,7 +1123,7 @@ INT_PTR CALLBACK SettingsPageProcedure(HWND dialog, UINT message, WPARAM wParam,
         if (label)
         {
             CHAR text[16];
-            wsprintfA(text, SETTINGS_FORMAT_PERCENT, (UINT)SendMessageA((HWND)lParam, TBM_GETPOS, 0, 0));
+            wsprintfA(text, SETTINGS_FORMAT_PERCENT, (UINT)SettingsSliderValue(SendMessageA((HWND)lParam, TBM_GETPOS, 0, 0)));
             SetWindowTextA(label, text);
         }
 
