@@ -1,0 +1,28 @@
+/* case.c -- a case label's statements are one level in. */
+
+#include "case.h"
+
+INT CaseValue(INT selector)
+{
+    INT value = 0;
+
+    switch (selector)
+    {
+    case 1:
+        value = 2;
+    break;
+
+    case 2:
+        value = 3;
+    /* The last one. */
+    return value;
+
+    case 3:
+    {
+        value = 4;
+    }
+    break;
+    }
+
+    return value;
+}

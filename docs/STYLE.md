@@ -11,6 +11,30 @@ this document is silent, do what the surrounding code does.
 *Agreed in #333. The migration of the existing code is described in section 8; until a module
 has been migrated it still uses the old style, and new code in it follows this document.*
 
+## Checking it
+
+Most of this document is applied by a tool, so it does not have to be done by hand or argued
+about in review:
+
+```sh
+scripts/style.sh --check        # every C file; exit 1, with the diff, if one is out of style
+scripts/style.sh --fix          # rewrite the ones that are
+scripts/style.sh --fix FILE...  # only these
+```
+
+It covers the file header (6a), comment markers, titles and gutters (6), braces, one
+statement and one declaration a line, signatures and blank lines (5), and the order of a
+file (5a). Every change it makes is proven not to change the code: the comment-free tokens
+must be the same before and after, or the file is refused and left alone. To run it on each
+commit, on just the files being committed:
+
+```sh
+git config core.hooksPath scripts/hooks
+```
+
+What the tool cannot judge is left to people: names (2), magic values (3), how a long
+expression is wrapped, the steps of a function, and what a comment says.
+
 ---
 
 ## 1. Types

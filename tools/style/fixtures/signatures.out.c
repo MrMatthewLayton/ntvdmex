@@ -1,0 +1,26 @@
+/* NTVDMEX -- An NTVDM replacement for Microsoft Windows
+ *
+ * A signature fits on one line, or takes one parameter a line.
+ *
+ *
+ *
+ * SPDX-License-Identifier: MIT
+ * Copyright (c) 2026 Matthew Layton
+ */
+
+#include "signatures.h"
+
+static INT SignatureShort(INT left, INT right)
+{
+    return left + right;
+}
+
+INT SignatureLong(
+    PSIGNATURE_MACHINE machine,
+    DWORD linearAddress,
+    DWORD byteCount,
+    BOOL isWrite,
+    PDWORD faultCode)
+{
+    return SignatureShort((INT)linearAddress, (INT)byteCount);
+}
