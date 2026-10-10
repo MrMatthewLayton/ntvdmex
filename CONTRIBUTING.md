@@ -59,8 +59,10 @@ and comment rules for you, and proves it changed no code; to run it on every com
 
 ## Pull requests
 
-All changes, the maintainer's included, go through a pull request, and CI must be green:
-the cross-build, the battery and the style check.
+All changes, the maintainer's included, go through a pull request into `main`, and CI must
+be green: the cross-build, the battery and the style check. (`release` holds only builds known
+to work on Windows XP; the maintainer promotes main into it -- see
+[docs/releasing.md](docs/releasing.md). Never open a pull request against `release`.)
 
 - Keep a pull request to one subject, and say in it what changed and how you know it works.
   Name the issue it closes.

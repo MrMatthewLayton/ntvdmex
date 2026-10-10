@@ -1,0 +1,24 @@
+# A pull request into release must come from main: release is main, promoted once it is known
+# to work, never a branch of its own. A fix lands on main first (docs/releasing.md).
+
+name: Promote
+
+on:
+  pull_request:
+    branches: [release]
+
+permissions:
+  contents: read
+
+jobs:
+  from-main:
+    name: Promoted from main
+    runs-on: ubuntu-24.04
+    steps:
+      - name: The source branch is main
+        run: |
+          if [ "${{ github.head_ref }}" != "main" ] || \
+             [ "${{ github.event.pull_request.head.repo.full_name }}" != "${{ github.repository }}" ]; then
+              echo "::error::A pull request into release must come from this repository's main."
+              exit 1
+          fi
