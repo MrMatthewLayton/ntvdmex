@@ -10,7 +10,7 @@
  */
 
 #include "vdd_video.h"
-#include "VGA_MODEDEFs.h"
+#include "vga_modedefs.h"
 #include "vga_font.h"
 
 /* #322: the one copy of each table -- filled at start-up (src/host/sysfont.h). */
