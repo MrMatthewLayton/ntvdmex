@@ -1,35 +1,45 @@
 # Releasing
 
-A release is a tag on `main`, a zip that CI builds from it, and notes written by hand. Nothing
-is published until the maintainer has run that exact zip on a real Windows XP machine.
+Two long-lived branches:
+
+- **`main`** is the working trunk and the default branch. Every change lands here by pull
+  request with green CI. It builds and passes its tests, but it has not necessarily been run on
+  Windows XP: main might not work.
+- **`release`** only ever holds builds that work. Nothing is committed to it directly: it is
+  main, promoted by pull request once main's build has been run on a real Windows XP machine.
+
+A release is published automatically when `release` moves to a version that has not been
+released yet.
+
+```
+main  --(pull request, merge commit)-->  release  --(CI green)-->  tag v<VERSION> + GitHub release
+```
 
 ## Versions
 
-Semantic versions, `v<major>.<minor>.<patch>`, with a pre-release suffix while it is early:
-`v0.1.0-alpha`, `v0.1.0-alpha.2`, ..., `v0.1.0-beta`, `v0.1.0`. A tag with a suffix becomes a
-GitHub *pre-release*. The zip is named for the version (`ntvdmex-v0.1.0-alpha.zip`); its
+`VERSION` at the top of the repository names the next release, in semantic versioning:
+`0.1.0-alpha`, `0.1.0-alpha.2`, ..., `0.1.0-beta`, `0.1.0`. A version with a suffix is published
+as a GitHub *pre-release*. The tag is `v<VERSION>`; the zip is `ntvdmex-v<VERSION>.zip`, and its
 `VERSION.txt` also carries the build ID (`ntvdmex-<date>-<sha>`) and the commit.
 
-## Steps
+## Making a release
 
-1. **The notes.** Write `docs/releases/<tag>.md` and merge it through a pull request: what it
-   is, what was confirmed working and on what, install and uninstall, before-you-install
-   warnings, known issues (the open bugs a user will meet, with their issue numbers), and how
-   to report a problem. The release workflow refuses a tag without it.
-2. **The tag.** On an up-to-date `main` whose CI is green:
+1. **On main, by pull request:** set `VERSION`, and write the notes in
+   `docs/releases/v<VERSION>.md` -- what it is, what was confirmed working and on what, install and
+   uninstall, before-you-install warnings, known issues (the open bugs a user will meet, with
+   their issue numbers), and how to report a problem.
+2. **Run main's build on a real Windows XP SP3 machine** -- the programs the notes say were
+   confirmed. This is the check CI cannot make, and it is what makes `release` trustworthy.
+3. **Promote:** open a pull request from `main` into `release` and merge it with a **merge
+   commit** (not rebase or squash), so `release` stays a copy of main's history. CI must be
+   green, and the *Promoted from main* check refuses a pull request from any other branch.
+4. **Automatic from here:** when CI passes on `release`, `.github/workflows/release.yml` builds
+   the zip from that commit with `SHA256SUMS`, creates the tag `v<VERSION>` and publishes the
+   GitHub release with the notes.
 
-   ```sh
-   git tag -a v0.1.0-alpha -m "NTVDMEX v0.1.0-alpha"
-   git push origin v0.1.0-alpha
-   ```
+Promoting main without changing `VERSION` publishes nothing -- `release` simply moves to a newer
+known-good build. A fix is never made on `release`: it lands on main and is promoted.
 
-3. **The draft.** `.github/workflows/release.yml` checks that the tag is on `main`, builds,
-   checks the imports, runs the battery, packages the zip with `SHA256SUMS`, and creates a
-   **draft** release with the notes.
-4. **The check.** Download the draft's zip, verify it against `SHA256SUMS`, install it on a real
-   Windows XP SP3 machine, and run the programs the notes say were confirmed. If anything is
-   wrong, delete the draft and the tag (`git push origin :refs/tags/<tag>`), fix it, and start
-   again with the same or the next version.
-5. **Publish** the draft on GitHub.
-
-A published release is never replaced. A mistake found later is fixed by the next release.
+A published release is never replaced. A mistake found later is fixed by the next release. If
+the release workflow fails (the notes missing, a build error), fix it on main and promote again;
+nothing is tagged until it succeeds.
