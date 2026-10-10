@@ -34,6 +34,8 @@ import restyle                                                   # noqa: E402
 
 ROOTS = ('src', 'sdk', 'tests', 'tools')
 
+FIXTURES = 'tools/style/fixtures/'              # deliberately out of style: the tests' inputs
+
 GENERATED = {
     'src/vdd/opl_tables.h',
     'src/vdd/vbe_pm.h',
@@ -95,7 +97,8 @@ def style_text(text, path):
 
 def tracked_files():
     out = subprocess.check_output(['git', 'ls-files', '--', *ROOTS], text=True)
-    return [p for p in out.split('\n') if p.endswith(('.c', '.h')) and p not in GENERATED]
+    return [p for p in out.split('\n')
+            if p.endswith(('.c', '.h')) and p not in GENERATED and not p.startswith(FIXTURES)]
 
 
 def examine(path):

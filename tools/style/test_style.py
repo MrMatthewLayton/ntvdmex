@@ -163,6 +163,11 @@ class Command(unittest.TestCase):
             self.assertEqual(self.run_main('--fix', path)[0], 0)
             self.assertEqual(read(path), read(os.path.join(FIXTURES, 'braces.out.c')))
 
+    def test_the_default_files_leave_out_the_fixtures(self):
+        files = style.tracked_files()
+        self.assertTrue(any(p.startswith('src/') for p in files))
+        self.assertFalse([p for p in files if p.startswith(style.FIXTURES)])
+
     def test_a_mode_is_required(self):
         self.assertEqual(self.run_main('x.c')[0], 2)
         self.assertEqual(self.run_main('--check', '--fix')[0], 2)
