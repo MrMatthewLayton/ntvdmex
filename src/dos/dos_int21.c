@@ -4212,27 +4212,27 @@ INT DosInt21(PDOS_MACHINE machine)
             {
             case DOS_INT21_COUNTRY_UPPERCASE:
                 offset = DOS_CTAB_UPPER;
-            break;
+                break;
 
             case DOS_INT21_COUNTRY_FILENAME_UPPERCASE:
                 offset = DOS_CTAB_FNUPPER;
-            break;
+                break;
 
             case DOS_INT21_COUNTRY_FILENAME_TERMINATORS:
                 offset = DOS_CTAB_FNTERM;
-            break;
+                break;
 
             case DOS_INT21_COUNTRY_COLLATING:
                 offset = DOS_CTAB_COLLATE;
-            break;
+                break;
 
             case DOS_INT21_COUNTRY_DBCS:
                 offset = DOS_CTAB_DBCS;
-            break;
+                break;
 
             default:
                 offset = DOS_CTAB_UPPER;
-            break;  /* AL=03, same shape */
+                break;  /* AL=03, same shape */
             }
 
             buffer[0] = subfunction;

@@ -592,7 +592,8 @@ static MMRESULT g_PitPaceTimer;
 
 /* THE GUEST IS ONLY CHARGED FOR TIME IT WAS ACTUALLY EXECUTING (Importance = 3):
  *
- * [CAUTION]: THE BUG THIS FIXES, MEASURED ON THE TEST MACHINE 2026-09-09 WITH tests/probes/dos/mixbench:
+ * [CAUTION]: THE BUG THIS FIXES, MEASURED ON THE TEST MACHINE 2026-09-09 WITH
+ * tests/probes/dos/mixbench:
  *  at index 11 -- the menu says 66 MHz -- five shapes of work were delivered at
  *      ALU 68   MEM 209   VID13 92   VID12 23   PORT 1     (MHz apparent)
  *  The ALU figure is right because ALU code is what CPUSPEED_REF_MHZ was
@@ -1650,39 +1651,39 @@ VOID CpuSpeedTimelineDump(PCSTR tag)
             {
             case 0:
                 value = g_ControlExecMicroseconds[second] / MICROSECONDS_PER_MILLISECOND_U;
-            break;
+                break;
 
             case 1:
                 value = g_ControlHoldMicroseconds[second] / MICROSECONDS_PER_MILLISECOND_U;
-            break;
+                break;
 
             case 2:
                 value = g_ControlMissed[second];
-            break;
+                break;
 
             case 3:
                 value = g_ControlCooperative[second];
-            break;
+                break;
 
             case 4:
                 value = g_ControlIo[second]    ? g_ControlIo[second]    - prev : 0;
 
-            if (g_ControlIo[second])
-                prev = g_ControlIo[second];
+                if (g_ControlIo[second])
+                    prev = g_ControlIo[second];
 
-            break;
+                break;
 
             case 5:
                 value = g_ControlRaise[second] ? g_ControlRaise[second] - prev : 0;
 
-            if (g_ControlRaise[second])
-                prev = g_ControlRaise[second];
+                if (g_ControlRaise[second])
+                    prev = g_ControlRaise[second];
 
-            break;
+                break;
 
             case 6:
                 value = g_ControlRunMicroseconds[second];
-            break;
+                break;
             }
 
             cursor = LogPut(cursor, second ? "," : ""); cursor = LogDecimal(cursor, value);
@@ -1869,15 +1870,14 @@ DWORD WINAPI CpuSpeedThread(LPVOID param)
          * fast host -- the only way to be both smooth AND accurate is a
          * cycle-counting interpreter, which this project is not.
          *
-         * [CAUTION]: ...BUT ONLY WHERE IT IS NEEDED, AND THE TWO REGIMES ARE REAL. At a VERY
-         * slow setting the guest, caught immediately after a few microseconds, already
-         * earns a hold of many milliseconds -- far larger than the catch cost -- so it
-         * is accurate WITHOUT a run Sleep, and forcing a 1 ms run there makes the
-         * earned hold enormous and OVER-shoots (measured: 8 MHz delivered 3x with the
-         * floor, dead-on without it). So the floor applies only above a duty where the
-         * immediate-catch hold would otherwise be swamped by the catch cost. The
-         * threshold is tuned on the test machine (8 MHz = 14 bp fails with the floor, 33 MHz = 56 bp
-         * needs it) and keyed on the DUTY, which already folds in the reference.
+         * [CAUTION]: ...BUT ONLY WHERE IT IS NEEDED, AND THE TWO REGIMES ARE REAL. At a VERY slow
+         * setting the guest, caught immediately after a few microseconds, already earns a hold of
+         * many milliseconds -- far larger than the catch cost -- so it is accurate WITHOUT a run
+         * Sleep, and forcing a 1 ms run there makes the earned hold enormous and OVER-shoots
+         * (measured: 8 MHz delivered 3x with the floor, dead-on without it). So the floor applies
+         * only above a duty where the immediate-catch hold would otherwise be swamped by the catch
+         * cost. The threshold is tuned on the test machine (8 MHz, 14 bp, fails with the floor;
+         * 33 MHz, 56 bp, needs it) and keyed on the DUTY, which already folds in the reference.
          */
         {   DWORD runMicroseconds = g_CpuSpeedGranularityMs
                 ? (DWORD)g_CpuSpeedGranularityMs * MICROSECONDS_PER_MILLISECOND_UL * duty / CPUSPEED_BP_FULL_UL : 0ul;

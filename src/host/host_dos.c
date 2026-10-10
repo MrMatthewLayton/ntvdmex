@@ -2542,17 +2542,17 @@ VOID HostXms(volatile BYTE *tib)
 
     case DOS_XMS_FN_REQUEST_UMB:
         X_SETAX(0);
-    X_SETBL(DOS_XMS_ERROR_NO_UMB);
-    X_SETDX(0);
-    break;  /* request UMB: none */
+        X_SETBL(DOS_XMS_ERROR_NO_UMB);
+        X_SETDX(0);
+        break;  /* request UMB: none */
 
     case DOS_XMS_FN_RELEASE_UMB:
         X_FAIL(DOS_XMS_ERROR_INVALID_UMB);
-    break;                          /* release UMB */
+        break;                          /* release UMB */
 
     default:
         X_FAIL(DOS_XMS_ERROR_NOT_IMPLEMENTED);
-    break;
+        break;
     }
     #undef X_SETAX
     #undef X_SETBX
@@ -2601,12 +2601,12 @@ VOID HostEms(volatile BYTE *tib)
     {
     case DOS_EMS_FN_GET_STATUS:
         E_SETAH(DOS_EMS_STATUS_OK);
-    break;                  /* get manager status */
+        break;                  /* get manager status */
 
     case DOS_EMS_FN_GET_PAGE_FRAME:
         E_SETBX(g_Ems.FrameSegment);
-    E_SETAH(DOS_EMS_STATUS_OK);
-    break;  /* page frame seg */
+        E_SETAH(DOS_EMS_STATUS_OK);
+        break;  /* page frame seg */
 
     case DOS_EMS_FN_GET_PAGE_COUNTS:                                          /* unallocated/total pages */
         DosEmsGetPageCounts(&g_Ems, &unallocatedPages, &totalPages);
@@ -2646,8 +2646,8 @@ VOID HostEms(volatile BYTE *tib)
 
     case DOS_EMS_FN_GET_VERSION:
         E_SETAL(DOS_EMS_VERSION);
-    E_SETAH(DOS_EMS_STATUS_OK);
-    break;  /* EMM version 4.0 */
+        E_SETAH(DOS_EMS_STATUS_OK);
+        break;  /* EMM version 4.0 */
 
     case DOS_EMS_FN_SAVE_PAGE_MAP:                                          /* save page map: DX handle */
         if (DosEmsSavePageMap(&g_Ems, (WORD)VDM_REG16(tib, VTIB_EDX), &error))
@@ -2667,8 +2667,8 @@ VOID HostEms(volatile BYTE *tib)
 
     case DOS_EMS_FN_GET_HANDLE_COUNT:
         E_SETBX(DosEmsGetHandleCount(&g_Ems));
-    E_SETAH(DOS_EMS_STATUS_OK);
-    break;  /* # handles */
+        E_SETAH(DOS_EMS_STATUS_OK);
+        break;  /* # handles */
 
     case DOS_EMS_FN_GET_HANDLE_PAGES:                                          /* pages owned by DX handle */
         if (DosEmsGetHandlePages(&g_Ems, (WORD)VDM_REG16(tib, VTIB_EDX), &unallocatedPages, &error))
@@ -2728,7 +2728,7 @@ VOID HostEms(volatile BYTE *tib)
 
     default:
         E_SETAH(DOS_EMS_ERROR_UNDEFINED_FUNCTION);
-    break;
+        break;
     }
     #undef E_SETAH
     #undef E_SETAL

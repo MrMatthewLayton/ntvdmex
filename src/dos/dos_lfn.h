@@ -696,15 +696,15 @@ static inline BOOL DosLfnErrFromWin32(_In_ DWORD win32Error, _Out_ PWORD dosErro
     case DOS_LFN_WIN32_NOT_SAME_DEVICE:
     case DOS_LFN_WIN32_NO_MORE_FILES:
         *dosError = (WORD)win32Error;
-    return TRUE;
+        return TRUE;
 
     case DOS_LFN_WIN32_INVALID_NAME:
         *dosError = DOS_ERR_PATH_NOT_FOUND;
-    return TRUE;
+        return TRUE;
 
     case DOS_LFN_WIN32_DIR_NOT_EMPTY:
         *dosError = DOS_ERR_ACCESS_DENIED;
-    return TRUE;
+        return TRUE;
 
     default:
         return DosErrFromWin32(win32Error, dosError);

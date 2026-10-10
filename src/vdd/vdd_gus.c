@@ -754,51 +754,51 @@ static VOID GusRegisterWrite(PGUS_STATE state, BYTE registerNumber, WORD value)
 
     case GUS_REGISTER_FREQUENCY:
         voice->FrequencyControl = value;
-    break;
+        break;
 
     case GUS_REGISTER_START_HIGH:
         voice->Start = GusPositionSetHigh(voice->Start, value);
-    break;
+        break;
 
     case GUS_REGISTER_START_LOW:
         voice->Start = GusPositionSetLow(voice->Start, value, GUS_FRACTION_FOUR_BIT);
-    break;
+        break;
 
     case GUS_REGISTER_END_HIGH:
         voice->End   = GusPositionSetHigh(voice->End, value);
-    break;
+        break;
 
     case GUS_REGISTER_END_LOW:
         voice->End   = GusPositionSetLow(voice->End, value, GUS_FRACTION_FOUR_BIT);
-    break;
+        break;
 
     case GUS_REGISTER_RAMP_RATE:
         voice->RampRate  = byteValue;
-    break;
+        break;
 
     case GUS_REGISTER_RAMP_START:
         voice->RampStart = byteValue;
-    break;
+        break;
 
     case GUS_REGISTER_RAMP_END:
         voice->RampEnd   = byteValue;
-    break;
+        break;
 
     case GUS_REGISTER_VOLUME:
         voice->Volume = (WORD)(value & GUS_VOLUME_MASK);
-    break;
+        break;
 
     case GUS_REGISTER_POSITION_HIGH:
         voice->Position = GusPositionSetHigh(voice->Position, value);
-    break;
+        break;
 
     case GUS_REGISTER_POSITION_LOW:
         voice->Position = GusPositionSetLow(voice->Position, value, GUS_FRACTION_NINE_BIT);
-    break;
+        break;
 
     case GUS_REGISTER_PAN:
         voice->Pan = (BYTE)(byteValue & GUS_PAN_MASK);
-    break;
+        break;
 
     case GUS_REGISTER_VOLUME_CONTROL:
         voice->VolumeControl = (BYTE)((byteValue & GUS_RAMP_CONTROL_BITS) | (voice->VolumeControl & GUS_RAMP_IRQ_PENDING));
@@ -834,15 +834,15 @@ static VOID GusRegisterWrite(PGUS_STATE state, BYTE registerNumber, WORD value)
 
     case GUS_REGISTER_DMA_ADDRESS:
         state->DmaAddress = value;
-    break;
+        break;
 
     case GUS_REGISTER_DRAM_IO_LOW:
         state->DramIoAddress = (state->DramIoAddress & GUS_DRAM_IO_HIGH_MASK) | value;
-    break;
+        break;
 
     case GUS_REGISTER_DRAM_IO_HIGH:
         state->DramIoAddress = (state->DramIoAddress & GUS_DRAM_IO_LOW_MASK) | ((UINT32)(byteValue & GUS_DRAM_IO_HIGH_BITS) << GUS_DRAM_IO_HIGH_SHIFT);
-    break;
+        break;
 
     case GUS_REGISTER_TIMER_CONTROL:
         state->TimerControl = byteValue;
@@ -858,17 +858,17 @@ static VOID GusRegisterWrite(PGUS_STATE state, BYTE registerNumber, WORD value)
 
     case GUS_REGISTER_TIMER1_COUNT:
         state->Timer1Load = byteValue;
-    state->Timer1Value = byteValue;
-    break;
+        state->Timer1Value = byteValue;
+        break;
 
     case GUS_REGISTER_TIMER2_COUNT:
         state->Timer2Load = byteValue;
-    state->Timer2Value = byteValue;
-    break;
+        state->Timer2Value = byteValue;
+        break;
 
     case GUS_REGISTER_SAMPLE_FREQUENCY:
         state->SampleFrequency = byteValue;
-    break;
+        break;
 
     case GUS_REGISTER_SAMPLE_CONTROL:
         /* #190: a take runs through the 8237 at the 48h rate -- see GusRecord. */
@@ -885,7 +885,7 @@ static VOID GusRegisterWrite(PGUS_STATE state, BYTE registerNumber, WORD value)
 
     case GUS_REGISTER_JOYSTICK_TRIM:
         state->JoystickTrim = byteValue;
-    break;
+        break;
 
     case GUS_REGISTER_RESET:
         if (!(byteValue & GUS_RESET_RUN))
@@ -1007,7 +1007,7 @@ static VOID GusPortOut(PVOID context, WORD port, BYTE width, UINT32 value)
 
     case GUS_PORT_ADLIB_INDEX:
         state->AdlibIndex = (BYTE)value;
-    break;
+        break;
 
     case GUS_PORT_ADLIB_DATA:
         if (state->AdlibIndex == GUS_ADLIB_TIMER_CONTROL)
@@ -1087,7 +1087,7 @@ static VOID GusPortOut(PVOID context, WORD port, BYTE width, UINT32 value)
 
     case GUS_PORT_REGISTER_CONTROL:
         state->RegisterControl = (BYTE)(value & GUS_REGCTL_MASK);
-    break;
+        break;
 
     case GUS_PORT_MIDI_CONTROL:
         /* 6850 control (ref section 9). CR1-0 = 11 is master reset: receive emptied, overrun
@@ -1143,11 +1143,11 @@ static VOID GusPortOut(PVOID context, WORD port, BYTE width, UINT32 value)
 
     case GUS_PORT_VOICE_SELECT:
         state->VoicePage = (BYTE)(value & GUS_VOICE_MASK);
-    break;
+        break;
 
     case GUS_PORT_REGISTER_SELECT:
         state->RegisterSelect = (BYTE)value;
-    break;
+        break;
 
     case GUS_PORT_DATA_LOW:
         if (width >= GUS_WORD_WIDTH)
@@ -1196,7 +1196,7 @@ static VOID GusPortIn(PVOID context, WORD port, BYTE width, UINT32 *value)
     {
     case GUS_PORT_IRQ_STATUS:
         result = GusIrqStatus(state);
-    break;
+        break;
 
     case GUS_PORT_ADLIB_INDEX:
         result = (UINT32)((state->IsTimer1Expired && !(state->AdlibMask & GUS_ADLIB_MASK_TIMER1) ? GUS_ADLIB_TIMER1_EXPIRED : 0)
@@ -1209,7 +1209,7 @@ static VOID GusPortIn(PVOID context, WORD port, BYTE width, UINT32 *value)
 
     case GUS_PORT_REGISTER_CONTROL:
         result = state->RegisterControl;
-    break;
+        break;
 
     case GUS_PORT_MIDI_CONTROL:                                      /* 6850 status (ref section 9) */
         if (!GusIsMidiDecoded(state))
@@ -1233,11 +1233,11 @@ static VOID GusPortIn(PVOID context, WORD port, BYTE width, UINT32 *value)
 
     case GUS_PORT_VOICE_SELECT:
         result = state->VoicePage;
-    break;
+        break;
 
     case GUS_PORT_REGISTER_SELECT:
         result = state->RegisterSelect;
-    break;
+        break;
 
     case GUS_PORT_DATA_LOW:
     {

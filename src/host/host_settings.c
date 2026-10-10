@@ -1193,32 +1193,32 @@ INT_PTR CALLBACK SettingsPageProcedure(HWND dialog, UINT message, WPARAM wParam,
         {
         case IDC_S_SHELL_XP:
             SettingsShellRadios(SETTINGS_SHELL_XP);
-        return TRUE;
+            return TRUE;
 
         case IDC_S_SHELL_OWN:
             SettingsShellRadios(SETTINGS_SHELL_OWN);
-        return TRUE;
+            return TRUE;
 
         case IDC_S_SHELL_BROWSE:
             SettingsShellBrowse(dialog);
-        return TRUE;
+            return TRUE;
 
         /* s84: the Drives tab's radio pairs and the three new Browse buttons. */
         case IDC_S_FLOPPY_PHYS:
             SettingsFloppyRadios(SETTINGS_DRIVE_PHYSICAL);
-        return TRUE;
+            return TRUE;
 
         case IDC_S_FLOPPY_IMG:
             SettingsFloppyRadios(SETTINGS_DRIVE_IMAGE);
-        return TRUE;
+            return TRUE;
 
         case IDC_S_CD_PHYS:
             SettingsCdRadios(SETTINGS_DRIVE_PHYSICAL);
-        return TRUE;
+            return TRUE;
 
         case IDC_S_CD_IMG:
             SettingsCdRadios(SETTINGS_DRIVE_IMAGE);
-        return TRUE;
+            return TRUE;
 
         case IDC_S_FLOPPY_BROWSE:
             SettingsBrowse(dialog, IDC_S_FLOPPYA, SETTINGS_FILTER_FLOPPY,

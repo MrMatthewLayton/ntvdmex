@@ -497,7 +497,7 @@ INT NeApplyRelocations(PNE_MODULE module, INT index, PNE_IMPORT importer, PVOID 
             {
             case NE_ADDR_SEGMENT:
                 NeWrite16(segment->Memory + site, targetSelector);
-            break;
+                break;
 
             case NE_ADDR_OFFSET16:
                 NeWrite16(segment->Memory + site, (WORD)(isAdditive ? next + targetOffset : targetOffset));
@@ -517,7 +517,7 @@ INT NeApplyRelocations(PNE_MODULE module, INT index, PNE_IMPORT importer, PVOID 
 
             default:
                 module->Error = __LINE__;
-            return -1;
+                return -1;
             }
 
             ++module->Sites;

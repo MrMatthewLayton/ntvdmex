@@ -875,7 +875,7 @@ static INT InputBiosTranslate(PINPUT_STATE state, BYTE scanCode)
         if (!isExtended)
             InputSetShiftFlag(state, INPUT_SHIFT_LEFT_SHIFT, !isBreak);
 
-    return INPUT_ACTION_NONE;
+        return INPUT_ACTION_NONE;
 
                /* E0 2A is the fake shift the controller brackets some extended keys
                 * with -- not a shift. Likewise E0 36.
@@ -884,7 +884,7 @@ static INT InputBiosTranslate(PINPUT_STATE state, BYTE scanCode)
         if (!isExtended)
             InputSetShiftFlag(state, INPUT_SHIFT_RIGHT_SHIFT, !isBreak);
 
-    return INPUT_ACTION_NONE;
+        return INPUT_ACTION_NONE;
 
     case INPUT_SCAN_CTRL:
         if (isExtended)
@@ -916,7 +916,7 @@ static INT InputBiosTranslate(PINPUT_STATE state, BYTE scanCode)
 
     case INPUT_SCAN_CAPS_LOCK:
         InputLockKey(state, INPUT_SHIFT_CAPS_LOCK, INPUT_SHIFT2_CAPS_HELD, isBreak);
-    return INPUT_ACTION_NONE;
+        return INPUT_ACTION_NONE;
 
     case INPUT_SCAN_NUM_LOCK:
         /* [CAUTION]: Plain 45 is NumLock on the keyboard; our host sends NumLock as E0 45 (the
@@ -1403,19 +1403,19 @@ static VOID InputKeyboardPortOut(PVOID context, WORD port, BYTE width, UINT32 va
         {
         case INPUT_KBC_SELF_TEST:
             InputControllerReply(state, INPUT_KBC_SELF_TEST_PASSED);
-        break;      /* self test passed */
+            break;      /* self test passed */
 
         case INPUT_KBC_INTERFACE_TEST:
             InputControllerReply(state, INPUT_KBC_INTERFACE_TEST_OK);
-        break;      /* interface test: no error */
+            break;      /* interface test: no error */
 
         case INPUT_KBC_READ_COMMAND_BYTE:
             InputControllerReply(state, state->ControllerCommandByte);
-        break;
+            break;
 
         case INPUT_KBC_READ_OUTPUT_PORT:
             InputControllerReply(state, state->ControllerOutputPort);
-        break;
+            break;
 
         case INPUT_KBC_WRITE_COMMAND_BYTE:
         case INPUT_KBC_WRITE_OUTPUT_PORT:                        /* a parameter byte follows */
@@ -1426,19 +1426,19 @@ static VOID InputKeyboardPortOut(PVOID context, WORD port, BYTE width, UINT32 va
 
         case INPUT_KBC_DISABLE_KEYBOARD:
             state->ControllerCommandByte |= INPUT_COMMAND_BYTE_KEYBOARD_DISABLED;
-        break;   /* disable keyboard clock */
+            break;   /* disable keyboard clock */
 
         case INPUT_KBC_ENABLE_KEYBOARD:
             state->ControllerCommandByte &= (BYTE)~INPUT_COMMAND_BYTE_KEYBOARD_DISABLED;
-        break;
+            break;
 
         case INPUT_KBC_DISABLE_AUX:
             state->ControllerCommandByte |= INPUT_COMMAND_BYTE_AUX_DISABLED;
-        break;   /* disable aux clock */
+            break;   /* disable aux clock */
 
         case INPUT_KBC_ENABLE_AUX:
             state->ControllerCommandByte &= (BYTE)~INPUT_COMMAND_BYTE_AUX_DISABLED;
-        break;
+            break;
 
         /* [WARNING]: FEh PULSES THE CPU RESET LINE, and we do not have one to pulse. It is
          * COUNTED rather than obeyed: a VDD cannot reboot the machine it is a
@@ -1447,7 +1447,7 @@ static VOID InputKeyboardPortOut(PVOID context, WORD port, BYTE width, UINT32 va
          */
         case INPUT_KBC_PULSE_RESET:
             state->ControllerResetsAsked++;
-        break;
+            break;
 
         default:
             break;
@@ -1556,21 +1556,21 @@ static VOID InputInt16(PVOID context, PNTVDD_REGISTERS registers)
     case INPUT_INT16_READ:
     case INPUT_INT16_READ_ENHANCED:
         state->Int16Calls[INPUT_INT16_GROUP_READ]++;
-    break;
+        break;
 
     case INPUT_INT16_STATUS:
     case INPUT_INT16_STATUS_ENHANCED:
         state->Int16Calls[INPUT_INT16_GROUP_STATUS]++;
-    break;
+        break;
 
     case INPUT_INT16_SHIFT_STATUS:
     case INPUT_INT16_SHIFT_STATUS_ENHANCED:
         state->Int16Calls[INPUT_INT16_GROUP_SHIFT_STATUS]++;
-    break;
+        break;
 
     default:
         state->Int16Calls[INPUT_INT16_GROUP_OTHER]++;
-    break;
+        break;
     }
 
     switch (VddGetAh(registers))

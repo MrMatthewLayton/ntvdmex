@@ -324,11 +324,11 @@ static VOID MgrOnCommand(UINT commandId)
         {
         case IDM_P_SHOW:
             MgrSessionCommand(slot, MGR_COMMAND_SHOW);
-        break;
+            break;
 
         case IDM_P_CLOSE:
             MgrSessionCommand(slot, MGR_COMMAND_CLOSE_PROGRAM);
-        break;
+            break;
         }
 
         return;

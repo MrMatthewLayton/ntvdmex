@@ -798,10 +798,10 @@ static INT NtvdmServiceGuestBop(
                  * shorter than 7 characters -> 9. Mirrored, not invented.
                  */
                 static INT namedOnce = 0;
-                /* [CAUTION]: programPathBuffer FIRST, not g_Application2. On the test machine CSRSS names
-                 * `dosstub.com` -- the harness stub -- and `target.txt` names the
-                 * real program, so g_Application2 would hand the shell the stub. programPathBuffer
-                 * is what we actually LOADED, which is the program either way.
+                /* [CAUTION]: programPathBuffer FIRST, not g_Application2. On the test machine CSRSS
+                 * names `dosstub.com` -- the harness stub -- and `target.txt` names the real
+                 * program, so g_Application2 would hand the shell the stub. programPathBuffer is
+                 * what we actually LOADED, which is the program either way.
                  */
                 PCSTR programPath = g_Routed ? g_FirstProgram      /* #208: the program */
                                : programPathBuffer[0] ? programPathBuffer : (g_Application2[0] ? g_Application2 : "");

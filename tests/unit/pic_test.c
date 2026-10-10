@@ -20,6 +20,11 @@
 #include <string.h>
 #include "vdd_pic.h"
 
+/* Reach the port handlers the way the bus would. They are static in the VDD, so
+ * drive them through the device descriptor's init + the public host API instead.
+ */
+extern INT VddPicInitialize(PVDD_BUS bus, PVOID context);
+
 static INT g_Checks = 0;
 static INT g_Failures = 0;
 
@@ -36,11 +41,6 @@ static BYTE g_LastLastPort;
 static PVDD_PORT_IN_ROUTINE  g_InRoutine;
 static PVDD_PORT_OUT_ROUTINE g_OutRoutine;
 static PVOID g_Context;
-
-/* Reach the port handlers the way the bus would. They are static in the VDD, so
- * drive them through the device descriptor's init + the public host API instead.
- */
-extern INT VddPicInitialize(PVDD_BUS bus, PVOID context);
 
 static VOID PicTestCheck(INT condition, PCSTR description)
 {

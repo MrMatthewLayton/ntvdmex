@@ -245,31 +245,31 @@ static INT Pm32Condition(UINT32 flags, INT condition)
     {
     case PM32_CC_OVERFLOW:
         isTrue = (flags & EFLAGS_OF_U) != 0;
-    break;                              /* O */
+        break;                              /* O */
 
     case PM32_CC_BELOW:
         isTrue = (flags & EFLAGS_CF_U) != 0;
-    break;                              /* B */
+        break;                              /* B */
 
     case PM32_CC_ZERO:
         isTrue = (flags & EFLAGS_ZF_U) != 0;
-    break;                              /* Z */
+        break;                              /* Z */
 
     case PM32_CC_BELOW_OR_EQUAL:
         isTrue = (flags & (EFLAGS_CF_U | EFLAGS_ZF_U)) != 0;
-    break;                   /* BE */
+        break;                   /* BE */
 
     case PM32_CC_SIGN:
         isTrue = (flags & EFLAGS_SF_U) != 0;
-    break;                              /* S */
+        break;                              /* S */
 
     case PM32_CC_PARITY:
         isTrue = (flags & EFLAGS_PF_U) != 0;
-    break;                              /* P */
+        break;                              /* P */
 
     case PM32_CC_LESS:
         isTrue = ((flags & EFLAGS_SF_U) != 0) != ((flags & EFLAGS_OF_U) != 0);
-    break;     /* L */
+        break;     /* L */
 
     default:
         isTrue = (flags & EFLAGS_ZF_U) || (((flags & EFLAGS_SF_U) != 0) != ((flags & EFLAGS_OF_U) != 0)); /* LE */
@@ -1208,8 +1208,8 @@ static INT Pm32Step(PM32_CPU *cpu)
         case PM32_GROUP3_TEST:
         case PM32_GROUP3_TEST_ALIAS:
             Pm32Logic(&cpu->Flags, operand & Pm32CodeImmediate(cpu, next, width), width);
-        next += (UINT32)width;
-        break;
+            next += (UINT32)width;
+            break;
 
         case X86_GROUP3_NOT:
         {

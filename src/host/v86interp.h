@@ -411,7 +411,7 @@ V86_INLINE UINT32 V86Alu(V86_CPU *cpu, int operation, UINT32 first, UINT32 secon
 
     default:
         V86Subtract(cpu, first, second, 0, width);
-    return 0;             /* CMP: no store */
+        return 0;             /* CMP: no store */
     }
 }
 
@@ -440,41 +440,41 @@ static UINT32 V86ShiftRotate(V86_CPU *cpu, int operation, UINT32 value, int coun
     {
         case X86_SHIFT_ROL:
             carry = (value & signBit) ? 1 : 0;
-        value = ((value << 1) | (UINT32)carry) & mask;
-        break;          /* ROL */
+            value = ((value << 1) | (UINT32)carry) & mask;
+            break;          /* ROL */
 
         case X86_SHIFT_ROR:
             carry = value & 1;
-        value = ((value >> 1) | (carry ? signBit : 0)) & mask;
-        break;                     /* ROR */
+            value = ((value >> 1) | (carry ? signBit : 0)) & mask;
+            break;                     /* ROR */
 
         case X86_SHIFT_RCL:
             oldCarry = carry;
-        carry = (value & signBit) ? 1 : 0;
-        value = ((value << 1) | (UINT32)oldCarry) & mask;
-        break; /* RCL */
+            carry = (value & signBit) ? 1 : 0;
+            value = ((value << 1) | (UINT32)oldCarry) & mask;
+            break; /* RCL */
 
         case X86_SHIFT_RCR:
             oldCarry = carry;
-        carry = value & 1;
-        value = ((value >> 1) | (oldCarry ? signBit : 0)) & mask;
-        break;      /* RCR */
+            carry = value & 1;
+            value = ((value >> 1) | (oldCarry ? signBit : 0)) & mask;
+            break;      /* RCR */
 
         case X86_SHIFT_SHL:
         case X86_SHIFT_SAL:
             carry = (value & signBit) ? 1 : 0;
-        value = (value << 1) & mask;
-        break;                    /* SHL/SAL */
+            value = (value << 1) & mask;
+            break;                    /* SHL/SAL */
 
         case X86_SHIFT_SHR:
             carry = value & 1;
-        value = (value >> 1) & mask;
-        break;                                       /* SHR */
+            value = (value >> 1) & mask;
+            break;                                       /* SHR */
 
         default:
             carry = value & 1;
-        value = ((value >> 1) | (value & signBit)) & mask;
-        break;                         /* SAR */
+            value = ((value >> 1) | (value & signBit)) & mask;
+            break;                         /* SAR */
     }
 
     cpu->Flags = (cpu->Flags & ~EFLAGS_CF_U) | (carry ? EFLAGS_CF_U : 0);
@@ -487,20 +487,20 @@ static UINT32 V86ShiftRotate(V86_CPU *cpu, int operation, UINT32 value, int coun
         {
         case X86_SHIFT_SHR:
             overflow = (original & signBit) ? 1 : 0;
-        break;                      /* SHR: MSB of orig */
+            break;                      /* SHR: MSB of orig */
 
         case X86_SHIFT_SAR:
             overflow = 0;
-        break;                                        /* SAR */
+            break;                                        /* SAR */
 
         case X86_SHIFT_ROR:
         case X86_SHIFT_RCR:
             overflow = (((value & signBit) ? 1 : 0) ^ ((value & (signBit >> 1)) ? 1 : 0));
-        break; /* ROR/RCR */
+            break; /* ROR/RCR */
 
         default:
             overflow = (((value & signBit) ? 1 : 0) ^ carry);
-        break;                /* ROL/RCL/SHL */
+            break;                /* ROL/RCL/SHL */
         }
 
         cpu->Flags = (cpu->Flags & ~EFLAGS_OF_U) | (overflow ? EFLAGS_OF_U : 0);
@@ -653,29 +653,29 @@ static int V86DecodeModrm(
     {
     case V86_RM_BX_SI:
         effectiveAddress = (WORD)(bxValue + siValue);
-    break;
+        break;
 
     case V86_RM_BX_DI:
         effectiveAddress = (WORD)(bxValue + diValue);
-    break;
+        break;
 
     case V86_RM_BP_SI:
         effectiveAddress = (WORD)(bpValue + siValue);
-    isStackBased = 1;
-    break;
+        isStackBased = 1;
+        break;
 
     case V86_RM_BP_DI:
         effectiveAddress = (WORD)(bpValue + diValue);
-    isStackBased = 1;
-    break;
+        isStackBased = 1;
+        break;
 
     case V86_RM_SI:
         effectiveAddress = siValue;
-    break;
+        break;
 
     case V86_RM_DI:
         effectiveAddress = diValue;
-    break;
+        break;
 
     case V86_RM_BP:
         if (mode == V86_MODE_NO_DISP)
@@ -691,7 +691,7 @@ static int V86DecodeModrm(
 
     default:
         effectiveAddress = bxValue;
-    break;
+        break;
     }
 
     if (mode == X86_MODE_DISP8)

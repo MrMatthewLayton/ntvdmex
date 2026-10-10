@@ -331,27 +331,27 @@ static VOID SbExecute(PSB_STATE state)
 
     case SB_DSP_PAUSE_DMA8:
         state->IsPaused = 1;
-    break;      /* pause 8-bit DMA */
+        break;      /* pause 8-bit DMA */
 
     case SB_DSP_SPEAKER_ON:
         state->IsSpeakerOn = 1;
-    break;
+        break;
 
     case SB_DSP_SPEAKER_OFF:
         state->IsSpeakerOn = 0;
-    break;
+        break;
 
     case SB_DSP_CONTINUE_DMA8:
         state->IsPaused = 0;
-    break;      /* continue 8-bit DMA */
+        break;      /* continue 8-bit DMA */
 
     case SB_DSP_PAUSE_DMA16:
         state->IsPaused = 1;
-    break;      /* pause 16-bit DMA */
+        break;      /* pause 16-bit DMA */
 
     case SB_DSP_CONTINUE_DMA16:
         state->IsPaused = 0;
-    break;      /* continue 16-bit DMA */
+        break;      /* continue 16-bit DMA */
 
     case SB_DSP_EXIT_AUTO_DMA8:
     case SB_DSP_EXIT_AUTO_DMA16:                       /* leave auto-init after this block */
@@ -456,11 +456,11 @@ static VOID SbPortOut(PVOID context, WORD port, BYTE width, UINT32 value)
 
     case SB_PORT_MIXER_ADDRESS:
         state->MixerIndex = byteValue;
-    break;
+        break;
 
     case SB_PORT_MIXER_DATA:
         state->Mixer[state->MixerIndex] = byteValue;
-    break;
+        break;
 
     case SB_PORT_DSP_RESET:                                   /* DSP reset */
         /* The handshake: 1 then 0. Only the falling edge arms 0xAA, which is what
@@ -491,7 +491,7 @@ static VOID SbPortOut(PVOID context, WORD port, BYTE width, UINT32 value)
 
     case SB_PORT_DSP_WRITE:
         SbDspWrite(state, byteValue);
-    break;     /* DSP command / data */
+        break;     /* DSP command / data */
 
     default:
         break;
@@ -605,11 +605,11 @@ static VOID SbPortIn(PVOID context, WORD port, BYTE width, UINT32 *value)
 
     case SB_PORT_DSP_READ:
         *value = SbOutputQueuePop(state);
-    break;      /* DSP read data */
+        break;      /* DSP read data */
 
     case SB_PORT_DSP_WRITE:
         *value = SB_DSP_WRITE_READY;
-    break;             /* write status: never busy */
+        break;             /* write status: never busy */
 
     case SB_PORT_DSP_READ_STATUS:                                   /* read status + 8-bit IRQ ack */
         *value = (BYTE)(state->OutputQueueLength ? SB_DSP_DATA_AVAILABLE : SB_DSP_NO_DATA);   /* bit 7 = data available */
@@ -626,7 +626,7 @@ static VOID SbPortIn(PVOID context, WORD port, BYTE width, UINT32 *value)
 
     default:
         *value = SB_FLOATING_BUS;
-    break;
+        break;
     }
 }
 

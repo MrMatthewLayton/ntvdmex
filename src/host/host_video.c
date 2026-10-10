@@ -847,23 +847,23 @@ VOID ModeYTimelineReport(VOID)
             {
             case 0:
                 value = g_ModeYTimelineSelector[second];
-            break;
+                break;
 
             case 1:
                 value = g_ModeYTimelineSwap[second];
-            break;
+                break;
 
             case 2:
                 value = g_ModeYTimelineFanout[second];
-            break;
+                break;
 
             case 3:
                 value = g_ModeYTimelineFanoutBytes[second];
-            break;
+                break;
 
             case 4:
                 value = cpu ? (DWORD)(g_ModeYTimelineCycles[second] / cpu) : 0;
-            break;
+                break;
 
             case 5:
                 value = g_ModeYTimelineFlip[second] ? g_ModeYTimelineFlip[second] - previousFlip : 0;
@@ -875,15 +875,15 @@ VOID ModeYTimelineReport(VOID)
 
             case 6:
                 value = g_ModeYTimelineFanoutCount[second];
-            break;
+                break;
 
             case 7:
                 value = g_ModeYTimelineIns[second];
-            break;
+                break;
 
             case 8:
                 value = cpu ? (DWORD)(g_ModeYTimelineInterpreterCycles[second] / cpu) : 0;
-            break;
+                break;
             }
 
             cursor = LogPut(cursor, second ? "," : ""); cursor = LogDecimal(cursor, value);

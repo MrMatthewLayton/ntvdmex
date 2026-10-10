@@ -190,11 +190,11 @@ static INT CmosClockRegister(PCMOS_STATE state, BYTE registerIndex, BYTE *value)
     {
     case CMOS_SECONDS:
         *value = CmosClockValue(state, reading.Second);
-    return CMOS_CLOCK_REGISTER;
+        return CMOS_CLOCK_REGISTER;
 
     case CMOS_MINUTES:
         *value = CmosClockValue(state, reading.Minute);
-    return CMOS_CLOCK_REGISTER;
+        return CMOS_CLOCK_REGISTER;
 
     case CMOS_HOURS:
     {
@@ -224,19 +224,19 @@ static INT CmosClockRegister(PCMOS_STATE state, BYTE registerIndex, BYTE *value)
      */
     case CMOS_DAY_OF_MONTH:
         *value = CmosClockValue(state, reading.Day);
-    return CMOS_CLOCK_REGISTER;
+        return CMOS_CLOCK_REGISTER;
 
     case CMOS_MONTH:
         *value = CmosClockValue(state, reading.Month);
-    return CMOS_CLOCK_REGISTER;
+        return CMOS_CLOCK_REGISTER;
 
     case CMOS_YEAR:
         *value = CmosClockValue(state, reading.Year);
-    return CMOS_CLOCK_REGISTER;
+        return CMOS_CLOCK_REGISTER;
 
     case CMOS_CENTURY:
         *value = CmosClockValue(state, reading.Century);
-    return CMOS_CLOCK_REGISTER;
+        return CMOS_CLOCK_REGISTER;
 
     /* THE DAY OF WEEK COMES FROM THE HOST, NOT A CALENDAR RULE. (s81, #182) It
      * was fixed at 1 (Sunday) because the clock reading carried no weekday and a
@@ -538,11 +538,11 @@ static VOID CmosPortOut(PVOID context, WORD port, BYTE width, UINT32 value)
         {
         case CMOS_SECONDS:
             reading.Second = CmosClockDecode(state, byteValue);
-        break;
+            break;
 
         case CMOS_MINUTES:
             reading.Minute = CmosClockDecode(state, byteValue);
-        break;
+            break;
 
         case CMOS_HOURS:
             if (state->StatusB & CMOS_B_24_HOUR)
@@ -554,19 +554,19 @@ static VOID CmosPortOut(PVOID context, WORD port, BYTE width, UINT32 value)
 
         case CMOS_DAY_OF_MONTH:
             reading.Day   = CmosClockDecode(state, byteValue);
-        break;
+            break;
 
         case CMOS_MONTH:
             reading.Month = CmosClockDecode(state, byteValue);
-        break;
+            break;
 
         case CMOS_YEAR:
             reading.Year  = CmosClockDecode(state, byteValue);
-        break;
+            break;
 
         default:
             reading.Century  = CmosClockDecode(state, byteValue);
-        break;
+            break;
         }
 
         if (state->IsSetHeld)

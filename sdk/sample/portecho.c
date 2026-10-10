@@ -59,19 +59,19 @@ static void PortEchoIn(void *self, uint16_t port, uint8_t width, uint32_t *value
     {
     case PORTECHO_ID_REGISTER:
         *value = PORTECHO_ID;
-    break;
+        break;
 
     case PORTECHO_COMPLEMENT_REGISTER:
         *value = (uint8_t)~state->Latch;
-    break;
+        break;
 
     case PORTECHO_COUNT_REGISTER:
         *value = (uint8_t)(state->Writes & PORTECHO_LOW_BYTE);
-    break;
+        break;
 
     case PORTECHO_VERSION_REGISTER:
         *value = (uint8_t)state->Version;
-    break;
+        break;
 
     /* [CAUTION]: AN UNCLAIMED REGISTER READS 0xFF, WHICH IS WHAT AN EMPTY ISA SLOT DOES.
      * Answering 0 instead would make a detection routine that probes for
@@ -79,7 +79,7 @@ static void PortEchoIn(void *self, uint16_t port, uint8_t width, uint32_t *value
      */
     default:
         *value = PORTECHO_EMPTY_SLOT;
-    break;
+        break;
     }
 }
 

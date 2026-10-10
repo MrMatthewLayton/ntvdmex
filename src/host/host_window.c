@@ -2149,14 +2149,13 @@ VOID InputCaptureSet(HWND window, INT isOn)
     if (isOn)
     {
         /* [WARNING]: THIS HOOK CAN JAM THE WHOLE MACHINE, SO IT IS OFF BY DEFAULT (Importance = 2):
-         * WH_KEYBOARD_LL is SYSTEM-WIDE: every keystroke on the box is routed through
-         * THIS process's UI thread. If that thread stalls -- and a VDM host has many
-         * ways to stall, including being blocked behind the guest -- then the entire
-         * machine's keyboard stalls with it. Add ClipCursor below, which confines the
-         * mouse system-wide, and a host that wedges while captured leaves a computer
-         * that is running, pingable, and completely unusable.
-         * Reported by the user, 2026-09-09, twice in one session: "that basically
-         * crashed Windows, and I had to restart the test machine", then "NTVDMEX jams the test machine".
+         * WH_KEYBOARD_LL is SYSTEM-WIDE: every keystroke on the box is routed through THIS
+         * process's UI thread. If that thread stalls -- and a VDM host has many ways to stall,
+         * including being blocked behind the guest -- then the entire machine's keyboard stalls
+         * with it. Add ClipCursor below, which confines the mouse system-wide, and a host that
+         * wedges while captured leaves a computer that is running, pingable, and completely
+         * unusable. Reported by the user, 2026-09-09, twice in one session: "that basically crashed
+         * Windows, and I had to restart the test machine", then "NTVDMEX jams the test machine".
          * - AND WHAT IT BUYS IS SMALL: swallowing Win, Alt+Tab and Ctrl/Alt+Esc so the
          *   guest keeps focus. Losing that means Alt+Tab works again -- which is an
          *   ESCAPE ROUTE from a misbehaving guest, not a regression. The trade is not
@@ -3240,15 +3239,15 @@ static LRESULT CALLBACK HostWindowProcedure(HWND window, UINT message, WPARAM wP
 
         case MGR_COMMAND_SETTINGS:
             PostMessageA(window, WM_COMMAND, IDM_FILE_SETTINGS, 0);
-        return 0;
+            return 0;
 
         case MGR_COMMAND_CLOSE_PROGRAM:
             PostMessageA(window, WM_COMMAND, IDM_FILE_CLOSEPROG, 0);
-        return 0;
+            return 0;
 
         case MGR_COMMAND_EXIT:
             PostMessageA(window, WM_COMMAND, IDM_FILE_EXIT, 0);
-        return 0;
+            return 0;
         }
 
         return 0;
@@ -4053,11 +4052,11 @@ static LRESULT CALLBACK HostWindowProcedure(HWND window, UINT message, WPARAM wP
         {
         case IDM_FILE_EXIT:
             DestroyWindow(window);
-        return 0;
+            return 0;
 
         case IDM_FILE_OPEN:
             OpenProgramDialog(window);
-        return 0;   /* #153 */
+            return 0;   /* #153 */
 
         /* #154: the text-mode Edit menu -- see g_MarkMode. */
         case IDM_EDIT_MARK:
@@ -4093,16 +4092,16 @@ static LRESULT CALLBACK HostWindowProcedure(HWND window, UINT message, WPARAM wP
 
         case IDM_EDIT_COPY:
             TextCopy(window, TEXT_COPY_SELECTION);
-        SelectionClear();
-        return 0;
+            SelectionClear();
+            return 0;
 
         case IDM_EDIT_COPYSCREEN:
             TextCopy(window, TEXT_COPY_SCREEN);
-        return 0;
+            return 0;
 
         case IDM_EDIT_PASTE:
             TextPaste(window);
-        return 0;
+            return 0;
 
         case IDM_FILE_CLOSEPROG:                       /* #152 -- see CloseProgramNow */
             if (!CloseProgramAvailable())
@@ -4122,7 +4121,7 @@ static LRESULT CALLBACK HostWindowProcedure(HWND window, UINT message, WPARAM wP
 
         case IDM_DISP_FULLSCREEN:
             HostFullscreenToggle(window);
-        return 0;
+            return 0;
 
         /* [CAUTION]: CONFIRM FIRST. Both of these change how EVERY DOS and Win16 program on
          * the machine starts, and both outlive this process -- an accidental
@@ -4172,19 +4171,19 @@ static LRESULT CALLBACK HostWindowProcedure(HWND window, UINT message, WPARAM wP
 
         case IDM_INPUT_CAPTURE:
             InputCaptureSet(window, !g_Captured);
-        return 0;
+            return 0;
 
         case IDM_CAP_SHOT:
             HostScreenshot();
-        return 0;
+            return 0;
 
         case IDM_CAP_AUDIO:
             HostRecordToggle();
-        return 0;              /* #155 */
+            return 0;              /* #155 */
 
         case IDM_CAP_FOLDER:
             HostOpenCaptureFolder();
-        return 0;    /* #155 */
+            return 0;    /* #155 */
 
         /* THE SYSTEM ABOUT BOX, WHICH IS WHAT A PROGRAM OF THIS ERA USES (Importance = 1):
          * ShellAbout is the shared About dialog every Win16 and early Win32
@@ -4301,7 +4300,7 @@ static LRESULT CALLBACK HostWindowProcedure(HWND window, UINT message, WPARAM wP
 
     case WM_ENTERSIZEMOVE:
         g_InSizeMove = 1;
-    break;
+        break;
 
     case WM_EXITSIZEMOVE:                /* Windows' move/size loop leaves the cursor unclipped */
         g_InSizeMove = 0;

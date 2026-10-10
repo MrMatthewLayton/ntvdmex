@@ -30,12 +30,6 @@
 #include <stdint.h>
 #include "interp_xcpu.h"
 
-static BYTE g_Image[XMEM_SIZE];
-static UINT64 g_Random;
-
-static UINT g_ExtraByKey[0x20000];
-static UINT g_MismatchByKey[0x20000];
-
 VOID ref_Initialize(PCBYTE image, INT isProtectedMode);  VOID new_Initialize(
     PCBYTE image,
     INT isProtectedMode);
@@ -45,6 +39,12 @@ INT  ref_Step(PINTERP_XCPU state, PUINT64 effects);       INT  new_Step(
     PINTERP_XCPU state,
     PUINT64 effects);
 VOID new_UndoBegin(VOID);  INT new_UndoRollback(VOID);  VOID new_UndoEnd(VOID);
+
+static BYTE g_Image[XMEM_SIZE];
+static UINT64 g_Random;
+
+static UINT g_ExtraByKey[0x20000];
+static UINT g_MismatchByKey[0x20000];
 
 static UINT32 InterpSupersetRandom(VOID)
 {

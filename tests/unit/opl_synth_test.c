@@ -66,6 +66,8 @@
  */
 #define T_NSAMP     6000
 
+VOID VddOplRender(POPL_STATE state, INT16 *output, UINT32 frames);
+
 static INT g_Total = 0;
 static INT g_Failures = 0;
 static INT16 g_Samples[OPL_NATIVE_HZ];              /* one second */
@@ -92,8 +94,6 @@ static UINT32 g_HashMelodic;
  */
 static const BYTE g_MultiplierTimesTwo[16] = { 1, 2, 4, 6, 8, 10, 12, 14, 16, 18, 20, 20, 24, 24, 30, 30 };
 static BYTE g_Noise[72 * (T_NSAMP + 2) + 32];
-
-VOID VddOplRender(POPL_STATE state, INT16 *output, UINT32 frames);
 
 /* Operator index -> register offset. The banks skip 0x06/0x07 and 0x0E/0x0F. */
 static BYTE OplSynthTestOperatorRegister(INT operatorIndex)

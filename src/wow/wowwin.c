@@ -682,7 +682,7 @@ static LRESULT CALLBACK WowWinProc(HWND window, UINT message, WPARAM wParam, LPA
 
     case WM_ENTERSIZEMOVE:
         ++g_WowWinSizeMove;
-    break;
+        break;
 
     /* ...and when the loop ends, the whole window is repainted once. A child the guest
      * moved from inside its WM_SIZE (Packager's "View:" label) left the strip it

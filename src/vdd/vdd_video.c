@@ -1188,13 +1188,13 @@ static VOID VideoAttributeOut(PVOID context, WORD port, BYTE width, UINT32 value
 
     case VIDEO_AR_OVERSCAN:
         state->PaletteRegisters[VIDEO_OVERSCAN_REGISTER] = state->Overscan = (BYTE)(byteValue & VIDEO_AR_PALETTE_MASK);
-    state->IsDirty = 1;
-    break;
+        state->IsDirty = 1;
+        break;
 
     case VIDEO_AR_COLOR_SELECT:
         state->AttributeColorSelect = byteValue;
-    VideoPaletteRefresh(state);
-    break;
+        VideoPaletteRefresh(state);
+        break;
 
     default:
         break;                                  /* 12h plane enable, 13h pan */
@@ -1218,19 +1218,19 @@ static VOID VideoAttributeIn(PVOID context, WORD port, BYTE width, UINT32 *value
     {
     case VIDEO_AR_MODE:
         *value = state->AttributeMode;
-    break;
+        break;
 
     case VIDEO_AR_OVERSCAN:
         *value = state->PaletteRegisters[VIDEO_OVERSCAN_REGISTER];
-    break;
+        break;
 
     case VIDEO_AR_COLOR_SELECT:
         *value = state->AttributeColorSelect;
-    break;
+        break;
 
     default:
         *value = (index < VIDEO_EGA_PALETTE_REGISTERS) ? state->PaletteRegisters[index] : state->AttributeRegisters[index];
-    break;  /* AR12/AR13 */
+        break;  /* AR12/AR13 */
     }
 }
 
@@ -1376,33 +1376,33 @@ static UINT VideoModePageSize(BYTE mode, BYTE kind, UINT columns, UINT rows)
         case 0x05:
         case 0x06:
             pageSize = 0x4000u;
-        break;  /* 06h verified */
+            break;  /* 06h verified */
 
         case 0x0D:
             pageSize = 0x2000u;
-        break;
+            break;
 
         case 0x0E:
             pageSize = 0x4000u;
-        break;
+            break;
 
         case 0x0F:
         case 0x10:
             pageSize = 0x8000u;
-        break;
+            break;
 
         case 0x11:
         case 0x12:
             pageSize = 0xA000u;
-        break;  /* 12h verified */
+            break;  /* 12h verified */
 
         case 0x13:
             pageSize = 0x2000u;
-        break;  /* 13h verified */
+            break;  /* 13h verified */
 
         default:
             pageSize = 0x2000u;
-        break;
+            break;
         }
     }
 
@@ -2022,7 +2022,7 @@ static VOID VideoTeletypeChar(PVIDEO_STATE state, BYTE character, BYTE colour)
     {
     case VIDEO_CHAR_CARRIAGE_RETURN:
         state->CursorColumn = 0;
-    break;
+        break;
 
     case VIDEO_CHAR_LINE_FEED:
         if (++state->CursorRow >= state->Rows)
@@ -2037,7 +2037,7 @@ static VOID VideoTeletypeChar(PVIDEO_STATE state, BYTE character, BYTE colour)
         if (state->CursorColumn)
             state->CursorColumn--;
 
-    break;
+        break;
 
     case VIDEO_CHAR_BELL:
         break;
@@ -2205,32 +2205,32 @@ static INT VideoVesaGeometry(
     {
     case 400:
         *verticalTotal = 449u;
-    *hz = VIDEO_VESA_400_REFRESH_HZ;
-    break;
+        *hz = VIDEO_VESA_400_REFRESH_HZ;
+        break;
 
     case VIDEO_VGA_480_LINES:
         *verticalTotal = VIDEO_VGA_480_TOTAL;
-    break;
+        break;
 
     case 600:
         *verticalTotal = 628u;
-    break;
+        break;
 
     case 768:
         *verticalTotal = 806u;
-    break;
+        break;
 
     case 1024:
         *verticalTotal = 1066u;
-    break;
+        break;
 
     default:
         *verticalTotal = lines * VIDEO_VGA_480_TOTAL / VIDEO_VGA_480_LINES;
 
-    if (*verticalTotal <= lines)
-        *verticalTotal = lines + 1u;
+        if (*verticalTotal <= lines)
+            *verticalTotal = lines + 1u;
 
-    break;
+        break;
     }
 
     *verticalDisplay = *verticalBlank = lines;
@@ -2452,27 +2452,27 @@ static VOID VideoVbePortIn(PVOID context, WORD port, BYTE width, UINT32 *value)
     {
     case VIDEO_VBE_INDEX_BPP:
         registers = state->IsVesa ? state->VesaBpp : 0;
-    break;
+        break;
 
     case VIDEO_VBE_INDEX_BANK:
         registers = state->VesaBank;
-    break;
+        break;
 
     case VIDEO_VBE_INDEX_VIRTUAL_WIDTH:
         registers = (state->IsVesa && state->VesaBpp) ? state->VesaStride / VideoVesaBytesPerPixel(state->VesaBpp) : 0;
-    break;
+        break;
 
     case VIDEO_VBE_INDEX_START_LOW:
         registers = (state->VesaOrigin / VIDEO_VBE_START_UNIT) & WORD_MASK_U;
-    break;
+        break;
 
     case VIDEO_VBE_INDEX_START_HIGH:
         registers = (state->VesaOrigin / VIDEO_VBE_START_UNIT) >> WORD_SHIFT;
-    break;
+        break;
 
     default:
         registers = 0;
-    break;                  /* 00h (ID) and the rest: 0 */
+        break;                  /* 00h (ID) and the rest: 0 */
     }
 
     *value = registers;
@@ -3803,7 +3803,7 @@ static VOID VideoVesa(PVIDEO_STATE state, PNTVDD_REGISTERS registers)
 
     default:
         VddSetAx(registers, VIDEO_VBE_NO_SUCH_FUNCTION);
-    break;              /* no such sub-function: AL != 4Fh (measured on two BIOSes) */
+        break;              /* no such sub-function: AL != 4Fh (measured on two BIOSes) */
     }
 }
 
@@ -4066,7 +4066,7 @@ static VOID VideoInt10(PVOID context, PNTVDD_REGISTERS registers)
 
     case VIDEO_FUNCTION_SET_CURSOR_SHAPE:
         state->CursorShape = VddGetCx(registers);
-    break;
+        break;
 
     /* 02h/03h: THE CURSOR OF PAGE BH (#252). Eight cursors, one per page -- the
      * active page's is CursorRow/CursorColumn, the rest PageRow/PageColumn (0040:0050). BH was
@@ -4733,9 +4733,9 @@ static VOID VideoInt10(PVOID context, PNTVDD_REGISTERS registers)
             {
             case VIDEO_FONT_INFO_ROM_8X8:
                 segment = VDD_FONT8X8_SEG;
-            offset = 0;
-            bytesPerCharacter = VGA_FONT8_HEIGHT;
-            break;
+                offset = 0;
+                bytesPerCharacter = VGA_FONT8_HEIGHT;
+                break;
 
             case VIDEO_FONT_INFO_INT1F:                                        /* INT 1Fh: 8x8 upper half */
                 /* #266: what INT 1Fh holds -- ours (8x8 upper half) unless AL=20h
@@ -4752,17 +4752,17 @@ static VOID VideoInt10(PVOID context, PNTVDD_REGISTERS registers)
                 /* fall through */
             case VIDEO_FONT_INFO_ROM_8X8_HIGH:
                 segment = VDD_FONT8X8_SEG;
-            offset = VIDEO_FONT_HIGH_FIRST * VGA_FONT8_HEIGHT;
-            bytesPerCharacter = VGA_FONT8_HEIGHT;
-            break;
+                offset = VIDEO_FONT_HIGH_FIRST * VGA_FONT8_HEIGHT;
+                bytesPerCharacter = VGA_FONT8_HEIGHT;
+                break;
 
             case VIDEO_FONT_INFO_ROM_8X14:                                        /* ROM 8x14 / 9x14 alt */
 
             case VIDEO_FONT_INFO_ROM_9X14:
                 segment = VDD_FONT8X14_SEG;
-            offset = 0;
-            bytesPerCharacter = VGA_FONT14_HEIGHT;
-            break;
+                offset = 0;
+                bytesPerCharacter = VGA_FONT14_HEIGHT;
+                break;
 
             case VIDEO_FONT_INFO_INT43:                                        /* INT 43h: the CURRENT font */
                 /* Whatever the active mode actually draws with -- 8x8 in the 200-line
@@ -4803,9 +4803,9 @@ static VOID VideoInt10(PVOID context, PNTVDD_REGISTERS registers)
 
             default:
                 segment = VDD_FONT8X16_SEG;
-            offset = 0;
-            bytesPerCharacter = VGA_FONT16_HEIGHT;
-            break;
+                offset = 0;
+                bytesPerCharacter = VGA_FONT16_HEIGHT;
+                break;
             }
 
             registers->Es = segment;
@@ -5129,7 +5129,7 @@ static VOID VideoInt10(PVOID context, PNTVDD_REGISTERS registers)
 
     case VIDEO_FUNCTION_VESA:
         VideoVesa(state, registers);
-    break;                     /* VESA VBE 2.0 */
+        break;                     /* VESA VBE 2.0 */
 
     default:                                           /* unimplemented function */
         VIDEO_UNIMPLEMENTED_SET(state->UnimplementedFunctions, ah);
@@ -5226,16 +5226,16 @@ static VOID VideoDacIn(PVOID context, WORD port, BYTE width, UINT32 *value)
     {
     case 0:
         *value = VideoDacFrom8(state, (BYTE)(position >> VIDEO_RED_SHIFT));
-    break;   /* R, at the DAC width */
+        break;   /* R, at the DAC width */
 
     case 1:
         *value = VideoDacFrom8(state, (BYTE)(position >> VIDEO_GREEN_SHIFT));
-    break;   /* G */
+        break;   /* G */
 
     default:
         *value = VideoDacFrom8(state, (BYTE)position);
-    state->DacReadIndex++;
-    break;   /* B, then advance */
+        state->DacReadIndex++;
+        break;   /* B, then advance */
     }
 
     if (++state->DacComponent >= VIDEO_RGB_BYTES)
@@ -6284,7 +6284,7 @@ static VOID VideoCrtcSetData(PVOID context, UINT32 value)
     case VIDEO_CR_VERTICAL_DISPLAY_END:
     case VIDEO_CR_MODE_CONTROL:
         state->IsGeometryRegistersOk = 1;
-    break;
+        break;
 
     default:
         break;
@@ -6347,51 +6347,51 @@ static VOID VideoCrtcSetData(PVOID context, UINT32 value)
 
     case VIDEO_CR_OFFSET:
         state->CrtcOffset = (BYTE)value;
-    state->IsCrtcOffsetSeen = 1;
-    state->IsDirty = 1;
-    break;
+        state->IsCrtcOffsetSeen = 1;
+        state->IsDirty = 1;
+        break;
 
     /* Line Compare, and the two registers that carry its top two bits. */
     case VIDEO_CR_OVERFLOW:
         state->CrtcOverflow = (BYTE)value;
-    VideoCrtcLineCompareUpdate(state);
-    VideoCrtcVerticalTimingUpdate(state);
-    state->IsDirty = 1;
-    break;
+        VideoCrtcLineCompareUpdate(state);
+        VideoCrtcVerticalTimingUpdate(state);
+        state->IsDirty = 1;
+        break;
 
     case VIDEO_CR_MAX_SCAN:
         state->CrtcMaxScan  = (BYTE)value;
-    VideoCrtcLineCompareUpdate(state);
-    VideoCrtcVerticalTimingUpdate(state);
-    state->IsDirty = 1;
-    break;
+        VideoCrtcLineCompareUpdate(state);
+        VideoCrtcVerticalTimingUpdate(state);
+        state->IsDirty = 1;
+        break;
 
     case VIDEO_CR_LINE_COMPARE:
         state->CrtcLineCompareLow   = (BYTE)value;
-    VideoCrtcLineCompareUpdate(state);
-    state->IsDirty = 1;
-    break;
+        VideoCrtcLineCompareUpdate(state);
+        state->IsDirty = 1;
+        break;
 
     /* Vertical timing -- see VideoVerticalTiming(). Low bytes only; 0x07/0x09 carry the
      * high bits and are latched above for Line Compare already.
      */
     case VIDEO_CR_VERTICAL_TOTAL:
         state->CrtcVerticalTotalLow = (BYTE)value;
-    VideoCrtcVerticalTimingUpdate(state);
-    state->IsDirty = 1;
-    break;
+        VideoCrtcVerticalTimingUpdate(state);
+        state->IsDirty = 1;
+        break;
 
     case VIDEO_CR_VERTICAL_DISPLAY_END:
         state->CrtcVerticalDisplayEndLow    = (BYTE)value;
-    VideoCrtcVerticalTimingUpdate(state);
-    state->IsDirty = 1;
-    break;
+        VideoCrtcVerticalTimingUpdate(state);
+        state->IsDirty = 1;
+        break;
 
     case VIDEO_CR_VERTICAL_BLANK_START:
         state->CrtcVerticalBlankStartLow    = (BYTE)value;
-    VideoCrtcVerticalTimingUpdate(state);
-    state->IsDirty = 1;
-    break;
+        VideoCrtcVerticalTimingUpdate(state);
+        state->IsDirty = 1;
+        break;
 
     /* THE TEXT CURSOR, PROGRAMMED DIRECTLY:
      * 0x0A/0x0B are Cursor Start/End (the same CH/CL INT 10h AH=01h takes, bit 5
@@ -6444,23 +6444,23 @@ static VOID VideoCrtcIn(PVOID context, WORD port, BYTE width, UINT32 *value)
     {
     case VIDEO_CR_START_HIGH:
         *value = (BYTE)(state->CrtcStart >> BYTE_SHIFT);
-    break;
+        break;
 
     case VIDEO_CR_START_LOW:
         *value = (BYTE)(state->CrtcStart & BYTE_MASK);
-    break;
+        break;
 
     case VIDEO_CR_OFFSET:
         *value = state->CrtcOffset;
-    break;
+        break;
 
     case VIDEO_CR_CURSOR_START:
         *value = (BYTE)((state->CursorShape >> BYTE_SHIFT) & VIDEO_CR0A_CURSOR_START_MASK);
-    break;
+        break;
 
     case VIDEO_CR_CURSOR_END:
         *value = (BYTE)(state->CursorShape & VIDEO_CR0B_CURSOR_END_MASK);
-    break;
+        break;
 
     /* Read back what the BIOS path set, in the hardware's own units -- in TEXT modes.
      * - In a graphics mode the BIOS never writes CR0E/CR0F (there is no hardware
@@ -6481,7 +6481,7 @@ static VOID VideoCrtcIn(PVOID context, WORD port, BYTE width, UINT32 *value)
 
     default:
         *value = state->CrtcRegisters[state->CrtcIndex & VIDEO_CR_INDEX_MASK];
-    break;  /* CR00-05/11/17 read back */
+        break;  /* CR00-05/11/17 read back */
     }
 }
 
@@ -6691,26 +6691,26 @@ static VOID VideoGcSetData(PVOID context, UINT32 value)
     {
     case VIDEO_GR_SET_RESET:
         state->SetReset   = (BYTE)(value & VIDEO_ALL_PLANES);
-    break;
+        break;
 
     case VIDEO_GR_ENABLE_SET_RESET:
         state->EnableSetReset   = (BYTE)(value & VIDEO_ALL_PLANES);
-    break;
+        break;
 
     /* GR2 and GR7 are the two halves of read mode 1 and used to fall into default:,
      * i.e. be dropped. See ReadMode in the header.
      */
     case VIDEO_GR_COLOR_COMPARE:
         state->ColorCompare  = (BYTE)(value & VIDEO_ALL_PLANES);
-    break;
+        break;
 
     case VIDEO_GR_COLOR_DONT_CARE:
         state->ColorDontCare = (BYTE)(value & VIDEO_ALL_PLANES);
-    break;
+        break;
 
     case VIDEO_GR_DATA_ROTATE:
         state->FunctionRotate = (BYTE)(value & VIDEO_GR3_MASK);
-    break;
+        break;
 
     /* GR4 IS THE READ PLANE, AND THE REMAP PATH CANNOT SEE READS AT ALL:
      * In the `st->Planes[]` interpreter path a guest read is served by us and honours
@@ -6755,7 +6755,7 @@ static VOID VideoGcSetData(PVOID context, UINT32 value)
 
     case VIDEO_GR_BIT_MASK:
         state->BitMask    = (BYTE)value;
-    break;
+        break;
 
     default:
         break;
@@ -6778,27 +6778,27 @@ static VOID VideoGcIn(PVOID context, WORD port, BYTE width, UINT32 *value)
     {
     case VIDEO_GR_SET_RESET:
         *value = state->SetReset;
-    break;
+        break;
 
     case VIDEO_GR_ENABLE_SET_RESET:
         *value = state->EnableSetReset;
-    break;
+        break;
 
     case VIDEO_GR_COLOR_COMPARE:
         *value = state->ColorCompare;
-    break;
+        break;
 
     case VIDEO_GR_COLOR_DONT_CARE:
         *value = state->ColorDontCare;
-    break;
+        break;
 
     case VIDEO_GR_DATA_ROTATE:
         *value = state->FunctionRotate;
-    break;
+        break;
 
     case VIDEO_GR_READ_MAP:
         *value = state->ReadMap;
-    break;
+        break;
 
     /* [CAUTION]: GR5 IS NOT ONLY THE TWO MODE FIELDS. Bits 0:1 are the write mode and bit 3
      * the read mode, and those are shadowed because the engine uses them -- but
@@ -6814,11 +6814,11 @@ static VOID VideoGcIn(PVOID context, WORD port, BYTE width, UINT32 *value)
 
     case VIDEO_GR_BIT_MASK:
         *value = state->BitMask;
-    break;
+        break;
 
     default:
         *value = state->GcRegisters[state->GcIndex & VIDEO_GR_INDEX_MASK];
-    break;   /* GR6 and the rest read back */
+        break;   /* GR6 and the rest read back */
     }
 }
 
@@ -7173,27 +7173,27 @@ static VOID VideoExternalIn(PVOID context, WORD port, BYTE width, UINT32 *value)
      */
     case VIDEO_PORT_INPUT_STATUS_0:
         *value = VIDEO_STATUS0_SWITCH_SENSE | VideoVintStatus(state);
-    break;   /* bit 7: #187, see VideoVintCr11 */
+        break;   /* bit 7: #187, see VideoVintCr11 */
 
     case VIDEO_PORT_VGA_ENABLE:
         *value = state->VgaEnable;
-    break;
+        break;
 
     case VIDEO_PORT_DAC_MASK:
         *value = state->DacMask;
-    break;
+        break;
 
     case VIDEO_PORT_FEATURE_READ:
         *value = state->FeatureControl;
-    break;   /* Feature Control read */
+        break;   /* Feature Control read */
 
     case VIDEO_PORT_MISC_READ:
         *value = state->MiscOutput;
-    break;   /* Misc Output read */
+        break;   /* Misc Output read */
 
     default:
         *value = VIDEO_FLOATING_BUS;
-    break;             /* 3CB: nothing decodes there */
+        break;             /* 3CB: nothing decodes there */
     }
 }
 

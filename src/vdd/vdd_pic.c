@@ -324,11 +324,11 @@ static VOID PicCommandWrite(PPIC_CHIP chip, BYTE value)
      */
     case PIC_OCW2_ROTATE_AEOI_SET:
         chip->IsRotateInAutoEoi = TRUE;
-    break;
+        break;
 
     case PIC_OCW2_ROTATE_AEOI_CLEAR:
         chip->IsRotateInAutoEoi = FALSE;
-    break;
+        break;
 
     default:
         /* 40h is the datasheet's "no operation". None of C0h/80h/00h/40h ends an
@@ -346,12 +346,12 @@ static VOID PicDataWrite(PPIC_CHIP chip, BYTE value)
     {
     case PIC_ICW_EXPECT_ICW2:
         chip->VectorBase = value;
-    chip->IcwStep = PIC_ICW_EXPECT_ICW3;
-    return;          /* ICW2: vector base */
+        chip->IcwStep = PIC_ICW_EXPECT_ICW3;
+        return;          /* ICW2: vector base */
 
     case PIC_ICW_EXPECT_ICW3:
         chip->IcwStep = chip->IsIcw4Needed ? PIC_ICW_EXPECT_ICW4 : PIC_ICW_RUNNING;
-    return;  /* ICW3: cascade map */
+        return;  /* ICW3: cascade map */
 
     case PIC_ICW_EXPECT_ICW4:
         chip->IsAutoEoi = (BYTE)((value & PIC_ICW4_AEOI) ? TRUE : FALSE);   /* ICW4 */
@@ -365,7 +365,7 @@ static VOID PicDataWrite(PPIC_CHIP chip, BYTE value)
 
     default:
         chip->Imr = value;
-    return;                           /* OCW1: mask */
+        return;                           /* OCW1: mask */
     }
 }
 
@@ -380,19 +380,19 @@ static VOID PicPortOut(PVOID context, WORD port, BYTE width, UINT32 value)
     {
     case PIC_MASTER_COMMAND:
         PicCommandWrite(&state->Master, byteValue);
-    break;
+        break;
 
     case PIC_MASTER_DATA:
         PicDataWrite(&state->Master, byteValue);
-    break;
+        break;
 
     case PIC_SLAVE_COMMAND:
         PicCommandWrite(&state->Slave, byteValue);
-    break;
+        break;
 
     case PIC_SLAVE_DATA:
         PicDataWrite(&state->Slave, byteValue);
-    break;
+        break;
 
     default:
         break;

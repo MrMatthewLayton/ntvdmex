@@ -261,39 +261,39 @@ UINT X86InstructionLength(const BYTE *bytes, UINT offset, UINT length, INT isDef
 
     case XL_IB:
         offset += 1;
-    break;
+        break;
 
     case XL_IZ:
         offset += immediateSize;
-    break;
+        break;
 
     case XL_IW:
         offset += X86_IMM16_SIZE;
-    break;
+        break;
 
     case XL_MOFF:
         offset += isAddress32 ? X86_IMM32_SIZE : X86_IMM16_SIZE;
-    break;
+        break;
 
     case XL_ENTER:
         offset += X86_ENTER_IMMEDIATE_SIZE;
-    break;
+        break;
 
     case XL_FAR:
         offset += immediateSize + X86_SELECTOR_SIZE;
-    break;
+        break;
 
     case XL_G3B:
         if (registerField >= 0 && registerField < X86_GROUP3_IMMEDIATE_FORMS)
             offset += 1;
 
-    break;
+        break;
 
     case XL_G3Z:
         if (registerField >= 0 && registerField < X86_GROUP3_IMMEDIATE_FORMS)
             offset += immediateSize;
 
-    break;
+        break;
 
     default:
         return 0;

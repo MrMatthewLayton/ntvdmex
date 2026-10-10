@@ -56,9 +56,6 @@ typedef struct
     WORD Last;
 } VDD_IO_PORTRANGE;
 
-static HANDLE g_IsvModule;
-static BYTE   g_IsvLatch;
-
 USHORT WINAPI getAX(VOID); VOID WINAPI setAX(USHORT);
 USHORT WINAPI getBX(VOID); USHORT WINAPI getCX(VOID); VOID WINAPI setCX(USHORT);
 USHORT WINAPI getDX(VOID); USHORT WINAPI getSI(VOID); USHORT WINAPI getDS(VOID);
@@ -66,6 +63,9 @@ VOID WINAPI setCF(ULONG);
 BOOL WINAPI VDDInstallIOHook(HANDLE, WORD, VDD_IO_PORTRANGE *, VDD_IO_HANDLERS *);
 VOID WINAPI VDDDeInstallIOHook(HANDLE, WORD, VDD_IO_PORTRANGE *);
 PVOID WINAPI VdmMapFlat(USHORT, ULONG, ULONG);
+
+static HANDLE g_IsvModule;
+static BYTE   g_IsvLatch;
 
 static VOID WINAPI IsvPortInByte(WORD port, BYTE *data)
 {
@@ -91,13 +91,13 @@ __declspec(dllexport) VOID IsvDispatch(VOID)
     {
     case ISV_FUNCTION_COMPLEMENT:
         setCX((USHORT)(getBX() ^ ISV_WORD_MASK));
-    setCF(0);
-    break;
+        setCF(0);
+        break;
 
     case ISV_FUNCTION_LATCH:
         setCX(g_IsvLatch);
-    setCF(0);
-    break;
+        setCF(0);
+        break;
 
     case ISV_FUNCTION_SUM:
     {
@@ -115,7 +115,7 @@ __declspec(dllexport) VOID IsvDispatch(VOID)
 
     default:
         setCF(1);
-    break;
+        break;
     }
 }
 

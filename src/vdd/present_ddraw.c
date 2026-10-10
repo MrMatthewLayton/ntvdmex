@@ -63,15 +63,59 @@
 #define PRESENT_MID_SCREEN_MARGIN               32              /* Lines from either edge */
 #define PRESENT_FLIP_STREAK_OUR_WAIT            30              /* Flips that never waited, then we time them */
 
+#define PRESENT_DIRECT_DRAW                     ((LPDIRECTDRAW7)presenter->DirectDraw)
+#define PRESENT_SURFACE(p)                      ((LPDIRECTDRAWSURFACE7)(p))
+
+typedef HRESULT (WINAPI *PFN_DIRECT_DRAW_CREATE_EX)(GUID *, LPVOID *, REFIID, IUnknown *);
+
+/* The snapshot as a DIB that StretchDIBits can take: 8bpp + palette, or 32bpp when
+ * the frame is direct colour or raster-split. Shared by the window/borderless path and
+ * (#223) the exclusive DirectDraw path, so both draw the same picture the same way.
+ * `scale2x` lets the caller ask for the pixel-art doubler first (GDI's Scaler).
+ */
+typedef struct _PRESENT_SNAPSHOT_DIB
+{
+    BITMAPINFOHEADER Header;
+    RGBQUAD Colors[NTVDD_PALETTE_ENTRIES];
+} PRESENT_SNAPSHOT_DIB, *PPRESENT_SNAPSHOT_DIB;
+
+/* windowed AND (by default) fullscreen: GDI StretchDIBits:
+ * THIS PATH IS SHARP AND THE DIRECTDRAW ONE IS NOT. (s64) (Importance = 3):
+ * The user settled it with a comparison no log could have produced: "even if I
+ * maximize the window on the desktop, with or without aspect ratio, the pixels stay
+ * sharp. In fullscreen they are NEVER sharp, regardless of what knobs I twiddle."
+ * Same frame, same aspect maths, same monitor, same non-integer 5.25x scale -- the
+ * only difference is WHICH BLITTER DRAWS IT:
+ *   GDI StretchDIBits + COLORONCOLOR -> point sampling. Hard pixel edges.
+ *   DirectDraw stretch Blt           -> the DRIVER decides, and it filters.
+ * DirectDraw offers no reliable way to demand point sampling on a stretch blt
+ * (DDBLTFX can ASK for arithmetic stretching; there is no flag that forbids it), so
+ * the fix is not to configure the stretch but to STOP ASKING FOR ONE.
+ * - So fullscreen is now a BORDERLESS WINDOW presented through here, not an exclusive
+ *   DirectDraw mode. That also gets back the instant toggle (no mode switch to resync)
+ *   and removes the fullscreen resolution knob entirely -- there is no mode to choose.
+ *   The exclusive path is kept behind a file knob (ddrawfs.flag) rather than deleted,
+ *   because "no tearing" was its original argument and that deserves a way back.
+ *
+ * [CAUTION]: TWO THINGS DIFFER IN FULLSCREEN and both are handled below: there is no status
+ * strip to reserve room for, and the fit is snapped to whole multiples.
+ */
+static const UINT32 *PresentRowPalette(PPRESENT_DDRAW presenter, INT row);   /* fwd: with _snapshot */
+
 /* The .bmp snapshot (PresentDdrawSaveBmp). */
 
 /* IID_IDirectDraw7 = 15e65ec0-3b9c-11d2-b92f-00609797ea5b (inline -> no dxguid). */
 static const GUID g_PresentIidDirectDraw7 =
     { 0x15e65ec0, 0x3b9c, 0x11d2, { 0xb9,0x2f,0x00,0x60,0x97,0x97,0xea,0x5b } };
-typedef HRESULT (WINAPI *PFN_DIRECT_DRAW_CREATE_EX)(GUID *, LPVOID *, REFIID, IUnknown *);
 
-#define PRESENT_DIRECT_DRAW     ((LPDIRECTDRAW7)presenter->DirectDraw)
-#define PRESENT_SURFACE(p)      ((LPDIRECTDRAWSURFACE7)(p))
+/* THE SCALE2X TARGET, AS ONE STATIC BUFFER:
+ * The largest frame doubled (#325: it was 1280x960 -- 640x480 doubled -- so a
+ * 720x400 text frame silently skipped the scaler). It lives here rather than in PRESENT_DDRAW so the
+ * struct stays something a caller can hold by value (present_demo does), and it
+ * is static rather than allocated because the present path runs on the UI thread
+ * at video rate and must never wait on the heap.
+ */
+static BYTE g_PresentScaled[(PRESENT_SCALE2X_FACTOR * NTVDD_FRAME_MAX_WIDTH) * (PRESENT_SCALE2X_FACTOR * NTVDD_FRAME_MAX_HEIGHT)];
 
 /* time a blit near the monitor's vertical blank (reduces tearing).
  *
@@ -149,15 +193,6 @@ static VOID PresentWaitVerticalBlank(PPRESENT_DDRAW presenter)
     }
 }
 
-/* THE SCALE2X TARGET, AS ONE STATIC BUFFER:
- * The largest frame doubled (#325: it was 1280x960 -- 640x480 doubled -- so a
- * 720x400 text frame silently skipped the scaler). It lives here rather than in PRESENT_DDRAW so the
- * struct stays something a caller can hold by value (present_demo does), and it
- * is static rather than allocated because the present path runs on the UI thread
- * at video rate and must never wait on the heap.
- */
-static BYTE g_PresentScaled[(PRESENT_SCALE2X_FACTOR * NTVDD_FRAME_MAX_WIDTH) * (PRESENT_SCALE2X_FACTOR * NTVDD_FRAME_MAX_HEIGHT)];
-
 /* The scanline mask: an 8x8 monochrome pattern, black on every other row. ANDed
  * over the destination it darkens alternate PHYSICAL rows -- which is where a
  * scanline lives, on the screen, not in the frame. Built once and kept: a brush
@@ -183,29 +218,6 @@ static HBRUSH PresentScanlineBrush(VOID)
     return brush;
 }
 
-/* windowed AND (by default) fullscreen: GDI StretchDIBits:
- * THIS PATH IS SHARP AND THE DIRECTDRAW ONE IS NOT. (s64) (Importance = 3):
- * The user settled it with a comparison no log could have produced: "even if I
- * maximize the window on the desktop, with or without aspect ratio, the pixels stay
- * sharp. In fullscreen they are NEVER sharp, regardless of what knobs I twiddle."
- * Same frame, same aspect maths, same monitor, same non-integer 5.25x scale -- the
- * only difference is WHICH BLITTER DRAWS IT:
- *   GDI StretchDIBits + COLORONCOLOR -> point sampling. Hard pixel edges.
- *   DirectDraw stretch Blt           -> the DRIVER decides, and it filters.
- * DirectDraw offers no reliable way to demand point sampling on a stretch blt
- * (DDBLTFX can ASK for arithmetic stretching; there is no flag that forbids it), so
- * the fix is not to configure the stretch but to STOP ASKING FOR ONE.
- * - So fullscreen is now a BORDERLESS WINDOW presented through here, not an exclusive
- *   DirectDraw mode. That also gets back the instant toggle (no mode switch to resync)
- *   and removes the fullscreen resolution knob entirely -- there is no mode to choose.
- *   The exclusive path is kept behind a file knob (ddrawfs.flag) rather than deleted,
- *   because "no tearing" was its original argument and that deserves a way back.
- *
- * [CAUTION]: TWO THINGS DIFFER IN FULLSCREEN and both are handled below: there is no status
- * strip to reserve room for, and the fit is snapped to whole multiples.
- */
-static const UINT32 *PresentRowPalette(PPRESENT_DDRAW presenter, INT row);   /* fwd: with _snapshot */
-static UINT32 PresentSnapshotPixel(PPRESENT_DDRAW presenter, INT row, INT column);   /* fwd: depth-agnostic pixel */
 /* #138: the release hint, top centre of the picture, while it is due. Drawn after the
  * frame on BOTH fullscreen paths (the GDI window here, the DirectDraw back buffer via
  * GetDC in PresentFullscreen), so every present repaints it until it expires. s81: the user
@@ -302,16 +314,48 @@ static VOID PresentMemoryRelease(PPRESENT_DDRAW presenter)
     presenter->MemoryWidth = presenter->MemoryHeight = 0;
 }
 
-/* The snapshot as a DIB that StretchDIBits can take: 8bpp + palette, or 32bpp when
- * the frame is direct colour or raster-split. Shared by the window/borderless path and
- * (#223) the exclusive DirectDraw path, so both draw the same picture the same way.
- * `scale2x` lets the caller ask for the pixel-art doubler first (GDI's Scaler).
+/* The palette for source row `y` of the snapshot: the single palette on an ordinary
+ * frame; on a raster-split frame the per-entry resolution of VddFramePaletteAt,
+ * computed once per row.
  */
-typedef struct _PRESENT_SNAPSHOT_DIB
+static const UINT32 *PresentRowPalette(PPRESENT_DDRAW presenter, INT row)
 {
-    BITMAPINFOHEADER Header;
-    RGBQUAD Colors[NTVDD_PALETTE_ENTRIES];
-} PRESENT_SNAPSHOT_DIB, *PPRESENT_SNAPSHOT_DIB;
+    NTVDD_FRAME frame;
+    UINT index;
+
+    if (!presenter->IsSnapshotSplit)
+        return presenter->SnapshotPalette;
+
+    if (presenter->RowPaletteY == row)
+        return presenter->RowPalette;
+
+    frame.Palette = presenter->SnapshotPalette;
+    frame.PaletteBase = presenter->SnapshotPaletteBase;
+    frame.PaletteSplit = presenter->SnapshotPaletteSplit;
+    frame.SplitRow = presenter->SnapshotSplitRow;
+    frame.SplitFrame = presenter->SnapshotSplitFrame;
+    frame.FrameNumber = presenter->SnapshotFrameNumber;
+
+    for (index = 0; index < NTVDD_PALETTE_ENTRIES; ++index)
+        presenter->RowPalette[index] = VddFramePaletteAt(&frame, (UINT)row, index);
+
+    presenter->RowPaletteY = row;
+    return presenter->RowPalette;
+}
+
+/* The snapshot's pixel at (x,y) as ARGB, whatever depth it was captured at. One
+ * accessor so the depth is resolved in exactly one place: the alternative is the
+ * same `SnapshotBpp` test copied into four loops, which is how one of them ends up
+ * not having it.
+ */
+static UINT32 PresentSnapshotPixel(PPRESENT_DDRAW presenter, INT row, INT column)
+{
+    if (presenter->SnapshotBpp == PRESENT_BPP_DIRECT)
+        return presenter->Snapshot32[(size_t)row * presenter->SnapshotWidth + column];
+
+    return PresentRowPalette(presenter, row)[presenter->Snapshot[(size_t)row * presenter->SnapshotWidth + column]];
+}
+
 static const BYTE *PresentSnapshotDib(
     PPRESENT_DDRAW presenter,
     PPRESENT_SNAPSHOT_DIB dib,
@@ -771,19 +815,6 @@ static VOID PresentMaskInfo(DWORD mask, INT *shift, INT *bits)
 
     *shift=shiftCount;
     *bits=bitCount;
-}
-
-/* The snapshot's pixel at (x,y) as ARGB, whatever depth it was captured at. One
- * accessor so the depth is resolved in exactly one place: the alternative is the
- * same `SnapshotBpp` test copied into four loops, which is how one of them ends up
- * not having it.
- */
-static UINT32 PresentSnapshotPixel(PPRESENT_DDRAW presenter, INT row, INT column)
-{
-    if (presenter->SnapshotBpp == PRESENT_BPP_DIRECT)
-        return presenter->Snapshot32[(size_t)row * presenter->SnapshotWidth + column];
-
-    return PresentRowPalette(presenter, row)[presenter->Snapshot[(size_t)row * presenter->SnapshotWidth + column]];
 }
 
 /* Write one snapshot pixel, packed to whatever depth the locked surface is. */
@@ -1359,35 +1390,6 @@ VOID PresentDdrawSnapshot(PPRESENT_DDRAW presenter, PCNTVDD_FRAME frame)
     presenter->SnapshotWidth = frame->Width;
     presenter->SnapshotHeight = frame->Height;
     presenter->IsSnapshotValid = 1;
-}
-
-/* The palette for source row `y` of the snapshot: the single palette on an ordinary
- * frame; on a raster-split frame the per-entry resolution of VddFramePaletteAt,
- * computed once per row.
- */
-static const UINT32 *PresentRowPalette(PPRESENT_DDRAW presenter, INT row)
-{
-    NTVDD_FRAME frame;
-    UINT index;
-
-    if (!presenter->IsSnapshotSplit)
-        return presenter->SnapshotPalette;
-
-    if (presenter->RowPaletteY == row)
-        return presenter->RowPalette;
-
-    frame.Palette = presenter->SnapshotPalette;
-    frame.PaletteBase = presenter->SnapshotPaletteBase;
-    frame.PaletteSplit = presenter->SnapshotPaletteSplit;
-    frame.SplitRow = presenter->SnapshotSplitRow;
-    frame.SplitFrame = presenter->SnapshotSplitFrame;
-    frame.FrameNumber = presenter->SnapshotFrameNumber;
-
-    for (index = 0; index < NTVDD_PALETTE_ENTRIES; ++index)
-        presenter->RowPalette[index] = VddFramePaletteAt(&frame, (UINT)row, index);
-
-    presenter->RowPaletteY = row;
-    return presenter->RowPalette;
 }
 
 /* blit the back-buffer to the screen, vsync'd (call outside the lock). */

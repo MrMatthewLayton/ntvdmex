@@ -633,51 +633,51 @@ INT HostTryIo(volatile BYTE *tib, VDD_BUS *bus)
     {
     case X86_OP_IN_IMM_BYTE:
         isIn = 1;
-    width = 1;
-    usedDx = 0;
-    break;  /* IN  AL,ib */
+        width = 1;
+        usedDx = 0;
+        break;  /* IN  AL,ib */
 
     case X86_OP_IN_IMM:
         isIn = 1;
-    width = operandSize;
-    usedDx = 0;
-    break;  /* IN  eAX,ib */
+        width = operandSize;
+        usedDx = 0;
+        break;  /* IN  eAX,ib */
 
     case X86_OP_OUT_IMM_BYTE:
         isIn = 0;
-    width = 1;
-    usedDx = 0;
-    break;  /* OUT ib,AL */
+        width = 1;
+        usedDx = 0;
+        break;  /* OUT ib,AL */
 
     case X86_OP_OUT_IMM:
         isIn = 0;
-    width = operandSize;
-    usedDx = 0;
-    break;  /* OUT ib,eAX */
+        width = operandSize;
+        usedDx = 0;
+        break;  /* OUT ib,eAX */
 
     case X86_OP_IN_DX_BYTE:
         isIn = 1;
-    width = 1;
-    usedDx = 1;
-    break;  /* IN  AL,DX */
+        width = 1;
+        usedDx = 1;
+        break;  /* IN  AL,DX */
 
     case X86_OP_IN_DX:
         isIn = 1;
-    width = operandSize;
-    usedDx = 1;
-    break;  /* IN  eAX,DX */
+        width = operandSize;
+        usedDx = 1;
+        break;  /* IN  eAX,DX */
 
     case X86_OP_OUT_DX_BYTE:
         isIn = 0;
-    width = 1;
-    usedDx = 1;
-    break;  /* OUT DX,AL */
+        width = 1;
+        usedDx = 1;
+        break;  /* OUT DX,AL */
 
     case X86_OP_OUT_DX:
         isIn = 0;
-    width = operandSize;
-    usedDx = 1;
-    break;  /* OUT DX,eAX */
+        width = operandSize;
+        usedDx = 1;
+        break;  /* OUT DX,eAX */
 
     default:
         return 0;                       /* not an I/O op -> real fault */
@@ -823,23 +823,23 @@ INT HostTryIoString(volatile BYTE *tib, VDD_BUS *bus)
     {
     case X86_OP_INSB:
         isIn = 1;
-    width = 1;
-    break;              /* INSB */
+        width = 1;
+        break;              /* INSB */
 
     case X86_OP_INS:
         isIn = 1;
-    width = operandSize;
-    break;              /* INSW / INSD */
+        width = operandSize;
+        break;              /* INSW / INSD */
 
     case X86_OP_OUTSB:
         isIn = 0;
-    width = 1;
-    break;              /* OUTSB */
+        width = 1;
+        break;              /* OUTSB */
 
     case X86_OP_OUTS:
         isIn = 0;
-    width = operandSize;
-    break;              /* OUTSW / OUTSD */
+        width = operandSize;
+        break;              /* OUTSW / OUTSD */
 
     default:
         return 0;                                      /* not a string I/O */
@@ -924,51 +924,51 @@ INT HostTryIoPm(volatile BYTE *tib, VDD_BUS *bus)
     {
     case X86_OP_IN_IMM_BYTE:
         isIn = 1;
-    width = 1;
-    usedDx = 0;
-    break;  /* IN  AL,ib */
+        width = 1;
+        usedDx = 0;
+        break;  /* IN  AL,ib */
 
     case X86_OP_IN_IMM:
         isIn = 1;
-    width = operandSize;
-    usedDx = 0;
-    break;  /* IN  eAX,ib */
+        width = operandSize;
+        usedDx = 0;
+        break;  /* IN  eAX,ib */
 
     case X86_OP_OUT_IMM_BYTE:
         isIn = 0;
-    width = 1;
-    usedDx = 0;
-    break;  /* OUT ib,AL */
+        width = 1;
+        usedDx = 0;
+        break;  /* OUT ib,AL */
 
     case X86_OP_OUT_IMM:
         isIn = 0;
-    width = operandSize;
-    usedDx = 0;
-    break;  /* OUT ib,eAX */
+        width = operandSize;
+        usedDx = 0;
+        break;  /* OUT ib,eAX */
 
     case X86_OP_IN_DX_BYTE:
         isIn = 1;
-    width = 1;
-    usedDx = 1;
-    break;  /* IN  AL,DX */
+        width = 1;
+        usedDx = 1;
+        break;  /* IN  AL,DX */
 
     case X86_OP_IN_DX:
         isIn = 1;
-    width = operandSize;
-    usedDx = 1;
-    break;  /* IN  eAX,DX */
+        width = operandSize;
+        usedDx = 1;
+        break;  /* IN  eAX,DX */
 
     case X86_OP_OUT_DX_BYTE:
         isIn = 0;
-    width = 1;
-    usedDx = 1;
-    break;  /* OUT DX,AL */
+        width = 1;
+        usedDx = 1;
+        break;  /* OUT DX,AL */
 
     case X86_OP_OUT_DX:
         isIn = 0;
-    width = operandSize;
-    usedDx = 1;
-    break;  /* OUT DX,eAX */
+        width = operandSize;
+        usedDx = 1;
+        break;  /* OUT DX,eAX */
 
     default:
         return 0;                       /* not an I/O op -> real fault */

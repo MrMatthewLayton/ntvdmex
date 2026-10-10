@@ -935,11 +935,11 @@ static VOID Emu8kDataWrite(PEMU8K_STATE state, INT dataPort, INT isHighHalf, WOR
         {
         case EMU8K_DATA0_CPF:
             voice->Cpf  = Emu8kSetHalf(voice->Cpf, isHighHalf, value);
-        break;
+            break;
 
         case EMU8K_DATA0_PTRX:
             voice->Ptrx = Emu8kSetHalf(voice->Ptrx, isHighHalf, value);
-        break;
+            break;
 
         case EMU8K_DATA0_CVCF:
             voice->Cvcf = Emu8kSetHalf(voice->Cvcf, isHighHalf, value);
@@ -954,23 +954,23 @@ static VOID Emu8kDataWrite(PEMU8K_STATE state, INT dataPort, INT isHighHalf, WOR
 
         case EMU8K_DATA0_VTFT:
             voice->Vtft = Emu8kSetHalf(voice->Vtft, isHighHalf, value);
-        break;
+            break;
 
         case EMU8K_DATA0_R4:
             voice->Data0Register4 = Emu8kSetHalf(voice->Data0Register4, isHighHalf, value);
-        break;
+            break;
 
         case EMU8K_DATA0_R5:
             voice->Data0Register5 = Emu8kSetHalf(voice->Data0Register5, isHighHalf, value);
-        break;
+            break;
 
         case EMU8K_DATA0_PSST:
             voice->Psst = Emu8kSetHalf(voice->Psst, isHighHalf, value);
-        break;
+            break;
 
         case EMU8K_DATA0_CSL:
             voice->Csl  = Emu8kSetHalf(voice->Csl, isHighHalf, value);
-        break;
+            break;
         }
 
         return;
@@ -991,15 +991,15 @@ static VOID Emu8kDataWrite(PEMU8K_STATE state, INT dataPort, INT isHighHalf, WOR
             {
             case EMU8K_CHANNEL_HWCF4:
                 state->Hwcf4 = Emu8kSetHalf(state->Hwcf4, isHighHalf, value);
-            break;
+                break;
 
             case EMU8K_CHANNEL_HWCF5:
                 state->Hwcf5 = Emu8kSetHalf(state->Hwcf5, isHighHalf, value);
-            break;
+                break;
 
             case EMU8K_CHANNEL_HWCF6:
                 state->Hwcf6 = Emu8kSetHalf(state->Hwcf6, isHighHalf, value);
-            break;
+                break;
 
             case EMU8K_CHANNEL_SMALR:
             case EMU8K_CHANNEL_SMARR:
@@ -1011,46 +1011,46 @@ static VOID Emu8kDataWrite(PEMU8K_STATE state, INT dataPort, INT isHighHalf, WOR
 
             case EMU8K_CHANNEL_SMLD:
                 Emu8kSoundMemoryWrite(state, EMU8K_LEFT, value);
-            break;  /* SMLD */
+                break;  /* SMLD */
 
             case EMU8K_CHANNEL_HWCF1:
                 state->Hwcf1 = value;
-            break;
+                break;
 
             case EMU8K_CHANNEL_HWCF2:
                 state->Hwcf2 = value;
-            break;
+                break;
 
             case EMU8K_CHANNEL_HWCF3:
                 state->Hwcf3 = value;
-            break;
+                break;
 
             default:
                 state->Data1Register1[channel] = Emu8kSetHalf(state->Data1Register1[channel], isHighHalf, value);
-            break;
+                break;
             }
 
             break;
 
         case EMU8K_DATA1_INIT1:
             state->EffectsInit[EMU8K_INIT1][channel] = value;
-        break;
+            break;
 
         case EMU8K_DATA1_INIT3:
             state->EffectsInit[EMU8K_INIT3][channel] = value;
-        break;
+            break;
 
         case EMU8K_DATA1_ENVVOL:
             voice->Envvol = value;
-        break;
+            break;
 
         case EMU8K_DATA1_DCYSUSV:
             Emu8kWriteDcysusv(voice, value, state);
-        break;
+            break;
 
         case EMU8K_DATA1_ENVVAL:
             voice->Envval = value;
-        break;
+            break;
 
         case EMU8K_DATA1_DCYSUS:                     /* DCYSUS: bit 7 is always zero */
             voice->Dcysus = (WORD)(value & ~EMU8K_ALWAYS_ZERO_BIT);
@@ -1078,27 +1078,27 @@ static VOID Emu8kDataWrite(PEMU8K_STATE state, INT dataPort, INT isHighHalf, WOR
 
         case EMU8K_DATA2_INIT2:
             state->EffectsInit[EMU8K_INIT2][channel] = value;
-        break;
+            break;
 
         case EMU8K_DATA2_INIT4:
             state->EffectsInit[EMU8K_INIT4][channel] = value;
-        break;
+            break;
 
         case EMU8K_DATA2_ATKHLDV:
             voice->Atkhldv = (WORD)(value & ~EMU8K_ALWAYS_ZERO_BIT);
-        break;
+            break;
 
         case EMU8K_DATA2_LFO1VAL:
             voice->Lfo1val = value;
-        break;
+            break;
 
         case EMU8K_DATA2_ATKHLD:
             voice->Atkhld  = (WORD)(value & ~EMU8K_ALWAYS_ZERO_BIT);
-        break;
+            break;
 
         case EMU8K_DATA2_LFO2VAL:
             voice->Lfo2val = value;
-        break;
+            break;
 
         default:
             break;
@@ -1111,35 +1111,35 @@ static VOID Emu8kDataWrite(PEMU8K_STATE state, INT dataPort, INT isHighHalf, WOR
     {
     case EMU8K_DATA3_IP:
         voice->Ip = value;
-    break;
+        break;
 
     case EMU8K_DATA3_IFATN:
         voice->Ifatn = value;
-    break;
+        break;
 
     case EMU8K_DATA3_PEFE:
         voice->Pefe = value;
-    break;
+        break;
 
     case EMU8K_DATA3_FMMOD:
         voice->Fmmod = value;
-    break;
+        break;
 
     case EMU8K_DATA3_TREMFRQ:
         voice->Tremfrq = value;
-    break;
+        break;
 
     case EMU8K_DATA3_FM2FRQ2:
         voice->Fm2frq2 = value;
-    break;
+        break;
 
     case EMU8K_DATA3_R6:
         voice->Data3Register6 = value;
-    break;
+        break;
 
     case EMU8K_DATA3_R7:
         voice->Data3Register7 = value;
-    break;
+        break;
     }
 }
 
@@ -1321,15 +1321,15 @@ static VOID Emu8kWordOut(PEMU8K_STATE state, WORD portOffset, WORD value)
     {
     case EMU8K_PORT_DATA0_LOW:
         Emu8kDataWrite(state, EMU8K_DATA0, EMU8K_LOW_HALF, value);
-    break;
+        break;
 
     case EMU8K_PORT_DATA0_HIGH:
         Emu8kDataWrite(state, EMU8K_DATA0, EMU8K_HIGH_HALF, value);
-    break;
+        break;
 
     case EMU8K_PORT_DATA1_LOW:
         Emu8kDataWrite(state, EMU8K_DATA1, EMU8K_LOW_HALF, value);
-    break;
+        break;
 
     case EMU8K_PORT_DATA1_HIGH_DATA2:
         if (Emu8kIsData1DoubleWord(registerNumber, channel))
@@ -1341,11 +1341,11 @@ static VOID Emu8kWordOut(PEMU8K_STATE state, WORD portOffset, WORD value)
 
     case EMU8K_PORT_DATA3:
         Emu8kDataWrite(state, EMU8K_DATA3, EMU8K_LOW_HALF, value);
-    break;
+        break;
 
     case EMU8K_PORT_POINTER:
         state->Pointer = value;
-    break;
+        break;
 
     default:
         break;

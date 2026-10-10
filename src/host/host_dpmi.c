@@ -3182,25 +3182,25 @@ PSTR PmInt21Lfn(DOS_MACHINE *machine, volatile BYTE *tib, PSTR cursor)
 
     case DOS_FN_RENAME:
         copyDx = PM_LFN_COPY_STRING_IN;
-    copyDi = PM_LFN_COPY_STRING_IN;
-    break;
+        copyDi = PM_LFN_COPY_STRING_IN;
+        break;
 
     case DOS_FN_EXTENDED_OPEN:
     case DOS_INT21_LFN_SERVER_OPEN:
     case DOS_FN_TRUENAME:
     case DOS_INT21_LFN_SHORT_NAME:
         copySi = PM_LFN_COPY_STRING_IN;
-    break;
+        break;
 
     case DOS_FN_GET_CURRENT_DIRECTORY:
         copySi = PM_LFN_COPY_STRING_OUT;
-    siLength = DOS_LFN_PATH_BUFFER_SIZE;
-    break;
+        siLength = DOS_LFN_PATH_BUFFER_SIZE;
+        break;
 
     case DOS_INT21_LFN_HANDLE_INFO:
         copyDx = PM_LFN_COPY_BLOCK_OUT;
-    dxLength = DOS_INT21_HANDLE_INFO_SIZE;
-    break;
+        dxLength = DOS_INT21_HANDLE_INFO_SIZE;
+        break;
 
     case DOS_INT21_LFN_TIME_CONVERT:
         if (bl == DOS_INT21_TIME_TO_DOS)

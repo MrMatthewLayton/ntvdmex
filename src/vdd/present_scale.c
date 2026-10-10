@@ -28,23 +28,23 @@ VOID PresentAspectRatio(INT aspect, INT *ratioWidth, INT *ratioHeight)
     {
     case PRESENT_ASPECT_4_3:
         *ratioWidth = 4;
-    *ratioHeight = 3;
-    break;
+        *ratioHeight = 3;
+        break;
 
     case PRESENT_ASPECT_16_9:
         *ratioWidth = 16;
-    *ratioHeight = 9;
-    break;
+        *ratioHeight = 9;
+        break;
 
     case PRESENT_ASPECT_16_10:
         *ratioWidth = 16;
-    *ratioHeight = 10;
-    break;
+        *ratioHeight = 10;
+        break;
 
     default:
         *ratioWidth = 0;
-    *ratioHeight = 0;
-    break;
+        *ratioHeight = 0;
+        break;
     }
 }
 
@@ -397,21 +397,21 @@ UINT32 PresentTint(UINT32 argb, INT tint)
 
     case PRESENT_TINT_MONO_WHITE:
         outputRed = 255u;
-    outputGreen = 255u;
-    outputBlue = 255u;
-    break;
+        outputGreen = 255u;
+        outputBlue = 255u;
+        break;
 
     case PRESENT_TINT_MONO_GREEN:
         outputRed = 51u;
-    outputGreen = 255u;
-    outputBlue = 51u;
-    break;   /* P1 */
+        outputGreen = 255u;
+        outputBlue = 51u;
+        break;   /* P1 */
 
     case PRESENT_TINT_MONO_ORANGE:
         outputRed = 255u;
-    outputGreen = 176u;
-    outputBlue = 0u;
-    break;   /* amber */
+        outputGreen = 176u;
+        outputBlue = 0u;
+        break;   /* amber */
 
     default:
         return argb;

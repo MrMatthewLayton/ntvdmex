@@ -60,7 +60,7 @@ BOOL DosErrFromWin32(_In_ DWORD win32Error, _Out_ PWORD dosError)
      */
     case DOS_ERR_WIN32_TOO_MANY_OPEN:
         *dosError = DOS_ERR_TOO_MANY_OPEN_FILES;
-    return TRUE;
+        return TRUE;
 
     /* #168: p_file int21.6C.exists -- 6Ch "fail if it exists" on a file that does:
      * 6.22 answers AX=0050. CREATE_NEW reports ERROR_FILE_EXISTS; CreateDirectory
@@ -69,7 +69,7 @@ BOOL DosErrFromWin32(_In_ DWORD win32Error, _Out_ PWORD dosError)
     case DOS_ERR_WIN32_FILE_EXISTS:
     case DOS_ERR_WIN32_ALREADY_EXISTS:
         *dosError = DOS_ERR_FILE_EXISTS;
-    return TRUE;
+        return TRUE;
 
     /* #34: THE HARDWARE ERRORS, 19-31, ARE THE SAME NUMBERS ON BOTH SIDES. Win32
      * kept DOS's codes for them (ERROR_WRITE_PROTECT 19 .. ERROR_GEN_FAILURE 31;

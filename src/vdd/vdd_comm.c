@@ -310,11 +310,11 @@ static VOID CommPortIn(PVOID context, WORD port, BYTE width, UINT32 *value)
 
     case COMM_LCR:
         *value = uart->Lcr;
-    break;
+        break;
 
     case COMM_MCR:
         *value = uart->Mcr;
-    break;
+        break;
 
     case COMM_LSR:
         *value = uart->Lsr;
@@ -331,11 +331,11 @@ static VOID CommPortIn(PVOID context, WORD port, BYTE width, UINT32 *value)
 
     case COMM_SCR:
         *value = uart->Scr;
-    break;
+        break;
 
     default:
         *value = COMM_UNDRIVEN_BUS;
-    break;
+        break;
     }
 }
 
@@ -455,7 +455,7 @@ static VOID CommPortOut(PVOID context, WORD port, BYTE width, UINT32 value)
 
     case COMM_SCR:
         uart->Scr = byteValue;
-    break;
+        break;
 
     default:
         break;
@@ -590,7 +590,7 @@ static VOID LptPortIn(PVOID context, WORD port, BYTE width, UINT32 *value)
     {
     case LPT_DATA_REGISTER:
         *value = printer->Data;
-    break;             /* the latch reads back */
+        break;             /* the latch reads back */
 
     case LPT_STATUS_REGISTER:
         /* Ready, online, no error, paper loaded, ACK idle. BUSY is INVERTED,
@@ -602,11 +602,11 @@ static VOID LptPortIn(PVOID context, WORD port, BYTE width, UINT32 *value)
 
     case LPT_CONTROL_REGISTER:
         *value = printer->Control;
-    break;
+        break;
 
     default:
         *value = COMM_UNDRIVEN_BUS;
-    break;
+        break;
     }
 }
 
@@ -626,7 +626,7 @@ static VOID LptPortOut(PVOID context, WORD port, BYTE width, UINT32 value)
     {
     case LPT_DATA_REGISTER:
         printer->Data = byteValue;
-    break;                /* latched, NOT yet printed */
+        break;                /* latched, NOT yet printed */
 
     case LPT_STATUS_REGISTER:
         break;                             /* status is read-only */

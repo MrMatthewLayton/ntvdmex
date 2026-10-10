@@ -617,7 +617,7 @@ static VOID DmaPortOut(PVOID context, WORD port, BYTE width, UINT32 value)
     {
     case DMA_REGISTER_COMMAND:
         state->Command[controller] = byteValue;
-    break;                /* command: bit 2 is read by
+        break;                /* command: bit 2 is read by
                                                             VddDmaGrants; the rest
                                                             are stored (see the header) */
 
@@ -641,11 +641,11 @@ static VOID DmaPortOut(PVOID context, WORD port, BYTE width, UINT32 value)
 
     case DMA_REGISTER_CLEAR_FLIP_FLOP:
         state->FlipFlop[controller] = 0;
-    break;                   /* clear byte pointer */
+        break;                   /* clear byte pointer */
 
     case DMA_REGISTER_MASTER_CLEAR:
         DmaMasterClear(state, controller);
-    break;         /* master clear */
+        break;         /* master clear */
 
     case DMA_REGISTER_CLEAR_MASK:                                            /* clear mask register */
         for (channelNumber = controller ? DMA_CHANNELS_PER_CONTROLLER : 0; channelNumber < (controller ? DMA_CHANNELS : DMA_CHANNELS_PER_CONTROLLER); ++channelNumber)

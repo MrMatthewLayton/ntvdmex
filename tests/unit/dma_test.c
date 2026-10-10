@@ -55,31 +55,31 @@ static VOID DmaTestProgram(PVDD_BUS bus, INT channel, UINT32 physical, WORD coun
     {
     case 0:
         pagePort = 0x87;
-    break;
+        break;
 
     case 1:
         pagePort = 0x83;
-    break;
+        break;
 
     case 2:
         pagePort = 0x81;
-    break;
+        break;
 
     case 3:
         pagePort = 0x82;
-    break;
+        break;
 
     case 5:
         pagePort = 0x8B;
-    break;
+        break;
 
     case 6:
         pagePort = 0x89;
-    break;
+        break;
 
     default:
         pagePort = 0x8A;
-    break;
+        break;
     }
 
     value = 0;

@@ -305,11 +305,11 @@ INT KeyboardActionEntry(INT keyboardAction)
     {
     case INPUT_ACTION_BREAK:
         vector = VECTOR_CTRL_BREAK;
-    break;
+        break;
 
     case INPUT_ACTION_PRINT_SCREEN:
         vector = VECTOR_PRINT_SCREEN;
-    break;
+        break;
 
     case INPUT_ACTION_SYSREQ_DOWN:
         return BIOS_KEYBOARD_ACTION_SYSREQ_DOWN;

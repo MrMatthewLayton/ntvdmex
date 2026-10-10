@@ -500,18 +500,18 @@ static INT WowUserHookSet(SHORT hookId, DWORD procedure, WORD dataSelector)
     {
     case WH_JOURNALRECORD:
         hookProcedure = WowUserHookJournalRecord;
-    kind32 = WH_JOURNALRECORD;
-    break;
+        kind32 = WH_JOURNALRECORD;
+        break;
 
     case WH_JOURNALPLAYBACK:
         hookProcedure = WowUserHookJournalPlayback;
-    kind32 = WH_JOURNALPLAYBACK;
-    break;
+        kind32 = WH_JOURNALPLAYBACK;
+        break;
 
     case WH_KEYBOARD:
         hookProcedure = WowUserHookKeyboard;
-    kind32 = WH_KEYBOARD;
-    break;
+        kind32 = WH_KEYBOARD;
+        break;
 
     default:
         break;
@@ -1896,7 +1896,7 @@ static INT WowUserListMessage(
 
         default:
             isDone = 0;
-        break;
+            break;
         }
 
         WowNotePut(note, noteCapacity, &noteLength, isComboBox ? "CB_" : "LB_");
@@ -9143,19 +9143,19 @@ INT WowUserCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
         {
         case SETDTR:
             WowCommDtr(portId, TRUE);
-        break;  /* SETDTR */
+            break;  /* SETDTR */
 
         case CLRDTR:
             WowCommDtr(portId, FALSE);
-        break;  /* CLRDTR */
+            break;  /* CLRDTR */
 
         case SETRTS:
             WowCommRts(portId, TRUE);
-        break;  /* SETRTS */
+            break;  /* SETRTS */
 
         case CLRRTS:
             WowCommRts(portId, FALSE);
-        break;  /* CLRRTS */
+            break;  /* CLRRTS */
 
         default:
             break;
@@ -10932,20 +10932,20 @@ INT WowUserCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
         {
         case WOWUSER_BRINGWINDOWTOTOP:
             result = BringWindowToTop(window32) ? 1 : 0;
-        break;
+            break;
 
         case WOWUSER_DRAWMENUBAR:
             DrawMenuBar(window32);
-        result = 1;
-        break;
+            result = 1;
+            break;
 
         case WOWUSER_HIDECARET:
             result = HideCaret(window32) ? 1 : 0;
-        break;
+            break;
 
         default:
             result = ShowCaret(window32) ? 1 : 0;
-        break;
+            break;
         }
 
         Wow32SetReturn(frame, (DWORD)result);

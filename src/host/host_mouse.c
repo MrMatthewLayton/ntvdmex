@@ -1630,7 +1630,7 @@ VOID MouseInt33(volatile BYTE *tib, INT source)
      */
     default:
         ++g_MouseI33Unimplemented;
-    break;
+        break;
     }
 }
 

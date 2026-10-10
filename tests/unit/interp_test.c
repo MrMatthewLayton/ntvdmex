@@ -114,19 +114,19 @@ static INT InterpTestLarLslDescriptor(WORD selector, PUINT32 accessRights, PUINT
         if (accessRights)
             *accessRights = (0xFAu << 8);
 
-    if (limit)
-        *limit = 0xFFFF;
+        if (limit)
+            *limit = 0xFFFF;
 
-    return 1;
+        return 1;
 
     case 0x10:
         if (accessRights)
             *accessRights = (0xF3u << 8) | (0x4u << 20);
 
-    if (limit)
-        *limit = 0x25CF;
+        if (limit)
+            *limit = 0x25CF;
 
-    return 1;
+        return 1;
 
     default:
         return 0;
@@ -151,18 +151,18 @@ static INT InterpTestSelectorDescriptor(WORD selector, PUINT32 accessRights, PUI
     {
     case 0x08:
         *accessRights = 0xFAu << 8;
-    *limit = 0x7FFF;
-    return 1;
+        *limit = 0x7FFF;
+        return 1;
 
     case 0x10:
         *accessRights = 0xF2u << 8;
-    *limit = 0xFFFF;
-    return 1;
+        *limit = 0xFFFF;
+        return 1;
 
     case 0x18:
         *accessRights = (0xFAu << 8) | (0x4u << 20);
-    *limit = 0xFFFF;
-    return 1;
+        *limit = 0xFFFF;
+        return 1;
 
     default:
         return 0;

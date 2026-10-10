@@ -593,7 +593,7 @@ VOID VddFdcPortOut(PVOID context, WORD port, BYTE width, UINT32 value)
 
     case FDC_TDR:
         state->Tdr = byteValue;
-    break;
+        break;
 
     case FDC_MSR:                               /* the WRITE side is DSR */
         state->Dsr = byteValue;
@@ -613,11 +613,11 @@ VOID VddFdcPortOut(PVOID context, WORD port, BYTE width, UINT32 value)
 
     case FDC_FIFO:
         FdcFifoWrite(state, byteValue);
-    break;
+        break;
 
     case FDC_DIR:
         state->Ccr = (BYTE)(byteValue & FDC_CCR_DATA_RATE);
-    break;  /* the write side is CCR */
+        break;  /* the write side is CCR */
 
     default:
         break;
@@ -634,19 +634,19 @@ VOID VddFdcPortIn(PVOID context, WORD port, BYTE width, UINT32 *value)
     {
     case FDC_DOR:
         *value = state->Dor;
-    break;       /* readable on an 82077AA */
+        break;       /* readable on an 82077AA */
 
     case FDC_TDR:
         *value = state->Tdr;
-    break;
+        break;
 
     case FDC_MSR:
         *value = VddFdcMainStatus(state);
-    break;
+        break;
 
     case FDC_FIFO:
         *value = FdcFifoRead(state);
-    break;
+        break;
 
     case FDC_DIR:
         /* DIR BIT 7 IS DSKCHG, AND WE ANSWER 0:
@@ -666,7 +666,7 @@ VOID VddFdcPortIn(PVOID context, WORD port, BYTE width, UINT32 *value)
 
     default:
         *value = FDC_UNDRIVEN_BUS;
-    break;
+        break;
     }
 }
 
