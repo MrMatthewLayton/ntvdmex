@@ -1,7 +1,8 @@
 # CI: every pull request, and every push to main or release.
 #
 #   build    the XP-32 cross build (mingw-w64 i686), with the warnings that have caught real
-#            defects as errors, and the check that every import ships with Windows XP
+#            defects as errors, the check that every import ships with Windows XP, and the
+#            release zip (artifact `release-zip`) -- the one that is tested, then published
 #   battery  the off-machine unit tests (scripts/offvm.sh), built natively
 #   style    scripts/style.sh --check, and the style tool's own tests; the names-and-types
 #            report (scripts/style.sh --names), which does not fail the run yet
@@ -34,7 +35,8 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
-              gcc-mingw-w64-i686 binutils-mingw-w64-i686 cmake nasm
+              gcc-mingw-w64-i686 binutils-mingw-w64-i686 cmake nasm zip
+          i686-w64-mingw32-gcc --version | head -1
 
       - name: Build
         run: ./scripts/build.sh
@@ -42,14 +44,22 @@ jobs:
       - name: Every import ships with Windows XP
         run: ./scripts/check-imports.sh
 
+      # The release zip, named for VERSION. This is the zip the maintainer tests on XP before
+      # promoting main to release -- and, byte for byte, the zip the release publishes
+      # (release.yml takes it from this run; nothing is rebuilt).
+      - name: Package the release zip
+        id: package
+        run: |
+          version="v$(tr -d ' \r\n' < VERSION)"
+          NTVDMEX_VERSION="$version" ./scripts/package.sh
+          echo "zip=ntvdmex-$version.zip" >> "$GITHUB_OUTPUT"
+
       - uses: actions/upload-artifact@v4
         with:
-          name: ntvdmex-build
-          path: |
-            build/ntvdmhost.exe
-            build/ntvdmex.exe
-            build/wowshim/
+          name: release-zip
+          path: dist/${{ steps.package.outputs.zip }}
           if-no-files-found: error
+          compression-level: 0
 
   battery:
     name: Off-machine test battery

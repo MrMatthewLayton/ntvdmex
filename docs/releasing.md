@@ -28,14 +28,20 @@ as a GitHub *pre-release*. The tag is `v<VERSION>`; the zip is `ntvdmex-v<VERSIO
    `docs/releases/v<VERSION>.md` -- what it is, what was confirmed working and on what, install and
    uninstall, before-you-install warnings, known issues (the open bugs a user will meet, with
    their issue numbers), and how to report a problem.
-2. **Run main's build on a real Windows XP SP3 machine** -- the programs the notes say were
-   confirmed. This is the check CI cannot make, and it is what makes `release` trustworthy.
+2. **Test the zip CI built from main** on a real Windows XP SP3 machine: on GitHub, *Actions >
+   CI >* the run for main's latest commit *> Artifacts > release-zip*. Run the programs the notes
+   say were confirmed. This is the check CI cannot make, and it is what makes `release`
+   trustworthy. Test this zip, not a local build: it is the exact file the release will publish,
+   built by CI's compiler, which is not the one on a developer's machine. If main moves on before
+   you promote, test the new commit's zip.
 3. **Promote:** open a pull request from `main` into `release` and merge it with a **merge
    commit** (not rebase or squash), so `release` stays a copy of main's history. CI must be
    green, and the *Promoted from main* check refuses a pull request from any other branch.
-4. **Automatic from here:** when CI passes on `release`, `.github/workflows/release.yml` builds
-   the zip from that commit with `SHA256SUMS`, creates the tag `v<VERSION>` and publishes the
-   GitHub release with the notes.
+4. **Automatic from here:** when CI passes on `release`, `.github/workflows/release.yml` takes
+   the `release-zip` that CI built from the promoted main commit -- the zip you tested, byte for
+   byte; nothing is rebuilt -- adds `SHA256SUMS`, creates the tag `v<VERSION>` and publishes the
+   GitHub release with the notes. It refuses if `release` is not exactly a merge of that main
+   commit.
 
 Promoting main without changing `VERSION` publishes nothing -- `release` simply moves to a newer
 known-good build. A fix is never made on `release`: it lands on main and is promoted.
