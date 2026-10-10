@@ -154,7 +154,7 @@ errors pointed the same way, and the value stood wrong for three sessions.
 never sets it at all**, and QEMU does not either. The IBM VGA spec describes the bit, two of
 three hosts do not implement it, and no DOS guest this project has met uses the VGA vertical
 interrupt — it is famously unreliable and IBM's own documentation steers software away from
-it. See [`../research/oracle-disagreements.md`](../research/oracle-disagreements.md).
+it. See [why oracles disagree](../testing.md#why-oracles-disagree).
 
 ### Input Status 1 — read `3DA` / `3BA`
 
@@ -530,8 +530,8 @@ for 256 colours with four times the memory and free page flipping.
   A famous copy-protection idiom writes `0x00` here to blank the screen.
   ✅ **The apparent disagreement here was QEMU's, not ours.** `3C6` is a read/write register
   that returns what was written, and the reset value is `0xFF`; **dosbox-x and the datasheet
-  both agree with us**, while the 6.22/QEMU oracle answers `0x00` to everything. Recorded in
-  `docs/research/oracle-disagreements.md`.
+  both agree with us**, while the 6.22/QEMU oracle answers `0x00` to everything. See
+  [why oracles disagree](../testing.md#why-oracles-disagree).
 - **The 6-bit truncation is observable.** A program that writes `0x3F` and reads back `0xFF`
   knows it is not talking to a VGA.
 

@@ -4,11 +4,11 @@
 
 One row is one numbered WOW call a system module's 16-bit code makes to the 32-bit side — the whole of what this host has to answer. Exports that are 16-bit code inside the module are not rows: they run on the real CPU.
 
-- **handled** = the module's dispatcher has a `case` that does more than name the id, **or** the rig log shows it answered (main.c services some ids in front of the dispatchers). *Not* that the answer is right — a row is *verified* only once its batch is checked against stock.
-- **rig** = outcomes in the host logs read (265 logs): `ok` answered, `part` answered but the host's own note says part is not implemented (usually a message — see the message table), **STEPPED** = unimplemented, stepped over, the guest got a sentinel.
+- **handled** = the module's dispatcher has a `case` that does more than name the id, **or** the test machine log shows it answered (main.c services some ids in front of the dispatchers). *Not* that the answer is right — a row is *verified* only once its batch is checked against stock.
+- **test machine** = outcomes in the host logs read (265 logs): `ok` answered, `part` answered but the host's own note says part is not implemented (usually a message — see the message table), **STEPPED** = unimplemented, stepped over, the guest got a sentinel.
 - **kind** (Wine's argument types): `values` = words/longs only (handles still need mapping); `pointer` = reads/writes guest memory; `callback` = takes or installs 16-bit code (needs `wow_call16_sync()`); `?` = no Wine entry.
 - **shelf** = programs in `guest/win16/` that import the call; `NAME*` = only through one of the shelf's 16-bit DLLs (an over-count: the program may not reach every call its DLL makes).
-- `(internal)` / `(HOST_NAME)` = a stub no export maps to; the module reaches it from its own 16-bit code (e.g. `LoadIcon` → USER `0xad`). **0 shelf users does not mean unused** — the rig column is the evidence for these.
+- `(internal)` / `(HOST_NAME)` = a stub no export maps to; the module reaches it from its own 16-bit code (e.g. `LoadIcon` → USER `0xad`). **0 shelf users does not mean unused** — the test-machine column is the evidence for these.
 - MMSYSTEM has no WOW stubs at all (#5); its rows are its exports.
 
 ## Summary
@@ -34,9 +34,9 @@ Shelf (21): CALC.EXE, CARDFILE.EXE, CHARMAP.EXE, CLOCK.EXE, DDEML.DLL, LZEXPAND.
 
 ## The gap list — the work, most-used first
 
-Used by the shelf and unanswered, or stepped over on the rig.
+Used by the shelf and unanswered, or stepped over on the test machine.
 
-| module | id | name | Wine signature | kind | rig | shelf |
+| module | id | name | Wine signature | kind | test machine | shelf |
 |---|---|---|---|---|---|---|
 | KERNEL | `0x01e` | WAITEVENT | `(word)` | values | **STEPPED 374** | 18: CALC CARDFILE CHARMAP CLOCK MPLAYER NOTEPAD PACKAGER PBRUSH PROGMAN RECORDER SOL SOUNDREC SYSEDIT TASKMAN TERMINAL WINFILE WINMINE WRITE |
 | KERNEL | `0x001` | FATALEXIT | `()` | values |  | 16: CALC CARDFILE CHARMAP LZEXPAND MPLAYER NOTEPAD PACKAGER PBRUSH RECORDER SOL SOUNDREC SYSEDIT TERMINAL WINMINE WRITE WINFILE* |
@@ -90,7 +90,7 @@ Used by the shelf and unanswered, or stepped over on the rig.
 
 ## Answered, but partly not implemented (from the host's own notes)
 
-| module | id | name | rig |
+| module | id | name | test machine |
 |---|---|---|---|
 | USER | `0x065` | SENDDLGITEMMESSAGE | ok 2471 part 227 |
 | USER | `0x06f` | SENDMESSAGE | ok 597 part 75 |
@@ -101,7 +101,7 @@ Used by the shelf and unanswered, or stepped over on the rig.
 
 Unhandled first, then most-used.
 
-| id | table | args | name | Wine signature | kind | handled | rig | shelf |
+| id | table | args | name | Wine signature | kind | handled | test machine | shelf |
 |---|---|---:|---|---|---|---|---|---|
 | `0x01e` | seg1→own thunk 0x2bb6 | 2 | WAITEVENT | `(word)` | values | — | **STEPPED 374** | 18: CALC CARDFILE CHARMAP CLOCK MPLAYER NOTEPAD PACKAGER PBRUSH PROGMAN RECORDER SOL SOUNDREC SYSEDIT TASKMAN TERMINAL WINFILE WINMINE WRITE |
 | `0x001` | seg1→own thunk 0x2bb6 | 2 | FATALEXIT | `()` | values | — |  | 16: CALC CARDFILE CHARMAP LZEXPAND MPLAYER NOTEPAD PACKAGER PBRUSH RECORDER SOL SOUNDREC SYSEDIT TERMINAL WINMINE WRITE WINFILE* |
@@ -310,7 +310,7 @@ Unhandled first, then most-used.
 
 Unhandled first, then most-used.
 
-| id | table | args | name | Wine signature | kind | handled | rig | shelf |
+| id | table | args | name | Wine signature | kind | handled | test machine | shelf |
 |---|---|---:|---|---|---|---|---|---|
 | `0x1d0` | seg1→imported thunk | 12 | DRAGOBJECT | `(word word word word word word)` | values | — |  | 2: PROGMAN WINFILE |
 | `0x000` | seg1→imported thunk | 0 | (internal) |  | ? | — |  | 0 |
@@ -758,7 +758,7 @@ Unhandled first, then most-used.
 
 Unhandled first, then most-used.
 
-| id | table | args | name | Wine signature | kind | handled | rig | shelf |
+| id | table | args | name | Wine signature | kind | handled | test machine | shelf |
 |---|---|---:|---|---|---|---|---|---|
 | `0x005` | seg1→imported thunk | 4 | SETRELABS | `(word word)` | values | — |  | 0 |
 | `0x008` | seg1→imported thunk | 4 | SETTEXTCHARACTEREXTRA | `(word s_word)` | values | — |  | 0 |
@@ -1130,7 +1130,7 @@ Unhandled first, then most-used.
 
 Unhandled first, then most-used.
 
-| id | table | args | name | Wine signature | kind | handled | rig | shelf |
+| id | table | args | name | Wine signature | kind | handled | test machine | shelf |
 |---|---|---:|---|---|---|---|---|---|
 | `0x004` | seg1→imported thunk | 14 | TOASCII | `(word word ptr ptr word)` | pointer | — |  | 0 |
 | `0x080` | seg1→imported thunk | 2 | OEMKEYSCAN | `(word)` | values | — |  | 0 |
@@ -1148,7 +1148,7 @@ Unhandled first, then most-used.
 
 Unhandled first, then most-used.
 
-| id | table | args | name | Wine signature | kind | handled | rig | shelf |
+| id | table | args | name | Wine signature | kind | handled | test machine | shelf |
 |---|---|---:|---|---|---|---|---|---|
 | `0x00c` | seg1→imported thunk | 2 | (internal) |  | ? | — |  | 0 |
 | `0x020` | seg1→imported thunk | 0 | WCI |  | ? | — |  | 0 |
@@ -1189,7 +1189,7 @@ Unhandled first, then most-used.
 
 Unhandled first, then most-used.
 
-| id | table | args | name | Wine signature | kind | handled | rig | shelf |
+| id | table | args | name | Wine signature | kind | handled | test machine | shelf |
 |---|---|---:|---|---|---|---|---|---|
 | `0x014` | seg1→imported thunk | 4 | PRINTDLG | `(ptr)` | callback | — | **STEPPED 14** | 5: CARDFILE NOTEPAD PBRUSH TERMINAL WRITE |
 | `0x001` | seg1→imported thunk | 4 | GETOPENFILENAME | `(segptr)` | callback | ✅ |  | 10: CARDFILE MPLAYER NOTEPAD PACKAGER PBRUSH RECORDER SOUNDREC TERMINAL WINFILE WRITE |
@@ -1204,7 +1204,7 @@ Unhandled first, then most-used.
 
 Unhandled first, then most-used.
 
-| id | table | args | name | Wine signature | kind | handled | rig | shelf |
+| id | table | args | name | Wine signature | kind | handled | test machine | shelf |
 |---|---|---:|---|---|---|---|---|---|
 | `0x001` | seg1→imported thunk | 0 | OPENSOUND | `()` | values | ✅ | ok 2 | 1: WINMINE |
 | `0x002` | seg1→imported thunk | 0 | CLOSESOUND | `()` | values | ✅ | ok 2 | 1: WINMINE |
@@ -1228,7 +1228,7 @@ Unhandled first, then most-used.
 
 Unhandled first, then most-used.
 
-| id | table | args | name | Wine signature | kind | handled | rig | shelf |
+| id | table | args | name | Wine signature | kind | handled | test machine | shelf |
 |---|---|---:|---|---|---|---|---|---|
 | `0x00f` | seg1→imported thunk | 0 | GETSYSTEMMSECCOUNT | `()` | values | — |  | 0 |
 
@@ -1236,7 +1236,7 @@ Unhandled first, then most-used.
 
 Unhandled first, then most-used.
 
-| id | table | args | name | Wine signature | kind | handled | rig | shelf |
+| id | table | args | name | Wine signature | kind | handled | test machine | shelf |
 |---|---|---:|---|---|---|---|---|---|
 | `0x000` | seg1→imported thunk | 0 | (internal) |  | ? | — |  | 0 |
 | `0x001` | seg1→imported thunk | 4 | CLASSFIRST |  | ? | — |  | 0 |
@@ -1246,7 +1246,7 @@ Unhandled first, then most-used.
 
 Unhandled first, then most-used.
 
-| id | table | args | name | Wine signature | kind | handled | rig | shelf |
+| id | table | args | name | Wine signature | kind | handled | test machine | shelf |
 |---|---|---:|---|---|---|---|---|---|
 | `0x006` | seg1→imported thunk | 6 | SENDIMEMESSAGE |  | ? | — |  | 0 |
 | `0x007` | seg1→imported thunk | 6 | SENDIMEMESSAGEEX |  | ? | — |  | 0 |
@@ -1261,7 +1261,7 @@ Unhandled first, then most-used.
 
 Unhandled first, then most-used.
 
-| id | table | args | name | Wine signature | kind | handled | rig | shelf |
+| id | table | args | name | Wine signature | kind | handled | test machine | shelf |
 |---|---|---:|---|---|---|---|---|---|
 | `0x191` | exports |  | WAVEOUTGETNUMDEVS | `()` | values | — |  | 2: MPLAYER SOUNDREC |
 | `0x1f5` | exports |  | WAVEINGETNUMDEVS | `()` | values | — |  | 2: MPLAYER SOUNDREC |

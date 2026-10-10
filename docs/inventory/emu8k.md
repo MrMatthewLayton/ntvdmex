@@ -166,7 +166,7 @@ no STAGE2 diagnostics line for the chip). The original list follows unchanged.
    digits before ` T`. A real AWE32's string is `A220 I5 D1 H5 P330 E620 T6`. ⚠ **`T` and `H`
    are deliberately left as they are** (`dos_env.h:59-77`, Doom is confirmed against the
    current string). Whether AWE-aware drivers need `T6`/`H5` is a measurement to make on the
-   rig, not something to change on the way past.
+   test machine, not something to change on the way past.
 8. **Diagnostics:** a STAGE2 line in the style of the GUS one (`main.c` near `:886`) should
    print `io_writes`, `io_reads`, `byte_io`, `sm_words_written`, `sm_words_read`, `sm_held`,
    `notes_started`, `releases`, `samples_out`, `out_nonzero` and `out_peak`. With those, "no

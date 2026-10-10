@@ -86,7 +86,7 @@ logged as `INT15 UNIMPL` (`:29193-29208`).
 | `83h` | event wait (set bit 7 of `ES:BX` after CX:DX µs; `AL=01h` cancels) | **PART** | #206, V86: `main.c:29118-29138`; the BDA mirrors it (`0040:0098`–`00A0`); the flag is posted from the 1 kHz pacer (`i15_event_poll`, `main.c:5639-5650`); a second request while one runs is refused `AH=83h` CF=1. **PM refuses it** (`:22387-22391`) | **oracle** (`p_int15w`: 6.22, DOSBox-X, PCem and ours agree, #206) |
 | `84h` | joystick | **IMPL** | `:29144-29181`, from the gameport VDD's sample; no stick → `AH=86h` CF=1 | untested ([gameport.md](gameport.md)) |
 | `85h` | SysReq (a hook the BIOS calls) | **MISS** | never called (keyboard.md §3) | — |
-| `86h` | wait CX:DX microseconds | **IMPL** | #206, V86: re-executes its BOP until the deadline, taking interrupts meanwhile; refused (busy) while an `83h` event runs. #256, PM: from the top-level PM loop the BOP is re-executed the same way (the loop keeps ticking the BIOS clock and delivering IRQ0); from a nested dispatch (an injected ISR, a callback) it waits in place with interrupts held | **oracle** for V86 (`p_int15w`, four hosts); PM on the rig only (`p_pm256` — no oracle runs a DPMI host) |
+| `86h` | wait CX:DX microseconds | **IMPL** | #206, V86: re-executes its BOP until the deadline, taking interrupts meanwhile; refused (busy) while an `83h` event runs. #256, PM: from the top-level PM loop the BOP is re-executed the same way (the loop keeps ticking the BIOS clock and delivering IRQ0); from a nested dispatch (an injected ISR, a callback) it waits in place with interrupts held | **oracle** for V86 (`p_int15w`, four hosts); PM on the test machine only (`p_pm256` — no oracle runs a DPMI host) |
 | `87h` | move extended memory block | **IMPL** | V86 (`int15_move_block`; success = AH=0, CF=0, ZF=1). #244: **PM too** — `ES:(E)SI` read as a PM pointer (selector base + offset, ESI for a 32-bit client) and the same copy (`int15_move_block_at`). ⚠ DPMI 0.9 reflects INT 15h untranslated, so a strict host would run it with a meaningless real-mode ES; translating is the only reading under which a PM caller's request means anything — a decision, recorded in the PM arm, unmeasured | **oracle** for the V86 round trip (`p_int15` on PCem); PM untested |
 | `88h` | extended memory size | **PART** | `:29071-29095`: always `3C00h` (15 MB). ⚠ **The same memory is also handed out by XMS**; a real machine with HIMEM reports 0 here. Recorded in the code and deliberately not changed. **#48 (2026-10-04):** the value is `CMOS_EXT_KB` in both modes, the same constant as CMOS and SysVars+`45h`; the XMS pool is that less the 64 K HMA (was 16384, more than the machine) | untested |
 | `89h` | switch to protected mode | **N/A** | a V86 guest cannot be handed the CPU; DPMI is the route | — |
@@ -143,9 +143,9 @@ answered**: fabricating a date is worse than silence.
 
 ### ⚠ A harness artefact
 
-`int1a.00.advances` reported **"the clock does not advance"** on the rig and nowhere
+`int1a.00.advances` reported **"the clock does not advance"** on the test machine and nowhere
 else. It was the probe: a 400-unit spin is longer than a tick on the emulated 486 and
-*shorter* than one on the rig, so the probe gave up before the counter moved. ▶ **When a
+*shorter* than one on the test machine, so the probe gave up before the counter moved. ▶ **When a
 row fails on one host only, check the probe's own assumptions about time before you
 touch the host.** And the first `int1a/02` off-VM check asserted `0x1729` for 23:41 —
 BCD 23:41 is `0x2341`. It failed on its first run, which is why expectations are

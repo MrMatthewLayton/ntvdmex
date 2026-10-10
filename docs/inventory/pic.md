@@ -82,7 +82,7 @@ timer's raise onto a slower path.
 arm used to EOI on delivery and the two synchronous injectors never told the PIC, so a
 client's non-specific `out 20h,20h` cleared a *lower* line's in-service bit. They now use
 `irq0_ack()` / `irq0_pm_claim()`, and the default PM INT 08h handler EOIs as the BIOS does.
-Rig: Doom `irq0_isr` strict=4061 against 4066 raises, 0 blocked, 0 timeouts, no fallback;
+Test machine: Doom `irq0_isr` strict=4061 against 4066 raises, 0 blocked, 0 timeouts, no fallback;
 Skyroads `n8=0 max_ms=7`; Win16 Notepad opens and closes. [[irq0-must-be-held-in-service]]
 
 ## 3. Initialisation — ICW1–ICW4
@@ -194,7 +194,7 @@ never EOIs the master already lost IRQ3–7 and now loses the rest of the slave 
 
 ---
 
-## Measured, 2026-09-23 — three new probe cases against three oracles and the rig
+## Measured, 2026-09-23 — three new probe cases against three oracles and the test machine
 
 `p_pic.asm` grew three cases aimed squarely at the gaps above. **All ten of its existing
 questions still agree; none of them was on the list, which was the point.**
@@ -285,7 +285,7 @@ cooperative path then read an honest VTIB that had been made wrong. **Fix:** the
 gate tests VIF alone once any live frame has shown VIF set (proof that VME keeps it); before
 that it falls back to IF-or-VIF. Skyroads' timing is unchanged, the Win16 close works, and
 ZAR's and Doom's real-mode stretches never reach that gate. See
-[`log/sessions/session-81.md`](../log/sessions/session-81.md).
+session 81.
 
 The original analysis, kept for the record:
 

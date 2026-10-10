@@ -5,7 +5,7 @@
 **Our implementation:** `src/vdd/vdd_fdc.c`, `src/vdd/vdd_fdc.h`.
 **Oracles:** MS-DOS 6.22 (QEMU), PCem (real AMI 486 BIOS), dosbox-x.
 DOS probe: `tests/probes/dos/p_fdc.asm` · off-VM battery: `tests/unit/fdc_test.c` (32 checks).
-**Marked:** 2026-09-23, **from the code**, then re-marked against the rig.
+**Marked:** 2026-09-23, **from the code**, then re-marked against the test machine.
 
 ---
 
@@ -41,7 +41,7 @@ went unmeasured for 77 sessions.
 
 ## Measured — before, and after
 
-`p_fdc.asm` asks the questions a **detection routine** asks, on the bare-metal rig and on
+`p_fdc.asm` asks the questions a **detection routine** asks, on the test machine and on
 two oracles that agree with each other.
 
 | case | 6.22/QEMU | PCem | NTVDMEX **before** | NTVDMEX **after** |
@@ -96,7 +96,7 @@ stronger one here because MSR *is* the protocol.
 | Item | Status | Evidence |
 |---|---|---|
 | Command / execution / result phases | ✅ **IMPL** | `fdc_execute`, `fdc_result` |
-| RQM/DIO handshake per byte | ✅ **IMPL** | measured: `fdc.cmdwait` `0080` on the rig |
+| RQM/DIO handshake per byte | ✅ **IMPL** | measured: `fdc.cmdwait` `0080` on the test machine |
 | `CMD BSY` set on the first command byte, cleared on the **last** result byte | ✅ **IMPL** | `fdc_test.c` checks both edges — it is what lets a driver drain a result of unknown length |
 | Invalid command → one byte, `ST0 = 80h`, **and stays in frame** | ✅ **IMPL** | the framing matters more than the value: an unknown opcode that guessed a parameter count would eat the next real command |
 | Non-DMA execution (MSR bit 5) | ⛔ **MISS** | there is no execution phase to be in yet |
@@ -106,7 +106,7 @@ stronger one here because MSR *is* the protocol.
 
 | Command | Status | Notes |
 |---|---|---|
-| `10h` **VERSION** → `90h` | ✅ **IMPL** | measured `0190` on the rig and both oracles |
+| `10h` **VERSION** → `90h` | ✅ **IMPL** | measured `0190` on the test machine and both oracles |
 | `08h` **SENSE INTERRUPT STATUS** | ✅ **IMPL** | pending → ST0+PCN · reset polling → `C0h\|drive` · otherwise `80h` |
 | `0Eh` **DUMPREG** — ten bytes | ✅ **IMPL** | count measured at 10 on all three |
 | `03h` SPECIFY · `13h` CONFIGURE · `12h` PERPENDICULAR | ✅ **IMPL** | stored, and handed back by DUMPREG |
@@ -161,7 +161,7 @@ A/B bytes and the 8042's status register both had to answer, and it splits three
 | Byte | Verdict |
 |---|---|
 | **EOT** (byte 7) | ✅ **Correctly zero.** It is the sector count of the **last data command**, not configuration — PCem's own `res[7] = eot[drive]` is set by read/write. We have no data commands yet, so there is no residue. It will populate itself when the data path lands |
-| **SRT/HUT, HLT/ND, CONFIG, LOCK\|PERP** | ⚠ **Not adjudicable.** The two oracles disagree on *every one* (`0A`/`BF`, `03`/`02`, `60`/`08`, `00`/`0C`) because they are a **BIOS's** choices, not the chip's — cause 1 in [`oracle-disagreements.md`](../research/oracle-disagreements.md). There is no value to copy, and a guest that cares issues SPECIFY itself. **Zero is recorded as a choice, not a measurement** |
+| **SRT/HUT, HLT/ND, CONFIG, LOCK\|PERP** | ⚠ **Not adjudicable.** The two oracles disagree on *every one* (`0A`/`BF`, `03`/`02`, `60`/`08`, `00`/`0C`) because they are a **BIOS's** choices, not the chip's — cause 1 in [why oracles disagree](../testing.md#why-oracles-disagree). There is no value to copy, and a guest that cares issues SPECIFY itself. **Zero is recorded as a choice, not a measurement** |
 | **PCN** (bytes 1–4) | ⚠ Truthful — our head has never moved. See the coherence row below |
 
 ### ⛔ …and PCem does **not** implement `09h`/`0Ch`. Do not "fix" toward it
@@ -179,7 +179,7 @@ That splits the two framing decisions made this session, and they must not be lu
 The deleted-data commands *are* in the 82077AA command set. PCem omits them because no
 guest it runs has ever issued one — *"device models that stop where their workloads stop"*,
 the pattern already written up in
-[`oracle-disagreements.md`](../research/oracle-disagreements.md). **A `0` from a host
+[why oracles disagree](../testing.md#why-oracles-disagree). **A `0` from a host
 without the feature is the absence of a measurement, not a measurement of absence** —
 exactly the reasoning that let PIT BCD be implemented against two silent oracles.
 

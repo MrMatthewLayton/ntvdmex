@@ -85,7 +85,7 @@ NTVDM's, so it relocates the collision instead of removing it. The origin test i
 
 `C4 C4 <bop> <sub>` — **four bytes**, for `0x50` and `0x54`. Observed in XP's
 `COMMAND.COM` first, then confirmed by byte-scanning XP's own 16-bit VDM components, pulled
-off the rig:
+off the test machine:
 
 | binary (XP SP3) | size | `BOP 0x50` | `BOP 0x54` | other |
 |---|---|---|---|---|
@@ -215,7 +215,7 @@ sets `[0]` to `0x80` once, at start-up, and never again.
 ⇒ **Write the length at `[1]`, the text from `[2]`, a CR after it, and never touch `[0]`.**
 The CR is the only load-bearing byte for the parser: with no CR in the buffer the shell's
 parser scans the whole 64K segment and never leaves — the "spinning in V86 with no traps"
-the headless deadline kept killing.
+the unattended deadline kept killing.
 
 #### ✅ `+0x22` = the program TYPE, by extension
 
@@ -233,7 +233,7 @@ So `sub 01` returns *three* things, not one: a command **tail** (`+0x08:+0x0A`),
 no-program path the shell empties the name buffer itself.
 
 All three are now answered: the tail as before, the name from `progpath` on the first
-call only (⚠ **not** `g_app2` — on the rig CSRSS names `dosstub.com`, the harness stub),
+call only (⚠ **not** `g_app2` — on the test machine CSRSS names `dosstub.com`, the harness stub),
 the type by XP's own extension rule, and empty/`9` on every call after.
 
 ⛔ An earlier note here read `+0x22`'s three observed values as *"a status enumeration,
@@ -361,11 +361,11 @@ an absence**: the shell acts on it.
 
 #### ✅✅ `AH=53h` MEASURED AGAINST STOCK NTVDM — 8/8 AGREE
 
-`debug\rig\dosstock.bat P_INT53.COM` drops the IFEO key, runs the probe under stock,
+A stock-run script drops the IFEO key, runs the probe under stock,
 restores the key **unconditionally** and proves it back (before/after both read the same
 path, and the target is checked to exist). The bracket is modelled on `w16stock.bat`;
 `stockdump.bat` could not be reused — it restores a hardcoded `C:\ntvdmex\` path that is
-not where this rig's host lives.
+not where this test machine's host lives.
 
 | `AX` in | stock | ours | | `AX` in | stock | ours |
 |---|---|---|---|---|---|---|
@@ -398,7 +398,7 @@ of the same question, so they are not the same question.
 through stdout, so every earlier stock reading was taken with `> FILE` in place;
 `tests/probes/dos/p_int53f.asm` asks the same eight questions through `AH=3Ch/40h/3Eh`
 and needs no redirection. Stock, both ways, answers all eight identically
-(`5305 → AX=5301`, `5302 → 5300 CF=0`); only DS differs (`runs/s84/stock/`). So the
+(`5305 → AX=5301`, `5302 → 5300 CF=0`); only DS differs (s84). So the
 remaining difference is the **caller**: a probe is always a child of stock's shell, and
 the `AL=0` answer can only come when the shell itself asks. The NTVDM-aware-shell branch
 in `main.c` stays the model, still marked provisional; `cfg\int53.txt` overrides it.
@@ -435,7 +435,7 @@ treated as our defect for two sessions without ever asking what the reference do
 same position. It does the same thing. Stock's own COMMAND.COM is started by `ntio.sys`
 during DOS boot, not run as a program.
 
-### ⛔⛔⛔ AND THE CONTROL LEFT THE RIG ROUTING TO STOCK
+### ⛔⛔⛔ AND THE CONTROL LEFT THE TEST MACHINE ROUTING TO STOCK
 
 `dosstock.bat`'s first cut ran the guest **inline and waited for it**. Fine for a probe,
 which exits. `COMMAND.COM /p` does not exit — it sits at its prompt — so the batch
@@ -537,7 +537,7 @@ API no game exercises, and it is the reason a shell was chosen as the M9 test.
 
 ### ▶ How to turn it on
 
-~~Copy `scripts/bm/int53-interactive.txt` to `cfg\int53.txt`.~~ **Superseded (s79):** it is
+~~Copy a fixed answer file to `cfg\int53.txt`.~~ **Superseded (s79):** it is
 on by default for an NTVDM-aware shell — see *Status* at the top. `cfg\int53.txt` remains
 an explicit override, and the host prints the table and its source every run.
 
@@ -556,7 +556,7 @@ buffer) only when every one of these host answers says so:
 
 With `CF=0` on (1) — true of every run before this was found — the rest are **never
 consulted at all**, which is why `sub 0x10` had never once fired. (1) and (2) have to
-change together, and that was measured one at a time on the rig:
+change together, and that was measured one at a time on the test machine:
 
 | `AL=2` | `AL=5` | result |
 |---|---|---|
@@ -623,7 +623,7 @@ counter that actually moved was `INT21 AH=0A line max=`, and it was in the log a
 ### ⚠ The bracket needed fixing TWICE
 
 1. It ran the guest **inline and waited** — fine for a probe, fatal for `COMMAND.COM /p`,
-   which never exits. Left the rig with no IFEO key (recorded above).
+   which never exits. Left the test machine with no IFEO key (recorded above).
 2. The fix used `start ... > file`, which redirects **START**, not the process it
    launches — so the next run captured **nothing**, an empty file that looks exactly
    like a guest which printed nothing. Now `start "" cmd /c "... > file"`: redirected by
@@ -644,7 +644,7 @@ and have not been tried.
 
 ⇒ There is **no safe oracle for the documented form**, and the private `AL`
 sub-functions exist only in `NTDOS.SYS`. **Stock ntvdm is the only oracle**, which needs
-the IFEO bracket — the documented rig-bricking hazard. Not run unattended.
+the IFEO bracket — the documented hazard that can leave the test machine unusable. Not run unattended.
 
 ⚠ The probe's first cut built its eight case names with a `%1` substitution NASM did not
 expand, so all eight emitted under ONE name: eight questions collapsed into one answer.
@@ -715,7 +715,7 @@ it was never given, using the guest's `AH` as if it were a DOS function number.
 
 XP's `COMMAND.COM` issues `BOP 0x54 / sub 0x01` with `AX=0x0002`. `AH=0` is DOS
 "terminate". The guest was killed by its own unimplemented call and we reported a
-**clean exit, code 0**. See [xp-command-com.md](../research/xp-command-com.md).
+**clean exit, code 0**. Investigated in session 79.
 
 Diagnostic in place since `92e2136`:
 
@@ -823,7 +823,7 @@ by behaviour or by stock's answer; the rest stay blank on purpose.
 (5.00), testing the whole word** — `AL`=major, `AH`=minor — so it demands **exactly
 5.00**, not "5 or later"; anything else prints *"Incorrect DOS version"*.
 `cfg\dosver.txt` = `5.0` satisfies it; anything else does not. That matches the measured
-0-calls-vs-9-calls result in [xp-command-com.md](../research/xp-command-com.md) and pins
+0-calls-vs-9-calls result from session 79 and pins
 *why*.
 
 ---
@@ -831,7 +831,7 @@ by behaviour or by stock's answer; the rest stay blank on purpose.
 ## 3a. Who else issues one — a measured negative
 
 Byte-scanned every `.exe`/`.com` under `demo/msdos/` and every `.exe`/`.dll`/`.drv`
-under `demo/win16/` on the rig. `C4 C4` pairs turn up in nineteen DOS binaries and
+under `demo/win16/` on the test machine. `C4 C4` pairs turn up in nineteen DOS binaries and
 three Win16 ones, and **every one of them is noise**: runs of `C4` inside compressed or
 resource data (`ZAR/SOUND/SETSOUND.EXE` alone has 362, 344 of them `C4 C4 C4`), with no
 third byte matching a plausible call number and none of them at a code site.

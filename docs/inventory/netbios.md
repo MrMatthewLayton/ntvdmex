@@ -26,7 +26,7 @@ period interface a DOS program under NT gets is NetBIOS, and that is what this i
 | INT 2Ah AH=80h-82h | ✅ | critical sections: nothing to serialise |
 | DPMI clients | ❌ | INT 5Ch from protected mode is not reflected |
 
-## Measured against stock (rig, s91, `scripts/dospair.sh tests/probes/dos/p_netb.com`)
+## Measured against stock (test machine, s91)
 
 14/14 agree (the 10 below plus a no-wait ADD NAME with a POST routine): invalid command → 03h in AL and retcode; RESET 00h; ADAPTER STATUS of `*`
 00h with 60 (3Ch) bytes and a non-zero adapter address; ADD NAME 00h with a name number;

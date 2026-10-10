@@ -222,7 +222,7 @@ below must not be acted on until it answers.
 OF PCem.** The crash was my *command sandbox*, not a GUI dependency; and its data
 directory is `~/PCem/`, not `~/Library/Application Support/PCem/` as our own notes said,
 so the ROMs I had "installed" were in a directory PCem never reads. **It now runs fully
-unattended**, `scripts/pcemoracle.py run <x.com>` start to finish in ~60 s, and everything
+unattended**, a probe start to finish in ~60 s, and everything
 this section filed as *blocked* was answerable all along. *A path in a note is a claim:
 `ls` what the program actually creates.*
 
@@ -332,7 +332,7 @@ order — each step is independently shippable and testable:
 
 ⚠ **Steps 3–5 touch every rendering path and must not be one commit.** The whole shelf
 — Doom, Wolf3D, Mario, Skyroads, Lemmings, ZAR, Hexen, heaven7 — is the regression set,
-and it is a by-hand set: the headless rig cannot see a wrong picture that still renders.
+and it is a by-hand set: an unattended test run cannot see a wrong picture that still renders.
 
 ## Re-measuring
 
@@ -381,7 +381,7 @@ cumulative** — is right; the throwaway script I verified with divided by both,
 commit that wrote the rule down. Re-derived from the **same bytes** with the stated rule,
 all eleven modes are correct, and **dosbox-x agrees with the same `CR09= 0xC1`**.
 ⇒ **A derivation is only as good as the code that checks it.** See
-[`../research/oracle-disagreements.md`](../research/oracle-disagreements.md).
+[why oracles disagree](../testing.md#why-oracles-disagree).
 
 ## Step 4 measurement — the CPU memory path now has a probe (2026-09-23)
 
@@ -402,7 +402,7 @@ The four cases that bear directly on the open defect:
 | `mask0f.5a` | `5A 5A 5A 5A` | all four |
 | `mask02.c3` | `00 C3 00 00` | one plane, for contrast |
 
-⚠ **NTVDMEX has not been asked these yet** — that needs the rig. Several are expected to
+⚠ **NTVDMEX has not been asked these yet** — that needs the test machine. Several are expected to
 fail, and that is the point: the checks were written from the document and seen to pass on
 real hardware first, so a failure on our side is a defect in us, not an argument about the
 expectation.
@@ -411,7 +411,7 @@ expectation.
 
 ## ★★★★★ THE PROBE RAN AGAINST NTVDMEX, AND THE ANSWER WAS NOT THE ONE EXPECTED
 
-Rig host `a7920404`, 2026-09-23. **12 of 13 AGREE. One MISMATCH.** Deterministic across
+Test machine host `a7920404`, 2026-09-23. **12 of 13 AGREE. One MISMATCH.** Deterministic across
 two runs.
 
 | case | 6.22 | NTVDMEX | |
@@ -595,7 +595,7 @@ offsets 0 and 4–63, so Feature Control, Input Status 0 and the DAC Pixel Mask 
 **zero whatever the file said**. They happened to be `0x00` on that host, so nothing caught
 it. Both references are now whole 64-byte buffers.
 
-### The number, re-measured on the rig (2026-09-23)
+### The number, re-measured on the test machine (2026-09-23)
 
 `p_vgaext` first, and it came back exactly as the fix predicted: **`is0.live` = `1010`,
 byte for byte with PCem**; `is0.vsync` = `0000`, the recorded gap; `fc.store` = `00`/`0F`/
@@ -652,7 +652,7 @@ the stored byte for the bits we do not model.
 rescales an 8-line shape, so the drawn cursor moves by **one scan line** (14–15 → 13–14) —
 but `INT 10h AH=03h` now reports the shape the card actually holds.
 
-**Re-measured on the rig: `689/690` — PARITY 99.9%**, from 92.0%. `offvm` carries nine new
+**Re-measured on the test machine: `689/690` — PARITY 99.9%**, from 92.0%. `offvm` carries nine new
 checks whose expectations come from `VGA_MODEDEFS`, i.e. from two oracles rather than from
 this project's idea of a VGA.
 

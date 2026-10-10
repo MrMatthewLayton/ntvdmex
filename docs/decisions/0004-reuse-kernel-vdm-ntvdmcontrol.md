@@ -1,6 +1,6 @@
 # ADR-0004: Reuse kernel VDM via `NtVdmControl`
 
-- **Status:** Proposed — contingent on [Spike-001](../spikes/spike-001-v86-keystone.md)
+- **Status:** Accepted — Spike-001 (the first spike, vdmhost) ran guest code on the real CPU through `NtVdmControl` (2026-06)
 - **Date:** 2026-06-01
 - **Deciders:** Matthew
 

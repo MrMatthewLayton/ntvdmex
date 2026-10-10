@@ -100,7 +100,7 @@ leaves EIP on the BOP, so the guest keeps running its ISRs while it "waits".
 
 | AH | Unit | Status | Where / what is missing | Verification |
 |---|---|---|---|---|
-| `30h` | DOS version, OEM, serial | **IMPL** | `:918-927`; the version is a setting, per process (`dos_version_word`, #208) | **oracle** while the rig is set to 6.22 — see [sweep.md](sweep.md) |
+| `30h` | DOS version, OEM, serial | **IMPL** | `:918-927`; the version is a setting, per process (`dos_version_word`, #208) | **oracle** while the test machine is set to 6.22 — see [sweep.md](sweep.md) |
 | `31h` | terminate and stay resident | **IMPL** | `:1446-1463`; the host resizes and keeps vectors | **oracle** except `tsr.paras.still.held` (`0x26` vs `0x21`, open) |
 | `32h` | DPB for drive DL | **PART** | as `1Fh` (`:1386-1415`), including #48's derived FAT layout | **oracle**, AL only (`p_rest`); `p_devchn dpb.c.layout` owed |
 | `33h` | Ctrl-Break flag, boot drive, true version | **IMPL** | `:2335-2368`; `00h`–`02h` state, `05h` = C:, `06h` true version | **oracle** (`p_subfn`, `p_ver`) |
@@ -169,7 +169,7 @@ leaves EIP on the BOP, so the guest keeps running its ISRs while it "waits".
 | `69h` | get / set volume serial | **IMPL** | `:1918-1964`; `6901h` session-only by decision | **oracle** (`p_misc`, `p_4b05`) |
 | `6Bh` | null function | **IMPL** | `:63` | **oracle** (`p_defs`) |
 | `6Ch` | extended open / create | **IMPL** | `:1763-1803`; action word / access / CX "action taken" are `dos_lfn.h`'s (shared with `716Ch`). #210: action `12h` on a file that did **not** exist now answers CX=2 (created), was 3 | **oracle** (`p_file`); the CX=2 row is `p_lfn lfn.6C.12.new`, owed |
-| `71h` | long-filename API (Windows 95 LFN, as stock XP NTVDM provides it; #210) | **IMPL** | the `ah == 0x71` arm + `lfn_alias` at the top of `dos_int21`; pure half `src/dos/dos_lfn.h`. **`7139h`/`713Ah`/`713Bh`/`7156h`/`716Ch`/`71A9h`** are served by their short-name twins (same registers; Win32 takes the long name), so they share 39h/3Ah/3Bh/56h/6Ch's error codes, handle allocation and JFT tail. **`710Dh`** reset (no-op), **`7141h`** delete (SI=1 wildcards + CL/CH), **`7143h`** BL 0-8 (attributes, compressed size, write/access/creation times, local), **`7147h`** cwd long form, **`714Eh`/`714Fh`/`71A1h`** find (318-byte record, SI=0 FILETIME / 1 DOS, 16 search handles), **`7160h`** CL 0/1/2, **`71A0h`** volume info (BX = Win32 flags & 8007h \| 4000h, CX 255, DX 260), **`71A6h`**, **`71A7h`** (FILETIME taken as UTC, DOS side local), **`71A8h`** (NT-style `~1` alias), **`71AAh`** SUBST via DefineDosDevice (terminate only undoes a real SUBST). Any other `71xxh`: `AX=7100h` CF=1. Names go through the ANSI `...A` APIs like every other DOS call here (stock: OEM). PM (WOW/krnl386): `pm_int21_lfn` in `main.c` bridges up to three pointers through the transfer buffer; a DPMI client without one gets `AX=7100h` CF=1 | **owed**: `p_lfn` under stock vs ours (`scripts/dospair.sh tests/probes/dos/p_lfn.com`); off-VM `lfn_test.c` (arithmetic/layout only). ⚠ `p_subfn int21.716C`/`int21.7147` now **differ from 6.22 by design** (6.22 has no LFN API; stock is the oracle for this AH) |
+| `71h` | long-filename API (Windows 95 LFN, as stock XP NTVDM provides it; #210) | **IMPL** | the `ah == 0x71` arm + `lfn_alias` at the top of `dos_int21`; pure half `src/dos/dos_lfn.h`. **`7139h`/`713Ah`/`713Bh`/`7156h`/`716Ch`/`71A9h`** are served by their short-name twins (same registers; Win32 takes the long name), so they share 39h/3Ah/3Bh/56h/6Ch's error codes, handle allocation and JFT tail. **`710Dh`** reset (no-op), **`7141h`** delete (SI=1 wildcards + CL/CH), **`7143h`** BL 0-8 (attributes, compressed size, write/access/creation times, local), **`7147h`** cwd long form, **`714Eh`/`714Fh`/`71A1h`** find (318-byte record, SI=0 FILETIME / 1 DOS, 16 search handles), **`7160h`** CL 0/1/2, **`71A0h`** volume info (BX = Win32 flags & 8007h \| 4000h, CX 255, DX 260), **`71A6h`**, **`71A7h`** (FILETIME taken as UTC, DOS side local), **`71A8h`** (NT-style `~1` alias), **`71AAh`** SUBST via DefineDosDevice (terminate only undoes a real SUBST). Any other `71xxh`: `AX=7100h` CF=1. Names go through the ANSI `...A` APIs like every other DOS call here (stock: OEM). PM (WOW/krnl386): `pm_int21_lfn` in `main.c` bridges up to three pointers through the transfer buffer; a DPMI client without one gets `AX=7100h` CF=1 | **owed**: `p_lfn` under stock vs ours; off-VM `lfn_test.c` (arithmetic/layout only). ⚠ `p_subfn int21.716C`/`int21.7147` now **differ from 6.22 by design** (6.22 has no LFN API; stock is the oracle for this AH) |
 | `6Dh`+ | undefined on 6.22 | **IMPL** | `:2396-2414`: AL=0, CF clear | **oracle** (`p_defs`, `p_unimp`) |
 | any defined AH not above | — | **MISS** | `:2415-2427`: CF=1 and listed in `unimpl21[]` | — |
 
@@ -263,7 +263,7 @@ still in `41h` and `56h` (§2, §3).
 
 ### Rows that are NOT contracts (abstentions in `oracle-rules.json`)
 
-The oracle boots to `A:\` and the rig runs probes from deep inside the share, so some
+The oracle boots to `A:\` and the test machine runs probes from deep inside the share, so some
 rows compare two *environments*: `int21.19.curdrive`; `curdir.*` (4 rows — the contract,
 GH #134, that an EXEC does not clobber the current directory, still holds); `psp.02.memtop`,
 `psp.int24.live`; `mcb.head`, `mcb.block` BX/CX/DX (the `'M'` signature and the chain end
@@ -291,9 +291,9 @@ No A20 *aliasing* is modelled — a recorded decision in `dos_xms.h`.
 wrong**: with no `cfg\FLOPPY.IMG` the layer correctly answered "drive not ready", and the
 registers that looked like untouched poison were a call that had properly **failed**.
 Given a disk, **all 18 rows AGREE** (`CX=4F12`, `DX=0101`, `BX=0004`; type `0100h`; the boot
-sector `55AA`/`MTOO`). `./scripts/mkfloppy.sh` builds the image. ▶ **Before calling a
+sector `55AA`/`MTOO`). ▶ **Before calling a
 surface unimplemented, check that it has something to work on.** ⚠ `cfg\FLOPPY.IMG` must
-stay on the rig.
+stay on the test machine.
 
 ## What to fix, in order
 

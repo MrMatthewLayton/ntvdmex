@@ -11,8 +11,7 @@ launch validates the host image: our binary never runs as the host under any sub
 `cmdline` repoint to any path, *or* physically replacing `system32\ntvdm.exe` (WFP defeated by
 also overwriting `dllcache`). Even a byte-copy of the genuine ntvdm fails from a non-canonical
 path. Every attempt yields "C:\…\dosstub.com is not a valid Win32 application" with **no STAGE0**
-(our log written on the very first instruction never appears). Full constraint table:
-`docs/research/ntvdmcontrol-and-v86.md`.
+(our log written on the very first instruction never appears).
 
 We still need a **true, transparent replacement** (requirement #14: every 16-bit launch routes to
 us, nothing run separately). The image-validation wall blocks *being the host image*. But it does

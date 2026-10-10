@@ -20,7 +20,7 @@ Program Interface* 1.0 (Phar Lap/Quarterdeck). Ralf Brown's Interrupt List (INT 
 - VCPI — **no code**.
 
 **Off-VM:** `tests/unit/xms_test.c` (T1–T12), `tests/unit/ems_test.c` (T1–T12),
-`tests/unit/extmem_test.c` (18 checks). **Rig self-checks** (pass/fail on our host only):
+`tests/unit/extmem_test.c` (18 checks). **Test-machine self-checks** (pass/fail on our host only):
 `tests/probes/dos/xmstest.asm`, `emstest.asm`, and the XMS/EMS steps of `selftest.asm`.
 **Oracle probe:** `tests/probes/dos/p_xms.asm` only (INT 2Fh `4300h`/`4310h`, XMS `00h`, `01h`,
 `07h`, `08h`, the HMA read-back); `p_kbc.asm` reads XMS `07h` beside the 8042; `p_int15.asm`
@@ -31,10 +31,10 @@ edited in the working tree while this was written; its line numbers are given wi
 or string and will drift — search for the symbol.
 
 ⚠ **Verification axis.** Only the `p_xms` rows have been asked of a reference. The latest
-five-host diff is `runs/s84/probes/c.txt:227-249` (MS-DOS 6.22 + HIMEM under QEMU, dosbox-x,
+five-host diff is s84 (MS-DOS 6.22 + HIMEM under QEMU, dosbox-x,
 PCem, PCem-VESA, NTVDMEX), and stock XP NTVDM was captured separately the same night in
-`runs/s84/stock/xms_stock.txt`; the oracle captures are also cached in
-`build/dosdiff-cache/p_xms.com-*`. Every other row is at most *untested*: the batteries and rig
+s84; the oracle captures are also cached in
+`build/dosdiff-cache/p_xms.com-*`. Every other row is at most *untested*: the batteries and test-machine
 self-checks were written against our own model, so they pin what the code does, not what a
 driver does.
 
@@ -71,15 +71,15 @@ open), and hands out handle 0, which LIM 4.0 reserves for the operating system.
 
 | Measurement | Where |
 |---|---|
-| All five hosts AGREE: `4300h` → `AL=80h`; `00h` → `AX=0300h`, `DX=0001h` (HMA exists); `07h` → `AX=0001h BL=00h` | `runs/s84/probes/c.txt:236-239`, `:247-248` |
-| ★ **Stock XP NTVDM reports XMS version 2.00**, revision `0277h` (`AX=0200 BX=0277 DX=0001`); `4300h`, `07h` and the HMA refusal (`91h`) match the DOS oracles. We report 3.00 | `runs/s84/stock/xms_stock.txt` |
+| All five hosts AGREE: `4300h` → `AL=80h`; `00h` → `AX=0300h`, `DX=0001h` (HMA exists); `07h` → `AX=0001h BL=00h` | s84, `:247-248` |
+| ★ **Stock XP NTVDM reports XMS version 2.00**, revision `0277h` (`AX=0200 BX=0277 DX=0001`); `4300h`, `07h` and the HMA refusal (`91h`) match the DOS oracles. We report 3.00 | s84 |
 | `00h` BX (driver revision): HIMEM `0310h` (6.22, PCem), dosbox-x `0301h`, ours `0300h` — abstained as "a version number for a different program" | `c.txt:238`; `oracle-rules.json` (probe `xms`, case `xms.00.version`, BX); `dos_xms.h:29-35` (0310h tried for #47 and refuted) |
-| `08h` BH: 6.22 and both PCems write `AAh` (`BX=AA00`); dosbox-x and stock NTVDM leave the poison (`BX=B100`). Now a setting, "behave like" (#167); ours `B100` by default | `c.txt:242`; `xms_stock.txt`; `main.c` ≈`:6936-6939`; `docs/log/sessions/session-84.md:35`; history `docs/inventory/sweep.md:135` |
+| `08h` BH: 6.22 and both PCems write `AAh` (`BX=AA00`); dosbox-x and stock NTVDM leave the poison (`BX=B100`). Now a setting, "behave like" (#167); ours `B100` by default | `c.txt:242`; `xms_stock.txt`; `main.c` ≈`:6936-6939`; session 84; history `docs/inventory/sweep.md:135` |
 | `08h` AX/DX: RAM size per machine (ours `4000h` = 16384 KB) — abstained | `c.txt:240-241`; `oracle-rules.json` |
-| HMA: we answered `DX=0` and `BL=90h` until s72; NT had the HMA committed all along. Ours grants `01h` and reads back `A55A`/`1234` through `FFFF:0010`; every oracle **and stock NTVDM** refuse with `91h` (DOS=HIGH) — abstained as configuration | `c.txt:243-246`; `xms_stock.txt`; `docs/inventory/dos-services.md:107-140`; `docs/log/sessions/session-72.md:188`; `oracle-rules.json` `xms.01.request.hma`, `xms.hma.readback` |
-| A20 was three flags, XMS owned the only one; the 8042, port `92h` and XMS `03h`–`07h` are one bit now. PCem answers `0101h` to `kbc.a20.readback` and so do we; the enable direction only is tested | `docs/log/sessions/session-77.md:254-295`; `docs/inventory/kbc.md:100`, `:171` |
-| MEM /D walked 256 EMS handles until `4Dh` and `53h` existed (#47) | `docs/log/sessions/session-81.md:357`; `dos_ems.h:193-216` |
-| Rig self-test `selftest.com` 8/8 including XMS and EMS | `docs/log/sessions/session-37.md:637`; `session-72.md:142` |
+| HMA: we answered `DX=0` and `BL=90h` until s72; NT had the HMA committed all along. Ours grants `01h` and reads back `A55A`/`1234` through `FFFF:0010`; every oracle **and stock NTVDM** refuse with `91h` (DOS=HIGH) — abstained as configuration | `c.txt:243-246`; `xms_stock.txt`; `docs/inventory/dos-services.md:107-140`; session 72; `oracle-rules.json` `xms.01.request.hma`, `xms.hma.readback` |
+| A20 was three flags, XMS owned the only one; the 8042, port `92h` and XMS `03h`–`07h` are one bit now. PCem answers `0101h` to `kbc.a20.readback` and so do we; the enable direction only is tested | session 77; `docs/inventory/kbc.md:100`, `:171` |
+| MEM /D walked 256 EMS handles until `4Dh` and `53h` existed (#47) | session 81; `dos_ems.h:193-216` |
+| Test-machine self-test `selftest.com` 8/8 including XMS and EMS | session 37; session 72 |
 
 ---
 
@@ -90,7 +90,7 @@ open), and hands out handle 0, which LIM 4.0 reserves for the operating system.
 | INT 2Fh `AX=4300h` — installation check, `AL=80h` | **IMPL** | `main.c` ≈`:28238` | **oracle** — `int2F.4300.installed` AGREE on five hosts (`c.txt:236`) and stock |
 | INT 2Fh `AX=4310h` — entry point in `ES:BX` | **IMPL** | ≈`:28240`, returns `DOS_HDLR_SEG:XMS_ENTRY_OFF` = `0050:0044` (`main.c:502`) | untested — `int2F.4310.entry.seg.nonzero` has an empty signature, so it compares nothing (`p_xms.asm:46`); the far calls that follow it working is the real evidence |
 | XMS switched off (Settings) → neither `4300h` nor `4310h` answers | **IMPL** | `g_xms_on` (`main.c` ≈`:10330`, `:10352`); the "not answering, not answering badly" note at ≈`:28232` | untested |
-| The control function: far call → `BOP 43h ; RETF`, dispatched to `host_xms()` | **IMPL** | stub `bopxms[]` ≈`:24777`, planted ≈`:25931`; dispatch ≈`:28331`–`:28359` (EIP += 3 → the RETF) | `xmstest.asm` (rig self-check) |
+| The control function: far call → `BOP 43h ; RETF`, dispatched to `host_xms()` | **IMPL** | stub `bopxms[]` ≈`:24777`, planted ≈`:25931`; dispatch ≈`:28331`–`:28359` (EIP += 3 → the RETF) | `xmstest.asm` (test-machine self-check) |
 | The hookable prologue — the spec requires the control function to begin with a short jump and three NOPs, so another program can patch a far jump over those five bytes | **MISS** | our entry is four bytes and the INT 67h stub starts at `0048h` (≈`:25938`), so a 5-byte far-jump patch at `0044h` **overwrites the first byte of the EMS entry** | — |
 
 ## 2. XMS — driver functions (AH)
@@ -112,7 +112,7 @@ Every call returns `AX=1` on success, `AX=0` with an error in BL on failure; car
 | `09h` | Allocate EMB, DX=KB → DX=handle | **IMPL** | ≈`:6941`; `dos_xms.h:135-149`; 0 KB is legal; `A0h`, `A1h` | `xms_test.c` T2, T4, T5, T12; `xmstest.asm` |
 | `0Ah` | Free EMB | **IMPL** | ≈`:6945`; `dos_xms.h:153-161`; `A2h`, `ABh` if locked | `xms_test.c` T9, T11 |
 | `0Bh` | Move EMB (DS:SI → 16-byte structure) | **PART** | ≈`:6949`–`:6959`; `dos_xms.h:233-262`. Round trips, EMB↔EMB, overlap in both directions, odd length `A7h` all work. ⛔ **The bounds test `offset + len > size` is 32-bit and wraps** (`dos_xms.h:246`, `:255`): offset `FFFFF000h` with length `2000h` passes and copies from `mem − 1000h`, i.e. host memory outside the block. ⛔ A handle-0 (conventional) endpoint has **no length limit at all** (`:240-242`, `:249-251`), so a long move from `9000:0000` runs past `0x10FFF0` into whatever the host has mapped — the exact hazard `dos_extmem.h:1-20` exists to refuse for INT 15h `87h` | `xms_test.c` T6–T8 (none probes the wrap); `xmstest.asm` |
-| `0Ch` | Lock EMB → DX:BX 32-bit address | **PART** | ≈`:6960`; `dos_xms.h:209-216`. Lock count and `ACh` are right. The address is **the host heap pointer**, not a physical address: usable by a client that shares our flat address space, and by INT 15h `87h` (`dos_extmem.h:13-15`, `:44-53`), but not by anything that treats it as physical (a DMA programme, a VCPI client's page tables). A 0-KB block locks to address 0 | `xms_test.c` T9; `p_int15.asm` uses it (`session-81.md:309-316`) |
+| `0Ch` | Lock EMB → DX:BX 32-bit address | **PART** | ≈`:6960`; `dos_xms.h:209-216`. Lock count and `ACh` are right. The address is **the host heap pointer**, not a physical address: usable by a client that shares our flat address space, and by INT 15h `87h` (`dos_extmem.h:13-15`, `:44-53`), but not by anything that treats it as physical (a DMA programme, a VCPI client's page tables). A 0-KB block locks to address 0 | `xms_test.c` T9; `p_int15.asm` uses it (session 81) |
 | `0Dh` | Unlock EMB | **IMPL** | ≈`:6965`; `dos_xms.h:218-224`; `AAh` | `xms_test.c` T9 |
 | `0Eh` | Get handle info: BH=lock count, BL=free handles, DX=KB | **IMPL** | ≈`:6969`–`:6974`; `dos_xms.h:186-201` | `xms_test.c` T3, T9 |
 | `0Fh` | Reallocate EMB, BX=new KB | **IMPL** | ≈`:6975`–`:6979`; `dos_xms.h:165-183`; content kept, `ABh` if locked, `A0h` | `xms_test.c` T10 |
@@ -172,7 +172,7 @@ answer (or none) is given.
 | Free and reallocate refused while locked | **IMPL** | `dos_xms.h:156`, `:169` | `xms_test.c` T9 |
 | Zero-KB blocks | **IMPL** | `dos_xms.h:131-149` | `xms_test.c` T5 |
 | Largest free block = total free (each EMB is its own host allocation, so the pool cannot fragment) | **IMPL** | `dos_xms.h:121-129`; `xms_host_alloc` ≈`:6856` | `xms_test.c` T2 |
-| Pool = 16384 KB, and SysVars+`45h` reports the same number (MEM.EXE reads it there, #47). **#48 (2026-10-04): pool = `CMOS_EXT_KB` − 64 K HMA = 15296 KB** (`XMS_POOL_KB`, `main.c` ≈`:526`); SysVars+`45h` = `CMOS_EXT_KB` = 15360, the boot-time `88h` figure the field is defined as. MEM's Total − Free = Used is then 64 K, the oracle's shape (6.22: 15,232K = 64K + 15,168K, `runs/s81_mem/oracle_memd.txt`) | **IMPL** | SysVars ≈`:30560`; `xms_init` | **owed:** MEM / MEM /C / MEM /D on the rig (Extended row should read 15,728,640 = 65,536 + 15,663,104) |
+| Pool = 16384 KB, and SysVars+`45h` reports the same number (MEM.EXE reads it there, #47). **#48 (2026-10-04): pool = `CMOS_EXT_KB` − 64 K HMA = 15296 KB** (`XMS_POOL_KB`, `main.c` ≈`:526`); SysVars+`45h` = `CMOS_EXT_KB` = 15360, the boot-time `88h` figure the field is defined as. MEM's Total − Free = Used is then 64 K, the oracle's shape (6.22: 15,232K = 64K + 15,168K, s81) | **IMPL** | SysVars ≈`:30560`; `xms_init` | **owed:** MEM / MEM /C / MEM /D on the test machine (Extended row should read 15,728,640 = 65,536 + 15,663,104) |
 | The pool against INT 15h `AH=88h` | **PART** | `88h` answers `3C00h` = 15360 KB of **raw** extended memory (≈`:27938`) while XMS hands out 16384 KB more; HIMEM hooks `88h` and reports what it has left, which is 0. The defect is recorded at the arm (≈`:27928`) and a change was tried and reverted. ⚠ The arm's "matching the XMS pool" is not even numerically true (`3C00h` ≠ 16384). **#48:** the NUMBERS now agree (`88h` both modes, CMOS `17h`/`30h`, SysVars+`45h` = `CMOS_EXT_KB`; pool = that − HMA); the double hand-out (`88h` not 0 under XMS) is unchanged and still open | untested; `p_devchn ext.sysvars45` (informational) |
 | The HMA — 64 KB−16 at linear `100000h`, reached as `FFFF:0010` | **IMPL** | `hma_try()` ≈`:966`–`:993` (query first; commit only if free/reserved) | ours `A55A`/`1234` read back (`dos-services.md:122-126`) |
 | A20 address wrap at 1 MB | **N/A** | recorded decision: "an NT VDM does not wrap at 1 MB" (`dos_xms.h:95-104`; `main.c` ≈`:26647`–`:26652`). A program that disables A20 and expects `FFFF:0010` to alias `0000:0000` sees the HMA | — |
@@ -184,8 +184,8 @@ answer (or none) is given.
 
 | Unit | Status | Where / what is missing | Verification |
 |---|---|---|---|
-| INT 67h vector → `DOS_HDLR_SEG:0048h` (`BOP 67h ; IRET`), absent when EMS is off | **IMPL** | `bop67[]` ≈`:24778`; planted ≈`:25938`–`:25949`; dispatch ≈`:28361` | `emstest.asm` step 1 (rig self-check) |
-| Detection by the vector: `"EMMXXXX0"` at vector-segment:`000Ah` | **IMPL** | `DOS_EMM_NAME_OFF` `dos_layout.h:26`; `emmname[]` ≈`:24794`; written ≈`:25981` | `emstest.asm`, `selftest.asm:312` (rig self-check) |
+| INT 67h vector → `DOS_HDLR_SEG:0048h` (`BOP 67h ; IRET`), absent when EMS is off | **IMPL** | `bop67[]` ≈`:24778`; planted ≈`:25938`–`:25949`; dispatch ≈`:28361` | `emstest.asm` step 1 (test-machine self-check) |
+| Detection by the vector: `"EMMXXXX0"` at vector-segment:`000Ah` | **IMPL** | `DOS_EMM_NAME_OFF` `dos_layout.h:26`; `emmname[]` ≈`:24794`; written ≈`:25981` | `emstest.asm`, `selftest.asm:312` (test-machine self-check) |
 | Detection by opening the device: INT 21h `3Dh` on `EMMXXXX0`, then IOCTL `4400h` (is a device) and `4407h` (output ready) — the spec's other documented method | **MISS** | no DOS device exists; the name goes to Win32 through `v86_path()` (`src/dos/dos_int21.c:389`) and the open fails. ⚠ The comment at ≈`:25939` says a program detects the EMM by "following the vector … OR by opening the device" — only the first is wired | — |
 | `EMMXXXX0` in the device-driver chain (a walker from the NUL header finds it) | **MISS** | the NUL header terminates at `FFFF:FFFF` (≈`:26554`–`:26560`) | — |
 | The page frame — 64 KB, found by scanning `D000h`, `C000h`, `E000h` for a free hole after `VdmInitialize` | **PART** | `v86_map_ems_frame()` `v86.c:95-117`; called ≈`:25262`. ⛔ **When no hole is free it returns 0 and nothing checks**: `ems_init()` gets segment 0 and frame pointer 0 (≈`:26657`), INT 67h stays installed, `41h` answers `BX=0000h AH=00h`, and the first `44h` copies 16 KB **over the IVT** (`dos_ems.h:156`) | logged as `STAGE1: ems_frame lin=` (≈`:25264`) |
@@ -215,7 +215,7 @@ falls to `84h` "undefined function" (≈`:7080`).
 | `4Ah` | (3.x: get translation array) | **N/A** | withdrawn in 4.0; `84h` | — |
 | `4Bh` | Get handle count → BX | **IMPL** | ≈`:7050`; `dos_ems.h:187-191` | `ems_test.c` T3, T11 |
 | `4Ch` | Get pages owned by handle → BX | **IMPL** | ≈`:7051`; `dos_ems.h:178-184` | `ems_test.c` T3 |
-| `4Dh` | Get all handle pages → ES:DI pairs, BX count | **IMPL** | ≈`:7055`–`:7062`; `dos_ems.h:198-211` | `ems_test.c` T12; MEM /D (`session-81.md:357`) |
+| `4Dh` | Get all handle pages → ES:DI pairs, BX count | **IMPL** | ≈`:7055`–`:7062`; `dos_ems.h:198-211` | `ems_test.c` T12; MEM /D (session 81) |
 | `4Eh`/`00h` | Get page map → ES:DI | **MISS** | `84h` | — |
 | `4Eh`/`01h` | Set page map ← DS:SI | **MISS** | `84h` | — |
 | `4Eh`/`02h` | Get and set page map | **MISS** | `84h` | — |
@@ -368,7 +368,7 @@ completeness.
 5. **XMS reports version 3.00 without the 3.0 functions.** `88h`, `89h`, `8Eh`, `8Fh` answer
    `80h` (§2). Each is a 32-bit twin of `08h`, `09h`, `0Eh`, `0Fh` on the same allocator, so
    the cost is small; `12h` should answer `B2h` like its UMB siblings. ⚠ Stock NTVDM
-   reports **2.00** (`runs/s84/stock/xms_stock.txt`) and 6.22's HIMEM 3.00, so this is also a
+   reports **2.00** (s84) and 6.22's HIMEM 3.00, so this is also a
    "behave like" question (#167) — but the spec says a 3.00 driver has these functions, so
    the version we report and the functions we answer must agree either way.
 

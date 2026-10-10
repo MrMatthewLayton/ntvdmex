@@ -2,8 +2,8 @@
 
 **Spec:** Windows 3.1 SDK Programmer's Reference; Wine (`krnl386.exe16`, `user.exe16`,
 `gdi.exe16`); ReactOS; *Undocumented Windows*. The NE format is documented.
-**Oracle for what has no spec:** stock `ntvdm` on the same rig —
-[`research/stock-vdm-dump-oracle`](../research/).
+**Oracle for what has no spec:** stock `ntvdm` on the same test machine —
+the stock-VDM dump oracle.
 **Harness:** `tools/ne/mkne.py`, `tests/probes/win16/`.
 **Started:** 2026-09-24.
 
@@ -20,14 +20,14 @@ Every Win16 check this project had ever run was **"launch Notepad and look at it
 needs a human, needs a screenshot, and cannot say *which* of four hundred calls behind the
 window is wrong. What actually blocked the tests was more basic: **nothing in this repo
 could build a Win16 binary.** There is no OpenWatcom on this machine, none in Homebrew,
-and no 16-bit Windows toolchain in the tree — `tools/wowprobe/make-dosexe.sh` emits an MZ
+and no 16-bit Windows toolchain in the tree — a throwaway script emitted an MZ
 header with `printf`.
 
 So nasm writes the 16-bit code and **`tools/ne/mkne.py` writes the NE around it**.
 
 ```bash
 ./tests/probes/win16/build.sh          # nasm + mkne.py -> build/wintest/*.EXE
-./tests/probes/win16/run.sh w_kernel   # stage on the rig, launch via IFEO, print the result
+./tests/probes/win16/run.sh w_kernel   # stage on the test machine, launch via IFEO, print the result
 ```
 
 ### Everything in the linker was checked against a real binary
@@ -49,12 +49,12 @@ the header values — **not** from memory:
 - The exit is `INT 21h AH=4Ch`.
 
 `build.sh` validates each generated `.EXE` with **our own `nedump.py`** before it ever
-reaches the rig: a reader verified against real Win16 binaries is the cheapest possible
+reaches the test machine: a reader verified against real Win16 binaries is the cheapest possible
 check that the writer produced something loadable.
 
 ---
 
-## First result — measured on the bare-metal rig, 2026-09-24
+## First result — measured on the test machine, 2026-09-24
 
 ```
 #PROBE w16kernel
@@ -146,7 +146,7 @@ is its imports and its cases. Five new tests; every ordinal read off
 what describes the machine is emitted as a `*.raw` row with its **stock value OWED** —
 `tests/probes/win16/stock.sh` needs supervision (it drops the IFEO key) and was not run.
 
-Measured on the rig (host `b0e3b5b9`), runs `runs/s87_ide/w16/`:
+Measured on the test machine (host `b0e3b5b9`), runs s87:
 
 | test | rows | match the contract | ⛔ differ | raw / owed |
 |---|---|---|---|---|
@@ -178,7 +178,7 @@ the five tests, and specifically the raw rows above plus `kfile.of.cbytes`.
 
 ✅ Scratch hygiene: `w_kfile`'s only file is absolute (`debug\out\W16F.TMP`) and its
 `OF_DELETE` case removes it — measured `0001`, then `OF_EXIST` `FFFF` / nErrCode 2. Nothing
-lands in the rig's `C:\WINDOWS`.
+lands in the test machine's `C:\WINDOWS`.
 
 Not done from #163's list: folding these outputs into `dosdiff.py`'s parser (item 5) —
 filed as a remainder.

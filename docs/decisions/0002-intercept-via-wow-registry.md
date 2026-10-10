@@ -9,8 +9,7 @@
 > `system32\ntvdm.exe`. Repointing `cmdline` at our binary (any path) — and even physically
 > replacing `system32\ntvdm.exe` after defeating WFP — results in our binary **never executing
 > a single instruction**; the 16-bit launch fails "not a valid Win32 application". The genuine
-> ntvdm also only hosts from its canonical `system32` path. See the constraint table in
-> `docs/research/ntvdmcontrol-and-v86.md`. Replaced by an **IFEO `Debugger` redirect** (ADR-0007),
+> ntvdm also only hosts from its canonical `system32` path. Replaced by an **IFEO `Debugger` redirect** (ADR-0007),
 > which *does* run our code transparently. Original text kept below for the record.
 
 ## Context

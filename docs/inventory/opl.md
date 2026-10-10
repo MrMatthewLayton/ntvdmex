@@ -4,7 +4,7 @@
 *YMF262 (OPL3) datasheet* (second register array, NEW, 4-operator connection figure,
 waveforms 4–7, CHA–CHD outputs); Creative *Sound Blaster 16 Hardware Programming Reference*
 (OPL3 at `2x0`–`2x3`, the `(status & 06h) == 0` OPL3 detect). None is held in the repository.
-**Oracle:** Nuked-OPL3, used strictly as a black box through `tools/oplref/oplprobe.c`
+**Oracle:** Nuked-OPL3, used strictly as a black box through a small probe harness
 (fetched on demand into `build/oplref/`, never linked into the host, its source never read for
 values). No OPL3 experiment has been run against it yet — see "Owed" below.
 **Our implementation:** `src/vdd/vdd_opl.h`, `vdd_opl.c` (register file, ports, timers),

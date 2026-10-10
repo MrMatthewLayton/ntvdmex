@@ -79,7 +79,7 @@ From `wowwin_proc` (`wowwin.h`) unless noted.
 | `0x0113` | WM_TIMER | posted | ✅ | lParam = TIMERPROC; DispatchMessage calls it |
 | `0x0116/0x0117` | WM_INITMENU / WM_INITMENUPOPUP | posted | ✅ | menu token |
 | `0x011F` | WM_MENUSELECT | — | ✅ (s91, #305 M9) | Win32 wParam=MAKELONG(item, flags) → Win16 wParam=item, lParam=MAKELONG(flags, 0); sent |
-| `0x0114/0x0115` | WM_HSCROLL / WM_VSCROLL | **sent** (nested) | ✅ (s89, #300, rig-verified on Paintbrush) | repacked: Win16 `wParam=code, lParam=MAKELONG(pos, hwndCtl16)` |
+| `0x0114/0x0115` | WM_HSCROLL / WM_VSCROLL | **sent** (nested) | ✅ (s89, #300, test machine-verified on Paintbrush) | repacked: Win16 `wParam=code, lParam=MAKELONG(pos, hwndCtl16)` |
 | `0x002B` | WM_DRAWITEM | **sent** (nested) | ✅ (s89, #302; Charmap's font list = stock) | DRAWITEMSTRUCT converted (26 bytes Win16, DC token) on the guest stack |
 | `0x002C` | WM_MEASUREITEM | **sent** (nested) | ✅ (s89, #302) | width/height copied back |
 | `0x0039/0x002D` | WM_COMPAREITEM / WM_DELETEITEM | **sent** (nested) | ✅ (s89, #302; not yet exercised) | structures converted; COMPAREITEM's answer = return value |
@@ -90,7 +90,7 @@ From `wowwin_proc` (`wowwin.h`) unless noted.
 | `0x0083/0x0084/0x0085/0x0086` | WM_NCCALCSIZE/NCHITTEST/NCPAINT/NCACTIVATE | — | ❌ (by design for now) | Luna frames are kept (user decision); only a program that hooks its own non-client area would notice |
 | `0x0210` | WM_PARENTNOTIFY | — | ❌ | |
 | `0x0011/0x0016` | WM_QUERYENDSESSION / WM_ENDSESSION | — | ❌ | |
-| `0xC000+` | registered `commdlg_FindReplace` | posted | ✅ (s89, #294, rig-verified on Notepad) | relayed to the owner with the guest's own FINDREPLACE pointer, flags copied back |
+| `0xC000+` | registered `commdlg_FindReplace` | posted | ✅ (s89, #294, test machine-verified on Notepad) | relayed to the owner with the guest's own FINDREPLACE pointer, flags copied back |
 | `0x0233` | WM_DROPFILES | — | ❌ | DragAcceptFiles is answered, but the drop is not forwarded (`wowshell.h:669`) |
 | `0x0200–0x0209` | mouse messages | posted | ✅ | moves coalesced |
 | `0x00A0–0x00A9` | WM_NC* mouse | — | ❌ | |

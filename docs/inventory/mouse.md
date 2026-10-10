@@ -134,7 +134,7 @@ snapping (`i33_snap`).
 **The driver's virtual screen was derived from the PRESENT SURFACE, not the video
 mode.** Every helper used `g_vid.frame.w/h` — the dimensions of the snapshot the UI
 thread presents. That surface does not exist until something has been drawn, so in a
-headless run (and in the window between a mode set and the first present)
+unattended run (and in the window between a mode set and the first present)
 `frame.h == 0`, and then:
 
 * `i33_text()` evaluated **false** in a genuine text mode (`0 > 200`), so the whole

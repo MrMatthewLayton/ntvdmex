@@ -10,14 +10,14 @@ foundation as everything before it.
 > list now, and new work is filed there directly.)
 >
 > ✅ **The tracker IS the source of truth for open work (session-81 review, 2026-09-27).**
-> Every open item from `STATE.md`, the inventories, the session logs and the notes was moved
+> Every open item from the status notes, the inventories and the session logs was moved
 > into GitHub issues, and done/obsolete issues were closed with evidence
-> (`docs/log/sessions/session-81.md` part 4). The order of work is the pinned **#202**. The unchecked boxes below
+> (session 81). The order of work is the pinned **#202**. The unchecked boxes below
 > are narrative pointers to those issues, not a separate list.
 
 ## Where it is, as of session 54 (2026-09-06)
 
-`./tools/score/score.py` says **80.2%** of the full vision — MS-DOS **85.9%**,
+The project score was **80.2%** of the full vision — MS-DOS **85.9%**,
 WOW/Win16 **78.7%**, Product/Packaging **61.6%**. Against the two narrower bars:
 
 - **The DOS games bar** (Doom / Skyroads / ZAR, flawless sound) — two of three fully
@@ -26,8 +26,8 @@ WOW/Win16 **78.7%**, Product/Packaging **61.6%**. Against the two narrower bars:
   and saves text; Paint draws in colour and writes a valid 24-bit `.BMP`. Nine Win16
   guests are routed and windowed, five user-confirmed doing their job.
 
-The live detail — what works, what does not, and what to do next — is
-[`STATE.md`](STATE.md). This file is the shape of the programme.
+The live detail — what is open, and in what order — is the
+[issue tracker](https://github.com/MrMatthewLayton/ntvdmex/issues). This file is the shape of the programme.
 
 ## How each step is tracked
 
@@ -36,12 +36,12 @@ Every milestone/step moves through five stages:
 > **Research → Spike → Impl → Test → Done**
 
 - **Research** — recover the contract: disassemble XP `ntvdm` / `basesrv` / `ntoskrnl`, read
-  ReactOS for logic & structures; findings land in [`research/`](research/).
-- **Spike** — a minimal, throwaway proof in the experiment harness (`tools/vdmhost/` — retired at M3 kickoff; see the note below):
+  ReactOS for logic & structures; findings land in the ADRs, the [inventories](inventory/) and the code's comments.
+- **Spike** — a minimal, throwaway proof in the experiment harness (the vdmhost spike — retired at M3 kickoff; see the note below):
   does it work *at all*? Driven and logged from the XP VM.
 - **Impl** — the real, clean implementation promoted into the host (`src/`).
-- **Test** — verified on the XP SP3 VM (the canonical bench, `scripts/xp-vm.sh`).
-- **Done** — exit criterion met, committed, this file + [`STATE.md`](STATE.md) updated.
+- **Test** — verified on the XP SP3 VM (the canonical bench at the time).
+- **Done** — exit criterion met, committed, this file updated.
 
 **Research and Spike are risk-scaled.** For undocumented territory (most V86/VDM work) they are
 essential. For documented, low-risk work (e.g. parsing an MZ header) they compress toward
@@ -49,7 +49,7 @@ Research → Impl → Test — *don't spike what's already known.*
 
 > Stage status: ⬜ not started · 🟡 in progress · ✅ done · `–` not applicable
 
-**History:** M0–M1 and M2.1–M2.4 were first proven in the throwaway **`tools/vdmhost` spike** (hence
+**History:** M0–M1 and M2.1–M2.4 were first proven in the throwaway **vdmhost spike** (hence
 the ✅ Spike / ⬜ Impl rows below). M2.6 promoted that proven DOS core into the clean `src/` host
 (`ntvdmhost.exe`); the spike was then **retired** (removed at the start of M3 — see git history). The
 ✅ Spike / ⬜ Impl rows are kept as the historical audit trail; the live implementation is `src/`.
@@ -71,7 +71,7 @@ Prove the premise before writing real code.
   validates the host image), see [ADR-0002 superseded](decisions/0002-intercept-via-wow-registry.md).
 - V86 keystone proven: `NtVdmControl(VdmStartExecution)` ran `mov ax,0xBEEF; mov [0x80],ax` on the
   real CPU; GP/BOP faults reflect back to us. **[ADR-0004](decisions/0004-reuse-kernel-vdm-ntvdmcontrol.md)
-  is now Accepted.** Full contract: [research/ntvdmcontrol-and-v86.md](research/ntvdmcontrol-and-v86.md).
+  is now Accepted.** The contract is summarised in [architecture.md](architecture.md).
 
 ## M1 — Minimal V86 host ✅ DONE (proven as spike)
 **Exit:** a real-mode program that does INT 21h AH=09h prints a string to our console.
@@ -134,13 +134,13 @@ Per-step exit criteria:
   ✅ **met (2026-06-07):** `ntvdmhost.exe` — the clean `src/` host (`src/dos` core + `src/vdm`
   V86/CSRSS glue + INT 21h surface + `src/host`) — ran `memtest.com` in V86 on the real CPU →
   **MEMTEST PASS** (VM-confirmed via `gate-clean.bat`). Imports **KERNEL32 only**
-  (`scripts/check-imports.sh`); off-VM battery 42/42. The `tools/vdmhost` spike is now reference-only.
+  (`scripts/check-imports.sh`); off-VM battery 42/42. The vdmhost spike is now reference-only.
 
 ## M3 — Device model + video/input ✅ DONE (2026-06-09)
-- [x] **Retire the `tools/vdmhost` spike** (clean host has parity) — done at M3 kickoff.
+- [x] **Retire the vdmhost spike** (clean host has parity) — done at M3 kickoff.
 - [x] Pluggable **VDD** interface (requirement #13) — clean `src/vdd/ntvdd.h` ABI + device bus
   (`vdd_bus.c`): claim ports / memory-window / interrupt / frame, services raise-IRQ / map-flat /
-  present. **Off-VM battery 22/22.** Design: [research/vdd-architecture.md](research/vdd-architecture.md).
+  present. **Off-VM battery 22/22.** Design: [ADR-0008](decisions/0008-pluggable-vdd-model.md) and the [device SDK](sdk/vdd-sdk.md).
 - [x] **Timer VDD** (PIT 8254 + INT 08h/1Ah, IRQ0) — `src/vdd/vdd_pit.c`, the first device on the
   bus. **Off-VM battery 19/19** (8254 ports, clocks→IRQ0 engine, BIOS tick + rollover, time-of-day).
 - [x] **I/O-port (`IN`/`OUT`) trap dispatch wired into `v86_run`** (slice-1b) — **VM-CONFIRMED
@@ -190,7 +190,7 @@ Per-step exit criteria:
 - [x] **Run real DOS apps** — all 10 QuickBASIC `demos/*.EXE` run (**VM-CONFIRMED**): AH=06 console I/O
   + INT 10h VGA queries + port-3DA vsync + mode-12h glyph render + the MOV/XCHG store decoder + INT 33h
   mouse (with a host-drawn cursor). Linear modes (13h/VESA/text) are fast; per-pixel 12h plotting is
-  slow by a documented wall (`research/hardware-vga-acceleration.md`). Two correctness fixes: the `XCHG`
+  slow by a documented wall (every planar write traps). Two correctness fixes: the `XCHG`
   pixel-store opcode and the INKEY$ enhanced-keyboard (INT 16h AH=10/11) phantom key.
 - [x] **Sound VDD stub** (2026-06-09) — `src/vdd/vdd_speaker.c`: PC-speaker control port 0x61 + the tone
   frequency from PIT channel 2 (channel-2 tracking added to `vdd_pit.c`). The third device *class* on the
@@ -299,7 +299,7 @@ sessions 39–53.
 
 ## M9 — DOS/BIOS completeness (TDD) 🟡 IN PROGRESS
 **The method, and it is the point of the milestone:** close every DOS/BIOS gap **test-first
-against a real MS-DOS 6.22 oracle** (`./scripts/oracle.sh`), then gate it on the bare-metal XP
+against a real MS-DOS 6.22 oracle**, then gate it on the bare-metal XP
 box. **Cardinal rule: never write a test expectation from memory.** The oracle is a panel, and
 NTVDMEX is not ground truth.
 
@@ -320,7 +320,7 @@ NTVDMEX is not ground truth.
   reach them even in principle. A real CPU cannot be clocked down, so the lever is a **duty
   cycle** — the exec thread is suspended for a share of each period, reusing the machinery the
   IRQ injector has used for twenty sessions. Calibrated against a probe whose loop costs 12
-  cycles on a 486 (`tests/probes/dos/cpubench.asm`): the rig presents **3665 MHz** unthrottled,
+  cycles on a 486 (`tests/probes/dos/cpubench.asm`): the test machine presents **3665 MHz** unthrottled,
   and 100 MHz measures 103. ⚠ **Two caveats, both in the log rather than hidden**: the slowest
   settings *saturate* on a host this fast, so the host reports `delivered_mhz` beside the
   requested one; and a slow setting is **chunky**, because 1 ms is the smallest slice `Sleep`
@@ -369,7 +369,7 @@ Making NTVDMEX the machine's VDM, **reversibly**. This is what turns a host into
   an existing value and can put it back**: a `Debugger` belonging to another program is
   saved before we displace it and restored on uninstall, and one we never installed is
   **refused** rather than deleted. Every claim is verified by reading the value back,
-  not by a return code. Rig-gated behaviourally on all six cases.
+  not by a return code. Gated behaviourally on the test machine on all six cases.
   ⚠ Remaining: there is no **package** — nothing that copies the exe somewhere sensible,
   makes a Start Menu entry, or uninstalls through Add/Remove Programs. The routing half
   is done; the shipping half is not.

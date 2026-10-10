@@ -4,7 +4,7 @@
 - **Date:** 2026-06-07
 - **Deciders:** Matthew
 - **Relates to:** M3 (device model + video); requirement #13 (third-party VDD hook point).
-  Design detail: [research/vdd-architecture.md](../research/vdd-architecture.md).
+  Design detail: the [device SDK](../sdk/vdd-sdk.md).
 
 ## Context
 M2 closed with the DOS kernel running in V86 from the clean `src/` host (`ntvdmhost.exe`). M3 adds

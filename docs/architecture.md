@@ -35,13 +35,16 @@
 
 | Path | What lives there |
 |---|---|
-| `src/host/` | The host process. `main.c` is the exec loop, the window, and the service dispatch. `v86interp.h` is the PM fallback interpreter, `x86len.h` the instruction-length decoder, `settings.h` the registry-backed configuration. |
-| `src/vdm/` | The VDM layer: `v86.c` (kernel VDM plumbing), `dpmi.c` + `dpmi_enter.S` (protected mode), `csrss.c` (session/console interaction). |
-| `src/dos/` | The DOS kernel — header-only by convention so it is testable off-VM. `dos_int21.c` is the API surface (103 functions), plus MCB, PSP, loader, environment, XMS, EMS. |
-| `src/vdd/` | Virtual device drivers: video, audio (SB16/OPL/MPU/speaker), DMA, PIC, PIT, input, and the bus that routes port I/O to them. Also `present_ddraw.c`, the GDI/DirectDraw presenter. |
-| `res/` | Win32 resources — the manifest that gets the Luna theme, the icon, the Settings dialog templates. |
-| `tools/` | Test binaries and instruments (see [Testing and oracles](Testing-and-oracles)). |
-| `scripts/` | Build, rig control, oracles. `scripts/bm/` is bare-metal rig operations. |
+| `src/host/` | The host process, one module per area: `main.c` (`WinMain`), `host_startup.c` (the start-up steps), `host_exec.c` (the exec loop and NTVDM's own services), `host_dpmi*.c` (the DPMI host and its client sessions), `host_video.c` (with the two instruction interpreters, `v86interp.h` and `pm32interp.h`), `host_window.c`, `host_wow.c`, and the rest -- each with its header. `host_state.c` holds the state several modules share; `host_types.h` the shared types and constants. |
+| `src/vdm/` | The VDM layer: `v86.c` (the kernel's VDM support), `dpmi.c` and `dpmi_enter.S` (protected mode), `csrss.c` (the console session). |
+| `src/dos/` | The DOS kernel: `dos_int21.c` (the INT 21h surface), memory blocks, the PSP, the loader, the environment, XMS, EMS, the clock -- mostly pure logic over guest memory, so the off-machine battery can test it. |
+| `src/vdd/` | The virtual devices: video, the Sound Blaster, OPL, MPU-401, Gravis UltraSound, EMU8000, the PC speaker, DMA, PIC, PIT, CMOS, keyboard, joystick, serial, IDE, floppy, NetBIOS -- and the bus that routes port I/O to them. `present_ddraw.c` presents the picture (GDI windowed, DirectDraw fullscreen). |
+| `src/wow/` | Windows 3.x support: the WOW32 call dispatch (`wow32.c`) and USER, GDI, the message queue, windows, dialogs, resources, the scheduler -- one file per area, the call tables in `wowuser_calls.h` / `wowgdi_calls.h`. |
+| `sdk/` | The device SDK: the interface a third-party virtual device builds against, with two samples. |
+| `res/` | Win32 resources: the manifest that gives the Luna theme, the icon, the Settings dialog. |
+| `tests/` | The off-machine unit tests (`tests/unit/`) and the DOS and Windows 3.x probes (`tests/probes/`); see [testing](testing.md). |
+| `tools/` | The generators (`tools/gen/`), `fncmp` (proof that a refactor changed no code), `dlgcheck`, the NE linker for the Windows 3.x probes. |
+| `scripts/` | `build.sh`, `offvm.sh` (the battery), `package.sh` (the release zip), `check-imports.sh`. |
 
 ---
 
@@ -71,7 +74,7 @@ Almost every hard bug in this project lives on the boundary between them:
 
 1. Guest executes `INT 21h` (or an `IN`/`OUT`, or faults).
 2. The CPU/kernel traps out; `NtVdmControl` returns with an event.
-3. `main.c`'s exec loop decodes the event: which interrupt, which port, which fault.
+3. The exec loop (`host_exec.c`) decodes the event: which interrupt, which port, which fault.
 4. It dispatches to the DOS layer, the BIOS layer, or the VDD bus.
 5. Registers are written back into the VDM_TIB, `EIP` is advanced past the instruction, and
    execution resumes.
@@ -110,7 +113,8 @@ via `INT 2Fh AX=1687h`, then far-call an entry point we supply.
 
 Virtualised and blitted — the guest never touches the CRTC.
 
-- Text mode renders through authentic IBM ROM fonts (8x8/8x14/8x16). Cursor shape comes from
+- Text mode renders with the character set of the Windows code page 437 fonts, read from the
+  system's own .FON files at start-up (no font is shipped). Cursor shape comes from
   the guest via `INT 10h AH=01 CX`, and blink phase from the injected clock, so the VDD stays
   pure and off-VM testable.
 - Mode 13h and mode-Y, including the page flipping Doom uses.
@@ -134,3 +138,19 @@ synthesiser; `vdd_mpu.c` is MPU-401 MIDI; `vdd_speaker.c` the PC speaker.
 not in the audio path at all — `host_pit_sync` ran only 65×/s, so timer ticks came out in
 *bursts*, so the game's DMA refill arms collapsed. **Pacing the PIT fixed the audio.** When
 a symptom is in one subsystem, the cause is often in the clock.
+
+---
+
+## Windows 3.x
+
+A Windows 3.x program runs as guest code too. NTVDMEX starts XP's own 16-bit `krnl386.exe`,
+`user.exe` and `gdi.exe` from `system32` as the guest's Windows -- nothing of Microsoft's is
+shipped -- and implements the 32-bit half they call out to: the WOW32 interface. Each call
+from 16-bit USER or GDI arrives as a BOP with a module and an id (the call tables are in
+`src/wow/wowuser_calls.h` and `wowgdi_calls.h`) and is answered by the matching Win32 call.
+
+- **A Windows 3.x window is a real Win32 window**, owned by the host's thread, so it is moved,
+  painted and themed by XP like any other. Messages are translated in both directions.
+- **The host calls back into 16-bit code** -- window procedures, dialog procedures, enumeration
+  callbacks -- by running the guest until the procedure returns (`wowcall.c`).
+- **Tasks are scheduled cooperatively**, as Windows 3.x did, with a task per program.

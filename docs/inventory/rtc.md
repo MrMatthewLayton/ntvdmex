@@ -31,7 +31,7 @@ settled which path mattered**: `p_rtc`'s `rtc.statusb` came back `0x8F`, which i
 
 ---
 
-## Measured, 2026-09-23 — `p_rtc.asm` against three oracles and the rig
+## Measured, 2026-09-23 — `p_rtc.asm` against three oracles and the test machine
 
 | case | 6.22/QEMU | dosbox-x | PCem | ours (was → now) |
 |---|---|---|---|---|
@@ -138,7 +138,7 @@ PIE clear raises **not one** interrupt.
 ⚠ **Disabling PIE drops the part-accumulated tick**, so re-enabling starts from *now*
 rather than firing immediately off a stale remainder — and that is pinned too.
 
-**Timing canary re-run on the rig after this landed:** Skyroads `n8=0 max_ms=7` against
+**Timing canary re-run on the test machine after this landed:** Skyroads `n8=0 max_ms=7` against
 the documented guard of `n8=0 max_ms≈6`, with `pacer_prio=0 joy_thread=0 pit_split=1`
 unchanged. The extra call in the pacer costs nothing measurable, and no IRQ8 appeared in
 the run — the tick stayed dormant, as designed.

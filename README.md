@@ -1,141 +1,71 @@
 # NTVDMEX
 
-**New Technology Virtual DOS Manager, Extended** — a from-scratch, drop-in replacement for
-`ntvdm.exe` on **Windows XP SP3 (32-bit)** that runs legacy 16-bit DOS and Win16 software on
-the **real CPU**, not a software emulator.
+**A replacement for `ntvdm.exe` on Windows XP SP3 (32-bit).** It runs MS-DOS and Windows 3.x
+programs on the real CPU, in the processor's Virtual-8086 mode, rather than in a software
+emulator, and puts each one in its own window on the XP desktop.
 
-> ## Status — **Doom is fully playable**
->
-> On a real Pentium-era Windows XP box: 3D rendering, status bar, menus, digital sound,
-> music, keyboard **and mouse**, running Doom's own 32-bit code through DOS/4GW in paged
-> protected mode on the real CPU. **Skyroads** is fully playable too, and **MS-DOS 6.22's
-> own `COMMAND.COM`** runs as a guest — prompt, internals, `DIR`, and an external program
-> EXEC'd and returned from.
->
-> Under the hood: 103 INT 21h functions, XMS 3.0, EMS (LIM 4.0), VGA text/13h/12h-planar/
-> VESA video, SB16 PCM at 99.999% delivery, a clean-room OPL2/OPL3 synthesiser, MPU-401
-> MIDI, and a DPMI 0.9 host.
->
-> **The big gap is Win16.** `ntvdm.exe` is also the host for every 16-bit *Windows*
-> program, and NTVDMEX has no WOW layer at all — no NE loader, no `krnl386`/`user`/`gdi`
-> hosting, no thunking. That is [the top open epic](https://github.com/MrMatthewLayton/ntvdmex/issues/128),
-> and it means NTVDMEX is not yet ready to be a machine's only VDM.
->
-> 📍 **[`docs/STATE.md`](docs/STATE.md)** is the canonical "where is this" document.
-> 📖 **[The wiki](https://github.com/MrMatthewLayton/ntvdmex/wiki)** is the knowledge base —
-> architecture, motivations, testing, and the [traps](https://github.com/MrMatthewLayton/ntvdmex/wiki/Traps-and-lessons)
-> that cost the most.
+![DOS programs under NTVDMEX: Skyroads, Doom, a DOS prompt and QuickBASIC, each in its own window](docs/screenshots/msdos.png)
+
+![Windows 3.x programs under NTVDMEX: Paintbrush, Calculator, Solitaire, Notepad, Sound Recorder and the Task List](docs/screenshots/wow16.png)
 
 ## What it is
 
-When Windows XP launches a 16-bit program, it hands the image to a support process called
-NTVDM. NTVDMEX replaces that process with our own implementation. The defining choice is
-**execution, not emulation**: 16-bit real-mode code runs in the CPU's **Virtual-8086 (V86)
-mode** on real silicon — the same mechanism the original NTVDM uses on 32-bit x86. Software
-CPU emulators (DOSBox, ReactOS's Fast486) are explicitly *not* what this project is.
+When Windows XP starts a 16-bit program it hands it to a support process, the NT Virtual
+DOS Machine (`ntvdm.exe`). NTVDMEX is a from-scratch implementation of that process. Like
+the original, it lets the real processor run the program's code and traps what the program
+asks of the machine: DOS and BIOS services, video, sound, input, timers. Those are
+re-implemented here.
 
-Hardware that DOS/Win16 code expects (video, sound, input, timers, networking) is
-**virtualized** and serviced by calls to the host, through a **pluggable device model** so
-third parties can supply their own backends.
+It is not an emulator and not a fork: it reuses the NT kernel's own VDM support, so 16-bit
+code runs at the speed of the machine. DOS extenders work too: 32-bit protected-mode games
+such as Doom run through the DPMI host NTVDMEX provides.
 
-## Goals
+## What runs
 
-- **Real CPU execution** of 16-bit code via V86 — no CPU emulation.
-- A **true replacement** for NTVDM: every 16-bit launch routes to us automatically, not via a
-  right-click "run with…" and not as a separate DOSBox-style app.
-- **DOS *and* Win16** support (Win16/WOW sequenced after the DOS core is working).
-- **Virtualized devices** (mouse, keyboard, sound, graphics) backed by host calls.
-- **Pluggable**: a documented driver/VDD interface so others can hook in their own devices.
-- Windows that **fit the XP Luna theme**.
-- Runs both on **XP-era bare metal** and in **XP-32 virtual machines**.
+- **DOS games and programs**: Doom and other DOS/4GW titles, Skyroads, QuickBASIC, MS-DOS's
+  own `COMMAND.COM`, with VGA and VESA graphics, Sound Blaster, OPL (AdLib) music, MIDI and
+  the mouse.
+- **Windows 3.x programs**: Notepad, Paintbrush, Calculator, Solitaire, Sound Recorder, the
+  Task List and others, as real windows on the XP desktop.
+- Windowed or fullscreen, several programs at once, each in its own window.
 
-## How it works (intended architecture)
+## Status
 
-| Concern | Approach |
-|---------|----------|
-| Becoming the system NTVDM | **IFEO `Debugger` redirect** on `ntvdm.exe` (`…\Image File Execution Options\ntvdm.exe\Debugger` → our binary) — registry-only, no signed-file replacement, so Windows File Protection is never triggered. (The original WOW `cmdline` repoint was disproven — XP validates the host image; see [ADR-0007](docs/decisions/0007-intercept-via-ifeo-debugger.md).) |
-| Executing 16-bit code | Enter **V86 mode** by reusing XP's kernel VDM machinery via the undocumented `NtVdmControl` syscall (custom kernel driver held as a fallback). |
-| DOS environment | Re-implemented DOS kernel: INT 21h, PSP/FCB, memory (MCBs), loaders, DPMI/XMS/EMS. |
-| Win16 | A WOW layer (`krnl386`/`user`/`gdi` hosting + 16↔32 thunking) built on the same foundation. |
-| Devices | Trap-and-service model exposed as **pluggable VDDs**; video blitted into a Luna-themed window. |
+NTVDMEX is under active development and has not had a first release yet. The programs
+above have been tested on the maintainer's XP machines; plenty of others will not work yet.
+Known gaps and planned work are in the [issue tracker](https://github.com/MrMatthewLayton/ntvdmex/issues).
 
-### Is this even possible?
+- **Windows XP SP3, 32-bit only.** Virtual-8086 mode does not exist in 64-bit Windows, so
+  there will be no 64-bit version.
+- **It replaces `ntvdm.exe` for the whole machine** while installed. Installing and
+  uninstalling are a single registry value; stock NTVDM is never modified.
 
-Yes — and code signing is not the obstacle it appears to be. XP-32 does not verify user-mode
-EXE signatures, and kernel driver signature enforcement is a Vista-x64+ feature. We don't even
-replace the signed `ntvdm.exe`; we redirect to ours via the registry. The genuine open risk is
-narrower: whether a *third-party* binary can drive XP's kernel VDM into V86 via `NtVdmControl`
-— something no open-source project demonstrates (ReactOS sidesteps it with emulation). Proving
-that is the project's first spike. Full reasoning in
-[`docs/research/signing-and-wfp.md`](docs/research/signing-and-wfp.md).
+## Quick start
 
-### Reality check: graphics
+1. **Build** on macOS or Linux (it cross-compiles to XP):
+   `brew install mingw-w64 cmake nasm`, then `./scripts/build.sh`.
+2. **Package**: `./scripts/package.sh` writes `dist/ntvdmex-<date>-<sha>.zip`.
+3. **Copy** the zip to the XP machine and extract it anywhere.
+4. **Install**: run `install.bat` as an administrator. `status.bat` says what now runs DOS
+   programs; `uninstall.bat` gives them back to stock NTVDM.
+5. **Run** any DOS or Windows 3.x program the way you normally would, or open
+   `bin\ntvdmhost.exe` for a DOS prompt.
 
-The original aim of accessing VGA/VESA "bare metal over emulation" is constrained by the fact
-that the XP GUI owns the display. The realistic path — like windowed NTVDM — is to
-**virtualize video and blit into a themed window**; true bare-metal full-screen is a later,
-cooperative path, not direct hardware access. *(This was risk R2; it is closed — windowed GDI
-and exclusive-fullscreen DirectDraw both ship.)*
-
-## Scope & platform
-
-- **Target:** Windows XP SP3, **32-bit only** (V86 exists only in 32-bit mode).
-- **Environments:** real hardware **and** VMs (VM-first for development).
-- **In scope:** DOS, then Win16/WOW, virtualized devices, pluggable drivers, Luna theming.
-- **Out of scope (for now):** 64-bit Windows, VT-x hypervisor execution, true bare-metal GPU
-  access while the GUI is running.
-
-## Building
-
-The first runnable artifact exists: a **Luna-themed shell preview** — a fixed 80×25 DOS-style
-text console in an XP-themed window, with a deliberately **non-functional** command line. It
-locks down the toolchain and the window/console shell ahead of the V86 work.
-
-Built with a **mingw-w64 (i686) cross-compiler driven by CMake**, linked with **no C runtime**
-so the binary depends only on the Win32 DLLs that ship with XP (see
-[ADR-0006](docs/decisions/0006-build-toolchain-mingw-no-crt.md)).
-
-```sh
-# prerequisites (macOS): brew install mingw-w64 cmake
-./scripts/build.sh
-#   → build/ntvdmex.exe   (PE32, ~20 KB, standalone; copy to an XP SP3 VM to run)
-```
-
-The window is a Windows GUI app, so it can only be *seen* on Windows; the cross-build verifies
-correctness (valid PE32, XP-only imports, 5.01 version stamps, embedded manifest) but not the
-visual result. Full toolchain notes and the XP-compatibility traps:
-[`docs/research/build-toolchain.md`](docs/research/build-toolchain.md).
-
-### Repository layout
-
-| Path | What |
-|------|------|
-| `src/` | Shell-preview sources: `main.c` (window/loop), `console.c/.h` (text-grid model + GDI render), `runtime.c` (no-CRT entry + `mem*`) |
-| `res/` | `ntvdmex.rc` + `ntvdmex.manifest` (version info; Common-Controls 6.0 → Luna visual style) |
-| `cmake/` | `toolchain-xp32-mingw.cmake` — the XP-32 cross toolchain |
-| `scripts/` | `build.sh` convenience wrapper |
-| `docs/` | The canonical knowledge base (see below) |
+[docs/quick-start.md](docs/quick-start.md) covers the keyboard shortcuts, the mouse, copy and
+paste, and what to do when something goes wrong.
 
 ## Documentation
 
-`docs/` is the single source of truth (this is a private, free-plan repo with no Wiki). Start
-with **[`docs/STATE.md`](docs/STATE.md)** to see where things stand, then:
+- [Quick start](docs/quick-start.md): installing, running, shortcuts.
+- [Building](docs/building.md): the toolchain, the build, the off-machine test battery.
+- [Architecture](docs/architecture.md): how NTVDMEX is put together.
+- [The documentation index](docs/README.md): design decisions, the hardware references, the
+  inventories of what is implemented, the code style and the roadmap.
 
-- [`docs/ROADMAP.md`](docs/ROADMAP.md) — milestones M0–M8
-- [`docs/ref/`](docs/ref/) — the hardware/firmware/software **specifications** we build from
-- [`docs/inventory/`](docs/inventory/) — what we implement of each surface, marked from the code
-- [`docs/decisions/`](docs/decisions/) — Architecture Decision Records (the *why*)
-- [`docs/research/`](docs/research/) — findings, tagged by confidence
-- [`docs/spikes/`](docs/spikes/) — time-boxed experiments (Spike-001 is the keystone test)
-- [`docs/GLOSSARY.md`](docs/GLOSSARY.md) — NTVDM/V86/WOW terminology
+## Contributing
 
-## References
-
-ReactOS (DOS/VDD/WOW logic), Linux `dosemu` (the closest V86-via-kernel analog), DOSBox /
-86Box (device behaviour), and disassembly of the shipping XP binaries (the only ground truth
-for the `NtVdmControl` contract). See
-[`docs/reference-projects.md`](docs/reference-projects.md), and
-[`CLEAN-ROOM.md`](CLEAN-ROOM.md) for what may and may not enter the repository.
+Contributions are welcome. Read [docs/STYLE.md](docs/STYLE.md) (the code style) and
+[CLEAN-ROOM.md](CLEAN-ROOM.md) (what may and may not enter the repository) first.
 
 ## License
 

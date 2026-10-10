@@ -171,3 +171,6 @@ tools/score/probe-cache.json
 # #335: the main.c split and giant-function extraction tools (local-only: they drive one-off
 # refactors; tools/fncmp, which proves them, is the committed part)
 /tools/split/
+
+# Maintainer-only notes on the test machine (local, #322 phase 5)
+/docs/wiki/

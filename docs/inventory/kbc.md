@@ -131,7 +131,7 @@ probe against three oracles is for.
 
 ---
 
-## Measured, 2026-09-23 — `p_kbc.asm` against three oracles and the rig
+## Measured, 2026-09-23 — `p_kbc.asm` against three oracles and the test machine
 
 | case | 6.22/QEMU | dosbox-x | PCem | ours (was → now) |
 |---|---|---|---|---|

@@ -87,7 +87,7 @@ Verify on our own box before believing either.
 ### ⚠️ `otya128/winevdm` (OTVDM) — usable as an oracle, wrong subject for now
 
 GPL-2.0, built on Wine's clean-room Win16 work. Legally far cleaner: read it for
-*semantics*, never copy expression, exactly as [Nuked was used for OPL](research/).
+*semantics*, never copy expression, exactly as [Nuked was used for OPL](motivations-and-decisions.md).
 
 Two caveats:
 
@@ -125,11 +125,11 @@ Checked during session 30, against our two open unknowns:
 
 | Question | Public documentation | Source of truth |
 |---|---|---|
-| `INT 31h 04F3` | **None.** Not in the DPMI 0.9 spec, not in RBIL. It falls in the undocumented "true DPMI" space Windows implements beyond the published 0.9 surface. | rig: stock `ntvdm` |
-| SysVars `+0x6A` WOW block | **None.** Not documented anywhere; past the documented end of the DOS list of lists. | rig: stock `ntvdm` (measured — see session 30 part 7) |
+| `INT 31h 04F3` | **None.** Not in the DPMI 0.9 spec, not in RBIL. It falls in the undocumented "true DPMI" space Windows implements beyond the published 0.9 surface. | test machine: stock `ntvdm` |
+| SysVars `+0x6A` WOW block | **None.** Not documented anywhere; past the documented end of the DOS list of lists. | test machine: stock `ntvdm` (measured — see session 30 part 7) |
 | krnl386's error strings | Microsoft KB Q220155 *"Troubleshooting NTVDM and WOW Startup Errors"* documents **no message text at all** — it is a troubleshooting flowchart. | the binary's own message strings |
 
 ★ **This is the finding, and it is a positive one.** The things blocking us are precisely
-the things nobody has written down, which is why the rig-as-oracle method is not a
+the things nobody has written down, which is why the test machine-as-oracle method is not a
 fallback here — it is the only source. It has now answered three of them (the launch
 shape, SysVars+0x6A, and the `168A` vendor API) and no external project would have.

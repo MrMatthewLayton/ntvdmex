@@ -26,7 +26,7 @@ is a regression guard, not an oracle.
 **The playback transport is solid and the rest of the card is a subset shaped by three
 guests.** Everything Doom's DMX, ZAR's Miles driver and Skyroads use — the reset handshake,
 the version, 8-bit single-cycle and auto-init, the SB16 `Bx`/`Cx` programmed transfers, SB16
-and SB Pro stereo, mixer `80h`–`82h` — is implemented and measured on the rig (below). What is
+and SB Pro stereo, mixer `80h`–`82h` — is implemented and measured on the test machine (below). What is
 missing is the rest of the DSP command table, and the way it is missing is dangerous:
 **`sb_cmd_args()` returns 0 for every command it does not know** (`vdd_sb.c:80`), so an
 unmodelled command that takes argument bytes has those bytes **executed as commands**. And
@@ -42,17 +42,17 @@ the mixer is a 256-byte RAM of which three registers are read, by their high nib
 | §6 Model variants and configuration | 7 | 2 | 2 | 1 | 1 | 1 |
 | **Total** | **112** | **29** | **34** | **21** | **23** | **5** |
 
-### What the rig has measured on this surface
+### What the test machine has measured on this surface
 
 | Measurement | Where |
 |---|---|
-| Doom (DMX, DSP 4.05 path): SB16 `C6` 8-bit auto-init, mode byte `20h` (**stereo**), 256-byte blocks = 128 frames; ~3600 blocks / 45 s at 11025 Hz, underruns 0 | `docs/log/sessions/session-22.md:32`, `:272` |
+| Doom (DMX, DSP 4.05 path): SB16 `C6` 8-bit auto-init, mode byte `20h` (**stereo**), 256-byte blocks = 128 frames; ~3600 blocks / 45 s at 11025 Hz, underruns 0 | session 22 |
 | Doom: the DMX ISR asks mixer `82h` and refills only if bit 0/1 is set; ~28% of delivered IRQs were once turned away there | `vdd_sb.c:233-244`, `vdd_sb.h:43-53` |
-| Doom: 32% of non-flat blocks replayed one ring lap earlier (`REPLAYED_LOUD=933` of 3662 checked) — a refill-margin race in the host, not a DSP-register defect | `session-24.md:188-196` |
-| ZAR (Miles `SBLASTER.DIG`): reads mixer `80h`/`81h`, then a 16-byte `14h` single-cycle self-test at `40 D3`; answered `00h` it waited forever. Fixed by deriving both from the card's configuration | `session-59.md:103-122` |
-| ZAR: 349 blocks, 268 with signal, `REPLAYED_LOUD=0`, 270 IRQ-5 reflections, none failed | `session-81.md:131-137` |
-| #189 stereo: Doom L/R correlation 0.932; SB Pro stereo via mixer `0Eh` bit 1 and `90h`/`91h` | `session-82.md:21`, `:27` |
-| #213 (ZAR silent) was the PIC acknowledge order, **not** the SB — recorded so it is not re-blamed here | `session-83.md:16-26` |
+| Doom: 32% of non-flat blocks replayed one ring lap earlier (`REPLAYED_LOUD=933` of 3662 checked) — a refill-margin race in the host, not a DSP-register defect | session 24 |
+| ZAR (Miles `SBLASTER.DIG`): reads mixer `80h`/`81h`, then a 16-byte `14h` single-cycle self-test at `40 D3`; answered `00h` it waited forever. Fixed by deriving both from the card's configuration | session 59 |
+| ZAR: 349 blocks, 268 with signal, `REPLAYED_LOUD=0`, 270 IRQ-5 reflections, none failed | session 81 |
+| #189 stereo: Doom L/R correlation 0.932; SB Pro stereo via mixer `0Eh` bit 1 and `90h`/`91h` | session 82 |
+| #213 (ZAR silent) was the PIC acknowledge order, **not** the SB — recorded so it is not re-blamed here | session 83 |
 
 ---
 
@@ -169,7 +169,7 @@ bit 1 (stereo, `vdd_sb.c:120`) are consumed; `80h`–`82h` are answered from sta
 | `43h` | 16 | mic AGC | **STORE** | | — |
 | `44h`/`45h` | 16 | treble L/R | **STORE** | | — |
 | `46h`/`47h` | 16 | bass L/R | **STORE** | | — |
-| `80h` | 16 | IRQ select | **PART** | read derived from `st->irq` (`vdd_sb.c:277-284`) — right; a **write** is stored and ignored, so a guest cannot move the IRQ. IRQ 11, a dialog choice (`main.c` `settings_apply` ≈`:10379`), has no encoding and reads `00h` | ZAR (`session-59.md:103-122`) |
+| `80h` | 16 | IRQ select | **PART** | read derived from `st->irq` (`vdd_sb.c:277-284`) — right; a **write** is stored and ignored, so a guest cannot move the IRQ. IRQ 11, a dialog choice (`main.c` `settings_apply` ≈`:10379`), has no encoding and reads `00h` | ZAR (session 59) |
 | `81h` | 16 | DMA select | **PART** | read derived (`:285-290`); write ignored. Reports DMA 5 (`22h`) while `BLASTER` advertises no `H` by default (`dos_env.h:59-63`) | ZAR (same) |
 | `82h` | 16 | IRQ status: bit 0 8-bit, bit 1 16-bit, bit 2 MPU-401 | **PART** | bits 0/1 from **one** pending flag and the last transfer's width (`:245`) — both cannot be set at once; bit 2 never set. Board-revision bits not modelled | `sb_test.c:125-126` (T6); Doom (`vdd_sb.c:233-244`) |
 | SB Pro ↔ SB16 aliasing | 16 | `22h`/`04h`/`26h`/`28h`/`2Eh` map onto `30h`–`39h` and back | **MISS** | two independent bytes each | — |
@@ -236,7 +236,7 @@ bit 1 (stereo, `vdd_sb.c:120`) are consumed; `80h`–`82h` are answered from sta
    hang.
 7. **Make the model variants real** (§6): `SbModel` is a dead setting; `dspver.txt` should
    select a command and mixer set, not just an `E1h` reply; `BLASTER`'s `T`/`H` should follow
-   the model (a measurement on the rig first — Doom is confirmed against today's string).
+   the model (a measurement on the test machine first — Doom is confirmed against today's string).
 8. **MIDI through the DSP** (`30h`–`38h`, UART mode) and the identification set (`E2h`, the
    `E3h` string, `E4h`/`E8h` loop-back, `D8h`, `45h`/`47h`, the undocumented status reads).
 9. **The CD-interface and AWE32 surfaces** are the last in line: `2x10h`–`2x13h` with no drive,

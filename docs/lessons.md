@@ -56,7 +56,7 @@ was a high-water mark being read as a current value, and `why=0` meant both "suc
 when a real bug was fixed, and was steered by for several rounds before being replaced with
 the WAD oracle.
 
-**A stale artefact is worse than a missing one.** Nothing collected `sb.raw` off the rig, so
+**A stale artefact is worse than a missing one.** Nothing collected `sb.raw` off the test machine, so
 a "before" run and an "after" run analysed the *same hours-old file* and produced
 byte-identical histograms. **Delete the destination before the run, and `md5` any two
 artefacts you call before/after.**
@@ -71,7 +71,7 @@ for verifying dialog layout — reported 47 problems, of which **45 were its own
 control. An instrument's model of its subject is a claim, and must be checked before its
 output is believed.
 
-**The rig is not necessarily unattended.** A window was observed minimising itself during a
+**The test machine is not necessarily unattended.** A window was observed minimising itself during a
 capture-toggle test and was filed as an unexplained anomaly. It was the user, at the box,
 using the window. Four clean re-tests said "not reproducible" — the right conclusion for
 the wrong reason. Desktop-level observations (focus, z-order, minimize, cursor) are not the
@@ -91,7 +91,7 @@ Kept because the pattern matters more than the facts.
 | "`AH=53h` is why XP's COMMAND.COM exits" | Tested and **refuted** — answering success with a zeroed DPB gave the identical CS:IP after the identical 32 ms. Reverted rather than left in. |
 | "The kernel won't run PM" (session 8) | It was our own `dpmi_enter.S` interrupt-pending guard firing on a stale value. |
 | "`Control\WOW\cmdline` is the interception point" | It is not. IFEO `Debugger` is. |
-| "Input latency regressed 25→66 ms" | The headless rig runs with nobody typing, so every input-latency counter measured a path no key travels. The comparison was interactive-vs-headless. |
+| "Input latency regressed 25→66 ms" | An unattended test run has nobody typing, so every input-latency counter measured a path no key travels. The comparison was interactive-vs-unattended. |
 
 ---
 
@@ -119,20 +119,20 @@ Kept because the pattern matters more than the facts.
 
 ---
 
-## Rig traps
+## Test-machine traps
 
-Each of these cost a reboot or a session. See [The bare-metal rig](The-bare-metal-rig).
+Each of these cost a reboot or a session.
 
 - **Two EXEs.** `ntvdmhost.exe` is the host; `ntvdmex.exe` is a small launcher. Deploying the
   wrong one makes the *launcher* the IFEO debugger, which relaunches into itself — and runs
-  still "succeed" because the harness copies a stale log. **Checksum what you deploy.**
+  still "succeed" because a stale log is read. **Checksum what you deploy.**
 - **Never edit a Windows `.bat` in Python text mode on macOS** — it strips CRs, `cmd.exe`
-  breaks on `goto`, and the whole watcher loop dies one iteration in.
+  breaks on `goto`, and the script dies one iteration in.
 - **A swallowed `copy` error runs a stale binary.** `copy ... >nul` hid a failure while an
   interactive host still held the target open. The only symptom was one missing log line.
 - **SMB attribute caching lies about mtime and size.** Don't conclude "the run didn't happen"
   from one stale `stat`.
 - **The mount drops silently** and writes then go to a local directory that shadows the
   mountpoint, where everything succeeds against nothing.
-- **`watcher.txt` merely existing means nothing** — a dead watcher and a busy watcher look
+- **A status file merely existing means nothing** — a dead watcher and a busy watcher look
   identical. The only reliable "it started" signal is the command file being *consumed*.

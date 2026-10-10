@@ -43,7 +43,7 @@
 > ⇒ **An unusable probe leaves *both halves* of the fraction, so the score could only rise
 > when a probe broke.** Fixed in `e618011` / `e89478e`. Two further defects in the same
 > runner came out with it: `p_tsrc` is a **TSR payload, not a probe** — every sweep this
-> project ever ran installed it on the rig — and `p_child` is **`p_exec`'s declared
+> project ever ran installed it on the test machine — and `p_child` is **`p_exec`'s declared
 > companion**, graded standalone, where both its "mismatches" were artefacts of having no
 > parent.
 >
@@ -62,33 +62,33 @@ surface (see the warning under the cluster above).
 | **fixed this session** | `p_err` (AH=3Dh error mapping, `b580c4d`) |
 | **still disagreeing** | `p_disk` 13 · `p_xms` 7 · `p_sysvar` 6 · `p_lpt` 5 · `p_ioctl` 3 · `p_tsr` 3 · `p_plan12` 1 |
 
-† `p_ver` is clean **only while the rig's persisted DOS version is 6.22** — it went dirty for an unknown period with no code change. See the section below; read the run's own `DOS version reported =` line before trusting this row.
+† `p_ver` is clean **only while the test machine's persisted DOS version is 6.22** — it went dirty for an unknown period with no code change. See the section below; read the run's own `DOS version reported =` line before trusting this row.
 
 ## ⛔ `p_ver` went dirty with no code change, and is clean again (2026-09-24)
 
-**Resolved the same day:** the rig's persisted version is back to **6.22**
+**Resolved the same day:** the test machine's persisted version is back to **6.22**
 (`DosVersionMajor=6`, `DosVersionMinor=22`), `p_ver` is AGREE on all six fields, and
 every run now prints `STAGE2: DOS version reported = 6.22 (source: …)`. The account
 below is kept because the *mechanism* is the lesson, not the value.
 
 ### What happened
 
-Re-run today, `./scripts/dosdiff.py build/probes/P_VER.COM --host msdos622 --host ntvdmex`:
+Re-run today, `P_VER.COM` against MS-DOS 6.22 and NTVDMEX:
 
 ```
 int21.30    AX   1606   0005   MISMATCH
 int21.3306  BX   1606   0005   MISMATCH
 ```
 
-**The rig is reporting DOS 5.00**, from `HKCU\Software\NTVDMEX\DosVersionMajor/Minor` —
+**The test machine is reporting DOS 5.00**, from `HKCU\Software\NTVDMEX\DosVersionMajor/Minor` —
 the Settings dialog's persistent store, which survives reboots and wipes, and which no
 `cfg\dosver.txt` was overriding. Nothing announced it; the host printed a version line
-only when the *file* overrode. See standing hazard 11 in [`STATE.md`](../STATE.md);
+only when the *file* overrode. See [the settings precedence](../motivations-and-decisions.md#settings-precedence-the-text-files-win);
 fixed in `0e342c2`, which now prints the version **and its source** on every run.
 
 ⚠ **This is what "scores — re-run, never quote" is for.** The recorded figure
 (670/677 = 99.0%) was true when measured and is stale now, and the thing that moved it
-was **a machine setting, not a commit**. How long the rig has been on 5.00 is unknown,
+was **a machine setting, not a commit**. How long the test machine has been on 5.00 is unknown,
 so the date of this table's `p_ver: clean` is the earliest it can be trusted from.
 
 ### ▶ And the row itself is badly modelled — this is owed
@@ -111,7 +111,7 @@ because making it abstain would hide the signal instead of fixing it.
 
 `p_dir`/`int21.3600.baddrive` and `p_rest`/`int21.3200.baddrive` both used **DL=26
 (Z:)** to mean "a drive that is not there". Z: is not free on this panel: DOSBox-X
-mounts it as its utility drive, and **the XP rig has it mapped to
+mounts it as its utility drive, and **the XP test machine has it mapped to
 `\\server\storage`** (confirmed with `net use` before anything was changed). So the
 question was never asked, and the rows read as NTVDMEX bugs:
 
@@ -170,8 +170,8 @@ correct code.
 
 | probe | the flaw | fix |
 |---|---|---|
-| `p_dir`, `p_rest` | used **Z:** as "a drive that is not there" — DOSBox-X mounts Z:, and **the rig has it mapped to `\\server\storage`**. Our `AX=0002` was *two sectors per cluster*: a **successful** query of a real drive. | → **Y:**, unclaimed everywhere |
-| `p_ioctl` ×3 | `4408/4409/440E` passed **BL=0, "the default drive"** — A: on the oracle, C: on the rig. Asked "is a floppy removable?" vs "is a hard disk removable?" and called the two correct answers a disagreement. Its own comment asserted the false part: *"no host has a single-floppy alias on its default drive"* — the oracle's default **is** A:, which has one. | → **BL=3 (C:)**, a fixed disk everywhere |
+| `p_dir`, `p_rest` | used **Z:** as "a drive that is not there" — DOSBox-X mounts Z:, and **the test machine has it mapped to `\\server\storage`**. Our `AX=0002` was *two sectors per cluster*: a **successful** query of a real drive. | → **Y:**, unclaimed everywhere |
+| `p_ioctl` ×3 | `4408/4409/440E` passed **BL=0, "the default drive"** — A: on the oracle, C: on the test machine. Asked "is a floppy removable?" vs "is a hard disk removable?" and called the two correct answers a disagreement. Its own comment asserted the false part: *"no host has a single-floppy alias on its default drive"* — the oracle's default **is** A:, which has one. | → **BL=3 (C:)**, a fixed disk everywhere |
 
 ▶ **The lesson, twice over:** `p_err.asm` already used Y: *and wrote down why*, and the
 reasoning never reached the other probes. **A hazard recorded in one probe does not
@@ -222,7 +222,7 @@ every probe that had stopped asking was silently improving the number.
 
 | Probe | Why |
 |---|---|
-| `p_tsrc` | **Not a probe** — the resident half of `p_tsr`, `incbin`'d into it, emitting no canonical dump. Every sweep before this one *ran* it, installing a TSR that hooks INT 60h on the rig |
+| `p_tsrc` | **Not a probe** — the resident half of `p_tsr`, `incbin`'d into it, emitting no canonical dump. Every sweep before this one *ran* it, installing a TSR that hooks INT 60h on the test machine |
 | `p_child` | **A companion**, declared in `p_exec.deps`. Its cases are *relations between a child and its parent*, and run alone it has none. Graded properly by `p_exec`, which is clean on all four |
 
 ⚠ **`p_child` is the instructive one.** Standalone it reported `child.env.copy` as *shared*,

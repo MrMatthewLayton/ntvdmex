@@ -6,7 +6,7 @@ This file is the companion: what **we** do about it.
 **Our implementation:** `src/vdd/vdd_pit.c` (669 lines), `src/vdd/vdd_pit.h`;
 port `61h` in `src/vdd/vdd_speaker.c`. How time reaches the chip (the 1 ms pacer, IRQ0
 delivery) is host code — §7.
-**Oracle:** MS-DOS 6.22 (`scripts/oracle.sh`) for BIOS-level behaviour; PCem for chip
+**Oracle:** MS-DOS 6.22 for BIOS-level behaviour; PCem for chip
 timing. Off-VM: `tests/unit/pit_test.c`.
 **Measured:** 2026-09-23, from the code, with citations. **Re-cited 2026-10-01** after #175
 (s82/s83) and #238 (s85): §1, §4 and §6 were stale against the code and are re-marked.
@@ -170,7 +170,7 @@ which took the one-shot path. Fixed by giving counter 0 and counter 1 their POST
 ⛔ **The first attempt at that fix was inert, and the canary "passed" on it.** The defaults
 went into `vdd_pit_reset` only — but the host builds `g_pit` as a zeroed global and calls
 `vdd_pit_init`, never `reset`, on the startup path. Read-Back still reported mode 0 on the
-rig. **A Skyroads run that certifies a change which is not wired up certifies nothing**, so
+test machine. **A Skyroads run that certifies a change which is not wired up certifies nothing**, so
 the canary was re-run once the defaults were live: `n8=0 max_ms=7`, within the documented
 guard.
 
@@ -262,12 +262,12 @@ Tracked in GitHub: [#175](https://github.com/MrMatthewLayton/ntvdmex/issues/175)
 Found while re-citing (2026-10-01): the `42h` speaker-divisor half-write (§1), mode 3's
 half-cycle load (§4), and `61h` bit 1 as a sample output (§6).
 
-## Re-verified on a quiet rig (2026-09-23) — ⚠ historical
+## Re-verified on a quiet test machine (2026-09-23) — ⚠ historical
 
 *This records the run **before** the Read-Back and counter 1/2 fixes above landed. Its
 "7 of 7 still MISMATCH" is the starting point, not the current state.*
 
-The first `p_pit` run happened while the user was on the rig taking screenshots, so it was
+The first `p_pit` run happened while the user was on the test machine taking screenshots, so it was
 **not a controlled run** — the same category of evidence as the `db4c059` verdict this
 project has already been burned by. Re-run with the machine idle, host `77b9b0bd`:
 

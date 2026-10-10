@@ -11,10 +11,10 @@ driver source. **▶ The hardware reference is [`../ref/gus.md`](../ref/gus.md)*
 
 ## Headline — heaven7 finds the card, fills it and plays it (s80)
 
-Rig, host `a0294462`: with `ULTRASND=240,3,3,11,11` in its environment, heaven7 resets the GF1
+Test machine, host `a0294462`: with `ULTRASND=240,3,3,11,11` in its environment, heaven7 resets the GF1
 to `07h`, sizes and fills its DRAM by programmed I/O (66,272 pokes, 38,374 peeks), starts 132
 voices and leaves 10 running; **96% of the 1.32 M samples rendered are non-zero, peak 17,871**.
-It uses neither DMA nor interrupts — it polls. ⚠ Nobody has *heard* it yet: a headless run
+It uses neither DMA nor interrupts — it polls. ⚠ Nobody has *heard* it yet: an unattended run
 cannot. The by-hand test is owed.
 
 ⛔ Found on the way: the environment block is built **before** the devices, so the card must be
@@ -55,7 +55,7 @@ touched a port.
 ## Host wiring owed (#190)
 
 The MIDI UART's `midi_sink` is **not connected** in `src/host/main.c` yet, so a GUS MIDI stream
-is still silent on the rig. The connection, reproduced by `gus_test` T11:
+is still silent on the test machine. The connection, reproduced by `gus_test` T11:
 
 ```c
 static mpu_state g_gusmidi;                     /* PRIVATE assembler: never vdd_bus_add'ed */
@@ -67,7 +67,7 @@ g_gus.midi_sink = gus_midi_to_synth;            /* before vdd_bus_add(&g_gus_dev
 
 A private `mpu_state`, not `g_mpu`: two byte streams sharing one assembler corrupt each other's
 running status. `midi_sink` survives `vdd_gus_reset`. Worth adding to `gus_report`: `mix`,
-`out_muted`, `midi_tx`, `samp_takes`, `dma_downloads` — **⚠ re-run heaven7 on the rig**: if it
+`out_muted`, `midi_tx`, `samp_takes`, `dma_downloads` — **⚠ re-run heaven7 on the test machine**: if it
 writes `2X0` with bit 1 set (line out off) it is now silent, as on a real card.
 
 ## What the card needs from the host — and what is not ready

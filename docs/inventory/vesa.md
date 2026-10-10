@@ -1,7 +1,7 @@
 # Inventory — VESA BIOS Extensions (VBE 2.0, with 3.0 noted)
 
-**Spec:** VESA *VBE Core Functions Standard 2.0* (document revision 1.1), [`../ref/vbe20.pdf`](../ref/vbe20.pdf);
-VESA *VBE Core Functions Standard 3.0*, [`../ref/vbe30.pdf`](../ref/vbe30.pdf). Both PDFs were
+**Spec:** VESA *VBE Core Functions Standard 2.0* (document revision 1.1), freely published by VESA;
+VESA *VBE Core Functions Standard 3.0*, likewise. Both PDFs were
 read for this document (text extracted with `pdftotext`); section numbers below are VBE 2.0's
 unless marked "3.0". The supplemental functions (4F10h VBE/PM, 4F15h VBE/DDC) are only *listed*
 in VBE 2.0 §5.7; their own specifications are **not held** in the repo, and our code says so
@@ -34,7 +34,7 @@ the symbol or the `case`.
 letter of the call but not always to its effect.** 4F00 and 4F01 were diffed field by field
 against two real VBE implementations in s74 (a Tseng ET4000/W32p ROM under PCem and QEMU's
 Bochs VBE) and every graded row agreed. 4F02–4F09 are implemented, spec-tested off-VM, and used
-by three guests on the rig (heaven7, ZAR, vesacube). Before #226 four of them did less than they
+by three guests on the test machine (heaven7, ZAR, vesacube). Before #226 four of them did less than they
 reported; #226 closed those four in the VDD:
 **4F08's 8-bit width now reaches the DAC ports** and the INT 10h palette calls, **4F07 BL=80h
 completes at the retrace** (the VDD stamps the wait; ⚠ **the host's wait loop is still owed** —
@@ -43,7 +43,7 @@ missing), **4F03 returns D14/D15** with `40:87h` bit 7 behind it, and **4F02 lea
 layer** (kind, chain-4, register file, BDA) instead of the previous mode's; ModeAttributes D5 now
 says what our modes are. Still absent: the far-call bank switch (WinFuncPtr), 4F06/4F07 in VESA text modes, and the
 runtime half still has no oracle. **4F0Ah, the protected-mode interface, exists since #53** (§13).
-⚠ **Not yet on the rig** — every #226 row below is off-VM evidence (`video_test.c` T12g–T12i).
+⚠ **Not yet on the test machine** — every #226 row below is off-VM evidence (`video_test.c` T12g–T12i).
 
 | Group | Units | IMPL | PART | STORE | MISS | N/A |
 |---|---|---|---|---|---|---|
@@ -74,14 +74,14 @@ the two §10 rows at PART are PART only for want of the host's wait loop (§10).
 
 | Measurement | Where |
 |---|---|
-| `p_vesa` against QEMU's Bochs VBE and the Tseng ET4000/W32p ROM (`pcem-vesa`): **131 rows, 128 comparable, 100 % agree, 3 abstained** (2026-09-17). ⚠ A recorded score, not a re-run; the rules that shape it are `oracle-rules.json:1235-1336` | `session-74.md:222-236` |
-| Found by that oracle and fixed: Capabilities D0 was 0; NumberOfImagePages was 0; YCharSize 8 in 200-line modes; DirectColorModeInfo D1 for 5:5:5; Lin/Bnk image pages | `session-74.md:226-229` |
-| `p_vesapm`: 4F0Ah answers `AX=0100` on both real BIOSes -- as we did until #53 (those rows now abstain: neither BIOS has the interface) | `session-74.md:246-249` |
-| Heretic: 4F00 through DPMI `0300` with a 256-byte DOS block; our old handler wrote the OEM string at `+100h`, over the next MCB | `session-74.md:511-535` |
-| heaven7: 4F00/01/02/07 only; sets `0x4170` (320x240x16, LFB); 16,389 4F07 calls in one run, 15,900 in another, all `(0,0)` — a vsync idiom on one buffer | `session-74.md:51`, `:165-168`, `:180` |
-| heaven7 (before 320x240 existed): `BX=4112h` accepted, DPMI `0800` mapped `E0000000h` size `E1000h` = 640·480·3 | `session-74.md:383-387` |
-| ZAR: `0x4101` via LFB (DPMI `0800`, then an LDT selector with DPL 0 that NT refused until `dpmi_install` forced DPL 3) and banked 640x480 with 4,735 4F05 calls; both rendered in-game | `session-74.md:33-46` |
-| vesacube (`tools/vesacube/`): every banked mode from 4F00/4F01, 4F07 BL=80h page flips, 4F09 palettes; rig screenshots in 640x480x8 and 320x240x16 | `session-74.md:254-259` |
+| `p_vesa` against QEMU's Bochs VBE and the Tseng ET4000/W32p ROM (`pcem-vesa`): **131 rows, 128 comparable, 100 % agree, 3 abstained** (2026-09-17). ⚠ A recorded score, not a re-run; the rules that shape it are `oracle-rules.json:1235-1336` | session 74 |
+| Found by that oracle and fixed: Capabilities D0 was 0; NumberOfImagePages was 0; YCharSize 8 in 200-line modes; DirectColorModeInfo D1 for 5:5:5; Lin/Bnk image pages | session 74 |
+| `p_vesapm`: 4F0Ah answers `AX=0100` on both real BIOSes -- as we did until #53 (those rows now abstain: neither BIOS has the interface) | session 74 |
+| Heretic: 4F00 through DPMI `0300` with a 256-byte DOS block; our old handler wrote the OEM string at `+100h`, over the next MCB | session 74 |
+| heaven7: 4F00/01/02/07 only; sets `0x4170` (320x240x16, LFB); 16,389 4F07 calls in one run, 15,900 in another, all `(0,0)` — a vsync idiom on one buffer | session 74 |
+| heaven7 (before 320x240 existed): `BX=4112h` accepted, DPMI `0800` mapped `E0000000h` size `E1000h` = 640·480·3 | session 74 |
+| ZAR: `0x4101` via LFB (DPMI `0800`, then an LDT selector with DPL 0 that NT refused until `dpmi_install` forced DPL 3) and banked 640x480 with 4,735 4F05 calls; both rendered in-game | session 74 |
+| vesacube (a VESA test program): every banked mode from 4F00/4F01, 4F07 BL=80h page flips, 4F09 palettes; test-machine screenshots in 640x480x8 and 320x240x16 | session 74 |
 
 ---
 
@@ -89,12 +89,12 @@ the two §10 rows at PART are PART only for want of the host's wait loop (§10).
 
 | Unit | Status | Where / what is missing | Verification |
 |---|---|---|---|
-| `INT 10h AH=4Fh` dispatch; AL = function | **IMPL** | `vdd_video.c:1688` → `vesa()` `:720`. Every call is counted per sub-function and per BL (`:723-727`), printed in the STAGE2 summary (`main.c` `WinMain` ≈`:32563-32597`) | rig: STAGE2 VESA lines (heaven7, ZAR) |
+| `INT 10h AH=4Fh` dispatch; AL = function | **IMPL** | `vdd_video.c:1688` → `vesa()` `:720`. Every call is counted per sub-function and per BL (`:723-727`), printed in the STAGE2 summary (`main.c` `WinMain` ≈`:32563-32597`) | test machine: STAGE2 VESA lines (heaven7, ZAR) |
 | Status: AL=4Fh supported; AH=00h ok, 01h failed, 02h not in this configuration, 03h invalid in this mode | **IMPL** | used per function below; AH=02h/03h where §4.8–§4.12 name them | `video_test.c:265-272`, `:297`, `:304`, `:369-382` |
-| A function we do not provide answers `AX=0100h` (AL≠4Fh), not `014Fh` | **IMPL** | `:1153`, and 4F0Ah `:1059` | **oracle**: both real BIOSes answer `0100h` (`session-74.md:246-248`); `video_test.c:485-486` |
+| A function we do not provide answers `AX=0100h` (AL≠4Fh), not `014Fh` | **IMPL** | `:1153`, and 4F0Ah `:1059` | **oracle**: both real BIOSes answer `0100h` (session 74); `video_test.c:485-486` |
 
 A protected-mode client reaches VBE through DPMI `0300h` with a real-mode buffer (Heretic's
-trace, `session-74.md:517-521`); `vesa()` maps `ES:DI` as a real-mode segment (`:740`). No
+trace, session 74); `vesa()` maps `ES:DI` as a real-mode segment (`:740`). No
 translation of a protected-mode `ES` selector for `INT 10h AH=4Fh` was found in `main.c`.
 
 ## 2. 4F00h — Return VBE Controller Information (§4.3)
@@ -104,11 +104,11 @@ The block is written in place in the caller's buffer. OEM string at `+22h` and m
 
 | Offset | Field | Status | Where / what is missing | Verification |
 |---|---|---|---|---|
-| — | `'VBE2'` preset ⇒ 512-byte block and the 2.0 fields; otherwise 256 bytes, nothing past `+FFh` | **IMPL** | `:741`, `:743`, `:754` | `video_test.c:215-238` (poisons 256–511); Heretic (`session-74.md:511-535`) |
+| — | `'VBE2'` preset ⇒ 512-byte block and the 2.0 fields; otherwise 256 bytes, nothing past `+FFh` | **IMPL** | `:741`, `:743`, `:754` | `video_test.c:215-238` (poisons 256–511); Heretic (session 74) |
 | `+00h` | VbeSignature `'VESA'` | **IMPL** | `:744` | **oracle** (`vesa.info`, `oracle-rules.json:1235`) |
 | `+04h` | VbeVersion `0200h` | **IMPL** | `:745`. Ungraded: 1.2 on the Tseng ROM, 3.0 on Bochs (`oracle-rules.json:1257`) | compared, ungraded |
 | `+06h` | OemStringPtr → `"NTVDMEX VESA"` | **IMPL** | #226: with `'VBE2'` preset it points into **OemData** (`+100h`), as §4.3 requires ("must place this string in the OemData area") — `vesa()` case `0x00`, `vdd_video.c:835-851`. A 1.x caller still gets `+22h` of its own block (it has no OemData, and `+100h` is not its memory); real ROMs point into ROM, and a string in the caller's buffer is gone once the caller reuses it — accepted | pointer masked by the probe; `video_test.c:229` (1.x: inside the block), `:238-249` (2.0: in OemData) |
-| `+0Ah` | Capabilities D0 = 1: DAC switchable to 8 bits | **IMPL** | `:751`. Since #226 the switch reaches the ports and the INT 10h palette calls too (§11) — the promise is kept for every path | `video_test.c:265`; found by the oracle (`session-74.md:226`), ungraded card property |
+| `+0Ah` | Capabilities D0 = 1: DAC switchable to 8 bits | **IMPL** | `:751`. Since #226 the switch reaches the ports and the INT 10h palette calls too (§11) — the promise is kept for every path | `video_test.c:265`; found by the oracle (session 74), ungraded card property |
 | `+0Ah` | Capabilities D1 = 0: VGA-compatible controller | **IMPL** | `:751` | compared, ungraded |
 | `+0Ah` | Capabilities D2 = 0: no blank bit needed for 4F09 | **IMPL** | `:751`; consistent with 4F09 BL=80h being treated as 00h (§12) | compared, ungraded |
 | `+0Ah` | Capabilities D3–D4 (3.0): stereo signalling, EVC connector = 0 | **IMPL** | `:751` (none, truthfully) | — |
@@ -142,12 +142,12 @@ offer, and we follow the Tseng ROM (`oracle-rules.json:1318-1336`).
 |---|---|---|---|---|
 | `+00h` D0 | mode supported in hardware = 1 | **IMPL** | `0x009B` `:800`; text `0x000F` `:777` | compared, ungraded |
 | D1 | reserved = 1 | **IMPL** | `:800` | ungraded |
-| D2 | TTY output supported | **IMPL** | 0 in graphics (we do not draw teletype into VESA modes — a recorded choice, `session-74.md:231-232`); 1 in text (`:777`) | ungraded |
+| D2 | TTY output supported | **IMPL** | 0 in graphics (we do not draw teletype into VESA modes — a recorded choice, session 74); 1 in text (`:777`) | ungraded |
 | D3 | colour | **IMPL** | `:800`, `:777` | ungraded |
 | D4 | graphics (1) / text (0) | **IMPL** | `:800`, `:777` | `video_test.c:420` |
-| D5 | 1 = **not** a VGA-compatible mode (graphics); 0 for the VESA text modes | **IMPL** | #226, decided from §4.4: D5 clear promises "the standard VGA I/O ports … can be assumed", and in our VESA modes the VGA CRTC does not drive the picture (4F06/4F07 are the only pitch and start; CR0C/0D/13h move nothing) and the sequencer/GC do not reach the window. Graphics modes now answer `00BBh` (`vdd_video.c:919`, the reasoning in the comment above it). The two measured BIOSes split on exactly this line: QEMU's SeaVGABIOS VBE (DISPI, like ours) says `BBh` for every packed and direct mode (`build/dosdiff-cache/p_vesa.com-3c1fd507…`), the Tseng ET4000/W32p ROM (CRTC-driven extended modes) says `1Fh`/`1Bh` (`runs/s74b_lazy32/pcem_p_vesa_et4000.txt`). The DAC ports and 3DAh still work in a VESA mode; D5 only stops promising the rest. Text modes 108h–10Ch stay `0Fh` | ungraded (`oracle-rules.json:1272` ignores ModeAttributes); `video_test.c:258-263`. ⚠ rig re-gate owed: heaven7, ZAR, vesacube (vesacube's source does not test D5) |
+| D5 | 1 = **not** a VGA-compatible mode (graphics); 0 for the VESA text modes | **IMPL** | #226, decided from §4.4: D5 clear promises "the standard VGA I/O ports … can be assumed", and in our VESA modes the VGA CRTC does not drive the picture (4F06/4F07 are the only pitch and start; CR0C/0D/13h move nothing) and the sequencer/GC do not reach the window. Graphics modes now answer `00BBh` (`vdd_video.c:919`, the reasoning in the comment above it). The two measured BIOSes split on exactly this line: QEMU's SeaVGABIOS VBE (DISPI, like ours) says `BBh` for every packed and direct mode (`build/dosdiff-cache/p_vesa.com-3c1fd507…`), the Tseng ET4000/W32p ROM (CRTC-driven extended modes) says `1Fh`/`1Bh` (s74). The DAC ports and 3DAh still work in a VESA mode; D5 only stops promising the rest. Text modes 108h–10Ch stay `0Fh` | ungraded (`oracle-rules.json:1272` ignores ModeAttributes); `video_test.c:258-263`. ⚠ test-machine re-gate owed: heaven7, ZAR, vesacube (vesacube's source does not test D5) |
 | D6 | 0 = windowed access available | **IMPL** | `:800` | ungraded |
-| D7 | 1 = linear frame buffer available | **IMPL** | `:800` with PhysBasePtr `:869` (D7/D6 = "both windowed and linear", §4.4) | rig: heaven7, ZAR |
+| D7 | 1 = linear frame buffer available | **IMPL** | `:800` with PhysBasePtr `:869` (D7/D6 = "both windowed and linear", §4.4) | test machine: heaven7, ZAR |
 | D8–D12 (3.0) | double scan, interlace, triple buffering, stereo, dual display start | **IMPL** | 0 — none offered, truthfully | — |
 | `+02h` | WinAAttributes `07h` (relocatable, readable, writeable) | **IMPL** | `:801` | ungraded (the Tseng ROM uses a write-only A + read-only B pair) |
 | `+03h` | WinBAttributes `00h` (no window B) | **IMPL** | `:801` | ungraded |
@@ -173,11 +173,11 @@ offer, and we follow the Tseng ROM (`oracle-rules.json:1318-1336`).
 | `+23h`/`+24h` | BlueMaskSize / BlueFieldPosition | **IMPL** | 5/0, 5/0, 8/0 | **oracle** |
 | `+25h`/`+26h` | RsvdMaskSize / RsvdFieldPosition | **IMPL** | 1/15 for 5:5:5, else 0 | **oracle** |
 | `+27h` | DirectColorModeInfo: D0 ramp fixed (0); D1 Rsvd bits usable (1 for 5:5:5) | **IMPL** | `:857` | **oracle**, DISPUTED (Tseng ROM `02h`, Bochs differs) |
-| `+28h` | PhysBasePtr = `E0000000h` (graphics); 0 for text | **IMPL** | `:869`, constant `vdd_video.h:63`; honoured by DPMI `0800h` (§15) | masked by the probe; rig: heaven7, ZAR |
+| `+28h` | PhysBasePtr = `E0000000h` (graphics); 0 for text | **IMPL** | `:869`, constant `vdd_video.h:63`; honoured by DPMI `0800h` (§15) | masked by the probe; test machine: heaven7, ZAR |
 | `+2Ch` | OffScreenMemOffset (2.0) | **PART** | 0 (`:799`). To a 2.0 caller that reads as "no off-screen memory", though VRAM beyond the displayed page exists and 4F06/4F07 use it. 3.0 turned these six bytes into Reserved-0, so the value is right only for 3.0 | bytes graded by `p_vesa`; agreement is with a VBE 1.2 ROM and a 3.0 VBE, neither of which has the 2.0 field |
 | `+30h` | OffScreenMemSize (2.0) | **PART** | 0, as above | as above |
 | `+32h` (3.0) | LinBytesPerScanLine | **IMPL** | `:873` (same pitch as banked) | — (outside the probe's 50 bytes) |
-| `+34h` (3.0) | BnkNumberOfImagePages | **IMPL** | `:874` = `+1Dh` | found by the oracle (`session-74.md:229`), not graded |
+| `+34h` (3.0) | BnkNumberOfImagePages | **IMPL** | `:874` = `+1Dh` | found by the oracle (session 74), not graded |
 | `+35h` (3.0) | LinNumberOfImagePages | **IMPL** | `:874` = `+1Dh` | as above |
 | `+36h`–`+3Dh` (3.0) | LinRed/Green/Blue/Rsvd MaskSize and FieldPosition | **IMPL** | `:875-876`, copied from `+1Fh`–`+26h` for direct colour | — |
 | `+3Eh` (3.0) | MaxPixelClock | **MISS** | 0. Harmless while VbeVersion says 2.0 (the bytes are Reserved to a 2.0 caller); needed with 4F0Bh and 4F02 D11 (§5, §14) | — |
@@ -186,10 +186,10 @@ offer, and we follow the Tseng ROM (`oracle-rules.json:1318-1336`).
 
 | Unit | Status | Where / what is missing | Verification |
 |---|---|---|---|
-| D0–D8 mode number → look up, set geometry and depth | **IMPL** | `:902-913`; text modes go through `INT 10h AH=00h` mode 3 then take the geometry (`:883-900`) | `video_test.c:251-252`, `:420-443`; rig: `0x4101`, `0x4170`, `0x4112`, `0x101` |
+| D0–D8 mode number → look up, set geometry and depth | **IMPL** | `:902-913`; text modes go through `INT 10h AH=00h` mode 3 then take the geometry (`:883-900`) | `video_test.c:251-252`, `:420-443`; test machine: `0x4101`, `0x4170`, `0x4112`, `0x101` |
 | D9–D13 reserved (2.0): a non-zero bit makes the number unknown → `014Fh` | **IMPL** | the lookup compares `num & 3FFFh` (`:578`, `:548`) | untested |
 | D11 (3.0): use the caller's CRTCInfoBlock at ES:DI | **MISS** | D11 is inside the compared number, so the call **fails** `014Fh` — correct for the 2.0 we claim, and the reason 3.0's refresh-rate control is absent | — |
-| D14: linear (1) / windowed (0) frame buffer | **IMPL** | graphics modes (`vesa_lfb`; `vesa_sync` stops copying the window). #226: a **text** mode with D14 set now fails `014Fh` before anything changes (`vesa()` case `0x02`, `vdd_video.c:1013-1019`) — §4.5: "If D14 is set, and a linear frame buffer model is not available then the call will fail"; the text ModeInfoBlocks say D7 = 0 | `video_test.c:270-272`, `:411`, `:650`; rig: `0x4101`, `0x4170` |
+| D14: linear (1) / windowed (0) frame buffer | **IMPL** | graphics modes (`vesa_lfb`; `vesa_sync` stops copying the window). #226: a **text** mode with D14 set now fails `014Fh` before anything changes (`vesa()` case `0x02`, `vdd_video.c:1013-1019`) — §4.5: "If D14 is set, and a linear frame buffer model is not available then the call will fail"; the text ModeInfoBlocks say D7 = 0 | `video_test.c:270-272`, `:411`, `:650`; test machine: `0x4101`, `0x4170` |
 | D15: don't clear display memory | **IMPL** | graphics `:924-927` (both VRAM and the A0000 window); text via AL bit 7 and `clear_text` `:893`, `:897` | untested (the standard-BIOS twin is in `video-bios.md`) |
 | An unavailable mode fails `014Fh` and leaves the environment unchanged | **IMPL** | `:930`; nothing is written before the lookup succeeds | untested |
 | A mode set resets: DAC width 6 (§4.11), bank 0, display start (0,0), pitch = the mode's own | **IMPL** | `:913-916` | `video_test.c:298-301` (DAC), `:389` (pitch and start) |
@@ -220,7 +220,7 @@ ours (`:654-668`).
 
 | Unit | Status | Where / what is missing | Verification |
 |---|---|---|---|
-| BH=00h set window A to DX (64 KB units) | **IMPL** | `:1141-1147` | `video_test.c:254-261`; rig: ZAR banked, 4,735 calls |
+| BH=00h set window A to DX (64 KB units) | **IMPL** | `:1141-1147` | `video_test.c:254-261`; test machine: ZAR banked, 4,735 calls |
 | BH=01h get window A → DX | **IMPL** | `:1148-1149` (this read BL as the selector until s74b) | `video_test.c:264-265` |
 | BL=01h window B → `014Fh` | **IMPL** | `:1140` — WinBAttributes says there is none | `video_test.c:266-267` |
 | DX past VRAM → `024Fh`, window unchanged | **IMPL** | `:1143` | `video_test.c:268-269` |
@@ -243,9 +243,9 @@ ours (`:654-668`).
 
 | Unit | Status | Where / what is missing | Verification |
 |---|---|---|---|
-| BL=00h set (CX pixel, DX line) | **IMPL** | `:992-1003`; the frame origin moves (`vesa_origin` `:558-562`, `:3322`) | `video_test.c:376`, `:395`; rig: heaven7 |
+| BL=00h set (CX pixel, DX line) | **IMPL** | `:992-1003`; the frame origin moves (`vesa_origin` `:558-562`, `:3322`) | `video_test.c:376`, `:395`; test machine: heaven7 |
 | BL=01h get (BH=0, CX, DX) | **IMPL** | `:989-991` | `video_test.c:379` |
-| BL=80h set during vertical retrace | **PART** | #226, VDD side done (`vesa()` case `0x07`, `vdd_video.c:1181-1241`; `vesa_vbl_release` `:2985`): the start goes to the register and the retrace loads it (`vid_latch`, the s83 schedule, now carrying `vesa_org` → `vesa_org_vs` → `vesa_org_live`); the call completes when the beam is in a retrace that has not already released such a call, else at the next retrace start (one release per retrace — a guest calling twice inside one retrace is paced to one flip a frame, as a `wait while in retrace; wait until in retrace` BIOS loop paces it). The beam is the VESA mode's own (§16). **PART because the wait is the host's to honour**: `int10()` runs under the host lock and cannot spin, so it stamps `int10_wait_until` and returns; ⚠ **`main.c` must, after `vdd_bus_deliver_int(...0x10...)` and `HOST_UNLOCK()` on each INT 10h path (V86 BOP ≈`:27904`, PM ≈`:21318`, DPMI `0300h` ≈`:22665`), loop on `vdd_video_int10_wait_us(&g_vid)` — yield, keep `g_dpmi_iter` alive — before advancing the guest.** Until then the call returns at once (as it always did) and only the pacing is missing; the start still appears from the retrace the call names | `video_test.c:553-624` (T12h, fake clock); vesacube uses it on the rig |
+| BL=80h set during vertical retrace | **PART** | #226, VDD side done (`vesa()` case `0x07`, `vdd_video.c:1181-1241`; `vesa_vbl_release` `:2985`): the start goes to the register and the retrace loads it (`vid_latch`, the s83 schedule, now carrying `vesa_org` → `vesa_org_vs` → `vesa_org_live`); the call completes when the beam is in a retrace that has not already released such a call, else at the next retrace start (one release per retrace — a guest calling twice inside one retrace is paced to one flip a frame, as a `wait while in retrace; wait until in retrace` BIOS loop paces it). The beam is the VESA mode's own (§16). **PART because the wait is the host's to honour**: `int10()` runs under the host lock and cannot spin, so it stamps `int10_wait_until` and returns; ⚠ **`main.c` must, after `vdd_bus_deliver_int(...0x10...)` and `HOST_UNLOCK()` on each INT 10h path (V86 BOP ≈`:27904`, PM ≈`:21318`, DPMI `0300h` ≈`:22665`), loop on `vdd_video_int10_wait_us(&g_vid)` — yield, keep `g_dpmi_iter` alive — before advancing the guest.** Until then the call returns at once (as it always did) and only the pacing is missing; the start still appears from the retrace the call names | `video_test.c:553-624` (T12h, fake clock); vesacube uses it on the test machine |
 | A start that leaves no full page → `024Fh`, nothing changed | **IMPL** | `:997-1000`; refusals are counted (`vesa_07_rej`) | `video_test.c:382` |
 | Valid in VBE text modes (§4.10 note) | **MISS** | `034Fh` (`:988`) | — |
 | 3.0 BL=02h / 82h: schedule a start given as a byte address (82h waits) | **PART** | #226: ECX is the byte offset (the start is a byte offset internally now, so any depth's page flip is exact — 3.0's reason for these); same full-page refusal (`024Fh`); BL=01h reads it back as (x, y) at the current pitch. 02h returns at once and the latch takes it at the retrace — **IMPL**; 82h waits exactly as 80h, so it shares 80h's owed host loop — hence PART | `video_test.c:600-616` |
@@ -286,10 +286,10 @@ in pixels; `00h` reads 0, so no Bochs driver mistakes us for one) and the VGA DA
 
 | Unit | Status | Where / what is missing | Verification |
 |---|---|---|---|
-| BL=00h: ES:DI → table, CX = length; other BL → `014Fh` | **IMPL** | `vesa()` `case 0x0A`; `ES:DI = B260:0000`, `CX = VBE_PM_LEN` | off-VM `vbepm_test.c`; rig `p_vbepm` (`vbepm.4F0A`) |
-| Table `+0`: 32-bit Set Window code (BH=00h, BL=window, DX=position) | **IMPL** | port `05h` → `vesa_set_bank`, the function 4F05h now shares; window B and out-of-range refused (counted `vbe_pm_rej`) | `vbepm_test.c` (copied, interpreted, compared with 4F05h get and the VRAM it flushed); rig `p_vbepm` (`vbepm.win.via.4F05`, `vbepm.vram.via.4F05`) |
-| Table `+2`: 32-bit Set Display Start (BL=00h/80h, DX:CX = start in DWORDS) | **IMPL** | ports `10h`/`11h`; BL=80h polls `3DAh` bit 3 in the block itself before the commit | `vbepm_test.c` (4F07h get agrees; the retrace wait reads `3DAh`); rig `p_vbepm` (`vbepm.start.via.4F07`) |
-| Table `+4`: 32-bit Set Primary Palette (BL=00h/80h, CX count, DX first, ES:EDI B,G,R,pad) | **IMPL** | `3C8h`/`3C9h`, so the 4F08h DAC width applies as for any port write | `vbepm_test.c` (4F09h get reads back the same bytes); rig `p_vbepm` (`vbepm.pal.via.3C9`) |
+| BL=00h: ES:DI → table, CX = length; other BL → `014Fh` | **IMPL** | `vesa()` `case 0x0A`; `ES:DI = B260:0000`, `CX = VBE_PM_LEN` | off-VM `vbepm_test.c`; test machine `p_vbepm` (`vbepm.4F0A`) |
+| Table `+0`: 32-bit Set Window code (BH=00h, BL=window, DX=position) | **IMPL** | port `05h` → `vesa_set_bank`, the function 4F05h now shares; window B and out-of-range refused (counted `vbe_pm_rej`) | `vbepm_test.c` (copied, interpreted, compared with 4F05h get and the VRAM it flushed); test machine `p_vbepm` (`vbepm.win.via.4F05`, `vbepm.vram.via.4F05`) |
+| Table `+2`: 32-bit Set Display Start (BL=00h/80h, DX:CX = start in DWORDS) | **IMPL** | ports `10h`/`11h`; BL=80h polls `3DAh` bit 3 in the block itself before the commit | `vbepm_test.c` (4F07h get agrees; the retrace wait reads `3DAh`); test machine `p_vbepm` (`vbepm.start.via.4F07`) |
+| Table `+4`: 32-bit Set Primary Palette (BL=00h/80h, CX count, DX first, ES:EDI B,G,R,pad) | **IMPL** | `3C8h`/`3C9h`, so the 4F08h DAC width applies as for any port write | `vbepm_test.c` (4F09h get reads back the same bytes); test machine `p_vbepm` (`vbepm.pal.via.3C9`) |
 | Table `+6`: ports/memory sub-table | **IMPL** | `01CEh 01CFh 03C8h 03C9h 03DAh FFFFh`, empty memory list `FFFFh` | `vbepm_test.c` |
 | 3.0: the `'PMID'` PMInfoBlock in the ROM image (PMInitialize, 16-bit PM entry) | **N/A (decided)** | #273 (s91) DECISION: not provided. We claim VBE 2.0 (4F00h version 0200h), and a client may only look for `PMID` after seeing 3.0; claiming 3.0 would oblige the rest of 3.0 too (4F0Bh, refresh-rate CRTC blocks, MaxPixelClock). Revisit only if a guest that needs 3.0 turns up | — |
 
@@ -297,12 +297,12 @@ in pixels; `00h` reads 0, so no Bochs driver mistakes us for one) and the VGA DA
 refused=` -- a client switching banks through the block appears there and NOT in the 4F05
 count.
 
-★ **DUKE3D USES IT** (measured 2026-10-02, headless 30 s, `runs/vm249/`): it asks 4F0Ah once
+★ **DUKE3D USES IT** (measured 2026-10-02, unattended 30 s run): it asks 4F0Ah once
 and, offered the block, page-flips through SetDisplayStart -- `4F0A-block starts=0x25a3
 refused=0`, and **no 4F07 calls at all**, where the base build (4F0Ah declined) shows
 `4F07x24bf` with starts up to y=0x1068 (4200 lines = 3.36 MB at 800 bytes a line). Zero
 refusals over that range is also the units check: had Duke passed BYTES, ×4 would have run
-past the 4 MB of VRAM from page 2 on. Mode `4103h` (800x600x8 LFB) on both. ⚠ The headless
+past the 4 MB of VRAM from page 2 on. Mode `4103h` (800x600x8 LFB) on both. ⚠ The unattended
 capture cannot save an 800x600 frame on either build (`CAPTURE: save_bmp FAILED ... w=800
 h=600`), so the picture is owed BY HAND. ZAR (VESA2 LFB) never asks for 4F0Ah: unchanged.
 Units: VBE 2.0 §4.13 leaves them unstated; the block takes DX:CX in DWORDS, as Bochs's PM
@@ -325,18 +325,18 @@ code and the clients written against it do.
 | Unit | Status | Where / what is missing | Verification |
 |---|---|---|---|
 | One constant for PhysBasePtr and the mapping | **IMPL** | `VID_VESA_LFB_PHYS` `vdd_video.h:56-63` | — |
-| DPMI `0800h` maps the aperture | **PART** | answers the host address of `vesa_vram` (`main.c` `dpmi_service_pm_int_body`, `case 0x0800` ≈`:22423`). Accepted **only** for BX:CX exactly `E0000000h` and SI:DI ≤ 4 MB; a request at an offset into the aperture, or larger than 4 MB, is refused `8021h`. The selector a client then builds had to be fixed in `dpmi_install` (DPL forced to 3, ≈`:16617`) for ZAR | rig: heaven7 (`session-74.md:386`), ZAR (`:33-46`) |
+| DPMI `0800h` maps the aperture | **PART** | answers the host address of `vesa_vram` (`main.c` `dpmi_service_pm_int_body`, `case 0x0800` ≈`:22423`). Accepted **only** for BX:CX exactly `E0000000h` and SI:DI ≤ 4 MB; a request at an offset into the aperture, or larger than 4 MB, is refused `8021h`. The selector a client then builds had to be fixed in `dpmi_install` (DPL forced to 3, ≈`:16617`) for ZAR | test machine: heaven7 (session 74), ZAR (`:33-46`) |
 | DPMI `0801h` free the mapping | **IMPL** | a successful no-op; the buffer is the VDD's (`main.c` ≈`:22442`) | untested |
-| LFB writes reach the picture; the A0000 window is not copied over them | **IMPL** | `vesa_sync` returns early when `vesa_lfb` (`:601`); frame reads `vesa_vram` (`:3322`) | `video_test.c:411`, `:448`; rig: heaven7, ZAR |
+| LFB writes reach the picture; the A0000 window is not copied over them | **IMPL** | `vesa_sync` returns early when `vesa_lfb` (`:601`); frame reads `vesa_vram` (`:3322`) | `video_test.c:411`, `:448`; test machine: heaven7, ZAR |
 | LFB for a real-mode or non-DPMI (VCPI, raw) client | **N/A** | `E0000000h` is unreachable from V86 mode; only a DPMI client can map it | — |
 
 ## 16. Presentation
 
 | Unit | Status | Where / what is missing | Verification |
 |---|---|---|---|
-| 8bpp packed: pixel indexes the DAC directly (no EGA attribute remap) | **IMPL** | `pal_refresh` `:152-158`; frame at `:3315-3322` | `video_test.c:287-290`, `:340-342`; rig: vesacube, ZAR |
+| 8bpp packed: pixel indexes the DAC directly (no EGA attribute remap) | **IMPL** | `pal_refresh` `:152-158`; frame at `:3315-3322` | `video_test.c:287-290`, `:340-342`; test machine: vesacube, ZAR |
 | 15bpp 5:5:5 → ARGB, bit replication | **IMPL** | `vesa_to_argb` `:638-641` | untested beyond the code |
-| 16bpp 5:6:5 → ARGB | **IMPL** | `:642-645` | `video_test.c:395`; rig: heaven7 `0x4170`, vesacube 320x240x16 |
+| 16bpp 5:6:5 → ARGB | **IMPL** | `:642-645` | `video_test.c:395`; test machine: heaven7 `0x4170`, vesacube 320x240x16 |
 | 24bpp 8:8:8 (B, G, R in memory) → ARGB | **IMPL** | `:646-647` | `video_test.c:411`, `:448` |
 | 32bpp 8:8:8:8 | **MISS** | no mode advertises it; `vesa_bypp` knows 4 bytes (`:555`) but `vesa_to_argb` treats every depth above 16 as 24-bit (`:646`) | — |
 | Logical pitch (4F06) and display start (4F07) applied to every depth | **IMPL** | the displayed start is `vesa_org_live` (the retrace-loaded one, #226) in both the 8bpp frame and the direct-colour conversion | `video_test.c:376-395`, `:553-624` |
@@ -349,9 +349,9 @@ The list 4F00 publishes is `vesa_modes[]` (`:508-532`) then `vesa_text_modes[]` 
 Every entry fits the 4 MB VRAM (`vesa_find` refuses any that does not, `:585`) and the 1280x1024
 presenter cap, so **every advertised mode can be set and presented**. *Pages* is the
 NumberOfImagePages value 4F01 returns (pages − 1), derived here from `:839-841` — arithmetic on
-the code, not a measurement. *Shown on the rig* lists what a guest actually displayed there.
+the code, not a measurement. *Shown on the test machine* lists what a guest actually displayed there.
 
-| Mode | Spec | Geometry | Depth / model | Pitch (bytes) | Pages | Status | Shown on the rig |
+| Mode | Spec | Geometry | Depth / model | Pitch (bytes) | Pages | Status | Shown on the test machine |
 |---|---|---|---|---|---|---|---|
 | `100h` | VBE | 640x400 | 8, packed | 640 | 15 | **IMPL** | — |
 | `101h` | VBE | 640x480 | 8, packed | 640 | 12 | **IMPL** | vesacube; ZAR banked and LFB (`0x4101`) |
@@ -392,7 +392,7 @@ the code, not a measurement. *Shown on the rig* lists what a guest actually disp
 
 ## Gaps worth closing (most important first)
 
-**Closed by #226** (off-VM; rig gate owed): the old items 1 (4F08 width at the ports), 2 (4F02's
+**Closed by #226** (off-VM; test-machine gate owed): the old items 1 (4F08 width at the ports), 2 (4F02's
 VGA layer, `mkind`, `40:49h`, D5), 3 (4F07 BL=80h — VDD half), 4 (4F03 D14/D15, `40:87h` bit 7),
 8 (the 2.0 OEM strings in OemData), 4F08 in standard modes (half of old 11) and 4F07 BL=02h/04h/82h
 (part of old 13). What remains, re-ranked:
@@ -403,7 +403,7 @@ VGA layer, `mkind`, `40:49h`, D5), 3 (4F07 BL=80h — VDD half), 4 (4F03 D14/D15
    watchdog (`g_dpmi_iter`) fed. Until it does, the call returns at once and paces nothing; the
    start itself already lands on the retrace. Also worth printing `vesa_07_waits`/`vesa_07_wait_us`
    in the STAGE2 VESA lines.
-2. **Rig re-gate for #226** — heaven7 (4F07 BL=80h idiom, `0x4170`), ZAR (banked `0x101` and LFB
+2. **Test-machine re-gate for #226** — heaven7 (4F07 BL=80h idiom, `0x4170`), ZAR (banked `0x101` and LFB
    `0x4101`; INT 33h range now follows the VESA extent), vesacube (8bpp palette through 4F09, page
    flips), plus Skyroads/Win16 per the shared-path rule, since `vid_beam`/`vid_latch` changed.
    ModeAttributes D5 is the one change a guest could refuse a mode over; rollback is one constant.

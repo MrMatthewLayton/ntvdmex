@@ -368,7 +368,7 @@ These are fixed by something outside this repository, and the style does not app
 - **The shim API version**, which the host and `bin\wowshim\` must agree on.
 - **Registry value names** under `HKCU\Software\NTVDMEX`.
 - **`cfg\` file-knob names.**
-- **Log line formats** the rig scripts parse (`STAGE1:`, `STAGE2:`, `FULLSCREEN:`, …).
+- **Log line formats** the test scripts parse (`STAGE1:`, `STAGE2:`, `FULLSCREEN:`, …).
 - **Win16 export names and thunk ids.**
 
 ---
@@ -404,7 +404,7 @@ behaviour**:
   identity there, so a moved line would change the binary and lose the proof. Elsewhere a pass
   may add lines -- a named constant's `#define`, say -- and the binary still matches.
 - **Module by module**, each on its own short branch, with its off-VM tests converted in the same
-  commit; `main.c` last. Each module's commit passes the battery; the full rig gate runs per
+  commit; `main.c` last. Each module's commit passes the battery; the full test-machine gate runs per
   batch.
 - **A pilot first:** `dos_disk.h` and `vdd_emu8k.c`, fully converted and reviewed before the
   rest.

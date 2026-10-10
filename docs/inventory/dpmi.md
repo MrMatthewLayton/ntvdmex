@@ -25,7 +25,7 @@ real 16-bit client — 0400h vs 1687h, every bad-selector path, 0100h/0101h × 2
 Off-VM: `tests/unit/dpmisvc_test.c` holds the spec-decided rules (`src/host/dpmi_svc.h`).
 `dpmitest.asm`, `dpmiexe.asm`, `pm32*.asm` exercise paths; the guest shelf (Doom, Heretic,
 Hexen, Duke3D, ZAR, heaven7, Win16's krnl386) remains the integration test.
-**Marked:** 2026-10-01, **from the code**; #248 rows re-marked 2026-10-02 (`runs/s87_dpmi/`).
+**Marked:** 2026-10-01, **from the code**; #248 rows re-marked 2026-10-02 (s87).
 
 ---
 
@@ -97,7 +97,7 @@ not 1.0 (the first is closed by #247):
 | AX | Function | Status | Where / what is missing |
 |---|---|---|---|
 | `0100h` | allocate DOS memory → segment + selector | **IMPL** | `:22875-22928`; on failure names every MCB's owner in the log |
-| `0101h` | free DOS memory | **IMPL** (#248) | the selector must name a live `0100h` block (`8022h` otherwise — the PSP selector used to free the program's own block); a DOS refusal returns DOS's code; the descriptor goes back on the free list and `0100h` takes from it (the leak ran the LDT dry after ~2000 calls, then the failure path's MCB dump overran a 2 KB stack buffer and killed the host — `runs/s87_dpmi/p31_base_host.log`) |
+| `0101h` | free DOS memory | **IMPL** (#248) | the selector must name a live `0100h` block (`8022h` otherwise — the PSP selector used to free the program's own block); a DOS refusal returns DOS's code; the descriptor goes back on the free list and `0100h` takes from it (the leak ran the LDT dry after ~2000 calls, then the failure path's MCB dump overran a 2 KB stack buffer and killed the host — s87) |
 | `0102h` | resize DOS memory | **IMPL** | `:22941-22962` |
 
 ## 4. Interrupts, exceptions, virtual interrupt flag

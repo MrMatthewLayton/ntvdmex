@@ -144,13 +144,14 @@ approximated, because a wrong drum that plays is harder to notice than a missing
 Configuration lives in `HKCU\Software\NTVDMEX` with a dialog. But the order is:
 
 ```
-built-in default   <   registry   <   text file on the test share
+built-in default   <   registry   <   a text file in cfg\
 ```
 
-and `settings_load()` runs at the *top* of the knob block in `WinMain`, never after it.
+and `SettingsLoad()` runs at the start of start-up (`host_startup.c`), before any file is
+consulted, never after it.
 
-**This looks backwards and is deliberate.** The headless rig configures the host by writing
-files and re-launching it. If the registry overrode them, every headless measurement would
+**This looks backwards and is deliberate.** Unattended test runs configure the host by writing
+files and re-launching it. If the registry overrode them, every unattended measurement would
 silently report whatever was last clicked in a dialog on that machine — which is exactly
 the "instrument lied" failure this project keeps paying for. Do not tidy this ordering.
 
@@ -165,7 +166,7 @@ A running theme, and it is a real engineering decision rather than a slogan:
 - `AH=31h` (TSR) is *handled* and explicitly refuses to pretend residency worked.
 - `AH=53h` was tested as the cause of a bug, **refuted**, and reverted rather than left in
   as a plausible-looking success.
-- 40 of 46 settings are stored and honoured by nothing — and `settings_apply()` is
+- 40 of 46 settings are stored and honoured by nothing — and `SettingsApply()` is
   documented as the honest list of which ones the emulator actually consults.
 
 The reasoning: this project's failures have almost never been "we did not implement X".

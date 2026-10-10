@@ -80,8 +80,8 @@ reasoning this programme exists to stop.
 
 **Measured** (`p_dma.asm dma.page.spare80`): dosbox-x and **PCem, on a real AMI 486
 BIOS**, both read back a written `0x5A`; only 6.22-under-QEMU answers `0xFF`. ⚠ **That is
-not a general rule about QEMU** — see [the oracle-profile
-note](../research/oracle-disagreements.md). Fixed;
+not a general rule about QEMU** — see [why oracles
+disagree](../testing.md#why-oracles-disagree). Fixed;
 `page_spare[]` in `vdd_dma.h`, and `dma_test.c` pins that the spare latches are **not the
 same storage** as a channel's page.
 
@@ -198,7 +198,7 @@ refused (then only: a masked channel) came back short and `sb_render` took it fo
 end of the block** — it raised an IRQ the card never raises and dropped the transfer to
 IDLE. Now a masked channel holds the DSP exactly as a disabled controller does, as the
 hardware does. A guest whose DSP length is **longer** than its single-cycle 8237 count
-used to be rescued by that spurious IRQ; it now waits, as on a real card. **Needs a rig
+used to be rescued by that spurious IRQ; it now waits, as on a real card. **Needs a test-machine
 re-gate of the audio guests (Doom, ZAR, Skyroads) before it ships.**
 
 ✅ **SUPERSEDED by #246 (§6): the cascade IS modelled now.** The paragraph below is the pre-#246 record.
@@ -278,8 +278,8 @@ What was built (`vdd_dma.c`):
 Off-VM: `dma_test.c` T13–T15 (+ the cascade rows in T12 and the FFFFh row in T4) — 110 checks;
 four mutations (no cascade check, no `req` in DREQ, no clear-at-TC, no POST unmask) each fail
 2–8 of them. ⚠ **Shared with the sound cards** (`vdd_dma_grants` is what SB and GUS ask), so gated on
-the rig, interleaved A/B ×2, headless with `cfg\wavrec.flag` (A = `2ae28649`, #179 only;
-B = `b0e3b5b9`, #246) — `runs/s87_ide/gate.txt`:
+the test machine, interleaved A/B ×2, unattended with `cfg\wavrec.flag` (A = `2ae28649`, #179 only;
+B = `b0e3b5b9`, #246) — s87:
 
 | run | Doom sounding s / IRQ5 | ZAR sounding s / IRQ5 |
 |---|---|---|
