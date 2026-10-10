@@ -56,6 +56,45 @@ observed.
 ## Contributing
 
 By contributing you confirm that the work is your own and that it contains none of the
-material listed above. If you have read leaked Windows source code, please do not
-contribute to NTVDMEX: what you know cannot be separated from what you write, and the
-risk would attach to the whole project.
+material listed above.
+
+### If you have seen Microsoft's source code or internal design
+
+What matters is what you have seen, not how you came to see it or who employed you. The
+rule applies equally to source that was leaked, seen at work, under a non-disclosure
+agreement, or under a Shared Source or academic licence, and to confidential design
+documents and internal specifications.
+
+**The protected areas** are the components NTVDMEX reimplements:
+
+- NTVDM and its virtual device drivers;
+- WOW and WOW32;
+- the NT kernel's and CSRSS's support for DOS machines;
+- the 16-bit KERNEL, USER and GDI and the other modules of Windows 3.x;
+- MS-DOS, including its command interpreter.
+
+If you have seen the source code or the confidential internal design of any of these, please
+**do not contribute code, design or review comments to the parts of NTVDMEX that do the same
+job.** What you know cannot be reliably separated from what you write, however carefully you
+try, and confidential knowledge can stay confidential after the job that gave it to you has
+ended. If it turned up in NTVDMEX, the whole project would have to answer for it: by removing
+it, by auditing everything around it, or worse.
+
+**You are welcome everywhere else:**
+
+- the user interface, settings and installation;
+- the build, the tests, the tools and CI;
+- the documentation;
+- device models written from the public hardware specifications (VGA, Sound Blaster, the PIT,
+  the PIC, and so on).
+
+Everyone may use Microsoft's *public* documentation: MSDN, the knowledge base, the DDK and
+SDK documentation. These are listed under "Where the knowledge comes from" above.
+
+**Say so in your pull request.** If you have had access of this kind, say so, and say to
+what. You need not give details of your employment. The maintainer decides whether the
+change can be accepted, and the note is the record if the question is ever asked. When in
+doubt, ask in an issue before you write the code.
+
+This is a policy for keeping the project clean. It is not legal advice, and it does not say
+what your own obligations to a former employer are.

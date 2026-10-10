@@ -6,9 +6,11 @@ reimplemented here. This page is how to get a change in.
 
 ## Before you start
 
-- **Read [CLEAN-ROOM.md](CLEAN-ROOM.md).** It is short, and it is the one rule that cannot
-  bend: no Microsoft code, no third-party code or disassembly, and if you have read leaked
-  Windows source code, please do not contribute.
+- **Read [CLEAN-ROOM.md](CLEAN-ROOM.md).** It is the one rule that cannot bend: no
+  Microsoft code, no third-party code or disassembly. If you have seen the source code or
+  internal design of NTVDM, WOW, Windows 3.x or MS-DOS -- at work, under licence or leaked --
+  read its section on that first: you are welcome, but not in the parts that do the same
+  job, and you say so in your pull request.
 - **Find or open an issue** for anything bigger than a small fix, and say there that you
   are working on it. Issues labelled `good first issue` are a good start.
 - Read the [architecture](docs/architecture.md) for the shape of the code, and

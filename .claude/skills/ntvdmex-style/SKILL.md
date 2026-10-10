@@ -57,7 +57,9 @@ where its users can see it. Tests are the exception: their expected values stay 
 ## Clean room (CLEAN-ROOM.md) -- not negotiable
 
 No Microsoft code, no third-party code, no disassembly, no addresses inside someone else's binary,
-nothing from leaked source. Interface values the host must recognise at run time (thunk ids,
+nothing from Microsoft's source code or confidential design, however it was seen (leaked, at work,
+under licence). A person who has seen the source or internal design of NTVDM, WOW, Windows 3.x or
+MS-DOS does not work on the parts of NTVDMEX that do the same job (CLEAN-ROOM.md). Interface values the host must recognise at run time (thunk ids,
 structure layouts the OS shares) are allowed; say where each is seen at run time.
 
 ## Before you finish
