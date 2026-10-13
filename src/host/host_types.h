@@ -840,6 +840,8 @@
  * real-mode loop -- defined just above WinMain, where its arms used to live. (GH #247)
  */
 #define V86BOP_NONE                     0                           /* Not one of V86BiosBop's numbers */
+#define V86BOP_DONE                     1 /* Serviced; EIP is past the BOP, onto the stub's IRET/RETF */
+#define V86BOP_RERUN                    4 /* Serviced, still waiting; EIP left ON the BOP to re-execute */
 #define INT15_WAIT_SLEEP_MS             3 /* INT 15h AH=86h: sleep only while more than this is left */
 #define ISV_MAX_HOOKS                   16
 
@@ -924,8 +926,8 @@ enum
 };   /* startup limits: instance numbers, knob ranges */
 enum
 {
-    NESTED_V86_ROUNDS_MAX = 128, PM_INT21_HANDLE_LIMIT = 24, PM_INT21_LOCK_REGION = 0xFF80
-};   /* DpmiServicePmIntBody: 0301h's nested run, PM INT 21h */
+    NESTED_V86_ROUNDS_MAX = 128, NESTED_V86_EVENTS_MAX = 4096, PM_INT21_HANDLE_LIMIT = 24, PM_INT21_LOCK_REGION = 0xFF80
+};   /* DpmiServicePmIntBody: 0301h's nested run (waiting passes, all passes), PM INT 21h */
 typedef struct
 {
     PVOID InByte;
