@@ -27,6 +27,7 @@
 #include "wowuser.h"
 #include "main.h"
 #include "host_audio.h"
+#include "audio_dmsynth.h"
 #include "host_bios.h"
 #include "host_diag.h"
 #include "host_dos.h"
@@ -1316,6 +1317,37 @@ static PSTR ReportDeviceIrqRetriesAndSoundBlocks(
     cursor = LogPut(cursor, " host_midi=");               cursor = LogPut(cursor, g_Wave.MidiOut ? "open" : "NONE");
     cursor = LogPut(cursor, " underruns=");               cursor = LogHex(cursor, g_Wave.Underruns);
     cursor = LogPut(cursor, "\r\n");
+    /* #155: the built-in synth -- whether it started, what it cost, and what it lost. */
+    if (g_MidiBuiltIn)
+    {
+        static const PCSTR stateNames[] = { "idle (no MIDI played)", "starting", "ready", "FAILED" };
+        PCAUDIO_DMSYNTH_STATS synthStats = AudioDmSynthStats();
+        LARGE_INTEGER frequency;
+        QueryPerformanceFrequency(&frequency);
+        cursor = LogPut(cursor, "STAGE2: midi builtin: ");
+        cursor = LogPut(cursor, stateNames[synthStats->State & 3]);
+
+        if (synthStats->FailedStep)
+        {
+            cursor = LogPut(cursor, " at ");
+            cursor = LogPut(cursor, synthStats->FailedStep);
+            cursor = LogPut(cursor, " hr=0x");
+            cursor = LogHex(cursor, (DWORD)synthStats->FailedResult);
+        }
+
+        cursor = LogPut(cursor, " start_ms=");    cursor = LogDecimal(cursor, synthStats->StartMs);
+        cursor = LogPut(cursor, " instruments="); cursor = LogDecimal(cursor, synthStats->Instruments);
+        cursor = LogPut(cursor, " voices=");      cursor = LogDecimal(cursor, synthStats->Voices);
+        cursor = LogPut(cursor, " msgs=");        cursor = LogDecimal(cursor, synthStats->Messages);
+        cursor = LogPut(cursor, " sysex=");       cursor = LogDecimal(cursor, synthStats->SysEx);
+        cursor = LogPut(cursor, " queued=");      cursor = LogDecimal(cursor, synthStats->Queued);
+        cursor = LogPut(cursor, " dropped=");     cursor = LogDecimal(cursor, synthStats->Dropped);
+        cursor = LogPut(cursor, " renders=");     cursor = LogDecimal(cursor, synthStats->RenderCalls);
+        cursor = LogPut(cursor, " render_ms=");   cursor = LogDecimal(cursor, (UINT)(synthStats->RenderTicks * 1000 / frequency.QuadPart));
+        cursor = LogPut(cursor, " worst_us=");    cursor = LogDecimal(cursor, (UINT)(synthStats->RenderTicksWorst * 1000000 / frequency.QuadPart));
+        cursor = LogPut(cursor, "\r\n");
+    }
+
     /* - THE BLOCK-BOUNDARY LEDGER (see the SB_BLOCK_RECORD comment in vdd_sb.h). One line
      * per completed block for the first few: where the capture stood, what the
      * 8237 held, and whether it had wrapped. cap_off is the load-bearing column --

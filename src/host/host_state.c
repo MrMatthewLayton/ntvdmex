@@ -57,6 +57,7 @@ COMM_STATE   g_Comm;      NTVDD_DEVICE g_CommDevice;   /* GH #9 */
  */
 JOYSTICK_STATE    g_Joystick;       NTVDD_DEVICE g_JoystickDevice;
 AUDIO_STATE  g_Audio;     AUDIO_WAVE g_Wave;
+BOOL g_MidiBuiltIn;      /* #155: MIDI goes to the hosted synth in our mixer */
 PRESENT_DDRAW g_PresentDdraw;
 DOS_XMS_STATE    g_Xms;       /* M4: XMS extended-memory manager */
 volatile LONG g_Irq0Pending = 0;    /* PIT raised IRQ0 (UI thread sets, V86 thread delivers) */

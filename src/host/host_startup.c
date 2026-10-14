@@ -18,6 +18,7 @@
 #include "wowuser.h"
 #include "main.h"
 #include "host_audio.h"
+#include "audio_dmsynth.h"
 #include "host_bios.h"
 #include "host_diag.h"
 #include "host_dos.h"
@@ -3291,6 +3292,24 @@ PSTR StartupStartServices(PSTR cursor)
     g_Wave.WantsDirectSound = (g_Settings.Values[SET_AUDIOAPI] == 1);          /* #234 */
     g_Wave.IsForcedSilent = g_Safe.AudioOut;                 /* s90 #132: SAFE MODE */
     g_Wave.MidiChoice = (INT)(g_Settings.Values[SET_MIDI] < MIDI_ROUTE_COUNT ? g_Settings.Values[SET_MIDI] : 0);  /* #136 */
+    /* #155: BUILT-IN GS -- the hosted synth, started when a guest enters MPU UART mode.
+     * midiOut still opens device 0, as Host GM: it is where MIDI goes if the synth fails.
+     */
+    if (g_Wave.MidiChoice == MIDI_ROUTE_BUILTIN)
+    {
+        g_MidiBuiltIn = TRUE;
+        g_Wave.MidiChoice = MIDI_ROUTE_GM;
+        AudioDmSynthPrepare(SettingsOutputHz(&g_Settings));
+        g_Mpu.SysExSink = HostMidiSysEx;
+        g_GusMidi.SysExSink = HostMidiSysEx;
+        {
+            CHAR builtInLine[160];
+            CHAR *builtInCursor = LogPut(builtInLine, "STAGE2: MIDI = Built-in GS (DirectMusic synth in our mixer; "
+                                                      "starts at MPU UART mode) (#155)\r\n");
+            LogAppend(LOG_PATH, builtInLine, builtInCursor);
+        }
+    }
+
     AudioWaveStart(&g_Wave, SettingsOutputHz(&g_Settings), HostAudioFill, NULL);
     /* #136: SAY WHICH SYNTH THE MPU-401 PLAYS THROUGH, but only when it was chosen.
      * Host GM (the default) opens device 0 as it always did and logs nothing new.
@@ -3955,6 +3974,7 @@ PSTR StartupAttachDevices(PSTR cursor)
     g_SbDevice = VddSbDevice(&g_Sb);
     VddBusAdd(&g_Bus, &g_SbDevice);             /* Sound Blaster 16: 0x220-0x22F */
     g_Mpu.Sink = HostMidiSink;
+    g_Mpu.UartHook = HostMidiUartMode;      /* #155: start the built-in synth early */
     {   static const WORD mpuBases[5] = { 0x300, 0x310, 0x320, 0x330, 0x340 };   /* #235 */
         g_Mpu.BasePort = mpuBases[g_Settings.Values[SET_MPUADDR] <= ARRAYSIZE(mpuBases) - 1 ? g_Settings.Values[SET_MPUADDR] : MPU_DEFAULT_BASE_CHOICE]; }
     g_MpuDevice = VddMpuDevice(&g_Mpu);

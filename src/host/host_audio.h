@@ -27,6 +27,8 @@ VOID OplPumpTime(VOID);
 VOID HostAudioFill(PVOID context, INT16 *out, UINT32 frames);
 VOID HostMidiSink(PVOID context, UINT32 message);
 VOID HostMidiSysEx(PVOID context, const BYTE *message, UINT32 length);
+VOID HostMidiUartMode(PVOID context);
+VOID HostMidiSilence(VOID);
 VOID GusMidiToSynth(PVOID context, BYTE byteValue);
 
 #endif

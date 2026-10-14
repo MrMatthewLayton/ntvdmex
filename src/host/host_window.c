@@ -14,6 +14,8 @@
 #include "host_window.h"
 #include <commctrl.h>
 #include "host_state.h"
+#include "audio_dmsynth.h"
+#include "host_audio.h"
 #include "log.h"
 #include "ne.h"
 #include "wow32.h"
@@ -3160,7 +3162,7 @@ static VOID HostPauseSet(INT isOn)
         InterlockedExchange(&g_PauseWant, 1);
         g_PauseMs = GetTickCount();
         ++g_PauseCount;
-        AudioWaveMidiSilence(&g_Wave);
+        HostMidiSilence();
 
         if (g_SpeakerReal)
             PcSpeakerSet(&g_PcSpeaker, 0);
@@ -4853,6 +4855,7 @@ static LRESULT CALLBACK HostWindowProcedure(HWND window, UINT message, WPARAM wP
          */
         HostRecordFinish();       /* before the device stops feeding it */
         AudioWaveStop(&g_Wave);
+        AudioDmSynthStop();       /* #155: after the fill has stopped calling Render */
         /* [CAUTION]: AND THE OTHER SPEAKER, WHICH IS NOT OURS TO LEAVE RUNNING. Beep.sys
          * keeps sounding after the process that started it exits -- the note
          * under the cursor would outlive the host and only a reboot would clear

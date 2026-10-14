@@ -154,8 +154,10 @@ const SET_DEF g_SetDefinitions[SET_COUNT] = {
 /* #136: which host midiOut device the MPU-401 (and the GUS's MIDI UART) play through --
  * MIDI_ROUTE_* in src/vdd/midi_route.h. Host GM = device 0, as always; MT-32 / SoundFont
  * = a host DRIVER found by name (Munt, BASSMIDI...), which also gets SysEx. Start-up only.
+ * #155: Built-in GS (the default) = Windows' GS synth hosted in OUR mixer, so MIDI music is
+ * recorded and follows the master volume; "Windows MIDI" is the old Host GM, unchanged.
  */
-{ "Midi",              IDC_S_MIDI,        SK_COMBO,      0,  0,   2, "Host GM|MT-32|SoundFont" },
+{ "Midi",              IDC_S_MIDI,        SK_COMBO,      3,  0,   3, "Windows MIDI|MT-32|SoundFont|Built-in GS" },
 /* [CAUTION] THE PC SPEAKER HAS TWO PLACES TO COME OUT OF, AND THEY ARE NOT THE SAME
  * DEVICE. The emulated one is a square wave in the mixer, out of the SOUND
  * CARD -- which is what DOSBox does, is the only path that can be attenuated

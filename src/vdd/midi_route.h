@@ -43,9 +43,14 @@
 
 #define MIDI_ROUTE_UPPER_CASE_OFFSET    0x20    /* 'a' - 'A' */
 
+/* MIDI_ROUTE_BUILTIN (#155, the default): no midiOut device at all -- Windows' own GS synth
+ * hosted in our mixer (audio_dmsynth.h), so the music is recorded and follows our volume.
+ * For it the host still opens device 0 as Host GM does: that is the fallback if the hosted
+ * synth cannot start. Appended, not inserted: the setting stores the index.
+ */
 enum
 {
-    MIDI_ROUTE_GM = 0, MIDI_ROUTE_MT32, MIDI_ROUTE_SF2, MIDI_ROUTE_COUNT
+    MIDI_ROUTE_GM = 0, MIDI_ROUTE_MT32, MIDI_ROUTE_SF2, MIDI_ROUTE_BUILTIN, MIDI_ROUTE_COUNT
 };
 
 /* Case-insensitive "does haystack contain needle" (needle is upper-case ASCII). */

@@ -176,6 +176,7 @@ add_executable(ntvdmhost
     src/vdd/vdd_net.c
     src/vdd/vdd_audio.c
     src/vdd/audio_wave.c
+    src/vdd/audio_dmsynth.c
     src/vdd/vdd_video.c
     src/vdd/vdd_input.c
     src/vdd/vdd_speaker.c
