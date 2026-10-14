@@ -13,6 +13,7 @@
 
 #include "host_settings.h"
 #include <commctrl.h>
+#include <shlobj.h>
 #include "host_state.h"
 #include "log.h"
 #include "main.h"
@@ -21,6 +22,7 @@
 #include "host_dos.h"
 #include "host_input.h"
 #include "host_timing.h"
+#include "capture_video.h"
 #define UITICK_CHOICES          5   /* The Settings combo's entries */
 
 /* fsinteger.flag -- SNAP FULLSCREEN TO WHOLE PIXEL MULTIPLES. OFF BY DEFAULT (Importance = 1):
@@ -144,10 +146,11 @@ static const BYTE g_SettingsLiveIds[] = {
      */
     SET_HOSTCURSOR, SET_FLOPPYPHYS, SET_CONVKB, SET_MIDI, SET_SEAMLESS,
     SET_FIT,                                     /* #325 */
+    SET_RECORDSTART,                             /* #155: read at start-up */
 };
 
 static PCSTR const g_SettingsTabs[NTVDMEX_PAGE_COUNT] = {
-    "MS-DOS", "Machine", "Video", "Audio", "Input", "Drives"
+    "MS-DOS", "Machine", "Video", "Audio", "Input", "Drives", "Capture"
 };
 static HWND g_SettingsPage[NTVDMEX_PAGE_COUNT];
 static SYSFONT_TABLES g_TextFontPreview;
@@ -269,7 +272,7 @@ VOID SettingsLogSources(VOID)
             cursor = LogPut(cursor, " OVERRIDDEN by "); cursor = LogPut(cursor, g_ShellOverride);
         }
 
-        if (index == SET_STR_FLOPPYA || index == SET_STR_SHELL || index == SET_STR_TEXTFONT)
+        if (index == SET_STR_FLOPPYA || index == SET_STR_SHELL || index == SET_STR_TEXTFONT || index == SET_STR_CAPTURE)
             cursor = LogPut(cursor, "\r\n");
         else { cursor = LogPut(cursor, " (stored only -- "); cursor = LogPut(cursor, SettingsDeadWhyText(index));
                cursor = LogPut(cursor, ", GH #136)\r\n"); }
@@ -659,6 +662,52 @@ static VOID SettingsBrowse(HWND page, INT editId, PCSTR filter, PCSTR title)
 
     if (GetOpenFileNameA(&openFile) && edit)
         SetWindowTextA(edit, file);
+}
+
+/* #155: a FOLDER, for the capture path: the shell's folder picker, starting nowhere in
+ * particular (it has no "start here" without a callback). Blank stays allowed: it means
+ * the debug\out folder.
+ */
+static VOID SettingsBrowseFolder(HWND page, INT editId, PCSTR title)
+{
+    CHAR folder[MAX_PATH];
+    BROWSEINFOA browse;
+    LPITEMIDLIST item;
+
+    IMalloc *shellMalloc = NULL;
+    HWND edit = SettingsControl(editId);
+
+    ZeroMemory(&browse, sizeof(browse));
+    browse.hwndOwner = GetParent(page);
+    browse.pszDisplayName = folder;
+    browse.lpszTitle = title;
+    browse.ulFlags = BIF_RETURNONLYFSDIRS;
+    item = SHBrowseForFolderA(&browse);
+
+    if (!item)
+        return;
+
+    if (SHGetPathFromIDListA(item, folder) && edit)
+        SetWindowTextA(edit, folder);
+
+    if (SUCCEEDED(SHGetMalloc(&shellMalloc)) && shellMalloc)
+    {
+        shellMalloc->lpVtbl->Free(shellMalloc, item);
+        shellMalloc->lpVtbl->Release(shellMalloc);
+    }
+}
+
+/* #155: the Capture page's codec line, from what Windows' dialog last saved. */
+static VOID SettingsCodecName(HWND page)
+{
+    CHAR name[SETTINGS_CODEC_NAME_MAX];
+    HWND label = GetDlgItem(page, IDC_S_CODEC_NAME);
+
+    if (!label)
+        return;
+
+    CaptureVideoCodecName(name, sizeof(name));
+    SetWindowTextA(label, name);
 }
 
 static VOID SettingsShellBrowse(HWND page)
@@ -1144,6 +1193,7 @@ INT_PTR CALLBACK SettingsPageProcedure(HWND dialog, UINT message, WPARAM wParam,
             g_EnableThemeDialogTexture(dialog, THEME_ETDT_ENABLE | THEME_ETDT_USETABTEXTURE);                               /* ETDT_ENABLE | ETDT_USETABTEXTURE */
 
         SettingsFillCpuInfo(dialog);            /* no-op on pages without the static */
+        SettingsCodecName(dialog);              /* #155: no-op on pages without it */
         return TRUE;
     }
 
@@ -1248,6 +1298,16 @@ INT_PTR CALLBACK SettingsPageProcedure(HWND dialog, UINT message, WPARAM wParam,
         case IDC_S_CD_BROWSE:
             SettingsBrowse(dialog, IDC_S_CDROM, SETTINGS_FILTER_ISO,
                             SETTINGS_TITLE_ISO);
+            return TRUE;
+
+        case IDC_S_CAPTURE_BROWSE:
+            SettingsBrowseFolder(dialog, IDC_S_CAPTUREPATH, SETTINGS_TITLE_CAPTURE);
+            return TRUE;
+
+        case IDC_S_CODEC_CHOOSE:
+            if (CaptureVideoChooseCodec(GetParent(dialog)))
+                SettingsCodecName(dialog);
+
             return TRUE;
 
         case IDC_S_SF_BROWSE:

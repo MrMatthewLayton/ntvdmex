@@ -401,3 +401,29 @@ BEGIN
     EDITTEXT        IDC_S_CDROM, 116, 104, 218, 13, ES_AUTOHSCROLL | WS_TABSTOP | WS_GROUP
     PUSHBUTTON      "B&rowse...", IDC_S_CD_BROWSE, 340, 104, 50, 14, WS_TABSTOP
 END
+
+/* -- PAGE: CAPTURE ---------------------------------------------------------------
+   #155 (user, s97): where captures go, the video codec, and recording from the start.
+   The codec line is filled at run time (CaptureVideoCodecName); the button opens
+   Windows' own Video Compression dialog, which saves the choice itself. */
+IDD_PAGE_CAPTURE DIALOGEX 0, 0, 404, 228
+STYLE DS_SETFONT | DS_CONTROL | WS_CHILD
+FONT 8, "MS Shell Dlg", 400, 0, 0x1
+BEGIN
+    GROUPBOX        "Capture Folder", -1, 6, 4, 392, 47
+    LTEXT           "Where screenshots and video recordings are saved. Leave it blank to use "
+                    "the debug\\out folder beside NTVDMEX.",
+                    -1, 14, 16, 376, 16
+    EDITTEXT        IDC_S_CAPTUREPATH, 14, 32, 320, 13, ES_AUTOHSCROLL | WS_TABSTOP | WS_GROUP
+    PUSHBUTTON      "&Browse...", IDC_S_CAPTURE_BROWSE, 340, 32, 50, 14, WS_TABSTOP
+
+    GROUPBOX        "Video", -1, 6, 55, 392, 64
+    LTEXT           "Video is recorded at the program's own resolution, with all of its sound "
+                    "(music included), through the codec chosen here.",
+                    -1, 14, 67, 376, 16
+    LTEXT           "Codec:", -1, 14, 87, 26, 8
+    LTEXT           "", IDC_S_CODEC_NAME, 42, 87, 192, 8
+    PUSHBUTTON      "Video &Compression...", IDC_S_CODEC_CHOOSE, 240, 85, 150, 14, WS_TABSTOP
+    CONTROL         "&Start recording when a program starts", IDC_S_RECORD_START, "Button",
+                    BS_AUTOCHECKBOX | WS_TABSTOP, 14, 103, 220, 10
+END

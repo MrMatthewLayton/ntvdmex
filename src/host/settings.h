@@ -94,6 +94,7 @@ typedef enum
     SET_HOSTCURSOR,             /* s84: Always / Never / Smart (#218's idle rule) */
     SET_FLOPPYPHYS, SET_CDPHYS, /* s84: the physical drive, or a mounted image */
     SET_FIT,                    /* #325: maximised/fullscreen -- whole pixels or fill */
+    SET_RECORDSTART,            /* #155: record video from the moment a program starts */
     SET_COUNT
 } SET_ID;
 
@@ -103,6 +104,7 @@ typedef enum
     SET_STR_FLOPPYA = 0, SET_STR_CDROM, SET_STR_SOUNDFONT,
     SET_STR_SHELL,
     SET_STR_TEXTFONT,              /* #321 */
+    SET_STR_CAPTURE,               /* #155 */
     SET_STR_COUNT
 } SET_STR_ID;
 

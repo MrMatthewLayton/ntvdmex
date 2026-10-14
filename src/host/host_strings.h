@@ -143,10 +143,9 @@
 #define MENU_TEXT_LIMIT_SPEED               "Limit Speed"
 #define MENU_TEXT_CAPTURE_MOUSE             "Capture Mouse\tWin releases"
 #define MENU_TEXT_CAPTURE                   "Capture"
-#define MENU_TEXT_SCREENSHOT_ACCELERATOR    "Take Screenshot\tCtrl+F5"
-#define MENU_TEXT_SCREENSHOT                "Take Screenshot"
-#define MENU_TEXT_RECORD_VIDEO              "Record Video (AVI)"
-#define MENU_TEXT_VIDEO_COMPRESSION         "Video Compression..."
+#define MENU_TEXT_SCREENSHOT_ACCELERATOR    "Capture Screenshot\tCtrl+F5"
+#define MENU_TEXT_SCREENSHOT                "Capture Screenshot"
+#define MENU_TEXT_RECORD_VIDEO              "Capture Video"
 #define MENU_TEXT_CAPTURE_FOLDER            "Open Capture Folder"
 #define MENU_TEXT_INSTALL                   "Install as System VDM..."
 #define MENU_TEXT_UNINSTALL                 "Uninstall..."
@@ -168,6 +167,8 @@
 #define SETTINGS_TITLE_ISO          "Choose an ISO disk image"
 #define SETTINGS_FILTER_SOUNDFONT   "SoundFonts (*.sf2)\0*.sf2\0All files (*.*)\0*.*\0"
 #define SETTINGS_TITLE_SOUNDFONT    "Choose a SoundFont"
+#define SETTINGS_TITLE_CAPTURE      "Choose the folder for screenshots and recordings"
+#define SETTINGS_CODEC_NAME_MAX     128
 #define SETTINGS_FONT_CODE_PAGE_FORMAT "This font draws code page %d, not 437: some line-drawing characters " \
                                     "will show as letters."
 #define SETTINGS_SOURCE_CONV_KB         "a program too big for it"  /* Why conventional memory was capped */

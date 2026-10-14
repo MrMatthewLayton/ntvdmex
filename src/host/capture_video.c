@@ -49,6 +49,8 @@
 #define CAPTURE_VIDEO_REG_KEY_RATE          "VideoCodecKeyRate"
 #define CAPTURE_VIDEO_REG_DATA_RATE         "VideoCodecDataRate"
 #define CAPTURE_VIDEO_LOG_LINE              512
+#define CAPTURE_VIDEO_UNCOMPRESSED_NAME     "Uncompressed (full frames)"
+#define CAPTURE_VIDEO_FOURCC_CHARS          4
 
 typedef BOOL (VFWAPI *PFN_IC_COMPRESSOR_CHOOSE)(HWND owner, UINT flags, LPVOID input, LPVOID data, PCOMPVARS vars, LPSTR title);
 typedef VOID (VFWAPI *PFN_IC_COMPRESSOR_FREE)(PCOMPVARS vars);
@@ -283,6 +285,71 @@ BOOL CaptureVideoChooseCodec(HWND owner)
 
     g_IcCompressorFree(&vars);
     return TRUE;
+}
+
+VOID CaptureVideoCodecName(PSTR name, INT capacity)
+{
+    HKEY key;
+    DWORD handler = 0;
+    HIC codec;
+    ICINFO info;
+    INT index;
+
+    lstrcpynA(name, CAPTURE_VIDEO_UNCOMPRESSED_NAME, capacity);
+
+    if (RegOpenKeyExA(HKEY_CURRENT_USER, NTVDMEX_REG_KEY, 0, KEY_READ, &key) == ERROR_SUCCESS)
+    {
+        handler = CaptureVideoRegistryDword(key, CAPTURE_VIDEO_REG_CODEC, 0);
+        RegCloseKey(key);
+    }
+
+    if (!handler || handler == CAPTURE_VIDEO_UNCOMPRESSED || capacity <= CAPTURE_VIDEO_FOURCC_CHARS)
+        return;
+
+    /* The FOURCC first, so a codec that will not open still has a name. */
+    for (index = 0; index < CAPTURE_VIDEO_FOURCC_CHARS; ++index)
+        name[index] = (CHAR)(handler >> (index * 8));
+
+    name[CAPTURE_VIDEO_FOURCC_CHARS] = 0;
+
+    if (!CaptureVideoBind())
+        return;
+
+    codec = g_IcOpen(ICTYPE_VIDEO, handler, ICMODE_QUERY);
+
+    if (!codec)
+        return;
+
+    ZeroMemory(&info, sizeof(info));
+    info.dwSize = sizeof(info);
+
+    if (g_IcSendMessage(codec, ICM_GETINFO, (DWORD_PTR)&info, sizeof(info)) && info.szDescription[0])
+        WideCharToMultiByte(CP_ACP, 0, info.szDescription, -1, name, capacity, NULL, NULL);
+
+    g_IcClose(codec);
+}
+
+PCSTR CaptureVideoFolder(VOID)
+{
+    static CHAR folder[MAX_PATH];
+    PCSTR chosen = g_Settings.Strings[SET_STR_CAPTURE];
+    INT length = lstrlenA(chosen);
+
+    if (!length || length > MAX_PATH - 2)
+        return NTVDMEX_OUT;
+
+    lstrcpynA(folder, chosen, MAX_PATH - 1);
+
+    if (folder[length - 1] != '\\')
+    {
+        folder[length] = '\\';
+        folder[length + 1] = 0;
+    }
+
+    if (GetFileAttributesA(folder) == INVALID_FILE_ATTRIBUTES && !CreateDirectoryA(chosen, NULL))
+        return NTVDMEX_OUT;
+
+    return folder;
 }
 
 /* the tap: */
@@ -552,7 +619,7 @@ static BOOL CaptureVideoOpenSegment(PCAPTURE_VIDEO_SEGMENT segment)
     /* The first free capture_video_NNN.avi. */
     for (number = 0; number < CAPTURE_VIDEO_NAME_MAX; ++number)
     {
-        wsprintfA(segment->Path, "%scapture_video_%03d.avi", NTVDMEX_OUT, number);
+        wsprintfA(segment->Path, "%scapture_video_%03d.avi", CaptureVideoFolder(), number);
 
         if (GetFileAttributesA(segment->Path) == INVALID_FILE_ATTRIBUTES)
             break;

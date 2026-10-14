@@ -38,4 +38,12 @@ BOOL CaptureVideoIsRecording(VOID);
 /* Windows' Video Compression dialog; the choice is remembered. FALSE = cancelled. */
 BOOL CaptureVideoChooseCodec(_In_opt_ HWND owner);
 
+/* The chosen codec's name, for the Settings page ("Uncompressed" when there is none). */
+VOID CaptureVideoCodecName(_Out_writes_(capacity) PSTR name, _In_ INT capacity);
+
+/* Where captures go, with a trailing backslash: Settings > Capture's folder (created if
+ * missing), or debug\out when that is blank or cannot be made. Screenshots use it too.
+ */
+PCSTR CaptureVideoFolder(VOID);
+
 #endif /* NTVDMEX_CAPTURE_VIDEO_H */
