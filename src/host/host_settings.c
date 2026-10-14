@@ -147,6 +147,7 @@ static const BYTE g_SettingsLiveIds[] = {
     SET_HOSTCURSOR, SET_FLOPPYPHYS, SET_CONVKB, SET_MIDI, SET_SEAMLESS,
     SET_FIT,                                     /* #325 */
     SET_RECORDSTART,                             /* #155: read at start-up */
+    SET_VIDEOCODEC, SET_VIDEOQUALITY, SET_VIDEOKEYFRAMES,   /* #155: read when a recording starts */
 };
 
 static PCSTR const g_SettingsTabs[NTVDMEX_PAGE_COUNT] = {
@@ -167,6 +168,14 @@ static PFN_ENABLE_THEME_DIALOG_TEXTURE  g_EnableThemeDialogTexture;
  */
 static HWND  g_SettingsDialog;
 static HHOOK g_SettingsHook;
+
+/* #155 (user, s97): THE CODEC, ON OUR OWN PAGE. The list is what is installed on this PC
+ * and takes our frames, so it is filled when the page is made, not from the settings table;
+ * item 0 is uncompressed, item N is g_SettingsCodecs[N - 1]. The VideoCodec setting is the
+ * chosen FOURCC, written and read here around the table's own round trip.
+ */
+static CAPTURE_VIDEO_CODEC g_SettingsCodecs[CAPTURE_VIDEO_CODECS_MAX];
+static INT g_SettingsCodecCount;
 
 VOID SettingsNoteOverride(INT settingId, PCSTR source, DWORD value)
 {
@@ -697,17 +706,68 @@ static VOID SettingsBrowseFolder(HWND page, INT editId, PCSTR title)
     }
 }
 
-/* #155: the Capture page's codec line, from what Windows' dialog last saved. */
-static VOID SettingsCodecName(HWND page)
+static VOID SettingsCodecFill(HWND page)
 {
-    CHAR name[SETTINGS_CODEC_NAME_MAX];
-    HWND label = GetDlgItem(page, IDC_S_CODEC_NAME);
+    HWND combo = GetDlgItem(page, IDC_S_CODEC);
+    INT index;
 
-    if (!label)
+    if (!combo)
         return;
 
-    CaptureVideoCodecName(name, sizeof(name));
-    SetWindowTextA(label, name);
+    g_SettingsCodecCount = CaptureVideoCodecs(g_SettingsCodecs, CAPTURE_VIDEO_CODECS_MAX);
+    SendMessageA(combo, CB_RESETCONTENT, 0, 0);
+    SendMessageA(combo, CB_ADDSTRING, 0, (LPARAM)SETTINGS_TEXT_UNCOMPRESSED);
+
+    for (index = 0; index < g_SettingsCodecCount; ++index)
+        SendMessageA(combo, CB_ADDSTRING, 0, (LPARAM)g_SettingsCodecs[index].Name);
+}
+
+/* The chosen codec, or NULL for uncompressed. */
+static PCAPTURE_VIDEO_CODEC SettingsCodecChosen(VOID)
+{
+    HWND combo = SettingsControl(IDC_S_CODEC);
+    LRESULT selection = combo ? SendMessageA(combo, CB_GETCURSEL, 0, 0) : CB_ERR;
+
+    if (selection < 1 || selection > g_SettingsCodecCount)
+        return NULL;
+
+    return &g_SettingsCodecs[selection - 1];
+}
+
+/* Quality, key frames and Configure only where the chosen codec has them. */
+static VOID SettingsCodecEnable(VOID)
+{
+    PCAPTURE_VIDEO_CODEC codec = SettingsCodecChosen();
+    HWND quality = SettingsControl(IDC_S_VIDEOQUALITY);
+    HWND keyFrames = SettingsControl(IDC_S_KEYFRAMES);
+    HWND configure = SettingsControl(IDC_S_CODEC_CONFIGURE);
+
+    if (quality)
+        EnableWindow(quality, codec && codec->HasQuality);
+
+    if (keyFrames)
+        EnableWindow(keyFrames, codec && codec->HasKeyFrames);
+
+    if (configure)
+        EnableWindow(configure, codec && codec->CanConfigure);
+}
+
+/* Select `handler` in the list; one that is no longer installed shows as uncompressed. */
+static VOID SettingsCodecSelect(DWORD handler)
+{
+    HWND combo = SettingsControl(IDC_S_CODEC);
+    INT selection = 0;
+    INT index;
+
+    if (!combo)
+        return;
+
+    for (index = 0; index < g_SettingsCodecCount; ++index)
+        if (g_SettingsCodecs[index].Handler == handler)
+            selection = index + 1;
+
+    SendMessageA(combo, CB_SETCURSEL, (WPARAM)selection, 0);
+    SettingsCodecEnable();
 }
 
 static VOID SettingsShellBrowse(HWND page)
@@ -996,6 +1056,7 @@ static VOID SettingsToDialog(const NTVDMEX_SETTINGS *settings)
 
     SettingsShellRadios(settings->Strings[SET_STR_SHELL][0] != 0);
     SettingsTextFontSelect(settings->Strings[SET_STR_TEXTFONT]);                 /* #321 */
+    SettingsCodecSelect(settings->Values[SET_VIDEOCODEC]);                         /* #155 */
     SettingsFloppyRadios(settings->Values[SET_FLOPPYPHYS] != 0);                /* s84 */
     SettingsCdRadios(settings->Values[SET_CDPHYS] != 0);
     /* SAY WHICH VERSION PROGRAMS ACTUALLY SEE. (s80, user: "if I'm in Windows XP's
@@ -1111,6 +1172,13 @@ static VOID SettingsFromDialog(NTVDMEX_SETTINGS *settings)
         if (xpShell && SendMessageA(xpShell, BM_GETCHECK, 0, 0) == BST_CHECKED)
             settings->Strings[SET_STR_SHELL][0] = 0;
     }
+
+    /* #155: the codec list is not a table control; its choice is. */
+    if (SettingsControl(IDC_S_CODEC))
+    {
+        PCAPTURE_VIDEO_CODEC codec = SettingsCodecChosen();
+        settings->Values[SET_VIDEOCODEC] = codec ? codec->Handler : 0;
+    }
 }
 
 /* The Processor page says WHICH processor -- the user's own -- so fill the static
@@ -1193,7 +1261,7 @@ INT_PTR CALLBACK SettingsPageProcedure(HWND dialog, UINT message, WPARAM wParam,
             g_EnableThemeDialogTexture(dialog, THEME_ETDT_ENABLE | THEME_ETDT_USETABTEXTURE);                               /* ETDT_ENABLE | ETDT_USETABTEXTURE */
 
         SettingsFillCpuInfo(dialog);            /* no-op on pages without the static */
-        SettingsCodecName(dialog);              /* #155: no-op on pages without it */
+        SettingsCodecFill(dialog);              /* #155: no-op on pages without it */
         return TRUE;
     }
 
@@ -1304,9 +1372,18 @@ INT_PTR CALLBACK SettingsPageProcedure(HWND dialog, UINT message, WPARAM wParam,
             SettingsBrowseFolder(dialog, IDC_S_CAPTUREPATH, SETTINGS_TITLE_CAPTURE);
             return TRUE;
 
-        case IDC_S_CODEC_CHOOSE:
-            if (CaptureVideoChooseCodec(GetParent(dialog)))
-                SettingsCodecName(dialog);
+        case IDC_S_CODEC_CONFIGURE:
+        {
+            PCAPTURE_VIDEO_CODEC codec = SettingsCodecChosen();
+
+            if (codec)
+                CaptureVideoConfigure(GetParent(dialog), codec->Handler);
+
+            return TRUE; }
+
+        case IDC_S_CODEC:
+            if (HIWORD(wParam) == CBN_SELCHANGE)
+                SettingsCodecEnable();
 
             return TRUE;
 

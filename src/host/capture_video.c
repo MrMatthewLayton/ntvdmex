@@ -24,36 +24,33 @@
 #include "log.h"
 
 #define CAPTURE_VIDEO_MODULE                "msvfw32.dll"
-#define CAPTURE_VIDEO_RING                  (1u << 20)  /* samples: ~5.9 s of stereo at 44.1 kHz */
+#define CAPTURE_VIDEO_RING                  (1u << 20)              /* samples: ~5.9 s of stereo at 44.1 kHz */
 #define CAPTURE_VIDEO_POLL_MS               5
 #define CAPTURE_VIDEO_STOP_TIMEOUT_MS       10000
-#define CAPTURE_VIDEO_FPS_TALL              60          /* 480 lines and up: a 60 Hz mode */
-#define CAPTURE_VIDEO_FPS_VGA               70          /* 200/350/400-line VGA modes run at 70 Hz */
+#define CAPTURE_VIDEO_FPS_TALL              60                      /* 480 lines and up: a 60 Hz mode */
+#define CAPTURE_VIDEO_FPS_VGA               70                      /* 200/350/400-line VGA modes run at 70 Hz */
 #define CAPTURE_VIDEO_TALL_LINES            400
 #define CAPTURE_VIDEO_RGB_BYTES             3
 #define CAPTURE_VIDEO_RGB_BITS              24
-#define CAPTURE_VIDEO_ROW_ALIGN             3           /* DIB rows are padded to 4 bytes */
+#define CAPTURE_VIDEO_ROW_ALIGN             3                       /* DIB rows are padded to 4 bytes */
 #define CAPTURE_VIDEO_PALETTE_ENTRIES       256
 #define CAPTURE_VIDEO_PALETTED_BPP          8
 #define CAPTURE_VIDEO_XRGB_BPP              32
 #define CAPTURE_VIDEO_XRGB_BYTES            4
 #define CAPTURE_VIDEO_BITMAP_HEADER_BYTES   40
 #define CAPTURE_VIDEO_FORMAT_MAX            (CAPTURE_VIDEO_BITMAP_HEADER_BYTES + CAPTURE_AVI_FORMAT_EXTRA_MAX)
-#define CAPTURE_VIDEO_STATE_MAX             65536       /* A codec's settings blob */
-#define CAPTURE_VIDEO_NAME_MAX              1000        /* capture_video_000 .. 999 */
-#define CAPTURE_VIDEO_DIALOG_TITLE          "Video Compression"
+#define CAPTURE_VIDEO_STATE_MAX             65536                   /* A codec's settings blob */
+#define CAPTURE_VIDEO_NAME_MAX              1000                    /* capture_video_000 .. 999 */
 #define CAPTURE_VIDEO_UNCOMPRESSED          mmioFOURCC('D', 'I', 'B', ' ')
-#define CAPTURE_VIDEO_REG_CODEC             "VideoCodec"
-#define CAPTURE_VIDEO_REG_STATE             "VideoCodecState"
-#define CAPTURE_VIDEO_REG_QUALITY           "VideoCodecQuality"
-#define CAPTURE_VIDEO_REG_KEY_RATE          "VideoCodecKeyRate"
-#define CAPTURE_VIDEO_REG_DATA_RATE         "VideoCodecDataRate"
+#define CAPTURE_VIDEO_REG_STATE             "VideoCodecState"       /* The codec's own settings blob */
+#define CAPTURE_VIDEO_REG_STATE_FOR         "VideoCodecStateFor"    /* ...and whose it is */
+#define CAPTURE_VIDEO_QUALITY_PER_PERCENT   100                     /* VfW quality runs 0..10000 */
+#define CAPTURE_VIDEO_SAMPLE_WIDTH          320                     /* The format a codec is asked about */
+#define CAPTURE_VIDEO_SAMPLE_HEIGHT         200
 #define CAPTURE_VIDEO_LOG_LINE              512
-#define CAPTURE_VIDEO_UNCOMPRESSED_NAME     "Uncompressed (full frames)"
 #define CAPTURE_VIDEO_FOURCC_CHARS          4
 
-typedef BOOL (VFWAPI *PFN_IC_COMPRESSOR_CHOOSE)(HWND owner, UINT flags, LPVOID input, LPVOID data, PCOMPVARS vars, LPSTR title);
-typedef VOID (VFWAPI *PFN_IC_COMPRESSOR_FREE)(PCOMPVARS vars);
+typedef BOOL (VFWAPI *PFN_IC_INFO)(DWORD type, DWORD handler, ICINFO *info);
 typedef BOOL (VFWAPI *PFN_IC_SEQ_START)(PCOMPVARS vars, LPBITMAPINFO input);
 typedef LPVOID (VFWAPI *PFN_IC_SEQ_FRAME)(PCOMPVARS vars, UINT flags, LPVOID bits, BOOL *isKey, LONG *size);
 typedef VOID (VFWAPI *PFN_IC_SEQ_END)(PCOMPVARS vars);
@@ -63,8 +60,7 @@ typedef LRESULT (VFWAPI *PFN_IC_SEND_MESSAGE)(HIC codec, UINT message, DWORD_PTR
 
 /* msvfw32, bound once. */
 static HMODULE g_CaptureVideoVfw;
-static PFN_IC_COMPRESSOR_CHOOSE g_IcCompressorChoose;
-static PFN_IC_COMPRESSOR_FREE g_IcCompressorFree;
+static PFN_IC_INFO g_IcInfo;
 static PFN_IC_SEQ_START g_IcSeqStart;
 static PFN_IC_SEQ_FRAME g_IcSeqFrame;
 static PFN_IC_SEQ_END g_IcSeqEnd;
@@ -125,22 +121,21 @@ static BOOL CaptureVideoBind(VOID)
     if (!g_CaptureVideoVfw)
         return FALSE;
 
-    g_IcCompressorChoose = (PFN_IC_COMPRESSOR_CHOOSE)GetProcAddress(g_CaptureVideoVfw, "ICCompressorChoose");
-    g_IcCompressorFree = (PFN_IC_COMPRESSOR_FREE)GetProcAddress(g_CaptureVideoVfw, "ICCompressorFree");
+    g_IcInfo = (PFN_IC_INFO)GetProcAddress(g_CaptureVideoVfw, "ICInfo");
     g_IcSeqStart = (PFN_IC_SEQ_START)GetProcAddress(g_CaptureVideoVfw, "ICSeqCompressFrameStart");
     g_IcSeqFrame = (PFN_IC_SEQ_FRAME)GetProcAddress(g_CaptureVideoVfw, "ICSeqCompressFrame");
     g_IcSeqEnd = (PFN_IC_SEQ_END)GetProcAddress(g_CaptureVideoVfw, "ICSeqCompressFrameEnd");
     g_IcOpen = (PFN_IC_OPEN)GetProcAddress(g_CaptureVideoVfw, "ICOpen");
     g_IcClose = (PFN_IC_CLOSE)GetProcAddress(g_CaptureVideoVfw, "ICClose");
 
-    if (!g_IcCompressorChoose || !g_IcCompressorFree || !g_IcSeqStart || !g_IcSeqFrame || !g_IcSeqEnd || !g_IcOpen || !g_IcClose)
+    if (!g_IcInfo || !g_IcSeqStart || !g_IcSeqFrame || !g_IcSeqEnd || !g_IcOpen || !g_IcClose)
         return FALSE;
 
     g_IcSendMessage = (PFN_IC_SEND_MESSAGE)GetProcAddress(g_CaptureVideoVfw, "ICSendMessage");
     return g_IcSendMessage != NULL;
 }
 
-/* remembered codec: */
+/* the codec: */
 
 static DWORD CaptureVideoRegistryDword(HKEY key, PCSTR name, DWORD fallback)
 {
@@ -154,44 +149,21 @@ static DWORD CaptureVideoRegistryDword(HKEY key, PCSTR name, DWORD fallback)
     return value;
 }
 
-/* The saved choice into `vars` (hic open, state set). FALSE = none saved: uncompressed. */
-static BOOL CaptureVideoLoadCodec(PCOMPVARS vars, DWORD fps)
+/* A codec's own settings (what its Configure window sets) are a blob only that codec can
+ * read, so the blob is stored with the FOURCC that wrote it and given to no other codec.
+ */
+static VOID CaptureVideoStateLoad(HIC codec, DWORD handler)
 {
     HKEY key;
-    DWORD handler;
-    BYTE *state;
     DWORD stateBytes = 0;
     DWORD type = 0;
-
-    ZeroMemory(vars, sizeof(*vars));
+    BYTE *state;
 
     if (RegOpenKeyExA(HKEY_CURRENT_USER, NTVDMEX_REG_KEY, 0, KEY_READ, &key) != ERROR_SUCCESS)
-        return FALSE;
+        return;
 
-    handler = CaptureVideoRegistryDword(key, CAPTURE_VIDEO_REG_CODEC, 0);
-
-    if (!handler || handler == CAPTURE_VIDEO_UNCOMPRESSED)
-    {
-        RegCloseKey(key);
-        return FALSE;
-    }
-
-    vars->cbSize = sizeof(*vars);
-    vars->dwFlags = ICMF_COMPVARS_VALID;
-    vars->fccType = ICTYPE_VIDEO;
-    vars->fccHandler = handler;
-    vars->lQ = (LONG)CaptureVideoRegistryDword(key, CAPTURE_VIDEO_REG_QUALITY, (DWORD)ICQUALITY_DEFAULT);
-    vars->lKey = (LONG)CaptureVideoRegistryDword(key, CAPTURE_VIDEO_REG_KEY_RATE, fps);
-    vars->lDataRate = (LONG)CaptureVideoRegistryDword(key, CAPTURE_VIDEO_REG_DATA_RATE, 0);
-    vars->hic = g_IcOpen(ICTYPE_VIDEO, handler, ICMODE_COMPRESS);
-
-    if (!vars->hic)
-    {
-        RegCloseKey(key);
-        return FALSE;
-    }
-
-    if (RegQueryValueExA(key, CAPTURE_VIDEO_REG_STATE, NULL, &type, NULL, &stateBytes) == ERROR_SUCCESS
+    if (CaptureVideoRegistryDword(key, CAPTURE_VIDEO_REG_STATE_FOR, 0) == handler
+        && RegQueryValueExA(key, CAPTURE_VIDEO_REG_STATE, NULL, &type, NULL, &stateBytes) == ERROR_SUCCESS
         && type == REG_BINARY
         && stateBytes
         && stateBytes <= CAPTURE_VIDEO_STATE_MAX)
@@ -199,134 +171,166 @@ static BOOL CaptureVideoLoadCodec(PCOMPVARS vars, DWORD fps)
         state = (BYTE *)HeapAlloc(GetProcessHeap(), 0, stateBytes);
 
         if (state && RegQueryValueExA(key, CAPTURE_VIDEO_REG_STATE, NULL, &type, state, &stateBytes) == ERROR_SUCCESS)
-            g_IcSendMessage(vars->hic, ICM_SETSTATE, (DWORD_PTR)state, stateBytes);
+            g_IcSendMessage(codec, ICM_SETSTATE, (DWORD_PTR)state, stateBytes);
 
         if (state)
             HeapFree(GetProcessHeap(), 0, state);
     }
 
     RegCloseKey(key);
+}
+
+static VOID CaptureVideoStateSave(HIC codec, DWORD handler)
+{
+    HKEY key;
+    DWORD stateBytes = (DWORD)g_IcSendMessage(codec, ICM_GETSTATE, 0, 0);
+    BYTE *state;
+
+    if (!stateBytes || stateBytes > CAPTURE_VIDEO_STATE_MAX)
+        return;
+
+    state = (BYTE *)HeapAlloc(GetProcessHeap(), 0, stateBytes);
+
+    if (state
+        && g_IcSendMessage(codec, ICM_GETSTATE, (DWORD_PTR)state, stateBytes) >= 0
+        && RegCreateKeyExA(HKEY_CURRENT_USER, NTVDMEX_REG_KEY, 0, NULL, 0, KEY_WRITE, NULL, &key, NULL) == ERROR_SUCCESS)
+    {
+        RegSetValueExA(key, CAPTURE_VIDEO_REG_STATE, 0, REG_BINARY, state, stateBytes);
+        RegSetValueExA(key, CAPTURE_VIDEO_REG_STATE_FOR, 0, REG_DWORD, (const BYTE *)&handler, sizeof(handler));
+        RegCloseKey(key);
+    }
+
+    if (state)
+        HeapFree(GetProcessHeap(), 0, state);
+}
+
+/* Settings > Capture's codec; 0 = uncompressed. 'DIB ' is what Windows' own dialog called
+ * uncompressed, saved by builds before the Capture tab.
+ */
+static DWORD CaptureVideoHandler(VOID)
+{
+    DWORD handler = g_Settings.Values[SET_VIDEOCODEC];
+
+    return handler == CAPTURE_VIDEO_UNCOMPRESSED ? 0 : handler;
+}
+
+/* The chosen codec into `vars` (open, its settings applied). FALSE = uncompressed. */
+static BOOL CaptureVideoLoadCodec(PCOMPVARS vars, DWORD fps)
+{
+    DWORD handler = CaptureVideoHandler();
+
+    (VOID)fps;
+    ZeroMemory(vars, sizeof(*vars));
+
+    if (!handler)
+        return FALSE;
+
+    vars->cbSize = sizeof(*vars);
+    vars->dwFlags = ICMF_COMPVARS_VALID;
+    vars->fccType = ICTYPE_VIDEO;
+    vars->fccHandler = handler;
+    vars->lQ = (LONG)(g_Settings.Values[SET_VIDEOQUALITY] * CAPTURE_VIDEO_QUALITY_PER_PERCENT);
+    vars->lKey = (LONG)g_Settings.Values[SET_VIDEOKEYFRAMES];
+    vars->hic = g_IcOpen(ICTYPE_VIDEO, handler, ICMODE_COMPRESS);
+
+    if (!vars->hic)
+        return FALSE;
+
+    CaptureVideoStateLoad(vars->hic, handler);
     return TRUE;
 }
 
-BOOL CaptureVideoChooseCodec(HWND owner)
+INT CaptureVideoCodecs(PCAPTURE_VIDEO_CODEC list, INT capacity)
 {
-    COMPVARS vars;
     BITMAPINFOHEADER sample;
-    HKEY key;
-    DWORD handler;
+    ICINFO entry;
+    ICINFO details;
+    DWORD index;
+    INT count = 0;
 
     if (!CaptureVideoBind())
-        return FALSE;
+        return 0;
 
-    /* A sample of what we will feed it, so the dialog lists only codecs that take it. */
+    /* What we will feed it: 24-bit RGB. A codec that will not take that is not listed. */
     ZeroMemory(&sample, sizeof(sample));
     sample.biSize = sizeof(sample);
-    sample.biWidth = 320;
-    sample.biHeight = 200;
+    sample.biWidth = CAPTURE_VIDEO_SAMPLE_WIDTH;
+    sample.biHeight = CAPTURE_VIDEO_SAMPLE_HEIGHT;
     sample.biPlanes = 1;
     sample.biBitCount = CAPTURE_VIDEO_RGB_BITS;
     sample.biCompression = BI_RGB;
-    ZeroMemory(&vars, sizeof(vars));
-    vars.cbSize = sizeof(vars);
-    vars.dwFlags = ICMF_COMPVARS_VALID;
-    vars.fccType = ICTYPE_VIDEO;
-    vars.lQ = ICQUALITY_DEFAULT;
+    sample.biSizeImage = CAPTURE_VIDEO_SAMPLE_WIDTH * CAPTURE_VIDEO_RGB_BYTES * CAPTURE_VIDEO_SAMPLE_HEIGHT;
 
-    if (!CaptureVideoLoadCodec(&vars, CAPTURE_VIDEO_FPS_VGA))
+    for (index = 0; count < capacity; ++index)
     {
-        ZeroMemory(&vars, sizeof(vars));
-        vars.cbSize = sizeof(vars);
-        vars.dwFlags = ICMF_COMPVARS_VALID;
-        vars.fccType = ICTYPE_VIDEO;
-        vars.fccHandler = CAPTURE_VIDEO_UNCOMPRESSED;
-        vars.lQ = ICQUALITY_DEFAULT;
+        HIC codec;
+
+        ZeroMemory(&entry, sizeof(entry));
+        entry.dwSize = sizeof(entry);
+
+        if (!g_IcInfo(ICTYPE_VIDEO, index, &entry))
+            break;
+
+        codec = g_IcOpen(ICTYPE_VIDEO, entry.fccHandler, ICMODE_COMPRESS);
+
+        if (!codec)
+            continue;
+
+        if (g_IcSendMessage(codec, ICM_COMPRESS_QUERY, (DWORD_PTR)&sample, 0) == ICERR_OK)
+        {
+            PCAPTURE_VIDEO_CODEC item = &list[count++];
+            INT character;
+
+            ZeroMemory(item, sizeof(*item));
+            ZeroMemory(&details, sizeof(details));
+            details.dwSize = sizeof(details);
+            item->Handler = entry.fccHandler;
+
+            for (character = 0; character < CAPTURE_VIDEO_FOURCC_CHARS; ++character)
+                item->Name[character] = (CHAR)(entry.fccHandler >> (character * 8));
+
+            if (g_IcSendMessage(codec, ICM_GETINFO, (DWORD_PTR)&details, sizeof(details)))
+            {
+                item->HasQuality = (details.dwFlags & VIDCF_QUALITY) != 0;
+                item->HasKeyFrames = (details.dwFlags & VIDCF_TEMPORAL) != 0;
+
+                if (details.szDescription[0])
+                    WideCharToMultiByte(CP_ACP, 0, details.szDescription, -1, item->Name, sizeof(item->Name), NULL, NULL);
+            }
+
+            item->CanConfigure = g_IcSendMessage(codec, ICM_CONFIGURE, (DWORD_PTR)-1, ICMF_CONFIGURE_QUERY) == ICERR_OK;
+        }
+
+        g_IcClose(codec);
     }
 
-    if (!g_IcCompressorChoose(owner, ICMF_CHOOSE_KEYFRAME | ICMF_CHOOSE_DATARATE, &sample, NULL, &vars, (LPSTR)CAPTURE_VIDEO_DIALOG_TITLE))
-    {
-        if (vars.hic)
-            g_IcClose(vars.hic);    /* the saved codec opened above */
+    return count;
+}
 
+BOOL CaptureVideoConfigure(HWND owner, DWORD handler)
+{
+    HIC codec;
+
+    if (!handler || !CaptureVideoBind())
+        return FALSE;
+
+    codec = g_IcOpen(ICTYPE_VIDEO, handler, ICMODE_COMPRESS);
+
+    if (!codec)
+        return FALSE;
+
+    CaptureVideoStateLoad(codec, handler);
+
+    if (g_IcSendMessage(codec, ICM_CONFIGURE, (DWORD_PTR)-1, ICMF_CONFIGURE_QUERY) != ICERR_OK)
+    {
+        g_IcClose(codec);
         return FALSE;
     }
 
-    handler = vars.hic ? vars.fccHandler : CAPTURE_VIDEO_UNCOMPRESSED;
-
-    if (RegCreateKeyExA(HKEY_CURRENT_USER, NTVDMEX_REG_KEY, 0, NULL, 0, KEY_WRITE, NULL, &key, NULL) == ERROR_SUCCESS)
-    {
-        DWORD quality = (DWORD)vars.lQ;
-        DWORD keyRate = (DWORD)vars.lKey;
-        DWORD dataRate = (DWORD)vars.lDataRate;
-        RegSetValueExA(key, CAPTURE_VIDEO_REG_CODEC, 0, REG_DWORD, (const BYTE *)&handler, sizeof(handler));
-        RegSetValueExA(key, CAPTURE_VIDEO_REG_QUALITY, 0, REG_DWORD, (const BYTE *)&quality, sizeof(quality));
-        RegSetValueExA(key, CAPTURE_VIDEO_REG_KEY_RATE, 0, REG_DWORD, (const BYTE *)&keyRate, sizeof(keyRate));
-        RegSetValueExA(key, CAPTURE_VIDEO_REG_DATA_RATE, 0, REG_DWORD, (const BYTE *)&dataRate, sizeof(dataRate));
-        RegDeleteValueA(key, CAPTURE_VIDEO_REG_STATE);
-
-        if (vars.hic)
-        {
-            DWORD stateBytes = (DWORD)g_IcSendMessage(vars.hic, ICM_GETSTATE, 0, 0);
-
-            if (stateBytes && stateBytes <= CAPTURE_VIDEO_STATE_MAX)
-            {
-                BYTE *state = (BYTE *)HeapAlloc(GetProcessHeap(), 0, stateBytes);
-
-                if (state && g_IcSendMessage(vars.hic, ICM_GETSTATE, (DWORD_PTR)state, stateBytes) >= 0)
-                    RegSetValueExA(key, CAPTURE_VIDEO_REG_STATE, 0, REG_BINARY, state, stateBytes);
-
-                if (state)
-                    HeapFree(GetProcessHeap(), 0, state);
-            }
-        }
-
-        RegCloseKey(key);
-    }
-
-    g_IcCompressorFree(&vars);
-    return TRUE;
-}
-
-VOID CaptureVideoCodecName(PSTR name, INT capacity)
-{
-    HKEY key;
-    DWORD handler = 0;
-    HIC codec;
-    ICINFO info;
-    INT index;
-
-    lstrcpynA(name, CAPTURE_VIDEO_UNCOMPRESSED_NAME, capacity);
-
-    if (RegOpenKeyExA(HKEY_CURRENT_USER, NTVDMEX_REG_KEY, 0, KEY_READ, &key) == ERROR_SUCCESS)
-    {
-        handler = CaptureVideoRegistryDword(key, CAPTURE_VIDEO_REG_CODEC, 0);
-        RegCloseKey(key);
-    }
-
-    if (!handler || handler == CAPTURE_VIDEO_UNCOMPRESSED || capacity <= CAPTURE_VIDEO_FOURCC_CHARS)
-        return;
-
-    /* The FOURCC first, so a codec that will not open still has a name. */
-    for (index = 0; index < CAPTURE_VIDEO_FOURCC_CHARS; ++index)
-        name[index] = (CHAR)(handler >> (index * 8));
-
-    name[CAPTURE_VIDEO_FOURCC_CHARS] = 0;
-
-    if (!CaptureVideoBind())
-        return;
-
-    codec = g_IcOpen(ICTYPE_VIDEO, handler, ICMODE_QUERY);
-
-    if (!codec)
-        return;
-
-    ZeroMemory(&info, sizeof(info));
-    info.dwSize = sizeof(info);
-
-    if (g_IcSendMessage(codec, ICM_GETINFO, (DWORD_PTR)&info, sizeof(info)) && info.szDescription[0])
-        WideCharToMultiByte(CP_ACP, 0, info.szDescription, -1, name, capacity, NULL, NULL);
-
+    g_IcSendMessage(codec, ICM_CONFIGURE, (DWORD_PTR)owner, 0);
+    CaptureVideoStateSave(codec, handler);
     g_IcClose(codec);
+    return TRUE;
 }
 
 PCSTR CaptureVideoFolder(VOID)
@@ -335,8 +339,11 @@ PCSTR CaptureVideoFolder(VOID)
     PCSTR chosen = g_Settings.Strings[SET_STR_CAPTURE];
     INT length = lstrlenA(chosen);
 
+    /* Blank = debug\out\ itself, not this instance's out\N\: a restarted host (Capture
+     * Video with "record from the start") overlaps the old one, so it is instance 1.
+     */
     if (!length || length > MAX_PATH - 2)
-        return NTVDMEX_OUT;
+        return NtvdmexPath(HOST_OUT_SUBDIRECTORY, "");
 
     lstrcpynA(folder, chosen, MAX_PATH - 1);
 
@@ -347,7 +354,7 @@ PCSTR CaptureVideoFolder(VOID)
     }
 
     if (GetFileAttributesA(folder) == INVALID_FILE_ATTRIBUTES && !CreateDirectoryA(chosen, NULL))
-        return NTVDMEX_OUT;
+        return NtvdmexPath(HOST_OUT_SUBDIRECTORY, "");
 
     return folder;
 }

@@ -168,7 +168,7 @@
 #define SETTINGS_FILTER_SOUNDFONT   "SoundFonts (*.sf2)\0*.sf2\0All files (*.*)\0*.*\0"
 #define SETTINGS_TITLE_SOUNDFONT    "Choose a SoundFont"
 #define SETTINGS_TITLE_CAPTURE      "Choose the folder for screenshots and recordings"
-#define SETTINGS_CODEC_NAME_MAX     128
+#define SETTINGS_TEXT_UNCOMPRESSED  "Uncompressed (full frames)"
 #define SETTINGS_FONT_CODE_PAGE_FORMAT "This font draws code page %d, not 437: some line-drawing characters " \
                                     "will show as letters."
 #define SETTINGS_SOURCE_CONV_KB         "a program too big for it"  /* Why conventional memory was capped */

@@ -4682,7 +4682,11 @@ VOID StartupLoadProgram(
     StartupApplyPif(&cursor, &readCount, programPathBuffer, args);
     /* #153: File > Open Recent lists every program this host was started with. */
     if (readCount && !g_WowLaunch && programPathBuffer[0])
+    {
         MruAdd(programPathBuffer);
+        lstrcpynA(g_LaunchPath, programPathBuffer, sizeof g_LaunchPath);   /* #155: to restart it */
+        lstrcpynA(g_LaunchArgs, args, sizeof g_LaunchArgs);
+    }
 
     StartupRouteToCommandCom(&cursor, &readCount, shellConfig, programPathBuffer, args);
     StartupLoadShell(&cursor, &readCount, shellConfig, shellSource, programPathBuffer, &wasShell);

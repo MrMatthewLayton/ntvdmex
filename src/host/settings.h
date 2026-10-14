@@ -95,6 +95,7 @@ typedef enum
     SET_FLOPPYPHYS, SET_CDPHYS, /* s84: the physical drive, or a mounted image */
     SET_FIT,                    /* #325: maximised/fullscreen -- whole pixels or fill */
     SET_RECORDSTART,            /* #155: record video from the moment a program starts */
+    SET_VIDEOCODEC, SET_VIDEOQUALITY, SET_VIDEOKEYFRAMES,   /* #155: Settings > Capture's codec */
     SET_COUNT
 } SET_ID;
 

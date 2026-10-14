@@ -245,6 +245,14 @@ const SET_DEF g_SetDefinitions[SET_COUNT] = {
  * capture can include the very first frame. Read at start-up.
  */
 { "RecordAtStart",     IDC_S_RECORD_START, SK_CHECK,     0,  0,   1, NULL },
+/* #155 (user, s97): the codec, on our own page rather than Windows' dialog. VideoCodec is a
+ * FOURCC (0 = uncompressed); its list is the installed codecs, so the page fills that combo
+ * itself (no ControlId here). Quality is a percentage; key frames, every N frames (0 = only
+ * the first). Read when a recording starts.
+ */
+{ "VideoCodec",        0,                 SK_UINT,       0,  0, 0xFFFFFFFFu, NULL },
+{ "VideoQuality",      IDC_S_VIDEOQUALITY, SK_UINT,     75,  1, 100, NULL },
+{ "VideoKeyFrames",    IDC_S_KEYFRAMES,   SK_UINT,      70,  0, 10000, NULL },
 };
 
 const SET_STR_DEF g_SetStringDefinitions[SET_STR_COUNT] = {

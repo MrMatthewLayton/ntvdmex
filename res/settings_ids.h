@@ -156,7 +156,9 @@
 #define IDC_S_CAPTUREPATH           339     /* Edit: the capture folder (blank = debug\out) */
 #define IDC_S_CAPTURE_BROWSE        340
 #define IDC_S_RECORD_START          341     /* Check: record video from the start */
-#define IDC_S_CODEC_NAME            342     /* Static: the chosen codec */
-#define IDC_S_CODEC_CHOOSE          343     /* Button: Windows' Video Compression dialog */
+#define IDC_S_CODEC                 342     /* Combo: the installed codecs (filled at run time) */
+#define IDC_S_CODEC_CONFIGURE       343     /* Button: the codec's own Configure window */
+#define IDC_S_VIDEOQUALITY          344     /* Edit: quality, % */
+#define IDC_S_KEYFRAMES             345     /* Edit: a key frame every N frames */
 
 #endif
