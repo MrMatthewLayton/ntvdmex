@@ -53,10 +53,26 @@ typedef HRESULT (WINAPI *PFN_CO_INITIALIZE_EX)(LPVOID reserved, DWORD flags);
 
 typedef HRESULT (WINAPI *PFN_CO_CREATE_INSTANCE)(REFCLSID classId, LPUNKNOWN outer, DWORD context, REFIID interfaceId, LPVOID *object);
 
+/* OUR OWN VTABLE FOR THE CLOCK, NOT THE HEADERS' (CI, s97). IReferenceClock's methods take an
+ * HEVENT and an HSEMAPHORE, which newer mingw-w64 headers name and Ubuntu 24.04's do not. A
+ * COM vtable is only a table of pointers in a fixed order, so the clock declares its own with
+ * the same order and the same sizes (both handles are DWORD_PTR), and builds with either.
+ */
+typedef struct _AUDIO_DMSYNTH_CLOCK_VTBL
+{
+    HRESULT (STDMETHODCALLTYPE *QueryInterface)(IReferenceClock *self, REFIID interfaceId, void **object);
+    ULONG (STDMETHODCALLTYPE *AddRef)(IReferenceClock *self);
+    ULONG (STDMETHODCALLTYPE *Release)(IReferenceClock *self);
+    HRESULT (STDMETHODCALLTYPE *GetTime)(IReferenceClock *self, REFERENCE_TIME *time);
+    HRESULT (STDMETHODCALLTYPE *AdviseTime)(IReferenceClock *self, REFERENCE_TIME baseTime, REFERENCE_TIME streamTime, DWORD_PTR event, DWORD_PTR *cookie);
+    HRESULT (STDMETHODCALLTYPE *AdvisePeriodic)(IReferenceClock *self, REFERENCE_TIME startTime, REFERENCE_TIME periodTime, DWORD_PTR semaphore, DWORD_PTR *cookie);
+    HRESULT (STDMETHODCALLTYPE *Unadvise)(IReferenceClock *self, DWORD_PTR cookie);
+} AUDIO_DMSYNTH_CLOCK_VTBL;
+
 /* The sink and its latency clock: one of each per process, so plain statics. */
 typedef struct _AUDIO_DMSYNTH_CLOCK
 {
-    IReferenceClockVtbl *lpVtbl;
+    const AUDIO_DMSYNTH_CLOCK_VTBL *lpVtbl;
 } AUDIO_DMSYNTH_CLOCK;
 
 typedef struct _AUDIO_DMSYNTH_SINK
@@ -77,13 +93,13 @@ static HRESULT STDMETHODCALLTYPE AudioDmSynthClockAdviseTime(
     IReferenceClock *self,
     REFERENCE_TIME baseTime,
     REFERENCE_TIME streamTime,
-    HEVENT event,
+    DWORD_PTR event,
     DWORD_PTR *cookie);
 static HRESULT STDMETHODCALLTYPE AudioDmSynthClockAdvisePeriodic(
     IReferenceClock *self,
     REFERENCE_TIME startTime,
     REFERENCE_TIME periodTime,
-    HSEMAPHORE semaphore,
+    DWORD_PTR semaphore,
     DWORD_PTR *cookie);
 static HRESULT STDMETHODCALLTYPE AudioDmSynthClockUnadvise(IReferenceClock *self, DWORD_PTR cookie);
 static HRESULT STDMETHODCALLTYPE AudioDmSynthSinkQueryInterface(
@@ -144,7 +160,7 @@ static DWORD g_AudioDmSynthQueueLength;
 static AUDIO_DMSYNTH_CLOCK g_AudioDmSynthClock;
 static AUDIO_DMSYNTH_SINK g_AudioDmSynthSink;
 
-static IReferenceClockVtbl g_AudioDmSynthClockVtbl =
+static AUDIO_DMSYNTH_CLOCK_VTBL g_AudioDmSynthClockVtbl =
 {
     AudioDmSynthClockQueryInterface, AudioDmSynthClockAddRef, AudioDmSynthClockRelease, AudioDmSynthClockGetTime,
     AudioDmSynthClockAdviseTime, AudioDmSynthClockAdvisePeriodic, AudioDmSynthClockUnadvise
@@ -223,7 +239,7 @@ static HRESULT STDMETHODCALLTYPE AudioDmSynthClockAdviseTime(
     IReferenceClock *self,
     REFERENCE_TIME baseTime,
     REFERENCE_TIME streamTime,
-    HEVENT event,
+    DWORD_PTR event,
     DWORD_PTR *cookie)
 {
     (VOID)self;
@@ -238,7 +254,7 @@ static HRESULT STDMETHODCALLTYPE AudioDmSynthClockAdvisePeriodic(
     IReferenceClock *self,
     REFERENCE_TIME startTime,
     REFERENCE_TIME periodTime,
-    HSEMAPHORE semaphore,
+    DWORD_PTR semaphore,
     DWORD_PTR *cookie)
 {
     (VOID)self;
