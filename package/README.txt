@@ -38,7 +38,9 @@ FILES
   diag.bat         when nothing seems to happen: writes debug\out\diag.txt, send it
   bin\             the program itself
   cfg\             settings files; the four wow*.* files enable Win16 -- keep them
-  debug\out\       the log of the LAST run (ntvdmhost.log) and screenshots
+  debug\out\       the log of the LAST run (ntvdmhost.log)
+  captures\        screenshots and video recordings (Tools > Capture), made on
+                   first use; Settings > Capture can put them elsewhere
 
 IF SOMETHING GOES WRONG
   - Run status.bat. It says whether NTVDMEX is installed and shows the key
