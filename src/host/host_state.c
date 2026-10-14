@@ -181,6 +181,8 @@ BYTE g_BiosUnimplemented[BYTE_VALUES];   /* GH #27: BIOS services a run actually
 
 INT g_ExecDepth;
 CHAR g_ProgramName[64] = HOST_PROGRAM_NONE;      /* first part of the status strip */
+CHAR g_LaunchPath[MAX_PATH];                     /* #155: for Capture Video's restart */
+CHAR g_LaunchArgs[MAX_PATH];
 
 WORD  g_PmReturnSelector = 0;
 /* GH #18: the PM-fault reflect selectors (0 = not installed). Run 67 corrected model:

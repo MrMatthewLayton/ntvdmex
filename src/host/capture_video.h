@@ -27,6 +27,19 @@
 
 #include "../ntvdmex_types.h"
 
+#define CAPTURE_VIDEO_CODECS_MAX        64
+#define CAPTURE_VIDEO_CODEC_NAME_MAX    64
+
+/* One installed codec that takes our 24-bit frames, for Settings > Capture's list. */
+typedef struct _CAPTURE_VIDEO_CODEC
+{
+    DWORD Handler;                      /* its FOURCC: the VideoCodec setting's value */
+    BOOL  HasQuality;                   /* honours a quality setting */
+    BOOL  HasKeyFrames;                 /* makes delta frames, so key-frame spacing applies */
+    BOOL  CanConfigure;                 /* has its own Configure window */
+    CHAR  Name[CAPTURE_VIDEO_CODEC_NAME_MAX];
+} CAPTURE_VIDEO_CODEC, *PCAPTURE_VIDEO_CODEC;
+
 /* Start recording into the capture folder. FALSE = already recording, or no file. */
 BOOL CaptureVideoStart(VOID);
 
@@ -35,14 +48,15 @@ VOID CaptureVideoStop(VOID);
 
 BOOL CaptureVideoIsRecording(VOID);
 
-/* Windows' Video Compression dialog; the choice is remembered. FALSE = cancelled. */
-BOOL CaptureVideoChooseCodec(_In_opt_ HWND owner);
+/* The installed codecs that can compress our frames. Returns how many were written. */
+INT CaptureVideoCodecs(_Out_writes_(capacity) PCAPTURE_VIDEO_CODEC list, _In_ INT capacity);
 
-/* The chosen codec's name, for the Settings page ("Uncompressed" when there is none). */
-VOID CaptureVideoCodecName(_Out_writes_(capacity) PSTR name, _In_ INT capacity);
+/* The codec's own Configure window; what it sets is kept for that codec. FALSE = it has none. */
+BOOL CaptureVideoConfigure(_In_opt_ HWND owner, _In_ DWORD handler);
 
 /* Where captures go, with a trailing backslash: Settings > Capture's folder (created if
- * missing), or debug\out when that is blank or cannot be made. Screenshots use it too.
+ * missing), or debug\out when that is blank or cannot be made -- every instance's, not
+ * its own out\N. Screenshots use it too.
  */
 PCSTR CaptureVideoFolder(VOID);
 

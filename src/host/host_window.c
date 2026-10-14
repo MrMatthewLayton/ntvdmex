@@ -844,6 +844,77 @@ static VOID HostRecordToggle(VOID)
     }
 }
 
+/* #155 (user, s97): CAPTURE VIDEO. Ticked = recording; clicking it then stops the recording
+ * and the program carries on. Unticked, with Settings > Capture > "Start recording when a
+ * program starts" on, it RESTARTS the program -- the same file and arguments in a fresh
+ * host, which records from its first frame -- and closes this one. Without the setting,
+ * or with no program to restart (a prompt, a Win16 program), it records from now.
+ */
+static VOID HostCaptureVideoCommand(HWND window)
+{
+    CHAR command[2 * MAX_PATH + 4];
+    CHAR directory[MAX_PATH];
+    CHAR *cursor;
+    INT index;
+    INT cut = -1;
+    STARTUPINFOA startupInfo;
+    PROCESS_INFORMATION processInfo;
+
+    if (CaptureVideoIsRecording())
+    {
+        CaptureVideoStop();
+        return;
+    }
+
+    if (!g_Settings.Values[SET_RECORDSTART] || !g_LaunchPath[0] || g_WowLaunch)
+    {
+        CaptureVideoStart();
+        return;
+    }
+
+    lstrcpynA(directory, g_LaunchPath, sizeof directory);
+
+    for (index = 0; directory[index]; ++index)
+        if (directory[index] == '\\')
+            cut = index;
+
+    if (cut >= 0)
+        directory[cut == 2 ? 3 : cut] = 0;
+
+    cursor = LogPut(command, "\"");
+    cursor = LogPut(cursor, g_LaunchPath);
+    cursor = LogPut(cursor, "\"");
+
+    if (g_LaunchArgs[0])
+    {
+        cursor = LogPut(cursor, " ");
+        cursor = LogPut(cursor, g_LaunchArgs);
+    }
+
+    for (index = 0; index < (INT)sizeof startupInfo; ++index)
+        ((PSTR)&startupInfo)[index] = 0;
+
+    startupInfo.cb = sizeof startupInfo;
+
+    if (!CreateProcessA(NULL, command, NULL, NULL, FALSE, CREATE_NEW_CONSOLE, NULL,
+                        cut >= 0 ? directory : NULL, &startupInfo, &processInfo))
+    {
+        CaptureVideoStart();        /* it would not start again: record from now instead */
+        return;
+    }
+
+    CloseHandle(processInfo.hThread);
+    CloseHandle(processInfo.hProcess);
+    {
+        CHAR lineBuffer[3 * MAX_PATH];
+        CHAR *lineCursor = LogPut(lineBuffer, "STAGE2: Capture Video -> restarting [");
+        lineCursor = LogPut(lineCursor, command);
+        lineCursor = LogPut(lineCursor, "] to record from its start (#155)\r\n");
+        LogAppend(LOG_PATH, lineBuffer, lineCursor);
+    }
+    DestroyWindow(window);          /* as File > Exit */
+}
+
 /* #155: the folder screenshots and recordings land in, in Explorer. CreateProcess on
  * explorer.exe rather than ShellExecute: no new import for one button.
  */
@@ -4193,11 +4264,7 @@ static LRESULT CALLBACK HostWindowProcedure(HWND window, UINT message, WPARAM wP
             return 0;    /* #155 */
 
         case IDM_CAP_VIDEO:
-            if (CaptureVideoIsRecording())
-                CaptureVideoStop();
-            else
-                CaptureVideoStart();
-
+            HostCaptureVideoCommand(window);
             return 0;    /* #155 */
 
         /* THE SYSTEM ABOUT BOX, WHICH IS WHAT A PROGRAM OF THIS ERA USES (Importance = 1):
