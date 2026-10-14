@@ -16,6 +16,7 @@
 #include "host_state.h"
 #include "audio_dmsynth.h"
 #include "host_audio.h"
+#include "capture_video.h"
 #include "log.h"
 #include "ne.h"
 #include "wow32.h"
@@ -200,6 +201,7 @@ enum                                         /* wired command IDs */
      * NUMBERS (textedit.bat: 14-18), and an insertion renumbers everything after it.
      */
     IDM_CAP_AUDIO, IDM_CAP_FOLDER,
+    IDM_CAP_VIDEO, IDM_CAP_CODEC,            /* #155: Record Video, Video Compression */
 
     /* ONE CONTIGUOUS RANGE PER DROPDOWN SETTING (Importance = 1):
      * Every combo on the Display page, plus the CPU speed, appears in a menu as a
@@ -877,6 +879,8 @@ VOID HostRecordFinish(VOID)
     UINT32 frames;
     UINT32 dropped;
 
+    CaptureVideoStop();     /* #155: and a video recording, on the same exit paths */
+
     if (!AudioWaveIsRecording())
         return;
 
@@ -1073,12 +1077,13 @@ static HMENU BuildMenu(VOID)
 
     menu = MenuPopup();                                                   /* Tools>Capture */
     MenuItem(menu,MENU_TEXT_SCREENSHOT_ACCELERATOR,IDM_CAP_SHOT);
-    MenuSubmenu(menu,MENU_TEXT_RECORD_VIDEO,(submenu=MenuPopup(),MenuItem(submenu,MENU_TEXT_START_STOP,IDM_STUB),submenu));
-    MenuItem(menu,MENU_TEXT_RECORD_AUDIO,IDM_CAP_AUDIO);          /* #155: ticked while recording */
-    MenuSubmenu(menu,MENU_TEXT_RECORD_MUSIC,(submenu=MenuPopup(),MenuItem(submenu,MENU_TEXT_START_STOP,IDM_STUB),submenu));
+    /* #155 (user, s83): screenshots, and video WITH all of our sound -- no separate WAV, OPL
+     * or MIDI recordings. IDM_CAP_AUDIO still works for the test scripts, off the menu.
+     */
+    MenuItem(menu,MENU_TEXT_RECORD_VIDEO,IDM_CAP_VIDEO);          /* ticked while recording */
+    MenuItem(menu,MENU_TEXT_VIDEO_COMPRESSION,IDM_CAP_CODEC);
     MenuSeparator(menu);
     MenuItem(menu,MENU_TEXT_CAPTURE_FOLDER,IDM_CAP_FOLDER);
-    MenuItem(menu,MENU_TEXT_CAPTURE_SETTINGS,IDM_STUB);
     MenuSubmenu(tools, MENU_TEXT_CAPTURE, menu);
 
     MenuSeparator(tools);
@@ -1940,7 +1945,7 @@ static VOID MenuSyncModal(HWND window, HMENU popup)
     for (index = 0; index < sizeof textOnly / sizeof textOnly[0]; ++index)
         EnableMenuItem(menu, textOnly[index], MF_BYCOMMAND | flag);
 
-    CheckMenuItem(menu, IDM_CAP_AUDIO, MF_BYCOMMAND | (AudioWaveIsRecording() ? MF_CHECKED : MF_UNCHECKED));
+    CheckMenuItem(menu, IDM_CAP_VIDEO, MF_BYCOMMAND | (CaptureVideoIsRecording() ? MF_CHECKED : MF_UNCHECKED));
     /* #154: Copy needs a selection; Paste needs text, and not a paste already typing. */
     if (flag == MF_ENABLED)
     {
@@ -4185,6 +4190,18 @@ static LRESULT CALLBACK HostWindowProcedure(HWND window, UINT message, WPARAM wP
 
         case IDM_CAP_FOLDER:
             HostOpenCaptureFolder();
+            return 0;    /* #155 */
+
+        case IDM_CAP_VIDEO:
+            if (CaptureVideoIsRecording())
+                CaptureVideoStop();
+            else
+                CaptureVideoStart();
+
+            return 0;    /* #155 */
+
+        case IDM_CAP_CODEC:
+            CaptureVideoChooseCodec(window);
             return 0;    /* #155 */
 
         /* THE SYSTEM ABOUT BOX, WHICH IS WHAT A PROGRAM OF THIS ERA USES (Importance = 1):
