@@ -3313,10 +3313,11 @@ PSTR StartupStartServices(PSTR cursor)
 
     AudioWaveStart(&g_Wave, SettingsOutputHz(&g_Settings), HostAudioFill, NULL);
 
-    /* #155: Settings > Capture > record from the start. The writer waits for the first
-     * picture, so nothing before it is lost and nothing empty is written.
+    /* #155 (user, s97): A HOST NEVER STARTS RECORDING ON ITS OWN. The one exception is the
+     * restart Capture Video itself asked for: that host left a hand-off naming this program
+     * moments ago (CaptureVideoHandoffTake), and this host records from its first frame.
      */
-    if (g_Settings.Values[SET_RECORDSTART])
+    if (g_LaunchPath[0] && CaptureVideoHandoffTake(g_LaunchPath))
         CaptureVideoStart();
 
     /* #136: SAY WHICH SYNTH THE MPU-401 PLAYS THROUGH, but only when it was chosen.

@@ -241,10 +241,11 @@ const SET_DEF g_SetDefinitions[SET_COUNT] = {
  * the largest on-ratio picture, sharp-filtered.
  */
 { "DisplayFit",        IDC_S_FIT,         SK_COMBO,      0,  0,   1, PRESENT_FIT_ITEMS },
-/* #155 (user): Capture > Record at start -- recording begins as the program starts, so a
- * capture can include the very first frame. Read at start-up.
+/* #155 (user, s97): Capture > "Restart running application when video capture starts" --
+ * Capture Video restarts the program and records from its first frame. Nothing ever
+ * records on its own: a capture always starts with the user's click. Read when clicked.
  */
-{ "RecordAtStart",     IDC_S_RECORD_START, SK_CHECK,     0,  0,   1, NULL },
+{ "RestartOnCapture",  IDC_S_RESTART_CAPTURE, SK_CHECK,  0,  0,   1, NULL },
 /* #155 (user, s97): the codec, on our own page rather than Windows' dialog. VideoCodec is a
  * FOURCC (0 = uncompressed); its list is the installed codecs, so the page fills that combo
  * itself (no ControlId here). Quality is a percentage; key frames, every N frames (0 = only

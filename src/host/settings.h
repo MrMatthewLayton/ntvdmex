@@ -94,7 +94,7 @@ typedef enum
     SET_HOSTCURSOR,             /* s84: Always / Never / Smart (#218's idle rule) */
     SET_FLOPPYPHYS, SET_CDPHYS, /* s84: the physical drive, or a mounted image */
     SET_FIT,                    /* #325: maximised/fullscreen -- whole pixels or fill */
-    SET_RECORDSTART,            /* #155: record video from the moment a program starts */
+    SET_RESTARTCAPTURE,         /* #155: Capture Video restarts the running program first */
     SET_VIDEOCODEC, SET_VIDEOQUALITY, SET_VIDEOKEYFRAMES,   /* #155: Settings > Capture's codec */
     SET_COUNT
 } SET_ID;

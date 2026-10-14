@@ -845,10 +845,11 @@ static VOID HostRecordToggle(VOID)
 }
 
 /* #155 (user, s97): CAPTURE VIDEO. Ticked = recording; clicking it then stops the recording
- * and the program carries on. Unticked, with Settings > Capture > "Start recording when a
- * program starts" on, it RESTARTS the program -- the same file and arguments in a fresh
- * host, which records from its first frame -- and closes this one. Without the setting,
- * or with no program to restart (a prompt, a Win16 program), it records from now.
+ * and the program carries on. Unticked, with Settings > Capture > "Restart running
+ * application when video capture starts" on, it RESTARTS the program -- the same file and
+ * arguments in a fresh host, handed a one-off "record from your start" -- and closes this
+ * one. Without the setting, or with no program to restart (a prompt, a Win16 program), it
+ * records from now.
  */
 static VOID HostCaptureVideoCommand(HWND window)
 {
@@ -866,7 +867,7 @@ static VOID HostCaptureVideoCommand(HWND window)
         return;
     }
 
-    if (!g_Settings.Values[SET_RECORDSTART] || !g_LaunchPath[0] || g_WowLaunch)
+    if (!g_Settings.Values[SET_RESTARTCAPTURE] || !g_LaunchPath[0] || g_WowLaunch)
     {
         CaptureVideoStart();
         return;
@@ -895,10 +896,12 @@ static VOID HostCaptureVideoCommand(HWND window)
         ((PSTR)&startupInfo)[index] = 0;
 
     startupInfo.cb = sizeof startupInfo;
+    CaptureVideoHandoffGive(g_LaunchPath);
 
     if (!CreateProcessA(NULL, command, NULL, NULL, FALSE, CREATE_NEW_CONSOLE, NULL,
                         cut >= 0 ? directory : NULL, &startupInfo, &processInfo))
     {
+        CaptureVideoHandoffTake(g_LaunchPath);      /* withdraw it */
         CaptureVideoStart();        /* it would not start again: record from now instead */
         return;
     }
@@ -1141,19 +1144,19 @@ static HMENU BuildMenu(VOID)
             if (!CpuSpeedIsAvailable(speed, HostCpuMhz()))
                 EnableMenuItem(tools, IDM_SPEED_0 + speed, MF_BYCOMMAND | MF_GRAYED); }
 
-    /* The accelerator column names the RELEASE, because that is the one a captured
-     * user needs and cannot look up -- the menu is unreachable while capture is held.
+    /* (user, s97) Capture Mouse is gone from the menu: capture is automatic. IDM_INPUT_CAPTURE
+     * keeps its number and handler for the scripts.
      */
-    MenuItem(tools,MENU_TEXT_CAPTURE_MOUSE,IDM_INPUT_CAPTURE);
     MenuSeparator(tools);
 
     menu = MenuPopup();                                                   /* Tools>Capture */
     MenuItem(menu,MENU_TEXT_SCREENSHOT_ACCELERATOR,IDM_CAP_SHOT);
     /* #155 (user, s83 + s97): screenshots, and video WITH all of our sound -- no separate
-     * WAV, OPL or MIDI recordings; the folder, the codec and "record from the start" are on
-     * Settings > Capture. IDM_CAP_AUDIO still works for the test scripts, off the menu.
+     * WAV, OPL or MIDI recordings; the folder, the codec and "restart when capture starts"
+     * are on Settings > Capture. IDM_CAP_AUDIO still works for the test scripts, off the menu.
      */
     MenuItem(menu,MENU_TEXT_RECORD_VIDEO,IDM_CAP_VIDEO);          /* ticked while recording */
+    MenuSeparator(menu);
     MenuItem(menu,MENU_TEXT_CAPTURE_FOLDER,IDM_CAP_FOLDER);
     MenuSubmenu(tools, MENU_TEXT_CAPTURE, menu);
 
