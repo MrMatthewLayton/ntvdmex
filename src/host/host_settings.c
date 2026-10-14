@@ -146,7 +146,7 @@ static const BYTE g_SettingsLiveIds[] = {
      */
     SET_HOSTCURSOR, SET_FLOPPYPHYS, SET_CONVKB, SET_MIDI, SET_SEAMLESS,
     SET_FIT,                                     /* #325 */
-    SET_RECORDSTART,                             /* #155: read at start-up */
+    SET_RESTARTCAPTURE,                          /* #155: read by Capture Video */
     SET_VIDEOCODEC, SET_VIDEOQUALITY, SET_VIDEOKEYFRAMES,   /* #155: read when a recording starts */
 };
 

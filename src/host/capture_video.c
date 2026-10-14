@@ -24,28 +24,31 @@
 #include "log.h"
 
 #define CAPTURE_VIDEO_MODULE                "msvfw32.dll"
-#define CAPTURE_VIDEO_RING                  (1u << 20)              /* samples: ~5.9 s of stereo at 44.1 kHz */
+#define CAPTURE_VIDEO_RING                  (1u << 20)                  /* samples: ~5.9 s of stereo at 44.1 kHz */
 #define CAPTURE_VIDEO_POLL_MS               5
 #define CAPTURE_VIDEO_STOP_TIMEOUT_MS       10000
-#define CAPTURE_VIDEO_FPS_TALL              60                      /* 480 lines and up: a 60 Hz mode */
-#define CAPTURE_VIDEO_FPS_VGA               70                      /* 200/350/400-line VGA modes run at 70 Hz */
+#define CAPTURE_VIDEO_FPS_TALL              60                          /* 480 lines and up: a 60 Hz mode */
+#define CAPTURE_VIDEO_FPS_VGA               70                          /* 200/350/400-line VGA modes run at 70 Hz */
 #define CAPTURE_VIDEO_TALL_LINES            400
 #define CAPTURE_VIDEO_RGB_BYTES             3
 #define CAPTURE_VIDEO_RGB_BITS              24
-#define CAPTURE_VIDEO_ROW_ALIGN             3                       /* DIB rows are padded to 4 bytes */
+#define CAPTURE_VIDEO_ROW_ALIGN             3                           /* DIB rows are padded to 4 bytes */
 #define CAPTURE_VIDEO_PALETTE_ENTRIES       256
 #define CAPTURE_VIDEO_PALETTED_BPP          8
 #define CAPTURE_VIDEO_XRGB_BPP              32
 #define CAPTURE_VIDEO_XRGB_BYTES            4
 #define CAPTURE_VIDEO_BITMAP_HEADER_BYTES   40
 #define CAPTURE_VIDEO_FORMAT_MAX            (CAPTURE_VIDEO_BITMAP_HEADER_BYTES + CAPTURE_AVI_FORMAT_EXTRA_MAX)
-#define CAPTURE_VIDEO_STATE_MAX             65536                   /* A codec's settings blob */
-#define CAPTURE_VIDEO_NAME_MAX              1000                    /* capture_video_000 .. 999 */
+#define CAPTURE_VIDEO_STATE_MAX             65536                       /* A codec's settings blob */
+#define CAPTURE_VIDEO_NAME_MAX              1000                        /* capture_video_000 .. 999 */
 #define CAPTURE_VIDEO_UNCOMPRESSED          mmioFOURCC('D', 'I', 'B', ' ')
-#define CAPTURE_VIDEO_REG_STATE             "VideoCodecState"       /* The codec's own settings blob */
-#define CAPTURE_VIDEO_REG_STATE_FOR         "VideoCodecStateFor"    /* ...and whose it is */
-#define CAPTURE_VIDEO_QUALITY_PER_PERCENT   100                     /* VfW quality runs 0..10000 */
-#define CAPTURE_VIDEO_SAMPLE_WIDTH          320                     /* The format a codec is asked about */
+#define CAPTURE_VIDEO_REG_STATE             "VideoCodecState"           /* The codec's own settings blob */
+#define CAPTURE_VIDEO_REG_STATE_FOR         "VideoCodecStateFor"        /* ...and whose it is */
+#define CAPTURE_VIDEO_REG_HANDOFF_PROGRAM   "CaptureRestartProgram"     /* The restart hand-off */
+#define CAPTURE_VIDEO_REG_HANDOFF_TICK      "CaptureRestartTick"
+#define CAPTURE_VIDEO_HANDOFF_MS            15000                       /* A restart arrives well inside this */
+#define CAPTURE_VIDEO_QUALITY_PER_PERCENT   100                         /* VfW quality runs 0..10000 */
+#define CAPTURE_VIDEO_SAMPLE_WIDTH          320                         /* The format a codec is asked about */
 #define CAPTURE_VIDEO_SAMPLE_HEIGHT         200
 #define CAPTURE_VIDEO_LOG_LINE              512
 #define CAPTURE_VIDEO_FOURCC_CHARS          4
@@ -331,6 +334,69 @@ BOOL CaptureVideoConfigure(HWND owner, DWORD handler)
     CaptureVideoStateSave(codec, handler);
     g_IcClose(codec);
     return TRUE;
+}
+
+VOID CaptureVideoHandoffGive(PCSTR program)
+{
+    HKEY key;
+    DWORD tick = GetTickCount();
+
+    if (RegCreateKeyExA(HKEY_CURRENT_USER, NTVDMEX_REG_KEY, 0, NULL, 0, KEY_WRITE, NULL, &key, NULL) != ERROR_SUCCESS)
+        return;
+
+    RegSetValueExA(key, CAPTURE_VIDEO_REG_HANDOFF_PROGRAM, 0, REG_SZ, (const BYTE *)program, (DWORD)lstrlenA(program) + 1);
+    RegSetValueExA(key, CAPTURE_VIDEO_REG_HANDOFF_TICK, 0, REG_DWORD, (const BYTE *)&tick, sizeof(tick));
+    RegCloseKey(key);
+}
+
+/* The same file, however the path is spelt: CSRSS may hand the new host the 8.3 form. */
+static BOOL CaptureVideoSameProgram(PCSTR left, PCSTR right)
+{
+    CHAR leftShort[MAX_PATH];
+    CHAR rightShort[MAX_PATH];
+
+    if (!lstrcmpiA(left, right))
+        return TRUE;
+
+    return GetShortPathNameA(left, leftShort, sizeof(leftShort))
+        && GetShortPathNameA(right, rightShort, sizeof(rightShort))
+        && !lstrcmpiA(leftShort, rightShort);
+}
+
+BOOL CaptureVideoHandoffTake(PCSTR program)
+{
+    HKEY key;
+    CHAR handedProgram[MAX_PATH];
+    DWORD bytes = sizeof(handedProgram);
+    DWORD type = 0;
+    DWORD tick;
+    BOOL isExpired;
+    BOOL isForThis;
+
+    if (RegOpenKeyExA(HKEY_CURRENT_USER, NTVDMEX_REG_KEY, 0, KEY_READ | KEY_WRITE, &key) != ERROR_SUCCESS)
+        return FALSE;
+
+    if (RegQueryValueExA(key, CAPTURE_VIDEO_REG_HANDOFF_PROGRAM, NULL, &type, (BYTE *)handedProgram, &bytes) != ERROR_SUCCESS
+        || type != REG_SZ)
+    {
+        RegCloseKey(key);
+        return FALSE;
+    }
+
+    handedProgram[MAX_PATH - 1] = 0;
+    tick = CaptureVideoRegistryDword(key, CAPTURE_VIDEO_REG_HANDOFF_TICK, 0);
+    isExpired = GetTickCount() - tick > CAPTURE_VIDEO_HANDOFF_MS;
+    isForThis = CaptureVideoSameProgram(handedProgram, program);
+
+    /* Taken, or stale: either way it is used up. Another program's live one stays. */
+    if (isForThis || isExpired)
+    {
+        RegDeleteValueA(key, CAPTURE_VIDEO_REG_HANDOFF_PROGRAM);
+        RegDeleteValueA(key, CAPTURE_VIDEO_REG_HANDOFF_TICK);
+    }
+
+    RegCloseKey(key);
+    return isForThis && !isExpired;
 }
 
 PCSTR CaptureVideoFolder(VOID)

@@ -403,7 +403,8 @@ BEGIN
 END
 
 /* -- PAGE: CAPTURE ---------------------------------------------------------------
-   #155 (user, s97): where captures go, the video codec, and recording from the start.
+   #155 (user, s97): where captures go, the video codec, and whether Capture Video restarts
+   the running program first.
    The codec list is the installed codecs, filled at run time (CaptureVideoCodecs);
    Configure opens the chosen codec's own window, the one thing that cannot live here. */
 IDD_PAGE_CAPTURE DIALOGEX 0, 0, 404, 228
@@ -430,6 +431,6 @@ BEGIN
     LTEXT           "&Key Frame Every:", -1, 120, 105, 60, 8
     EDITTEXT        IDC_S_KEYFRAMES, 182, 103, 28, 13, ES_AUTOHSCROLL | ES_NUMBER | WS_TABSTOP
     LTEXT           "frames", -1, 214, 105, 30, 8
-    CONTROL         "&Start recording when a program starts", IDC_S_RECORD_START, "Button",
-                    BS_AUTOCHECKBOX | WS_TABSTOP, 14, 127, 220, 10
+    CONTROL         "&Restart running application when video capture starts", IDC_S_RESTART_CAPTURE, "Button",
+                    BS_AUTOCHECKBOX | WS_TABSTOP, 14, 127, 300, 10
 END

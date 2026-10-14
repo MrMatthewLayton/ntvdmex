@@ -54,6 +54,15 @@ INT CaptureVideoCodecs(_Out_writes_(capacity) PCAPTURE_VIDEO_CODEC list, _In_ IN
 /* The codec's own Configure window; what it sets is kept for that codec. FALSE = it has none. */
 BOOL CaptureVideoConfigure(_In_opt_ HWND owner, _In_ DWORD handler);
 
+/* THE RESTART HAND-OFF (Importance = 1). Capture Video with "restart" on gives a hand-off
+ * naming the program, starts it again, and closes; the new host takes it at start-up and
+ * records. It is only good for that program and for CAPTURE_VIDEO_HANDOFF_MS, and taking it
+ * removes it, so no other host -- and no later start of the same program -- ever records
+ * without a click. Take returns TRUE when it was there, for this program, in time.
+ */
+VOID CaptureVideoHandoffGive(_In_ PCSTR program);
+BOOL CaptureVideoHandoffTake(_In_ PCSTR program);
+
 /* Where captures go, with a trailing backslash: Settings > Capture's folder (created if
  * missing), or debug\out when that is blank or cannot be made -- every instance's, not
  * its own out\N. Screenshots use it too.
