@@ -110,6 +110,7 @@ extern JOYSTICK_STATE g_Joystick;
 extern NTVDD_DEVICE g_JoystickDevice;
 extern AUDIO_STATE g_Audio;
 extern AUDIO_WAVE g_Wave;
+extern BOOL g_MidiBuiltIn;
 extern PRESENT_DDRAW g_PresentDdraw;
 extern DOS_XMS_STATE g_Xms;
 extern volatile LONG g_Irq0Pending;
@@ -172,6 +173,8 @@ extern INT g_DpmiVi;
 extern BYTE g_BiosUnimplemented[BYTE_VALUES];
 extern INT g_ExecDepth;
 extern CHAR g_ProgramName[PROGRAM_NAME_SIZE];
+extern CHAR g_LaunchPath[MAX_PATH];        /* #155: the program this host was started with */
+extern CHAR g_LaunchArgs[MAX_PATH];
 extern WORD g_PmReturnSelector;
 extern WORD g_DpmiFaultSelector;
 extern WORD g_DpmiFaultCodeSelector;

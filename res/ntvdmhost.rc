@@ -401,3 +401,36 @@ BEGIN
     EDITTEXT        IDC_S_CDROM, 116, 104, 218, 13, ES_AUTOHSCROLL | WS_TABSTOP | WS_GROUP
     PUSHBUTTON      "B&rowse...", IDC_S_CD_BROWSE, 340, 104, 50, 14, WS_TABSTOP
 END
+
+/* -- PAGE: CAPTURE ---------------------------------------------------------------
+   #155 (user, s97): where captures go, the video codec, and whether Capture Video restarts
+   the running program first.
+   The codec list is the installed codecs, filled at run time (CaptureVideoCodecs);
+   Configure opens the chosen codec's own window, the one thing that cannot live here. */
+IDD_PAGE_CAPTURE DIALOGEX 0, 0, 404, 228
+STYLE DS_SETFONT | DS_CONTROL | WS_CHILD
+FONT 8, "MS Shell Dlg", 400, 0, 0x1
+BEGIN
+    GROUPBOX        "Capture Folder", -1, 6, 4, 392, 47
+    LTEXT           "Where screenshots and video recordings are saved. Leave it blank to use "
+                    "the captures folder beside NTVDMEX.",
+                    -1, 14, 16, 376, 16
+    EDITTEXT        IDC_S_CAPTUREPATH, 14, 32, 320, 13, ES_AUTOHSCROLL | WS_TABSTOP | WS_GROUP
+    PUSHBUTTON      "&Browse...", IDC_S_CAPTURE_BROWSE, 340, 32, 50, 14, WS_TABSTOP
+
+    GROUPBOX        "Video", -1, 6, 55, 392, 92
+    LTEXT           "Video is recorded at the program's own resolution, with all of its sound "
+                    "(music included), through the codec chosen here.",
+                    -1, 14, 67, 376, 16
+    LTEXT           "&Codec:", -1, 14, 87, 26, 8
+    COMBOBOX        IDC_S_CODEC, 42, 85, 292, 120,
+                    CBS_DROPDOWNLIST | CBS_HASSTRINGS | WS_VSCROLL | WS_TABSTOP | WS_GROUP
+    PUSHBUTTON      "Con&figure...", IDC_S_CODEC_CONFIGURE, 340, 85, 50, 14, WS_TABSTOP
+    LTEXT           "&Quality (%):", -1, 14, 105, 44, 8
+    EDITTEXT        IDC_S_VIDEOQUALITY, 60, 103, 28, 13, ES_AUTOHSCROLL | ES_NUMBER | WS_TABSTOP
+    LTEXT           "&Key Frame Every:", -1, 120, 105, 60, 8
+    EDITTEXT        IDC_S_KEYFRAMES, 182, 103, 28, 13, ES_AUTOHSCROLL | ES_NUMBER | WS_TABSTOP
+    LTEXT           "frames", -1, 214, 105, 30, 8
+    CONTROL         "&Restart running application when video capture starts", IDC_S_RESTART_CAPTURE, "Button",
+                    BS_AUTOCHECKBOX | WS_TABSTOP, 14, 127, 300, 10
+END

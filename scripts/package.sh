@@ -79,7 +79,7 @@ printf 'WOW opt-in: with this file present NTVDMEX runs 16-bit Windows programs;
 printf 'Win16 task scheduler ON (existence-gated). Needed for any Win16 program.\r\n' > "$stage/cfg/wowsched.txt"
 printf 'Host calls 16-bit code ON (existence-gated). Needed for any Win16 program.\r\n'  > "$stage/cfg/wowcall.txt"
 printf '0' > "$stage/cfg/wowidle.txt"
-printf 'the last run''s log (ntvdmhost.log) and screenshots land here\r\n' > "$stage/debug/out/README.txt"
+printf 'the last run''s log (ntvdmhost.log) lands here; screenshots and recordings go to captures\\\r\n' > "$stage/debug/out/README.txt"
 {
     echo "NTVDMEX ${NTVDMEX_VERSION:-(development build)}"
     echo "build:    $build_id"

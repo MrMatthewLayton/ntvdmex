@@ -80,6 +80,7 @@ INT main(VOID)
     RMCS_REGS registers;
       RmcsTestFillPattern(record, sizeof record);
       memcpy(before, record, sizeof record);
+      memset(&registers, 0, sizeof registers);
       registers.Edi = 0xD1D2D3D4u;
       registers.Esi = 0x51525354u;
       registers.Ebp = 0xB1B2B3B4u;
@@ -106,6 +107,7 @@ INT main(VOID)
             "IP, CS, SP, SS NOT modified -- the spec's rule; the old 0300 retarget wrote CS:IP");
       CHECK(memcmp(record + 0x0C, before + 0x0C, 4) == 0, "the reserved dword at +0C is not touched");
       { RMCS_REGS readBack;
+      memset(&readBack, 0, sizeof readBack);
       RmcsRead(record, &readBack);
         CHECK(memcmp(&registers, &readBack, sizeof registers) == 0, "write then read is the identity"); } }
 

@@ -531,6 +531,42 @@ INT main(VOID)
         VddAudioMix(&g_Mixer, g_Samples, 8192);
     }
 
+    /* #155: A SOURCE THE CALLER RENDERED (the hosted MIDI synth) is added at unity, across
+     * the mixer's 512-frame chunks, on its own channels, and goes through the master
+     * attenuator like every other source.
+     */
+    {   static INT16 premixed[2 * 1500];
+        static INT16 stereo[2 * 1500];
+        POPL_STATE savedOpl = g_Mixer.Opl;
+        PSB_STATE savedSb = g_Mixer.Sb;
+        g_Mixer.Opl = NULL;
+        g_Mixer.Sb = NULL;
+
+        for (index = 0; index < 1500; ++index)
+        {
+            premixed[2 * index] = (INT16)(1000 + index % 7);
+            premixed[2 * index + 1] = -2000;
+        }
+
+        g_Mixer.Premixed = premixed;
+        VddAudioMixStereo(&g_Mixer, stereo, 1500);
+        CHECK(stereo[0] == 1000 && stereo[1] == -2000, "premixed: first frame, unity, own channels");
+        CHECK(stereo[2 * 600] == 1000 + 600 % 7 && stereo[2 * 1499 + 1] == -2000,
+              "premixed: frames past the first chunk come from the right place");
+        VddAudioSetMaster(&g_Mixer, 50, 0);
+        VddAudioMixStereo(&g_Mixer, stereo, 1500);
+        CHECK(stereo[1] == -1000, "premixed: under the master volume");
+        VddAudioSetMaster(&g_Mixer, 50, 1);
+        VddAudioMixStereo(&g_Mixer, stereo, 1500);
+        CHECK(stereo[0] == 0 && stereo[1] == 0, "premixed: muted with everything else");
+        VddAudioSetMaster(&g_Mixer, 100, 0);
+        g_Mixer.Premixed = NULL;
+        VddAudioMixStereo(&g_Mixer, stereo, 1500);
+        CHECK(stereo[0] == 0, "premixed: none -> nothing added");
+        g_Mixer.Opl = savedOpl;
+        g_Mixer.Sb = savedSb;
+    }
+
     /* #232: THE OPL THROUGH THE STEREO MIXER. Its own chip and mixer, so nothing
      * above leaks in. Two claims: an OPL2 still mixes to EXACTLY the samples it did
      * when the mixer took it as a mono source (a golden taken from 42a9029, the

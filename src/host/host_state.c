@@ -57,6 +57,7 @@ COMM_STATE   g_Comm;      NTVDD_DEVICE g_CommDevice;   /* GH #9 */
  */
 JOYSTICK_STATE    g_Joystick;       NTVDD_DEVICE g_JoystickDevice;
 AUDIO_STATE  g_Audio;     AUDIO_WAVE g_Wave;
+BOOL g_MidiBuiltIn;      /* #155: MIDI goes to the hosted synth in our mixer */
 PRESENT_DDRAW g_PresentDdraw;
 DOS_XMS_STATE    g_Xms;       /* M4: XMS extended-memory manager */
 volatile LONG g_Irq0Pending = 0;    /* PIT raised IRQ0 (UI thread sets, V86 thread delivers) */
@@ -180,6 +181,8 @@ BYTE g_BiosUnimplemented[BYTE_VALUES];   /* GH #27: BIOS services a run actually
 
 INT g_ExecDepth;
 CHAR g_ProgramName[64] = HOST_PROGRAM_NONE;      /* first part of the status strip */
+CHAR g_LaunchPath[MAX_PATH];                     /* #155: for Capture Video's restart */
+CHAR g_LaunchArgs[MAX_PATH];
 
 WORD  g_PmReturnSelector = 0;
 /* GH #18: the PM-fault reflect selectors (0 = not installed). Run 67 corrected model:

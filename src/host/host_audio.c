@@ -12,6 +12,7 @@
  */
 
 #include "host_audio.h"
+#include "audio_dmsynth.h"
 #include "host_state.h"
 #include "log.h"
 #include "main.h"
@@ -282,25 +283,73 @@ VOID HostAudioFill(PVOID context, INT16 *out, UINT32 frames)
     }
 
     DmxSample();
-    HOST_LOCK();
-    VddAudioMixStereo(&g_Audio, out, frames);   /* #189: interleaved L/R, as waveOut is opened */
-    HOST_UNLOCK();
+    /* #155: THE HOSTED MIDI SYNTH RENDERS BEFORE THE LOCK IS TAKEN. Up to ~0.2 ms per
+     * tick (the s96 spike's worst), and the exec thread waits on this lock: rendered
+     * here it costs the guest nothing. The mixer then adds it like any other source.
+     */
+    {
+        static INT16 synthPcm[AUDIO_STEREO_CHANNELS * AUDIO_WAVE_FRAMES];
+        BOOL hasSynth = g_MidiBuiltIn
+            && frames <= AUDIO_WAVE_FRAMES
+            && AudioDmSynthRender(synthPcm, frames);
+
+        HOST_LOCK();
+        g_Audio.Premixed = hasSynth ? synthPcm : NULL;
+        VddAudioMixStereo(&g_Audio, out, frames);   /* #189: interleaved L/R, as waveOut is opened */
+        g_Audio.Premixed = NULL;
+        HOST_UNLOCK();
+    }
 }
 
-/* MPU-401 output -> the host's MIDI synth (XP ships a GS Wavetable device). */
+/* MPU-401 output -> the built-in synth (#155), or the host's MIDI device: XP ships a GS
+ * Wavetable device, and an MT-32 or SoundFont driver may be chosen (#136). The built-in
+ * synth says FALSE only when it could not start; then midiOut, as before it existed.
+ */
 VOID HostMidiSink(PVOID context, UINT32 message)
 {
     (VOID)context;
+
+    if (g_MidiBuiltIn && AudioDmSynthShort(message))
+        return;
+
     AudioWaveMidi(&g_Wave, message);
 }
 
+/* #155: the guest put the MPU-401 into UART mode -- start the built-in synth now, so its
+ * instruments are loaded before the first note.
+ */
+VOID HostMidiUartMode(PVOID context)
+{
+    (VOID)context;
+
+    if (g_MidiBuiltIn)
+        AudioDmSynthWake();
+}
+
+/* Every note off, wherever the music is playing (child exit, pause). */
+VOID HostMidiSilence(VOID)
+{
+    AudioWaveMidiSilence(&g_Wave);
+
+    if (g_MidiBuiltIn)
+        AudioDmSynthSilence();
+}
+
 /* #136: whole SysEx messages, wired ONLY when Settings > Audio > MIDI found an external
- * synth by name (g_Wave.IsMidiExternal) -- see midi_route.h. Otherwise SysEx is swallowed in
- * vdd_mpu exactly as it always was.
+ * synth by name (g_Wave.IsMidiExternal) -- see midi_route.h -- or chose the built-in synth
+ * (#155: GM/GS resets matter to it). Otherwise SysEx is swallowed in vdd_mpu exactly as it
+ * always was.
  */
 VOID HostMidiSysEx(PVOID context, const BYTE *message, UINT32 length)
 {
     (VOID)context;
+
+    if (g_MidiBuiltIn)
+    {
+        AudioDmSynthLong(message, length);      /* a failed synth's SysEx is not for device 0 */
+        return;
+    }
+
     AudioWaveMidiLong(&g_Wave, message, length);
 }
 

@@ -6,6 +6,10 @@
 # request, after the maintainer has run main's build on a real Windows XP machine
 # (docs/releasing.md). So nothing here waits for a person.
 #
+# It builds NOTHING. It publishes the zip CI built from the main commit that was promoted --
+# the zip the maintainer tested -- byte for byte (#350). The promoted commit is the merge's
+# second parent, and the merge's tree must be identical to it: release adds nothing of its own.
+#
 # This workflow creates the tag and the GitHub release together. (A tag pushed with the
 # workflow's own token would not start another workflow, so they cannot be two steps.)
 # If v<VERSION> already exists, the merge was not a release and nothing happens; to release,
@@ -21,6 +25,7 @@ on:
 
 permissions:
   contents: write
+  actions: read                     # to find CI's run and download its release-zip
 
 concurrency:
   group: release
@@ -39,6 +44,8 @@ jobs:
         with:
           ref: ${{ github.event.workflow_run.head_sha }}
           fetch-depth: 0
+
+      - run: git fetch -q origin main
 
       - name: Which version, and is it new?
         id: version
@@ -64,23 +71,30 @@ jobs:
               || { echo "::error::docs/releases/$tag.md is missing -- the notes are written by hand"; exit 1; }
           echo "release=yes" >> "$GITHUB_OUTPUT"
 
-      - name: Install the toolchain
-        if: steps.version.outputs.release == 'yes'
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends \
-              gcc-mingw-w64-i686 binutils-mingw-w64-i686 cmake nasm zip
-
-      - name: Build and package
+      - name: The zip CI built from the promoted main commit
         if: steps.version.outputs.release == 'yes'
         env:
-          NTVDMEX_VERSION: ${{ steps.version.outputs.tag }}
+          TAG: ${{ steps.version.outputs.tag }}
         run: |
-          ./scripts/build.sh
-          ./scripts/check-imports.sh
-          ./scripts/package.sh
+          # release only ever moves by merging main: the tip is a merge whose second parent is
+          # the main commit that was tested, and whose tree is that commit's tree exactly
+          promoted="$(git rev-parse -q --verify "$SHA^2")" \
+              || { echo "::error::$SHA is not a merge from main"; exit 1; }
+          [ "$(git rev-parse "$SHA^{tree}")" = "$(git rev-parse "$promoted^{tree}")" ] \
+              || { echo "::error::release differs from the main commit it promoted ($promoted)"; exit 1; }
+          git merge-base --is-ancestor "$promoted" origin/main \
+              || { echo "::error::$promoted is not on main"; exit 1; }
+          run="$(gh run list --workflow CI --commit "$promoted" --event push --status success \
+                     --json databaseId -q '.[0].databaseId')"
+          [ -n "$run" ] || { echo "::error::no successful CI run on main for $promoted"; exit 1; }
+          echo "Publishing the zip from CI run $run (main $promoted)"
+          mkdir -p dist
+          gh run download "$run" --name release-zip --dir dist
+          test -f "dist/ntvdmex-$TAG.zip" \
+              || { echo "::error::run $run has no ntvdmex-$TAG.zip -- was VERSION bumped after it?"; exit 1; }
+          unzip -p "dist/ntvdmex-$TAG.zip" "ntvdmex-$TAG/VERSION.txt" | tr -d '\r'
           cd dist
-          sha256sum "ntvdmex-$NTVDMEX_VERSION.zip" > SHA256SUMS
+          sha256sum "ntvdmex-$TAG.zip" > SHA256SUMS
           cat SHA256SUMS
 
       - name: Tag and publish

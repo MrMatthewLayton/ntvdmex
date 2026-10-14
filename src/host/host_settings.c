@@ -13,6 +13,7 @@
 
 #include "host_settings.h"
 #include <commctrl.h>
+#include <shlobj.h>
 #include "host_state.h"
 #include "log.h"
 #include "main.h"
@@ -21,6 +22,7 @@
 #include "host_dos.h"
 #include "host_input.h"
 #include "host_timing.h"
+#include "capture_video.h"
 #define UITICK_CHOICES          5   /* The Settings combo's entries */
 
 /* fsinteger.flag -- SNAP FULLSCREEN TO WHOLE PIXEL MULTIPLES. OFF BY DEFAULT (Importance = 1):
@@ -68,7 +70,7 @@ enum
 
 enum
 {
-    SETTINGS_COMBO_DROPPED_WIDTH = 130, SETTINGS_FONT_DROPPED_WIDTH = 240, SETTINGS_SLIDER_PAGE = 10, SETTINGS_ITEM_HEIGHT = 14, SETTINGS_ITEM_INSET = 3, LOGFONT_PITCH_MASK = 3
+    SETTINGS_COMBO_DROPPED_WIDTH = 130, SETTINGS_FONT_DROPPED_WIDTH = 240, SETTINGS_SLIDER_STEP = 10, SETTINGS_SLIDER_PAGE = 1,SETTINGS_ITEM_HEIGHT = 14, SETTINGS_ITEM_INSET = 3, LOGFONT_PITCH_MASK = 3
 };   /* the Settings dialog */
 
 enum
@@ -144,10 +146,12 @@ static const BYTE g_SettingsLiveIds[] = {
      */
     SET_HOSTCURSOR, SET_FLOPPYPHYS, SET_CONVKB, SET_MIDI, SET_SEAMLESS,
     SET_FIT,                                     /* #325 */
+    SET_RESTARTCAPTURE,                          /* #155: read by Capture Video */
+    SET_VIDEOCODEC, SET_VIDEOQUALITY, SET_VIDEOKEYFRAMES,   /* #155: read when a recording starts */
 };
 
 static PCSTR const g_SettingsTabs[NTVDMEX_PAGE_COUNT] = {
-    "MS-DOS", "Machine", "Video", "Audio", "Input", "Drives"
+    "MS-DOS", "Machine", "Video", "Audio", "Input", "Drives", "Capture"
 };
 static HWND g_SettingsPage[NTVDMEX_PAGE_COUNT];
 static SYSFONT_TABLES g_TextFontPreview;
@@ -164,6 +168,14 @@ static PFN_ENABLE_THEME_DIALOG_TEXTURE  g_EnableThemeDialogTexture;
  */
 static HWND  g_SettingsDialog;
 static HHOOK g_SettingsHook;
+
+/* #155 (user, s97): THE CODEC, ON OUR OWN PAGE. The list is what is installed on this PC
+ * and takes our frames, so it is filled when the page is made, not from the settings table;
+ * item 0 is uncompressed, item N is g_SettingsCodecs[N - 1]. The VideoCodec setting is the
+ * chosen FOURCC, written and read here around the table's own round trip.
+ */
+static CAPTURE_VIDEO_CODEC g_SettingsCodecs[CAPTURE_VIDEO_CODECS_MAX];
+static INT g_SettingsCodecCount;
 
 VOID SettingsNoteOverride(INT settingId, PCSTR source, DWORD value)
 {
@@ -269,7 +281,7 @@ VOID SettingsLogSources(VOID)
             cursor = LogPut(cursor, " OVERRIDDEN by "); cursor = LogPut(cursor, g_ShellOverride);
         }
 
-        if (index == SET_STR_FLOPPYA || index == SET_STR_SHELL || index == SET_STR_TEXTFONT)
+        if (index == SET_STR_FLOPPYA || index == SET_STR_SHELL || index == SET_STR_TEXTFONT || index == SET_STR_CAPTURE)
             cursor = LogPut(cursor, "\r\n");
         else { cursor = LogPut(cursor, " (stored only -- "); cursor = LogPut(cursor, SettingsDeadWhyText(index));
                cursor = LogPut(cursor, ", GH #136)\r\n"); }
@@ -549,6 +561,21 @@ static HWND SettingsControl(INT controlId)
     return NULL;
 }
 
+/* #330 (user, 2026-10-10): A SLIDER MOVES IN WHOLE STEPS OF 10%. The trackbar holds the
+ * step number, not the percentage: holding the percentage, a drag landed on 97% or 103%
+ * and 100% could not be set exactly. A stored value between steps (a hand-edited
+ * registry value) rounds to the nearest step.
+ */
+static DWORD SettingsSliderPosition(DWORD value)
+{
+    return (value + SETTINGS_SLIDER_STEP / 2) / SETTINGS_SLIDER_STEP;
+}
+
+static DWORD SettingsSliderValue(LRESULT position)
+{
+    return (DWORD)position * SETTINGS_SLIDER_STEP;
+}
+
 static VOID SettingsFillCombos(VOID)
 {
     static PCSTR const versions[] = { "6.22", "5.00", "4.01", "3.31", "7.10" };
@@ -644,6 +671,105 @@ static VOID SettingsBrowse(HWND page, INT editId, PCSTR filter, PCSTR title)
 
     if (GetOpenFileNameA(&openFile) && edit)
         SetWindowTextA(edit, file);
+}
+
+/* #155: a FOLDER, for the capture path: the shell's folder picker, starting nowhere in
+ * particular (it has no "start here" without a callback). Blank stays allowed: it means
+ * the debug\out folder.
+ */
+static VOID SettingsBrowseFolder(HWND page, INT editId, PCSTR title)
+{
+    CHAR folder[MAX_PATH];
+    BROWSEINFOA browse;
+    LPITEMIDLIST item;
+
+    IMalloc *shellMalloc = NULL;
+    HWND edit = SettingsControl(editId);
+
+    ZeroMemory(&browse, sizeof(browse));
+    browse.hwndOwner = GetParent(page);
+    browse.pszDisplayName = folder;
+    browse.lpszTitle = title;
+    browse.ulFlags = BIF_RETURNONLYFSDIRS;
+    item = SHBrowseForFolderA(&browse);
+
+    if (!item)
+        return;
+
+    if (SHGetPathFromIDListA(item, folder) && edit)
+        SetWindowTextA(edit, folder);
+
+    if (SUCCEEDED(SHGetMalloc(&shellMalloc)) && shellMalloc)
+    {
+        shellMalloc->lpVtbl->Free(shellMalloc, item);
+        shellMalloc->lpVtbl->Release(shellMalloc);
+    }
+}
+
+static VOID SettingsCodecFill(HWND page)
+{
+    HWND combo = GetDlgItem(page, IDC_S_CODEC);
+    INT index;
+
+    if (!combo)
+        return;
+
+    g_SettingsCodecCount = CaptureVideoCodecs(g_SettingsCodecs, CAPTURE_VIDEO_CODECS_MAX);
+    SendMessageA(combo, CB_RESETCONTENT, 0, 0);
+    SendMessageA(combo, CB_ADDSTRING, 0, (LPARAM)SETTINGS_TEXT_UNCOMPRESSED);
+
+    for (index = 0; index < g_SettingsCodecCount; ++index)
+        SendMessageA(combo, CB_ADDSTRING, 0, (LPARAM)g_SettingsCodecs[index].Name);
+}
+
+/* The chosen codec, or NULL for uncompressed. */
+static PCAPTURE_VIDEO_CODEC SettingsCodecChosen(VOID)
+{
+    HWND combo = SettingsControl(IDC_S_CODEC);
+    LRESULT selection = combo ? SendMessageA(combo, CB_GETCURSEL, 0, 0) : CB_ERR;
+
+    if (selection < 1 || selection > g_SettingsCodecCount)
+        return NULL;
+
+    return &g_SettingsCodecs[selection - 1];
+}
+
+/* Quality, key frames and Configure only where the chosen codec has them. */
+static VOID SettingsCodecEnable(VOID)
+{
+    PCAPTURE_VIDEO_CODEC codec = SettingsCodecChosen();
+    HWND quality = SettingsControl(IDC_S_VIDEOQUALITY);
+    HWND keyFrames = SettingsControl(IDC_S_KEYFRAMES);
+    HWND configure = SettingsControl(IDC_S_CODEC_CONFIGURE);
+
+    if (quality)
+        EnableWindow(quality, codec && codec->HasQuality);
+
+    if (keyFrames)
+        EnableWindow(keyFrames, codec && codec->HasKeyFrames);
+
+    if (configure)
+        EnableWindow(configure, codec && codec->CanConfigure);
+}
+
+/* Select `handler` in the list; one that is no longer installed shows as uncompressed.
+ * FOURCCs match in any case: Windows' own dialog saved 'XVID' where the list says 'xvid'.
+ */
+static VOID SettingsCodecSelect(DWORD handler)
+{
+    HWND combo = SettingsControl(IDC_S_CODEC);
+    INT selection = 0;
+    INT index;
+
+    if (!combo)
+        return;
+
+    for (index = 0; index < g_SettingsCodecCount; ++index)
+        if ((g_SettingsCodecs[index].Handler | SETTINGS_FOURCC_LOWER_CASE) == (handler | SETTINGS_FOURCC_LOWER_CASE))
+            selection = index + 1;
+
+    SendMessageA(combo, CB_SETCURSEL, (WPARAM)selection, 0);
+    SettingsCodecEnable();
 }
 
 static VOID SettingsShellBrowse(HWND page)
@@ -888,13 +1014,18 @@ static VOID SettingsToDialog(const NTVDMEX_SETTINGS *settings)
         case SK_SLIDER:                      /* #291: a trackbar and its "N%" label */
         {
             HWND label = SettingsControl(definition->ControlId + IDC_S_SLIDER_VALUE_OFFSET);
-            SendMessageA(control, TBM_SETRANGE, FALSE, MAKELPARAM(definition->Low, definition->High));
+            DWORD position = SettingsSliderPosition(settings->Values[index]);
+            SendMessageA(
+                control,
+                TBM_SETRANGE,
+                FALSE,
+                MAKELPARAM(SettingsSliderPosition(definition->Low), SettingsSliderPosition(definition->High)));
             SendMessageA(control, TBM_SETPAGESIZE, 0, SETTINGS_SLIDER_PAGE);
-            SendMessageA(control, TBM_SETPOS, TRUE, (LPARAM)settings->Values[index]);
+            SendMessageA(control, TBM_SETPOS, TRUE, (LPARAM)position);
 
             if (label)
             {
-                wsprintfA(text, SETTINGS_FORMAT_PERCENT, (UINT)settings->Values[index]);
+                wsprintfA(text, SETTINGS_FORMAT_PERCENT, (UINT)SettingsSliderValue((LRESULT)position));
                 SetWindowTextA(label, text);
             }
 
@@ -927,6 +1058,7 @@ static VOID SettingsToDialog(const NTVDMEX_SETTINGS *settings)
 
     SettingsShellRadios(settings->Strings[SET_STR_SHELL][0] != 0);
     SettingsTextFontSelect(settings->Strings[SET_STR_TEXTFONT]);                 /* #321 */
+    SettingsCodecSelect(settings->Values[SET_VIDEOCODEC]);                         /* #155 */
     SettingsFloppyRadios(settings->Values[SET_FLOPPYPHYS] != 0);                /* s84 */
     SettingsCdRadios(settings->Values[SET_CDPHYS] != 0);
     /* SAY WHICH VERSION PROGRAMS ACTUALLY SEE. (s80, user: "if I'm in Windows XP's
@@ -1005,10 +1137,10 @@ static VOID SettingsFromDialog(NTVDMEX_SETTINGS *settings)
 
         case SK_SLIDER:
         {
-            LRESULT value = SendMessageA(control, TBM_GETPOS, 0, 0);
+            DWORD value = SettingsSliderValue(SendMessageA(control, TBM_GETPOS, 0, 0));
 
-            if ((DWORD)value >= definition->Low && (DWORD)value <= definition->High)
-                settings->Values[index] = (DWORD)value;
+            if (value >= definition->Low && value <= definition->High)
+                settings->Values[index] = value;
 
             break; }
 
@@ -1041,6 +1173,13 @@ static VOID SettingsFromDialog(NTVDMEX_SETTINGS *settings)
 
         if (xpShell && SendMessageA(xpShell, BM_GETCHECK, 0, 0) == BST_CHECKED)
             settings->Strings[SET_STR_SHELL][0] = 0;
+    }
+
+    /* #155: the codec list is not a table control; its choice is. */
+    if (SettingsControl(IDC_S_CODEC))
+    {
+        PCAPTURE_VIDEO_CODEC codec = SettingsCodecChosen();
+        settings->Values[SET_VIDEOCODEC] = codec ? codec->Handler : 0;
     }
 }
 
@@ -1103,7 +1242,7 @@ INT_PTR CALLBACK SettingsPageProcedure(HWND dialog, UINT message, WPARAM wParam,
         if (label)
         {
             CHAR text[16];
-            wsprintfA(text, SETTINGS_FORMAT_PERCENT, (UINT)SendMessageA((HWND)lParam, TBM_GETPOS, 0, 0));
+            wsprintfA(text, SETTINGS_FORMAT_PERCENT, (UINT)SettingsSliderValue(SendMessageA((HWND)lParam, TBM_GETPOS, 0, 0)));
             SetWindowTextA(label, text);
         }
 
@@ -1124,6 +1263,7 @@ INT_PTR CALLBACK SettingsPageProcedure(HWND dialog, UINT message, WPARAM wParam,
             g_EnableThemeDialogTexture(dialog, THEME_ETDT_ENABLE | THEME_ETDT_USETABTEXTURE);                               /* ETDT_ENABLE | ETDT_USETABTEXTURE */
 
         SettingsFillCpuInfo(dialog);            /* no-op on pages without the static */
+        SettingsCodecFill(dialog);              /* #155: no-op on pages without it */
         return TRUE;
     }
 
@@ -1228,6 +1368,25 @@ INT_PTR CALLBACK SettingsPageProcedure(HWND dialog, UINT message, WPARAM wParam,
         case IDC_S_CD_BROWSE:
             SettingsBrowse(dialog, IDC_S_CDROM, SETTINGS_FILTER_ISO,
                             SETTINGS_TITLE_ISO);
+            return TRUE;
+
+        case IDC_S_CAPTURE_BROWSE:
+            SettingsBrowseFolder(dialog, IDC_S_CAPTUREPATH, SETTINGS_TITLE_CAPTURE);
+            return TRUE;
+
+        case IDC_S_CODEC_CONFIGURE:
+        {
+            PCAPTURE_VIDEO_CODEC codec = SettingsCodecChosen();
+
+            if (codec)
+                CaptureVideoConfigure(GetParent(dialog), codec->Handler);
+
+            return TRUE; }
+
+        case IDC_S_CODEC:
+            if (HIWORD(wParam) == CBN_SELCHANGE)
+                SettingsCodecEnable();
+
             return TRUE;
 
         case IDC_S_SF_BROWSE:

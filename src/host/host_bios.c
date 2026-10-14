@@ -635,8 +635,6 @@ VOID RegistersStore(NTVDD_REGISTERS *registers, volatile BYTE *tib)
     VDM_REG(tib, VTIB_ES)  = registers->Es;
 }
 
-#define V86BOP_DONE                 1       /* Serviced; EIP is past the BOP, onto the stub's IRET/RETF */
-#define V86BOP_RERUN                4       /* Serviced, still waiting; EIP left ON the BOP to re-execute */
 #define V86BOP_2F_LOG_LINES_MAX     512     /* BOP 2Fh lines logged before the cap */
 
 /* OUR BIOS AND DRIVER STUBS, SERVICED FROM ONE PLACE. (GH #247) (Importance = 3):

@@ -14,6 +14,9 @@
 #include "host_window.h"
 #include <commctrl.h>
 #include "host_state.h"
+#include "audio_dmsynth.h"
+#include "host_audio.h"
+#include "capture_video.h"
 #include "log.h"
 #include "ne.h"
 #include "wow32.h"
@@ -159,11 +162,6 @@ enum
     INSTALL_UNFORCED = 0, INSTALL_FORCED = 1
 };   /* InstallPerform: /force replaces another program's Debugger value */
 
-enum
-{
-    SCREENSHOT_NAME_ROOM = 24, SCREENSHOT_NAME_DIGITS = 12
-};   /* "shot_manual_NN.bmp": path room kept for it, and where NN starts */
-
 enum                                         /* wired command IDs */
 {
     IDM_STUB = 1,                            /* every not-yet-wired item */
@@ -198,6 +196,7 @@ enum                                         /* wired command IDs */
      * NUMBERS (textedit.bat: 14-18), and an insertion renumbers everything after it.
      */
     IDM_CAP_AUDIO, IDM_CAP_FOLDER,
+    IDM_CAP_VIDEO, IDM_CAP_CODEC,            /* #155: Capture Video; CODEC retired (Settings > Capture) but keeps its number */
 
     /* ONE CONTIGUOUS RANGE PER DROPDOWN SETTING (Importance = 1):
      * Every combo on the Display page, plus the CPU speed, appears in a menu as a
@@ -410,7 +409,8 @@ DWORD g_AspectLive  = WINDOW_SETTING_UNSET_U;   /* ...and the shape it is that s
  */
 const INT g_SettingsPages[NTVDMEX_PAGE_COUNT] = {
     IDD_PAGE_GENERAL, IDD_PAGE_CPU, IDD_PAGE_DISPLAY,
-    IDD_PAGE_AUDIO,   IDD_PAGE_INPUT, IDD_PAGE_DRIVES
+    IDD_PAGE_AUDIO,   IDD_PAGE_INPUT, IDD_PAGE_DRIVES,
+    IDD_PAGE_CAPTURE                                    /* #155 */
 };
 static DWORD  g_SpeakerRealHz;   /* sampled under the lock, applied outside it */
 static volatile LONG g_UiPresentPending;                /* one WM_APP_PRESENT in flight */
@@ -648,7 +648,6 @@ static INT g_AutoFullscreenDone = 0;
  */
 static VOID HostScreenshot(VOID)
 {
-    static INT sequence = 0;
     BITMAPINFOHEADER *bitmapHeader;
     HGLOBAL memoryHandle;
     DWORD width;
@@ -751,26 +750,10 @@ static VOID HostScreenshot(VOID)
      */
     {
         CHAR path[MAX_PATH];
-        PCSTR directory = NTVDMEX_OUT;   /* screenshots are output, not clutter in the root */
-        INT index = 0;
-        INT index2;
+        /* #155 (user, s97): <program>-<time>.bmp in the capture folder, as recordings are. */
+        BOOL hasName = CaptureVideoFilePath(path, HOST_SCREENSHOT_EXTENSION);
 
-        while (directory[index] && index < MAX_PATH - SCREENSHOT_NAME_ROOM)
-        {
-            path[index] = directory[index];
-            ++index;
-        }
-
-        { PCSTR name = HOST_MANUAL_SHOT_NAME;
-
-          for (index2 = 0; name[index2]; ++index2)
-              path[index + index2] = name[index2];
-
-          path[index + SCREENSHOT_NAME_DIGITS] = (CHAR)('0' + (sequence / DECIMAL_RADIX) % DECIMAL_RADIX);
-          path[index + SCREENSHOT_NAME_DIGITS + 1] = (CHAR)('0' + sequence % DECIMAL_RADIX);
-          path[index + index2] = 0; }
-        ++sequence;
-        { HANDLE file = CreateFileA(path, GENERIC_WRITE, 0, NULL, CREATE_ALWAYS, 0, NULL);
+        { HANDLE file = hasName ? CreateFileA(path, GENERIC_WRITE, 0, NULL, CREATE_NEW, 0, NULL) : INVALID_HANDLE_VALUE;
 
           if (file != INVALID_HANDLE_VALUE)
           {
@@ -839,6 +822,80 @@ static VOID HostRecordToggle(VOID)
     }
 }
 
+/* #155 (user, s97): CAPTURE VIDEO. Ticked = recording; clicking it then stops the recording
+ * and the program carries on. Unticked, with Settings > Capture > "Restart running
+ * application when video capture starts" on, it RESTARTS the program -- the same file and
+ * arguments in a fresh host, handed a one-off "record from your start" -- and closes this
+ * one. Without the setting, or with no program to restart (a prompt, a Win16 program), it
+ * records from now.
+ */
+static VOID HostCaptureVideoCommand(HWND window)
+{
+    CHAR command[2 * MAX_PATH + 4];
+    CHAR directory[MAX_PATH];
+    CHAR *cursor;
+    INT index;
+    INT cut = -1;
+    STARTUPINFOA startupInfo;
+    PROCESS_INFORMATION processInfo;
+
+    if (CaptureVideoIsRecording())
+    {
+        CaptureVideoStop();
+        return;
+    }
+
+    if (!g_Settings.Values[SET_RESTARTCAPTURE] || !g_LaunchPath[0] || g_WowLaunch)
+    {
+        CaptureVideoStart();
+        return;
+    }
+
+    lstrcpynA(directory, g_LaunchPath, sizeof directory);
+
+    for (index = 0; directory[index]; ++index)
+        if (directory[index] == '\\')
+            cut = index;
+
+    if (cut >= 0)
+        directory[cut == 2 ? 3 : cut] = 0;
+
+    cursor = LogPut(command, "\"");
+    cursor = LogPut(cursor, g_LaunchPath);
+    cursor = LogPut(cursor, "\"");
+
+    if (g_LaunchArgs[0])
+    {
+        cursor = LogPut(cursor, " ");
+        cursor = LogPut(cursor, g_LaunchArgs);
+    }
+
+    for (index = 0; index < (INT)sizeof startupInfo; ++index)
+        ((PSTR)&startupInfo)[index] = 0;
+
+    startupInfo.cb = sizeof startupInfo;
+    CaptureVideoHandoffGive(g_LaunchPath);
+
+    if (!CreateProcessA(NULL, command, NULL, NULL, FALSE, CREATE_NEW_CONSOLE, NULL,
+                        cut >= 0 ? directory : NULL, &startupInfo, &processInfo))
+    {
+        CaptureVideoHandoffTake(g_LaunchPath);      /* withdraw it */
+        CaptureVideoStart();        /* it would not start again: record from now instead */
+        return;
+    }
+
+    CloseHandle(processInfo.hThread);
+    CloseHandle(processInfo.hProcess);
+    {
+        CHAR lineBuffer[3 * MAX_PATH];
+        CHAR *lineCursor = LogPut(lineBuffer, "STAGE2: Capture Video -> restarting [");
+        lineCursor = LogPut(lineCursor, command);
+        lineCursor = LogPut(lineCursor, "] to record from its start (#155)\r\n");
+        LogAppend(LOG_PATH, lineBuffer, lineCursor);
+    }
+    DestroyWindow(window);          /* as File > Exit */
+}
+
 /* #155: the folder screenshots and recordings land in, in Explorer. CreateProcess on
  * explorer.exe rather than ShellExecute: no new import for one button.
  */
@@ -850,7 +907,7 @@ static VOID HostOpenCaptureFolder(VOID)
     PROCESS_INFORMATION processInfo;
     INT index;
 
-    cursor = LogPut(command, HOST_EXPLORER_COMMAND); cursor = LogPut(cursor, NTVDMEX_OUT); cursor = LogPut(cursor, "\"");
+    cursor = LogPut(command, HOST_EXPLORER_COMMAND); cursor = LogPut(cursor, CaptureVideoFolder()); cursor = LogPut(cursor, "\"");
 
     for (index = 0; index < (INT)sizeof startupInfo; ++index)
         ((PSTR)&startupInfo)[index] = 0;
@@ -874,6 +931,8 @@ VOID HostRecordFinish(VOID)
     CHAR *lineCursor = lineBuffer;
     UINT32 frames;
     UINT32 dropped;
+
+    CaptureVideoStop();     /* #155: and a video recording, on the same exit paths */
 
     if (!AudioWaveIsRecording())
         return;
@@ -1063,20 +1122,20 @@ static HMENU BuildMenu(VOID)
             if (!CpuSpeedIsAvailable(speed, HostCpuMhz()))
                 EnableMenuItem(tools, IDM_SPEED_0 + speed, MF_BYCOMMAND | MF_GRAYED); }
 
-    /* The accelerator column names the RELEASE, because that is the one a captured
-     * user needs and cannot look up -- the menu is unreachable while capture is held.
+    /* (user, s97) Capture Mouse is gone from the menu: capture is automatic. IDM_INPUT_CAPTURE
+     * keeps its number and handler for the scripts.
      */
-    MenuItem(tools,MENU_TEXT_CAPTURE_MOUSE,IDM_INPUT_CAPTURE);
     MenuSeparator(tools);
 
     menu = MenuPopup();                                                   /* Tools>Capture */
     MenuItem(menu,MENU_TEXT_SCREENSHOT_ACCELERATOR,IDM_CAP_SHOT);
-    MenuSubmenu(menu,MENU_TEXT_RECORD_VIDEO,(submenu=MenuPopup(),MenuItem(submenu,MENU_TEXT_START_STOP,IDM_STUB),submenu));
-    MenuItem(menu,MENU_TEXT_RECORD_AUDIO,IDM_CAP_AUDIO);          /* #155: ticked while recording */
-    MenuSubmenu(menu,MENU_TEXT_RECORD_MUSIC,(submenu=MenuPopup(),MenuItem(submenu,MENU_TEXT_START_STOP,IDM_STUB),submenu));
+    /* #155 (user, s83 + s97): screenshots, and video WITH all of our sound -- no separate
+     * WAV, OPL or MIDI recordings; the folder, the codec and "restart when capture starts"
+     * are on Settings > Capture. IDM_CAP_AUDIO still works for the test scripts, off the menu.
+     */
+    MenuItem(menu,MENU_TEXT_RECORD_VIDEO,IDM_CAP_VIDEO);          /* ticked while recording */
     MenuSeparator(menu);
     MenuItem(menu,MENU_TEXT_CAPTURE_FOLDER,IDM_CAP_FOLDER);
-    MenuItem(menu,MENU_TEXT_CAPTURE_SETTINGS,IDM_STUB);
     MenuSubmenu(tools, MENU_TEXT_CAPTURE, menu);
 
     MenuSeparator(tools);
@@ -1938,7 +1997,7 @@ static VOID MenuSyncModal(HWND window, HMENU popup)
     for (index = 0; index < sizeof textOnly / sizeof textOnly[0]; ++index)
         EnableMenuItem(menu, textOnly[index], MF_BYCOMMAND | flag);
 
-    CheckMenuItem(menu, IDM_CAP_AUDIO, MF_BYCOMMAND | (AudioWaveIsRecording() ? MF_CHECKED : MF_UNCHECKED));
+    CheckMenuItem(menu, IDM_CAP_VIDEO, MF_BYCOMMAND | (CaptureVideoIsRecording() ? MF_CHECKED : MF_UNCHECKED));
     /* #154: Copy needs a selection; Paste needs text, and not a paste already typing. */
     if (flag == MF_ENABLED)
     {
@@ -3160,7 +3219,7 @@ static VOID HostPauseSet(INT isOn)
         InterlockedExchange(&g_PauseWant, 1);
         g_PauseMs = GetTickCount();
         ++g_PauseCount;
-        AudioWaveMidiSilence(&g_Wave);
+        HostMidiSilence();
 
         if (g_SpeakerReal)
             PcSpeakerSet(&g_PcSpeaker, 0);
@@ -4185,6 +4244,10 @@ static LRESULT CALLBACK HostWindowProcedure(HWND window, UINT message, WPARAM wP
             HostOpenCaptureFolder();
             return 0;    /* #155 */
 
+        case IDM_CAP_VIDEO:
+            HostCaptureVideoCommand(window);
+            return 0;    /* #155 */
+
         /* THE SYSTEM ABOUT BOX, WHICH IS WHAT A PROGRAM OF THIS ERA USES (Importance = 1):
          * ShellAbout is the shared About dialog every Win16 and early Win32
          * application on this desktop puts behind Help > About -- Program
@@ -4853,6 +4916,7 @@ static LRESULT CALLBACK HostWindowProcedure(HWND window, UINT message, WPARAM wP
          */
         HostRecordFinish();       /* before the device stops feeding it */
         AudioWaveStop(&g_Wave);
+        AudioDmSynthStop();       /* #155: after the fill has stopped calling Render */
         /* [CAUTION]: AND THE OTHER SPEAKER, WHICH IS NOT OURS TO LEAVE RUNNING. Beep.sys
          * keeps sounding after the process that started it exits -- the note
          * under the cursor would outlive the host and only a reboot would clear

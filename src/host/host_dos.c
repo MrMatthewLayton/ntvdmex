@@ -14,6 +14,8 @@
 #include "host_dos.h"
 #include <tlhelp32.h>
 #include "host_state.h"
+#include "host_audio.h"
+#include "capture_video.h"
 #include "log.h"
 #include "main.h"
 #include "host_bios.h"
@@ -1283,7 +1285,8 @@ INT DosTerminate(DOS_MACHINE *machine, PVOID tib, PSTR *logCursor, PSTR base)
         if (!machine->IsTsrPending)
         {
             UINT unusedValue;
-            AudioWaveMidiSilence(&g_Wave);
+            HostMidiSilence();
+            CaptureVideoStop();         /* #155 (user): the guest closing ends the capture */
             HOST_LOCK();
             (VOID)unusedValue;
             VddOplAllNotesOff(&g_Opl);              /* both banks, and the rhythm drums (#232) */

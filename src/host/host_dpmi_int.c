@@ -418,6 +418,7 @@ static PSTR DpmiInt31CallRealModeFar(
     WORD realSs = *(volatile WORD*)(registers+RMCS_SS);
     WORD realSp = *(volatile WORD*)(registers+RMCS_SP);
     UINT round;
+    UINT waitPasses = 0;
     INT done = 0;
     DWORD stackWordsToCopy = savedEcx & WORD_MASK;   /* words of PM stack to copy (DPMI 0.9) */
     RMCS_REGS rmcsRegisters;
@@ -558,11 +559,31 @@ static PSTR DpmiInt31CallRealModeFar(
     VDM_REG(tib,VTIB_EIP)=realIp;
     VDM_SET16(tib,VTIB_SS,realSs);
     VDM_REG(tib,VTIB_ESP)=realSp;
-    /* nested V86 run loop: run the proc until the return-BOP: */
-    for (round = 0; round < NESTED_V86_ROUNDS_MAX && !done; ++round)
+    /* nested V86 run loop: run the proc until the return-BOP:
+     *
+     * TWO BUDGETS, NOT ONE (GH #239) (Importance = 4):
+     * Every pass used to cost one of 128, so a procedure that does real work
+     * through traps ran out before it returned. ZAR's Miles SBLASTER.DIG
+     * detection (0300h, INT 66h, AX=0304h) polls the SB mixer in a timed loop:
+     * 0x76 or 0x7D passes in every run that sounded, 0x80 (NO-RET) in every
+     * silent one -- 48 rig logs, s91-s92, no exception. The number of polls
+     * tracks the BIOS tick phase, hence "intermittent". Cut off during its
+     * last DSP reset, the driver never sent D1h and playback never started.
+     * - A WAITING pass (V86BOP_RERUN: INT 16h with no key, INT 15h AH=86h)
+     *   still costs one of NESTED_V86_ROUNDS_MAX: a wait that cannot end in
+     *   here fails as fast as before.
+     * - Any other pass (a handled port trap, INT 21h, a callback, our BIOS)
+     *   costs one of NESTED_V86_EVENTS_MAX -- milliseconds of traps, so a
+     *   port poll that never ends still gives up, just not mid-detection.
+     */
+    for (round = 0; !done; ++round)
     {
         LONG runStatus;
         DWORD rev;
+
+        if (round >= NESTED_V86_EVENTS_MAX || waitPasses >= NESTED_V86_ROUNDS_MAX)
+            break;
+
         /* A DEVICE IRQ RAISED IN HERE HAD NOWHERE TO GO.
          * The cooperative delivery gate lived in the MAIN exec
          * loop, and a guest inside this nested real-mode call
@@ -638,18 +659,24 @@ static PSTR DpmiInt31CallRealModeFar(
          * `C4 C4 16` still falls through to the stop below.
          *
          * [CAUTION]: A RERUN (INT 16h AH=00h with no key; INT 15h AH=86h waiting)
-         * costs one of this loop's 128 passes like any other event, so
-         * a wait that outlasts them ends as NO-RET rather than parking
-         * the thread -- the keyboard IRQ is not delivered in here (our
-         * INT 09h stub is not a guest-owned vector), so a key could
-         * never arrive to end an INT 16h wait anyway.
+         * costs one of this loop's 128 waiting passes, so a wait that
+         * outlasts them ends as NO-RET rather than parking the thread --
+         * the keyboard IRQ is not delivered in here (our INT 09h stub is
+         * not a guest-owned vector), so a key could never arrive to end
+         * an INT 16h wait anyway.
          */
         if (rev == VDM_EVENT_BOP)
         {
             DWORD bopCs = VDM_REG16(tib, VTIB_CS);
+            INT biosResult = V86BOP_NONE;
 
-            if ((bopCs == DOS_HDLR_SEG || bopCs == DOS_CTAB_SEG)
-                && V86BiosBop(tib, info, &cursor, base) != V86BOP_NONE)
+            if (bopCs == DOS_HDLR_SEG || bopCs == DOS_CTAB_SEG)
+                biosResult = V86BiosBop(tib, info, &cursor, base);
+
+            if (biosResult == V86BOP_RERUN)
+                waitPasses++;
+
+            if (biosResult != V86BOP_NONE)
             {
                 if (cursor != base)
                 {
@@ -5924,7 +5951,7 @@ static INT DpmiServiceInt21(
 
         if (g_PmTransferSegment && (ah == DOS_FN_OPEN || ah == DOS_FN_READ || ah == DOS_FN_WRITE ||
                               ah == DOS_FN_DELETE || ah == DOS_FN_FILE_ATTRIBUTES || ah == DOS_FN_FIND_FIRST ||
-                              ah == DOS_FN_MKDIR || ah == DOS_FN_RMDIR || ah == DOS_FN_CHDIR))
+                              ah == DOS_FN_MKDIR || ah == DOS_FN_RMDIR || ah == DOS_FN_CHDIR || ah == DOS_FN_RENAME))
         {
             machine->TraceCursor = cursor;
             cursor = PmInt21Transfer(machine, tib, ah, cursor);

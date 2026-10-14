@@ -41,7 +41,8 @@
 #define IDD_PAGE_AUDIO      213
 #define IDD_PAGE_INPUT      214
 #define IDD_PAGE_DRIVES     215
-#define NTVDMEX_PAGE_COUNT  6
+#define IDD_PAGE_CAPTURE    216     /* #155: screenshots and video */
+#define NTVDMEX_PAGE_COUNT  7
 
 /* General: */
 /* The main icon (also defined by ntvdmhost.rc itself, ahead of its include of this file). */
@@ -150,5 +151,14 @@
 #define IDC_S_CD_IMG                336     /* Radio: mount an ISO disk image */
 #define IDC_S_CD_BROWSE             337
 #define IDC_S_SF_BROWSE             338     /* Button: SoundFont Browse... */
+
+/* Capture (#155): */
+#define IDC_S_CAPTUREPATH           339     /* Edit: the capture folder (blank = debug\out) */
+#define IDC_S_CAPTURE_BROWSE        340
+#define IDC_S_RESTART_CAPTURE       341     /* Check: Capture Video restarts the program first */
+#define IDC_S_CODEC                 342     /* Combo: the installed codecs (filled at run time) */
+#define IDC_S_CODEC_CONFIGURE       343     /* Button: the codec's own Configure window */
+#define IDC_S_VIDEOQUALITY          344     /* Edit: quality, % */
+#define IDC_S_KEYFRAMES             345     /* Edit: a key frame every N frames */
 
 #endif

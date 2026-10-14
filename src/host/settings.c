@@ -154,8 +154,10 @@ const SET_DEF g_SetDefinitions[SET_COUNT] = {
 /* #136: which host midiOut device the MPU-401 (and the GUS's MIDI UART) play through --
  * MIDI_ROUTE_* in src/vdd/midi_route.h. Host GM = device 0, as always; MT-32 / SoundFont
  * = a host DRIVER found by name (Munt, BASSMIDI...), which also gets SysEx. Start-up only.
+ * #155: Built-in GS (the default) = Windows' GS synth hosted in OUR mixer, so MIDI music is
+ * recorded and follows the master volume; "Windows MIDI" is the old Host GM, unchanged.
  */
-{ "Midi",              IDC_S_MIDI,        SK_COMBO,      0,  0,   2, "Host GM|MT-32|SoundFont" },
+{ "Midi",              IDC_S_MIDI,        SK_COMBO,      3,  0,   3, "Windows MIDI|MT-32|SoundFont|Built-in GS" },
 /* [CAUTION] THE PC SPEAKER HAS TWO PLACES TO COME OUT OF, AND THEY ARE NOT THE SAME
  * DEVICE. The emulated one is a square wave in the mixer, out of the SOUND
  * CARD -- which is what DOSBox does, is the only path that can be attenuated
@@ -239,6 +241,19 @@ const SET_DEF g_SetDefinitions[SET_COUNT] = {
  * the largest on-ratio picture, sharp-filtered.
  */
 { "DisplayFit",        IDC_S_FIT,         SK_COMBO,      0,  0,   1, PRESENT_FIT_ITEMS },
+/* #155 (user, s97): Capture > "Restart running application when video capture starts" --
+ * Capture Video restarts the program and records from its first frame. Nothing ever
+ * records on its own: a capture always starts with the user's click. Read when clicked.
+ */
+{ "RestartOnCapture",  IDC_S_RESTART_CAPTURE, SK_CHECK,  0,  0,   1, NULL },
+/* #155 (user, s97): the codec, on our own page rather than Windows' dialog. VideoCodec is a
+ * FOURCC (0 = uncompressed); its list is the installed codecs, so the page fills that combo
+ * itself (no ControlId here). Quality is a percentage; key frames, every N frames (0 = only
+ * the first). Read when a recording starts.
+ */
+{ "VideoCodec",        0,                 SK_UINT,       0,  0, 0xFFFFFFFFu, NULL },
+{ "VideoQuality",      IDC_S_VIDEOQUALITY, SK_UINT,     75,  1, 100, NULL },
+{ "VideoKeyFrames",    IDC_S_KEYFRAMES,   SK_UINT,      70,  0, 10000, NULL },
 };
 
 const SET_STR_DEF g_SetStringDefinitions[SET_STR_COUNT] = {
@@ -254,6 +269,8 @@ const SET_STR_DEF g_SetStringDefinitions[SET_STR_COUNT] = {
  * over the default character by character. NTVDMEX ships no font. Live.
  */
 { "TextFont",     IDC_S_TEXTFONT,  "" },
+/* #155: where screenshots and recordings go. Empty = the debug\out folder, as before. Live. */
+{ "CapturePath",  IDC_S_CAPTUREPATH, "" },
 };
 
 VOID SettingsCopyString(PSTR destination, PCSTR source, INT capacity)
