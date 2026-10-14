@@ -36,7 +36,7 @@
 #define HOST_EXPORT_TIME_BEGIN_PERIOD           "timeBeginPeriod"
 #define HOST_EXPORT_JOY_GET_POS_EX              "joyGetPosEx"
 #define HOST_EXPORT_ENABLE_THEME_DIALOG_TEXTURE "EnableThemeDialogTexture"
-#define HOST_EXPORT_SHIM_INIT                   "NtvdmexShimInit"       /* Each WOW shim DLL's entry */
+#define HOST_EXPORT_SHIM_INIT                   "NtvdmexShimInit"   /* Each WOW shim DLL's entry */
 #define HOST_EXPORT_INTERNAL_GET_WINDOW_TEXT    "InternalGetWindowText"
 
 /* Devices, kernel objects, registry: */
@@ -46,12 +46,12 @@
 #define HOST_REG_CPU_KEY                        "HARDWARE\\DESCRIPTION\\System\\CentralProcessor\\0"
 #define HOST_REG_CPU_MHZ                        "~MHz"
 #define HOST_REG_CPU_NAME                       "ProcessorNameString"
-#define HOST_REG_RECENT_PREFIX                  "Recent"                /* MRU values: Recent0, Recent1, ... */
+#define HOST_REG_RECENT_PREFIX                  "Recent"            /* MRU values: Recent0, Recent1, ... */
 #define HOST_WINDOW_CLASS                       "NtvdmexHostWindow"
 
 /* Files, programs and environment names: */
 #define HOST_OUT_SUBDIRECTORY                   "debug\\out\\"
-#define HOST_HARNESS_STUB_NAME                  "dosstub.com"           /* The test harness's launch stub */
+#define HOST_HARNESS_STUB_NAME                  "dosstub.com"       /* The test harness's launch stub */
 #define HOST_COMMAND_COM                        "COMMAND.COM"
 #define HOST_CMD_EXE                            "CMD.EXE"
 #define HOST_DEFAULT_SHELL_PATH                 "C:\\WINDOWS\\SYSTEM32\\COMMAND.COM"
@@ -64,12 +64,12 @@
 #define HOST_ENV_PATH                           "PATH"
 #define HOST_ENV_PATH_ASSIGN                    "PATH="
 #define HOST_ENV_COMSPEC_ASSIGN                 "COMSPEC="
-#define HOST_PROGRAM_NONE                       "(none)"                /* The status strip before a program */
-#define HOST_STOCK_NTVDM_NAME                   "ntvdm.exe" /* Windows' own VDM, looked for by process name */
+#define HOST_PROGRAM_NONE                       "(none)"            /* The status strip before a program */
+#define HOST_STOCK_NTVDM_NAME                   "ntvdm.exe"         /* Windows' own VDM, looked for by process name */
 #define HOST_FLOPPY_A_ROOT                      "A:\\"
 #define HOST_FLOPPY_B_ROOT                      "B:\\"
 #define HOST_SHIM_SUBDIRECTORY                  "bin\\wowshim\\"
-#define HOST_MANUAL_SHOT_NAME                   "shot_manual_00.bmp"    /* The digits are overwritten in sequence */
+#define HOST_SCREENSHOT_EXTENSION               ".bmp"              /* #155: <program>-<time>.bmp */
 #define HOST_SHOT_NAME                          "shot00.bmp"
 #define HOST_SHOT_TEXT_NAME                     "shot00.txt"
 #define HOST_ENV_LINE_FORMAT                    "%s=%s\n"
@@ -79,7 +79,7 @@
 #define HOST_DEFAULT_KRNL386_PATH               "C:\\WINDOWS\\SYSTEM32\\KRNL386.EXE"
 #define HOST_DEFAULT_WIN16_PATH                 "C:\\WINDOWS\\SYSTEM32;C:\\WINDOWS"
 #define HOST_DEFAULT_PROGRAM_PATH               "C:\\PROGRAM.COM" /* The environment's program name when none was loaded */
-#define HOST_SHELL_ARGUMENTS_FORMAT             "/P %s"                 /* COMMAND.COM: permanent, in this directory */
+#define HOST_SHELL_ARGUMENTS_FORMAT             "/P %s"             /* COMMAND.COM: permanent, in this directory */
 #define HOST_STARTUP_BATCH_FORMAT               "%sNTVDMEXS.BAT"
 #define HOST_STARTUP_BATCH_BODY     "@echo off\r\n" \
                                     "if exist C:\\AUTOEXEC.BAT call C:\\AUTOEXEC.BAT\r\n"

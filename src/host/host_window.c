@@ -162,11 +162,6 @@ enum
     INSTALL_UNFORCED = 0, INSTALL_FORCED = 1
 };   /* InstallPerform: /force replaces another program's Debugger value */
 
-enum
-{
-    SCREENSHOT_NAME_ROOM = 24, SCREENSHOT_NAME_DIGITS = 12
-};   /* "shot_manual_NN.bmp": path room kept for it, and where NN starts */
-
 enum                                         /* wired command IDs */
 {
     IDM_STUB = 1,                            /* every not-yet-wired item */
@@ -653,7 +648,6 @@ static INT g_AutoFullscreenDone = 0;
  */
 static VOID HostScreenshot(VOID)
 {
-    static INT sequence = 0;
     BITMAPINFOHEADER *bitmapHeader;
     HGLOBAL memoryHandle;
     DWORD width;
@@ -756,26 +750,10 @@ static VOID HostScreenshot(VOID)
      */
     {
         CHAR path[MAX_PATH];
-        PCSTR directory = CaptureVideoFolder();   /* #155: Settings > Capture's folder, else debug\out */
-        INT index = 0;
-        INT index2;
+        /* #155 (user, s97): <program>-<time>.bmp in the capture folder, as recordings are. */
+        BOOL hasName = CaptureVideoFilePath(path, HOST_SCREENSHOT_EXTENSION);
 
-        while (directory[index] && index < MAX_PATH - SCREENSHOT_NAME_ROOM)
-        {
-            path[index] = directory[index];
-            ++index;
-        }
-
-        { PCSTR name = HOST_MANUAL_SHOT_NAME;
-
-          for (index2 = 0; name[index2]; ++index2)
-              path[index + index2] = name[index2];
-
-          path[index + SCREENSHOT_NAME_DIGITS] = (CHAR)('0' + (sequence / DECIMAL_RADIX) % DECIMAL_RADIX);
-          path[index + SCREENSHOT_NAME_DIGITS + 1] = (CHAR)('0' + sequence % DECIMAL_RADIX);
-          path[index + index2] = 0; }
-        ++sequence;
-        { HANDLE file = CreateFileA(path, GENERIC_WRITE, 0, NULL, CREATE_ALWAYS, 0, NULL);
+        { HANDLE file = hasName ? CreateFileA(path, GENERIC_WRITE, 0, NULL, CREATE_NEW, 0, NULL) : INVALID_HANDLE_VALUE;
 
           if (file != INVALID_HANDLE_VALUE)
           {
