@@ -40,7 +40,13 @@
 #define CAPTURE_VIDEO_BITMAP_HEADER_BYTES   40
 #define CAPTURE_VIDEO_FORMAT_MAX            (CAPTURE_VIDEO_BITMAP_HEADER_BYTES + CAPTURE_AVI_FORMAT_EXTRA_MAX)
 #define CAPTURE_VIDEO_STATE_MAX             65536                       /* A codec's settings blob */
-#define CAPTURE_VIDEO_NAME_MAX              1000                        /* capture_video_000 .. 999 */
+#define CAPTURE_VIDEO_NAME_TRIES            100                         /* name, name-2 .. name-99 */
+#define CAPTURE_VIDEO_DEFAULT_FOLDER        "captures\\"                /* Beside NTVDMEX (user, s97) */
+#define CAPTURE_VIDEO_NO_PROGRAM            "NTVDMEX"                   /* A capture with no program running */
+#define CAPTURE_VIDEO_RECORDING_SUFFIX      "-recording"                /* The name while it is still being written */
+#define CAPTURE_VIDEO_EXTENSION             ".avi"
+#define CAPTURE_VIDEO_EXTENSION_CHARS       4                           /* ".EXE" / ".COM" */
+#define CAPTURE_VIDEO_SUFFIX_MAX            16
 #define CAPTURE_VIDEO_UNCOMPRESSED          mmioFOURCC('D', 'I', 'B', ' ')
 #define CAPTURE_VIDEO_REG_STATE             "VideoCodecState"           /* The codec's own settings blob */
 #define CAPTURE_VIDEO_REG_STATE_FOR         "VideoCodecStateFor"        /* ...and whose it is */
@@ -84,7 +90,8 @@ static HANDLE g_CaptureVideoThread;
 typedef struct _CAPTURE_VIDEO_SEGMENT
 {
     HANDLE File;
-    CHAR Path[MAX_PATH];
+    CHAR Path[MAX_PATH];        /* while recording: <app>-recording.avi; at close, the final name */
+    CHAR AppName[PROGRAM_NAME_SIZE];   /* the program running when it started */
     CAPTURE_AVI Avi;
     DWORD Width;
     DWORD Height;
@@ -399,17 +406,38 @@ BOOL CaptureVideoHandoffTake(PCSTR program)
     return isForThis && !isExpired;
 }
 
+/* captures\ beside NTVDMEX, made if missing; debug\out\ if it cannot be. */
+static PCSTR CaptureVideoDefaultFolder(VOID)
+{
+    PCSTR folder = NtvdmexPath(CAPTURE_VIDEO_DEFAULT_FOLDER, "");
+    CHAR directory[MAX_PATH];
+    INT length = lstrlenA(folder);
+
+    if (GetFileAttributesA(folder) != INVALID_FILE_ATTRIBUTES)
+        return folder;
+
+    lstrcpynA(directory, folder, sizeof(directory));
+
+    if (length && length < MAX_PATH && directory[length - 1] == '\\')
+        directory[length - 1] = 0;
+
+    if (!CreateDirectoryA(directory, NULL))
+        return NtvdmexPath(HOST_OUT_SUBDIRECTORY, "");
+
+    return folder;
+}
+
 PCSTR CaptureVideoFolder(VOID)
 {
     static CHAR folder[MAX_PATH];
     PCSTR chosen = g_Settings.Strings[SET_STR_CAPTURE];
     INT length = lstrlenA(chosen);
 
-    /* Blank = debug\out\ itself, not this instance's out\N\: a restarted host (Capture
-     * Video with "record from the start") overlaps the old one, so it is instance 1.
+    /* Blank = captures\ beside NTVDMEX (user, s97), the same for every instance: a host
+     * restarted by Capture Video overlaps the old one, so it is instance 1.
      */
     if (!length || length > MAX_PATH - 2)
-        return NtvdmexPath(HOST_OUT_SUBDIRECTORY, "");
+        return CaptureVideoDefaultFolder();
 
     lstrcpynA(folder, chosen, MAX_PATH - 1);
 
@@ -420,9 +448,67 @@ PCSTR CaptureVideoFolder(VOID)
     }
 
     if (GetFileAttributesA(folder) == INVALID_FILE_ATTRIBUTES && !CreateDirectoryA(chosen, NULL))
-        return NtvdmexPath(HOST_OUT_SUBDIRECTORY, "");
+        return CaptureVideoDefaultFolder();
 
     return folder;
+}
+
+/* "DOOM.EXE" -> "DOOM": the running program, without .EXE / .COM, safe as a file name. */
+static VOID CaptureVideoAppName(PSTR name, INT capacity)
+{
+    PCSTR source = g_ProgramName;
+    INT length;
+    INT index;
+
+    if (!source[0] || !lstrcmpA(source, HOST_PROGRAM_NONE))
+        source = CAPTURE_VIDEO_NO_PROGRAM;
+
+    lstrcpynA(name, source, capacity);
+    length = lstrlenA(name);
+
+    if (length > CAPTURE_VIDEO_EXTENSION_CHARS
+        && (!lstrcmpiA(name + length - CAPTURE_VIDEO_EXTENSION_CHARS, ".EXE")
+            || !lstrcmpiA(name + length - CAPTURE_VIDEO_EXTENSION_CHARS, ".COM")))
+        name[length - CAPTURE_VIDEO_EXTENSION_CHARS] = 0;
+
+    for (index = 0; name[index]; ++index)
+        if (name[index] == '\\' || name[index] == '/' || name[index] == ':' || name[index] == '*'
+            || name[index] == '?' || name[index] == '"' || name[index] == '<' || name[index] == '>' || name[index] == '|')
+            name[index] = '_';
+}
+
+/* <folder><app>-<YYYY-MM-DD_HH-MM-SS><extension>, local time now; "-2".. when taken. */
+static BOOL CaptureVideoTimedPath(PSTR path, PCSTR appName, PCSTR extension)
+{
+    SYSTEMTIME now;
+    CHAR suffix[CAPTURE_VIDEO_SUFFIX_MAX];
+    INT attempt;
+
+    GetLocalTime(&now);
+
+    for (attempt = 1; attempt < CAPTURE_VIDEO_NAME_TRIES; ++attempt)
+    {
+        suffix[0] = 0;
+
+        if (attempt > 1)
+            wsprintfA(suffix, "-%d", attempt);
+
+        wsprintfA(path, "%s%s-%04u-%02u-%02u_%02u-%02u-%02u%s%s", CaptureVideoFolder(), appName,
+                  now.wYear, now.wMonth, now.wDay, now.wHour, now.wMinute, now.wSecond, suffix, extension);
+
+        if (GetFileAttributesA(path) == INVALID_FILE_ATTRIBUTES)
+            return TRUE;
+    }
+
+    return FALSE;
+}
+
+BOOL CaptureVideoFilePath(PSTR path, PCSTR extension)
+{
+    CHAR appName[PROGRAM_NAME_SIZE];
+
+    CaptureVideoAppName(appName, sizeof(appName));
+    return CaptureVideoTimedPath(path, appName, extension);
 }
 
 /* the tap: */
@@ -689,10 +775,19 @@ static BOOL CaptureVideoOpenSegment(PCAPTURE_VIDEO_SEGMENT segment)
         segment->FormatBytes = sizeof(segment->Input);
     }
 
-    /* The first free capture_video_NNN.avi. */
-    for (number = 0; number < CAPTURE_VIDEO_NAME_MAX; ++number)
+    /* <app>-recording.avi while it records; renamed <app>-<time it ended>.avi at close. */
+    CaptureVideoAppName(segment->AppName, sizeof(segment->AppName));
+
+    for (number = 1; number < CAPTURE_VIDEO_NAME_TRIES; ++number)
     {
-        wsprintfA(segment->Path, "%scapture_video_%03d.avi", CaptureVideoFolder(), number);
+        CHAR suffix[CAPTURE_VIDEO_SUFFIX_MAX];
+        suffix[0] = 0;
+
+        if (number > 1)
+            wsprintfA(suffix, "-%d", number);
+
+        wsprintfA(segment->Path, "%s%s" CAPTURE_VIDEO_RECORDING_SUFFIX "%s" CAPTURE_VIDEO_EXTENSION,
+                  CaptureVideoFolder(), segment->AppName, suffix);
 
         if (GetFileAttributesA(segment->Path) == INVALID_FILE_ATTRIBUTES)
             break;
@@ -756,6 +851,13 @@ static VOID CaptureVideoCloseSegment(PCAPTURE_VIDEO_SEGMENT segment)
 
     isComplete = CaptureAviClose(&segment->Avi);
     CloseHandle(segment->File);
+
+    {
+        CHAR finalPath[MAX_PATH];
+
+        if (CaptureVideoTimedPath(finalPath, segment->AppName, CAPTURE_VIDEO_EXTENSION) && MoveFileA(segment->Path, finalPath))
+            lstrcpynA(segment->Path, finalPath, sizeof(segment->Path));
+    }
     cursor = LogPut(line, "STAGE2: video capture closed: ");
     cursor = LogPut(cursor, segment->Path);
     cursor = LogPut(cursor, " frames=");      cursor = LogDecimal(cursor, segment->Frames);

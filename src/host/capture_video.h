@@ -63,9 +63,15 @@ BOOL CaptureVideoConfigure(_In_opt_ HWND owner, _In_ DWORD handler);
 VOID CaptureVideoHandoffGive(_In_ PCSTR program);
 BOOL CaptureVideoHandoffTake(_In_ PCSTR program);
 
+/* A new capture file's full name: <folder><program>-<YYYY-MM-DD_HH-MM-SS><extension>, the
+ * program without .EXE / .COM, local time now ("-2".. if taken). FALSE = no free name.
+ * Screenshots use it; a video takes it when it ends. `path` holds MAX_PATH.
+ */
+BOOL CaptureVideoFilePath(_Out_writes_(MAX_PATH) PSTR path, _In_ PCSTR extension);
+
 /* Where captures go, with a trailing backslash: Settings > Capture's folder (created if
- * missing), or debug\out when that is blank or cannot be made -- every instance's, not
- * its own out\N. Screenshots use it too.
+ * missing), or captures\ beside NTVDMEX when that is blank or cannot be made -- the same
+ * for every instance. Screenshots use it too.
  */
 PCSTR CaptureVideoFolder(VOID);
 
