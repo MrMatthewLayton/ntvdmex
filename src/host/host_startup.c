@@ -19,6 +19,7 @@
 #include "main.h"
 #include "host_audio.h"
 #include "audio_dmsynth.h"
+#include "capture_video.h"
 #include "host_bios.h"
 #include "host_diag.h"
 #include "host_dos.h"
@@ -3311,6 +3312,13 @@ PSTR StartupStartServices(PSTR cursor)
     }
 
     AudioWaveStart(&g_Wave, SettingsOutputHz(&g_Settings), HostAudioFill, NULL);
+
+    /* #155: Settings > Capture > record from the start. The writer waits for the first
+     * picture, so nothing before it is lost and nothing empty is written.
+     */
+    if (g_Settings.Values[SET_RECORDSTART])
+        CaptureVideoStart();
+
     /* #136: SAY WHICH SYNTH THE MPU-401 PLAYS THROUGH, but only when it was chosen.
      * Host GM (the default) opens device 0 as it always did and logs nothing new.
      */

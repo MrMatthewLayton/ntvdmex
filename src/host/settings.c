@@ -241,6 +241,10 @@ const SET_DEF g_SetDefinitions[SET_COUNT] = {
  * the largest on-ratio picture, sharp-filtered.
  */
 { "DisplayFit",        IDC_S_FIT,         SK_COMBO,      0,  0,   1, PRESENT_FIT_ITEMS },
+/* #155 (user): Capture > Record at start -- recording begins as the program starts, so a
+ * capture can include the very first frame. Read at start-up.
+ */
+{ "RecordAtStart",     IDC_S_RECORD_START, SK_CHECK,     0,  0,   1, NULL },
 };
 
 const SET_STR_DEF g_SetStringDefinitions[SET_STR_COUNT] = {
@@ -256,6 +260,8 @@ const SET_STR_DEF g_SetStringDefinitions[SET_STR_COUNT] = {
  * over the default character by character. NTVDMEX ships no font. Live.
  */
 { "TextFont",     IDC_S_TEXTFONT,  "" },
+/* #155: where screenshots and recordings go. Empty = the debug\out folder, as before. Live. */
+{ "CapturePath",  IDC_S_CAPTUREPATH, "" },
 };
 
 VOID SettingsCopyString(PSTR destination, PCSTR source, INT capacity)

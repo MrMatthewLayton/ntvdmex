@@ -201,7 +201,7 @@ enum                                         /* wired command IDs */
      * NUMBERS (textedit.bat: 14-18), and an insertion renumbers everything after it.
      */
     IDM_CAP_AUDIO, IDM_CAP_FOLDER,
-    IDM_CAP_VIDEO, IDM_CAP_CODEC,            /* #155: Record Video, Video Compression */
+    IDM_CAP_VIDEO, IDM_CAP_CODEC,            /* #155: Capture Video; CODEC retired (Settings > Capture) but keeps its number */
 
     /* ONE CONTIGUOUS RANGE PER DROPDOWN SETTING (Importance = 1):
      * Every combo on the Display page, plus the CPU speed, appears in a menu as a
@@ -414,7 +414,8 @@ DWORD g_AspectLive  = WINDOW_SETTING_UNSET_U;   /* ...and the shape it is that s
  */
 const INT g_SettingsPages[NTVDMEX_PAGE_COUNT] = {
     IDD_PAGE_GENERAL, IDD_PAGE_CPU, IDD_PAGE_DISPLAY,
-    IDD_PAGE_AUDIO,   IDD_PAGE_INPUT, IDD_PAGE_DRIVES
+    IDD_PAGE_AUDIO,   IDD_PAGE_INPUT, IDD_PAGE_DRIVES,
+    IDD_PAGE_CAPTURE                                    /* #155 */
 };
 static DWORD  g_SpeakerRealHz;   /* sampled under the lock, applied outside it */
 static volatile LONG g_UiPresentPending;                /* one WM_APP_PRESENT in flight */
@@ -755,7 +756,7 @@ static VOID HostScreenshot(VOID)
      */
     {
         CHAR path[MAX_PATH];
-        PCSTR directory = NTVDMEX_OUT;   /* screenshots are output, not clutter in the root */
+        PCSTR directory = CaptureVideoFolder();   /* #155: Settings > Capture's folder, else debug\out */
         INT index = 0;
         INT index2;
 
@@ -854,7 +855,7 @@ static VOID HostOpenCaptureFolder(VOID)
     PROCESS_INFORMATION processInfo;
     INT index;
 
-    cursor = LogPut(command, HOST_EXPLORER_COMMAND); cursor = LogPut(cursor, NTVDMEX_OUT); cursor = LogPut(cursor, "\"");
+    cursor = LogPut(command, HOST_EXPLORER_COMMAND); cursor = LogPut(cursor, CaptureVideoFolder()); cursor = LogPut(cursor, "\"");
 
     for (index = 0; index < (INT)sizeof startupInfo; ++index)
         ((PSTR)&startupInfo)[index] = 0;
@@ -1077,12 +1078,11 @@ static HMENU BuildMenu(VOID)
 
     menu = MenuPopup();                                                   /* Tools>Capture */
     MenuItem(menu,MENU_TEXT_SCREENSHOT_ACCELERATOR,IDM_CAP_SHOT);
-    /* #155 (user, s83): screenshots, and video WITH all of our sound -- no separate WAV, OPL
-     * or MIDI recordings. IDM_CAP_AUDIO still works for the test scripts, off the menu.
+    /* #155 (user, s83 + s97): screenshots, and video WITH all of our sound -- no separate
+     * WAV, OPL or MIDI recordings; the folder, the codec and "record from the start" are on
+     * Settings > Capture. IDM_CAP_AUDIO still works for the test scripts, off the menu.
      */
     MenuItem(menu,MENU_TEXT_RECORD_VIDEO,IDM_CAP_VIDEO);          /* ticked while recording */
-    MenuItem(menu,MENU_TEXT_VIDEO_COMPRESSION,IDM_CAP_CODEC);
-    MenuSeparator(menu);
     MenuItem(menu,MENU_TEXT_CAPTURE_FOLDER,IDM_CAP_FOLDER);
     MenuSubmenu(tools, MENU_TEXT_CAPTURE, menu);
 
@@ -4198,10 +4198,6 @@ static LRESULT CALLBACK HostWindowProcedure(HWND window, UINT message, WPARAM wP
             else
                 CaptureVideoStart();
 
-            return 0;    /* #155 */
-
-        case IDM_CAP_CODEC:
-            CaptureVideoChooseCodec(window);
             return 0;    /* #155 */
 
         /* THE SYSTEM ABOUT BOX, WHICH IS WHAT A PROGRAM OF THIS ERA USES (Importance = 1):
