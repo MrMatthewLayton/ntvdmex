@@ -152,6 +152,12 @@ typedef struct _AUDIO_WAVE
 } AUDIO_WAVE, *PAUDIO_WAVE;
 typedef const AUDIO_WAVE *PCAUDIO_WAVE;
 
+/* #155: every buffer the pump fills, as it is filled (interleaved stereo 16-bit, `count`
+ * samples), on the AUDIO thread -- the video recorder's sound and its clock. The tap must
+ * only copy: this thread is on a ~11.6 ms deadline. NULL = none.
+ */
+typedef VOID (*PAUDIO_WAVE_TAP)(PVOID context, const INT16 *samples, UINT32 count);
+
 /* Start the audio pump. Returns 0 on success, 1 if it fell back to silent pumping
  * (still a success as far as the guest is concerned).
  */
@@ -188,5 +194,6 @@ INT      AudioWaveRecordStart(_In_ PCSTR path, _In_ UINT32 sampleHz);
 UINT32 AudioWaveRecordStop(VOID);
 INT      AudioWaveIsRecording(VOID);
 UINT32 AudioWaveRecordDropped(VOID);
+VOID AudioWaveSetTap(_In_opt_ PAUDIO_WAVE_TAP tap, _In_opt_ PVOID context);
 
 #endif /* NTVDMEX_AUDIO_WAVE_H */

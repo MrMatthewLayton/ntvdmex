@@ -139,6 +139,25 @@ static PFN_MIDI_OUT_HEADER g_MidiOutLongMsg;
 static AUDIO_MIDI_HEADER g_AudioWaveSysExHeaders[AUDIO_WAVE_SYSEX_SLOTS];
 static CHAR       g_AudioWaveSysExBuffers[AUDIO_WAVE_SYSEX_SLOTS][MPU_SYSEX_MAX];
 static UINT   g_AudioWaveSysExNext;
+static PAUDIO_WAVE_TAP volatile g_AudioWaveTap;    /* #155: the video recorder */
+static PVOID volatile g_AudioWaveTapContext;
+
+/* What the pump just filled goes to the WAV recorder and the tap, in that order. */
+static VOID AudioWaveFeed(const INT16 *samples, UINT32 count)
+{
+    PAUDIO_WAVE_TAP tap = g_AudioWaveTap;
+
+    AudioRecorderFeed(samples, count);
+
+    if (tap)
+        tap(g_AudioWaveTapContext, samples, count);
+}
+
+VOID AudioWaveSetTap(PAUDIO_WAVE_TAP tap, PVOID context)
+{
+    g_AudioWaveTapContext = context;
+    g_AudioWaveTap = tap;
+}
 
 static PAUDIO_WAVE_HEADER AudioWaveHeader(PAUDIO_WAVE wave, INT bufferIndex)
 {
@@ -171,7 +190,7 @@ static DWORD WINAPI AudioWaveThread(LPVOID parameter)
         header->dwUser = 0;
         g_WaveOutPrepareHeader(wave->WaveOut, header, sizeof(AUDIO_WAVE_HEADER));
         wave->Fill(wave->Context, wave->Buffers[bufferIndex], wave->FrameCount);
-        AudioRecorderFeed(wave->Buffers[bufferIndex], wave->FrameCount * AUDIO_STEREO_CHANNELS);
+        AudioWaveFeed(wave->Buffers[bufferIndex], wave->FrameCount * AUDIO_STEREO_CHANNELS);
         g_WaveOutWrite(wave->WaveOut, header, sizeof(AUDIO_WAVE_HEADER));
     }
 
@@ -183,7 +202,7 @@ static DWORD WINAPI AudioWaveThread(LPVOID parameter)
              * what advances SB playback and raises its IRQ.
              */
             wave->Fill(wave->Context, wave->Buffers[0], wave->FrameCount);
-            AudioRecorderFeed(wave->Buffers[0], wave->FrameCount * AUDIO_STEREO_CHANNELS);
+            AudioWaveFeed(wave->Buffers[0], wave->FrameCount * AUDIO_STEREO_CHANNELS);
             Sleep((wave->FrameCount * MILLISECONDS_PER_SECOND) / (wave->SampleHz ? wave->SampleHz : AUDIO_WAVE_DEFAULT_HZ));
             continue;
         }
@@ -215,7 +234,7 @@ static DWORD WINAPI AudioWaveThread(LPVOID parameter)
 
             header->dwFlags &= ~WHDR_DONE;
             wave->Fill(wave->Context, wave->Buffers[bufferIndex], wave->FrameCount);
-        AudioRecorderFeed(wave->Buffers[bufferIndex], wave->FrameCount * AUDIO_STEREO_CHANNELS);
+        AudioWaveFeed(wave->Buffers[bufferIndex], wave->FrameCount * AUDIO_STEREO_CHANNELS);
 
             if (g_WaveOutWrite(wave->WaveOut, header, sizeof(AUDIO_WAVE_HEADER)) != 0)
                 wave->Underruns++;
@@ -363,7 +382,7 @@ static DWORD WINAPI AudioWaveDirectSoundThread(LPVOID parameter)
             DWORD length1;
             DWORD length2;
             wave->Fill(wave->Context, wave->Buffers[0], wave->FrameCount);
-            AudioRecorderFeed(wave->Buffers[0], wave->FrameCount * AUDIO_STEREO_CHANNELS);
+            AudioWaveFeed(wave->Buffers[0], wave->FrameCount * AUDIO_STEREO_CHANNELS);
 
             if (SUCCEEDED(IDirectSoundBuffer_Lock(buffer, wave->DirectSoundWritePosition, chunk, &part1, &length1, &part2, &length2, 0)))
             {
