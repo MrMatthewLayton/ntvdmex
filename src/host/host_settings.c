@@ -752,7 +752,9 @@ static VOID SettingsCodecEnable(VOID)
         EnableWindow(configure, codec && codec->CanConfigure);
 }
 
-/* Select `handler` in the list; one that is no longer installed shows as uncompressed. */
+/* Select `handler` in the list; one that is no longer installed shows as uncompressed.
+ * FOURCCs match in any case: Windows' own dialog saved 'XVID' where the list says 'xvid'.
+ */
 static VOID SettingsCodecSelect(DWORD handler)
 {
     HWND combo = SettingsControl(IDC_S_CODEC);
@@ -763,7 +765,7 @@ static VOID SettingsCodecSelect(DWORD handler)
         return;
 
     for (index = 0; index < g_SettingsCodecCount; ++index)
-        if (g_SettingsCodecs[index].Handler == handler)
+        if ((g_SettingsCodecs[index].Handler | SETTINGS_FOURCC_LOWER_CASE) == (handler | SETTINGS_FOURCC_LOWER_CASE))
             selection = index + 1;
 
     SendMessageA(combo, CB_SETCURSEL, (WPARAM)selection, 0);
