@@ -502,9 +502,10 @@ static BOOL AudioDmSynthOpen(VOID)
     if (!coInitializeEx || !coCreateInstance)
         return AudioDmSynthStep("GetProcAddress(ole32)", E_FAIL);
 
-    /* This thread only; it ends when the port is up. The objects are called directly from
-     * the exec and audio threads afterwards: the port is built for that (its own sink
-     * thread renders while the application plays buffers).
+    /* The multithreaded apartment lives as long as THIS thread is in it, so the thread
+     * stays (AudioDmSynthStartThread parks it). The objects are called directly from the
+     * exec and audio threads: the port is built for that (its own sink thread renders
+     * while the application plays buffers).
      */
     coInitializeEx(NULL, COINIT_MULTITHREADED);
 
@@ -623,6 +624,22 @@ static DWORD WINAPI AudioDmSynthStartThread(LPVOID parameter)
     InterlockedExchange(&g_AudioDmSynthState, isOpen ? AUDIO_DMSYNTH_READY : AUDIO_DMSYNTH_FAILED);
     g_AudioDmSynthStats.State = g_AudioDmSynthState;
     LeaveCriticalSection(&g_AudioDmSynthLock);
+
+    /* THIS THREAD MUST NOT END WHILE THE SYNTH EXISTS. (s97 rig gate)
+     * It is the thread that joined COM's multithreaded apartment. When the last thread in
+     * that apartment exits, COM tears the apartment down and unloads the DLLs loaded in it:
+     * dmusic.dll went, and the next PackStructured (exec thread) or Flush (audio thread)
+     * called through a vtable that was no longer mapped -- every MIDI game crashed at its
+     * first note (runs/s97/gate155). The s96 spike never saw it: one thread did everything.
+     * So it parks here until the process ends; even AudioDmSynthStop leaves it in place,
+     * because a guest can still send MIDI while the host shuts down.
+     */
+    if (isOpen)
+    {
+        for (;;)
+            Sleep(INFINITE);
+    }
+
     return 0;
 }
 
