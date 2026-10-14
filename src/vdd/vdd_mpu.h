@@ -64,6 +64,7 @@
  */
 typedef VOID (*PMPU_MIDI_SINK)(PVOID context, UINT32 message);
 typedef VOID (*PMPU_SYSEX_SINK)(PVOID context, const BYTE *message, UINT32 length);
+typedef VOID (*PMPU_UART_HOOK)(PVOID context);
 
 typedef struct _MPU_STATE
 {
@@ -93,6 +94,10 @@ typedef struct _MPU_STATE
     BYTE     IsSysExOverflow;       /* this message outgrew the buffer: drop it */
     UINT32 SysExSent;
     UINT32 SysExDropped;
+    /* #155: told when the guest enters UART mode -- the sign it is about to play music, so
+     * the host can start its synth before the first note. NULL = nobody asked.
+     */
+    PMPU_UART_HOOK UartHook;
     BYTE     SysEx[MPU_SYSEX_MAX];
 } MPU_STATE, *PMPU_STATE;
 

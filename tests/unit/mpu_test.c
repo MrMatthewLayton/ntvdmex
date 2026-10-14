@@ -43,6 +43,9 @@ static BYTE  g_SysEx[MPU_SYSEX_MAX];
 static UINT32 g_SysExLength;
 static INT      g_SysExCount;
 
+/* #155: the UART-mode hook (the host starts its synth there). */
+static INT g_UartHookCount;
+
 static VOID MpuTestSink(PVOID context, UINT32 message)
 {
     (VOID)context;
@@ -57,6 +60,12 @@ static VOID MpuTestSysExSink(PVOID context, PCBYTE bytes, UINT32 length)
     memcpy(g_SysEx, bytes, length);
     g_SysExLength = length;
     g_SysExCount++;
+}
+
+static VOID MpuTestUartHook(PVOID context)
+{
+    (VOID)context;
+    g_UartHookCount++;
 }
 
 static VOID MpuTestWrite(WORD port, BYTE byteValue)
@@ -80,6 +89,7 @@ INT main(VOID)
 
     memset(&g_Mpu, 0, sizeof g_Mpu);
     g_Mpu.Sink = MpuTestSink;
+    g_Mpu.UartHook = MpuTestUartHook;
     VddBusInitialize(&g_Bus, g_GuestMemory);
     {
         NTVDD_DEVICE device = VddMpuDevice(&g_Mpu);
@@ -89,11 +99,17 @@ INT main(VOID)
     /* T1: the handshake ----------------------------------------------------- */
     CHECK((MpuTestRead(BASE + 1) & MPU_STATUS_DSR) != 0, "status: DSR set (active low) => no data waiting");
     MpuTestWrite(BASE + 1, 0xFF);                                   /* reset */
+    CHECK(g_UartHookCount == 0, "uart hook: not called by a reset");
     CHECK((MpuTestRead(BASE + 1) & MPU_STATUS_DSR) == 0, "status: DSR CLEAR once the ACK is queued");
     CHECK(MpuTestRead(BASE) == MPU_ACK, "reset: acknowledges with 0xFE");
     MpuTestWrite(BASE + 1, 0x3F);                                   /* enter UART mode */
     CHECK(MpuTestRead(BASE) == MPU_ACK, "uart: acknowledges with 0xFE");
     CHECK(g_Mpu.IsUartMode == 1, "uart: mode entered");
+    CHECK(g_UartHookCount == 1, "uart hook: called once on entering UART mode (#155)");
+    VddMpuReset(&g_Mpu);
+    CHECK(g_Mpu.UartHook == MpuTestUartHook, "uart hook: kept across a reset, like the sinks");
+    MpuTestWrite(BASE + 1, 0x3F);
+    CHECK(MpuTestRead(BASE) == MPU_ACK && g_UartHookCount == 2, "uart hook: called again after a reset");
     CHECK((MpuTestRead(BASE + 1) & MPU_STATUS_DRR) == 0, "status: DRR clear => ready to accept data");
 
     /* T2: a plain note-on --------------------------------------------------- */

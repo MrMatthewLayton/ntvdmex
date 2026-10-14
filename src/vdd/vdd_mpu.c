@@ -281,6 +281,10 @@ static VOID MpuPortOut(PVOID context, WORD port, BYTE width, UINT32 value)
     case MPU_COMMAND_UART_MODE:                 /* enter UART mode */
         state->IsUartMode = TRUE;
         MpuInputQueuePush(state, MPU_ACK);
+
+        if (state->UartHook)
+            state->UartHook(state->SinkContext);
+
         break;
 
     default:
@@ -316,6 +320,7 @@ VOID VddMpuReset(PVOID context)
     PVOID sinkContext = state->SinkContext;
     PMPU_SYSEX_SINK sysExSink = state->SysExSink;
     PVOID sysExContext = state->SysExContext;   /* #136 */
+    PMPU_UART_HOOK uartHook = state->UartHook;  /* #155 */
     UINT byteIndex;
     BYTE *stateBytes = (BYTE *)state;
 
@@ -328,6 +333,7 @@ VOID VddMpuReset(PVOID context)
     state->SinkContext = sinkContext;
     state->SysExSink = sysExSink;
     state->SysExContext = sysExContext;
+    state->UartHook = uartHook;
 }
 
 INT VddMpuInitialize(PVDD_BUS bus, PVOID context)

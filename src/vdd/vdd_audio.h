@@ -97,6 +97,11 @@ typedef struct _AUDIO_STATE
      */
     UINT32   Master;
     INT        IsMuted;
+    /* #155: a source rendered by the CALLER for this one call, already at OutputHz and
+     * interleaved L/R, `frames` long -- the hosted MIDI synth, which renders outside the
+     * host lock. Summed at unity before the master attenuator; NULL = none.
+     */
+    const INT16 *Premixed;
     INT16    Scratch[AUDIO_STEREO_CHANNELS * AUDIO_SOURCE_MAX];  /* #189: room for interleaved L/R */
     UINT32   FramesMixed;     /* diagnostics: total output frames produced */
     /* AND WHAT THE SPEAKER PATH ACTUALLY DID, BECAUSE "I HEARD NOTHING" HAS

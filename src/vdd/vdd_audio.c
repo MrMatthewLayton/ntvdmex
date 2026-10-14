@@ -339,6 +339,15 @@ VOID VddAudioMixStereo(PAUDIO_STATE state, INT16 *output, UINT32 frames)
             }
         }
 
+        /* the caller's pre-rendered source (the hosted MIDI synth, #155), at unity: */
+        if (state->Premixed)
+        {
+            const INT16 *premixed = state->Premixed + AUDIO_STEREO_CHANNELS * done;
+
+            for (frameIndex = 0; frameIndex < AUDIO_STEREO_CHANNELS * count; ++frameIndex)
+                chunk[frameIndex] = AudioClip(chunk[frameIndex] + premixed[frameIndex]);
+        }
+
         /* master attenuator: */
         if (state->IsMuted)
         {
