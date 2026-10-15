@@ -36,7 +36,16 @@
 #define PRESENT_DEFAULT_FRAME_HEIGHT    400
 #define PRESENT_DEFAULT_RATIO_WIDTH     9
 #define PRESENT_DEFAULT_RATIO_HEIGHT    5
+
+/* #158: the effect pass (PresentEffectRender). */
 #define PRESENT_SCALE2X_FACTOR          2
+#define PRESENT_SCALE3X_FACTOR          3
+#define PRESENT_EFFECT_MAX_PIXELS       (1920u * 1440u)     /* The largest buffer: 640x480 at 3x */
+#define PRESENT_SCANLINES_DARK_PERCENT  50                  /* Scanlines: what a dark row keeps */
+#define PRESENT_CRT_SCANLINE_PERCENT    60                  /* CRT: softer scanlines... */
+#define PRESENT_CRT_MASK_PERCENT        70                  /* ...a phosphor keeps the other two channels at this... */
+#define PRESENT_CRT_LIFT_PERCENT        125                 /* ...and the whole is brightened back up */
+#define PRESENT_CRT_MASK_PHASES         3                   /* Red, green, blue stripes, one column each */
 
 /* ARGB channels, and the tints' arithmetic (see PresentTint). */
 #define PRESENT_ALPHA_MASK              0xFF000000u
@@ -45,37 +54,43 @@
 #define PRESENT_CHANNEL_MASK            0xFF
 #define PRESENT_CHANNEL_MAX             255
 #define PRESENT_CHANNEL_SCALE           255u
-#define PRESENT_LUMA_RED                299u    /* Rec. 601, per mille */
+#define PRESENT_LUMA_RED                299u                /* Rec. 601, per mille */
 #define PRESENT_LUMA_GREEN              587u
 #define PRESENT_LUMA_BLUE               114u
 #define PRESENT_LUMA_ROUND              500u
 #define PRESENT_LUMA_SCALE              1000u
-#define PRESENT_SEPIA_KEEP_NUMERATOR    2       /* Keep 2/5 = 40% of the distance from luma */
+#define PRESENT_SEPIA_KEEP_NUMERATOR    2                   /* Keep 2/5 = 40% of the distance from luma */
 #define PRESENT_SEPIA_KEEP_DENOMINATOR  5
-#define PRESENT_SEPIA_WARM_RED          108     /* The warm cast, percent */
+#define PRESENT_SEPIA_WARM_RED          108                 /* The warm cast, percent */
 #define PRESENT_SEPIA_WARM_GREEN        98
 #define PRESENT_SEPIA_WARM_BLUE         80
-#define PRESENT_SEPIA_BLACK_RED         30u     /* Black fades to (30,22,12) */
+#define PRESENT_SEPIA_BLACK_RED         30u                 /* Black fades to (30,22,12) */
 #define PRESENT_SEPIA_BLACK_GREEN       22u
 #define PRESENT_SEPIA_BLACK_BLUE        12u
-#define PRESENT_SEPIA_SPAN_RED          225u    /* 255 - the black: full scale stays full */
+#define PRESENT_SEPIA_SPAN_RED          225u                /* 255 - the black: full scale stays full */
 #define PRESENT_SEPIA_SPAN_GREEN        233u
 #define PRESENT_SEPIA_SPAN_BLUE         243u
 #define PRESENT_ASPECT_ITEMS            "Native (square pixels)|4:3|16:9|16:10|Stretch"
 #define PRESENT_FIT_ITEMS               "Whole pixels|Fill"
 #define PRESENT_FILTER_ITEMS            "Nearest|Bilinear|Sharp"
+#define PRESENT_SCALER_ITEMS            "None|Scale2x|Scale3x|Scanlines|CRT"
 #define PRESENT_TINT_ITEMS              "Default|Sepia|Monochrome white|Monochrome green|Monochrome orange"
 
 /* Scaler ids -- the indices of the Scaler combo in settings.h, so the setting is
  * the value and there is no translation table to disagree with the list.
+ *
+ * [INFO]: #158: SCALE3X TOOK HQ2X'S INDEX. hq2x was never implemented (it presented as
+ * None), so a stored 2 now means Scale3x, the nearest thing to what was asked for,
+ * and Scanlines and CRT keep their stored values.
  */
 enum
 {
     PRESENT_SCALER_NONE = 0,
     PRESENT_SCALER_SCALE2X,
-    PRESENT_SCALER_HQ2X,        /* NOT IMPLEMENTED -- presents as NONE, and says so */
+    PRESENT_SCALER_SCALE3X,
     PRESENT_SCALER_SCANLINES,
-    PRESENT_SCALER_CRT          /* = SCALE2X + SCANLINES */
+    PRESENT_SCALER_CRT,
+    PRESENT_SCALER_COUNT
 };
 
 /* #325: THE ASPECT CHOICES, AND THEY ARE ALSO THE REGISTRY VALUE:
@@ -141,13 +156,14 @@ enum
     PRESENT_TINT_COUNT
 };
 
-/* Does this scaler double the source buffer before the stretch? */
-INT PresentScalerDoubles(INT scaler);
+/* The pixel-art factor a scaler enlarges by (Scale2x 2, Scale3x 3); 1 for the rest. */
+INT PresentScalerFactor(INT scaler);
 
-/* Does it mask alternate DESTINATION rows? (a scanline is a property of the
- * screen, not of the frame, so it is applied after the stretch, not before)
- */
+/* Does it darken the bottom of each frame row? (Scanlines and CRT) */
 INT PresentScalerHasScanlines(INT scaler);
+
+/* Does it change the picture at all? None is the one that does not. */
+INT PresentScalerHasEffect(INT scaler);
 
 /* The ratio a FORCED setting stands for; 0/0 for Native and Stretch (no ratio of its
  * own). Used by PresentFit, where 0/0 means "fill".
@@ -235,28 +251,66 @@ VOID PresentFit(
  * gone. Whole pixels are the default for every path now; see PresentLayout.)
  */
 
-/* SCALE2X (EPX):
- * Each source pixel becomes four. A corner is interpolated only where the two
- * neighbours it lies between AGREE and the opposite pair does not -- which is
- * what turns a staircase into a diagonal without touching the interior of a
- * flat region. Working on PALETTE INDICES, not colours, is not an approximation
- * here: the rule is an equality test, and two indices are the same colour iff
- * they are the same index in the same palette.
+/* SCALE2X AND SCALE3X (EPX), from the published description of the algorithm:
+ * Each source pixel becomes 2x2 (or 3x3). A sub-pixel takes a neighbour's colour
+ * only where the neighbours it lies between AGREE and the opposite pair does not --
+ * which turns a staircase into a diagonal without touching the interior of a flat
+ * region. The rule is an equality test, so it works on ARGB without any notion of
+ * distance between colours.
  *
- * Edges use clamped neighbours, so the border of the image is a plain doubling
+ * Edges use clamped neighbours, so the border of the image is a plain enlargement
  * -- there is no off-buffer read and no seam.
  *
- * dst must have room for (sw*2) x (sh*2) bytes with a stride of sw*2.
+ * `factor` is 2 or 3. destination must have room for (sourceWidth*factor) x
+ * (sourceHeight*factor) pixels with a stride of sourceWidth*factor.
  */
-/* `int sourceWidth`, not INT: spelt INT it moved the register allocation of
- * present_ddraw.c, which inlines this -- bisected to that one parameter (s93).
- */
-VOID PresentScale2x8(
-    const BYTE *source,
-    int sourceWidth,
+VOID PresentScaleEpx(
+    const UINT32 *source,
+    INT sourceWidth,
     INT sourceHeight,
     INT sourceStride,
-    BYTE *destination);
+    INT factor,
+    UINT32 *destination);
+
+/* #158: THE BUFFER SCALE OF THE EFFECT PASS (Importance = 2):
+ * The effects are drawn at a WHOLE multiple m of the frame and then stretched to the
+ * picture, so m is never more than the picture's own whole scale k (min of
+ * pictureWidth/sourceWidth and pictureHeight/sourceHeight): Scale3x into a 2x picture
+ * would only be thrown away again by the stretch, and a scanline needs at least two
+ * screen rows per frame row to exist. Among the m that fit maxPixels, a DIVISOR of k
+ * is preferred, so the stretch that follows is exact (an 8x picture of 320x200 gets a
+ * 4x buffer and a plain 2x stretch, not a 5x buffer and uneven rows). Returns 1 when
+ * no effect can be drawn: a picture under 2x, or a frame too big for even a 2x buffer.
+ */
+INT PresentEffectScale(
+    INT sourceWidth,
+    INT sourceHeight,
+    INT pictureWidth,
+    INT pictureHeight,
+    UINT maxPixels);
+
+/* #158: THE EFFECT PASS. Draws the frame (ARGB) at `scale` (from PresentEffectScale)
+ * into destination, (sourceWidth*scale) x (sourceHeight*scale) with that width as its
+ * stride:
+ * 1. Scale2x / Scale3x into `scratch` first (at no more than `scale`), which then
+ *    stands in for the frame. scratch needs (sourceWidth*f) x (sourceHeight*f) pixels.
+ * 2. Every frame row becomes `scale` rows; with Scanlines or CRT the bottom half of
+ *    them (scale/2, rounded down) is darkened, so the line belongs to the GAME's row
+ *    at every scale, never to whichever screen rows happen to be odd.
+ * 3. CRT adds an aperture mask: buffer columns cycle red, green, blue, each keeping
+ *    its own channel and PRESENT_CRT_MASK_PERCENT of the other two; then the whole is
+ *    lifted by PRESENT_CRT_LIFT_PERCENT, because a mask and scanlines darken the
+ *    picture the user chose the brightness of.
+ */
+VOID PresentEffectRender(
+    const UINT32 *source,
+    INT sourceWidth,
+    INT sourceHeight,
+    INT sourceStride,
+    INT scaler,
+    INT scale,
+    UINT32 *scratch,
+    UINT32 *destination);
 
 UINT32 PresentTint(UINT32 argb, INT tint);
 

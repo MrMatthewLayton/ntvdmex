@@ -22,14 +22,13 @@
 #define PRESENT_MODULE_DDRAW                    "ddraw.dll"
 #define PRESENT_EXPORT_DIRECT_DRAW_CREATE_EX    "DirectDrawCreateEx"
 #define PRESENT_MONITOR_HZ_MIN                  40
-#define PRESENT_ROP_PATAND                      0x00A000C9L     /* DPa: destination AND pattern (no windows.h name) */
 #define PRESENT_MONITOR_HZ_MAX                  240
-#define PRESENT_MONITOR_HZ_DEFAULT              60              /* When the driver will not say */
-#define PRESENT_FRAME_LINES_NUMERATOR           21u             /* A frame is ~21/20 of the visible lines */
+#define PRESENT_MONITOR_HZ_DEFAULT              60      /* When the driver will not say */
+#define PRESENT_FRAME_LINES_NUMERATOR           21u     /* A frame is ~21/20 of the visible lines */
 #define PRESENT_FRAME_LINES_DENOMINATOR         20u
-#define PRESENT_VBLANK_SPIN_US                  1200            /* Sleep to here, spin the rest */
+#define PRESENT_VBLANK_SPIN_US                  1200    /* Sleep to here, spin the rest */
 #define PRESENT_VBLANK_SPIN_MAX                 3000
-#define PRESENT_VBLANK_WRAP_LINES               4               /* Just after the blank */
+#define PRESENT_VBLANK_WRAP_LINES               4       /* Just after the blank */
 
 /* Depths. */
 #define PRESENT_BPP_INDEXED                     8
@@ -42,12 +41,11 @@
 #define PRESENT_SURFACE_BPP_32                  32
 #define PRESENT_CHANNEL_BITS                    8
 #define PRESENT_BYTES_PER_PIXEL_24              3
-#define PRESENT_GREY_RED                        30              /* An 8-bit surface: grey, percent */
+#define PRESENT_GREY_RED                        30      /* An 8-bit surface: grey, percent */
 #define PRESENT_GREY_GREEN                      59
 #define PRESENT_GREY_BLUE                       11
 
-/* The scanline mask and the hint. */
-#define PRESENT_SCANLINE_PATTERN_SIZE           8               /* An 8x8 monochrome pattern */
+/* The hint. */
 #define PRESENT_HINT_TOP                        12
 #define PRESENT_HINT_PAD_X                      10
 #define PRESENT_HINT_PAD_Y                      5
@@ -56,12 +54,12 @@
 /* Exclusive fullscreen. */
 #define PRESENT_DISPLAY_BPP                     32
 #define PRESENT_DISPLAY_BPP_FALLBACK            16
-#define PRESENT_FALLBACK_WIDTH                  640 /* The old forced mode, and the smallest staging surface */
+#define PRESENT_FALLBACK_WIDTH                  640     /* The old forced mode, and the smallest staging surface */
 #define PRESENT_FALLBACK_HEIGHT                 480
-#define PRESENT_BACK_BUFFERS                    2               /* Triple-buffered */
+#define PRESENT_BACK_BUFFERS                    2       /* Triple-buffered */
 #define PRESENT_TRIPLE_BUFFERS                  3
-#define PRESENT_MID_SCREEN_MARGIN               32              /* Lines from either edge */
-#define PRESENT_FLIP_STREAK_OUR_WAIT            30              /* Flips that never waited, then we time them */
+#define PRESENT_MID_SCREEN_MARGIN               32      /* Lines from either edge */
+#define PRESENT_FLIP_STREAK_OUR_WAIT            30      /* Flips that never waited, then we time them */
 
 #define PRESENT_DIRECT_DRAW                     ((LPDIRECTDRAW7)presenter->DirectDraw)
 #define PRESENT_SURFACE(p)                      ((LPDIRECTDRAWSURFACE7)(p))
@@ -71,7 +69,7 @@ typedef HRESULT (WINAPI *PFN_DIRECT_DRAW_CREATE_EX)(GUID *, LPVOID *, REFIID, IU
 /* The snapshot as a DIB that StretchDIBits can take: 8bpp + palette, or 32bpp when
  * the frame is direct colour or raster-split. Shared by the window/borderless path and
  * (#223) the exclusive DirectDraw path, so both draw the same picture the same way.
- * `scale2x` lets the caller ask for the pixel-art doubler first (GDI's Scaler).
+ * PresentSnapshotDib may first draw it through the Scaler's effect pass (#158).
  */
 typedef struct _PRESENT_SNAPSHOT_DIB
 {
@@ -108,14 +106,32 @@ static const UINT32 *PresentRowPalette(PPRESENT_DDRAW presenter, INT row);   /* 
 static const GUID g_PresentIidDirectDraw7 =
     { 0x15e65ec0, 0x3b9c, 0x11d2, { 0xb9,0x2f,0x00,0x60,0x97,0x97,0xea,0x5b } };
 
-/* THE SCALE2X TARGET, AS ONE STATIC BUFFER:
- * The largest frame doubled (#325: it was 1280x960 -- 640x480 doubled -- so a
- * 720x400 text frame silently skipped the scaler). It lives here rather than in PRESENT_DDRAW so the
- * struct stays something a caller can hold by value (present_demo does), and it
- * is static rather than allocated because the present path runs on the UI thread
- * at video rate and must never wait on the heap.
+/* #158: THE EFFECT PASS'S TWO BUFFERS, ALLOCATED ONCE (Importance = 1):
+ * The effect output and the Scale2x/Scale3x scratch, PRESENT_EFFECT_MAX_PIXELS ARGB
+ * each (11 MB). They live here rather than in PRESENT_DDRAW so the struct stays
+ * something a caller can hold by value (present_demo does). They are taken the first
+ * time an effect is drawn and kept, so a machine on Scaler = None never commits them
+ * and the present path, on the UI thread at video rate, never waits on an allocator
+ * after that first frame. If the allocation fails the picture is drawn without the
+ * effect, which is visible, rather than not at all.
  */
-static BYTE g_PresentScaled[(PRESENT_SCALE2X_FACTOR * NTVDD_FRAME_MAX_WIDTH) * (PRESENT_SCALE2X_FACTOR * NTVDD_FRAME_MAX_HEIGHT)];
+static UINT32 *g_PresentEffect;
+static UINT32 *g_PresentEffectScratch;
+
+static INT PresentEffectBuffersReady(VOID)
+{
+    static INT isTried;
+    SIZE_T bytes = (SIZE_T)PRESENT_EFFECT_MAX_PIXELS * PRESENT_ARGB_BYTES;
+
+    if (!isTried)
+    {
+        isTried = 1;
+        g_PresentEffect = (UINT32 *)VirtualAlloc(NULL, bytes, MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE);
+        g_PresentEffectScratch = (UINT32 *)VirtualAlloc(NULL, bytes, MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE);
+    }
+
+    return g_PresentEffect && g_PresentEffectScratch;
+}
 
 /* time a blit near the monitor's vertical blank (reduces tearing).
  *
@@ -191,31 +207,6 @@ static VOID PresentWaitVerticalBlank(PPRESENT_DDRAW presenter)
         if (height && scanLine < PRESENT_VBLANK_WRAP_LINES)
             return;                                                               /* wrapped: just after the blank */
     }
-}
-
-/* The scanline mask: an 8x8 monochrome pattern, black on every other row. ANDed
- * over the destination it darkens alternate PHYSICAL rows -- which is where a
- * scanline lives, on the screen, not in the frame. Built once and kept: a brush
- * per present would be a GDI object churned sixty times a second.
- */
-static HBRUSH PresentScanlineBrush(VOID)
-{
-    static HBRUSH brush = NULL;
-    static const WORD rows[PRESENT_SCANLINE_PATTERN_SIZE] = { 0xFFFF, 0x0000, 0xFFFF, 0x0000,
-                                  0xFFFF, 0x0000, 0xFFFF, 0x0000 };
-    HBITMAP bitmap;
-
-    if (brush)
-        return brush;
-
-    bitmap = CreateBitmap(PRESENT_SCANLINE_PATTERN_SIZE, PRESENT_SCANLINE_PATTERN_SIZE, 1, 1, rows);
-
-    if (!bitmap)
-        return NULL;
-
-    brush = CreatePatternBrush(bitmap);
-    DeleteObject(bitmap);
-    return brush;
 }
 
 /* #138: the release hint, top centre of the picture, while it is due. Drawn after the
@@ -356,12 +347,23 @@ static UINT32 PresentSnapshotPixel(PPRESENT_DDRAW presenter, INT row, INT column
     return PresentRowPalette(presenter, row)[presenter->Snapshot[(size_t)row * presenter->SnapshotWidth + column]];
 }
 
+/* The snapshot as a DIB for a picture of pictureWidth x pictureHeight (0 x 0 = no
+ * effect: the frame as it is).
+ *
+ * #158: WITH A SCALER ON, EVERY KIND OF FRAME TAKES THE EFFECT PASS. It used to run
+ * Scale2x on palette indices, so a direct-colour (VESA 15/16/24/32-bit) or raster-split
+ * frame silently skipped it. Now the frame is resolved to ARGB first -- the route
+ * split and direct frames already took -- and PresentEffectRender draws it at a whole
+ * multiple no larger than the picture's (PresentEffectScale), which the caller then
+ * stretches the rest of the way.
+ */
 static const BYTE *PresentSnapshotDib(
     PPRESENT_DDRAW presenter,
     PPRESENT_SNAPSHOT_DIB dib,
     INT *sourceWidthOut,
     INT *sourceHeightOut,
-    INT isScale2x)
+    INT pictureWidth,
+    INT pictureHeight)
 {
     static UINT32 resolved32[NTVDD_FRAME_MAX_WIDTH * NTVDD_FRAME_MAX_HEIGHT];  /* a split frame resolved per row, or ARGB */
     const BYTE *pixels = presenter->Snapshot;
@@ -376,19 +378,16 @@ static const BYTE *PresentSnapshotDib(
      * size resolves; s_rgb32 is already the largest frame.
      */
     INT isSplit = !isDirect && presenter->IsSnapshotSplit;
+    INT effectScale = 1;
 
-    /* Scale2x first: it is a property of the FRAME, so it happens before the
-     * stretch and the stretch then works from a source with twice the detail.
-     * (A split frame skips it; scale2x is an 8bpp pixel-art scaler and cannot read
-     * Snapshot32 either.)
-     */
-    if (isScale2x && !isSplit && !isDirect && PresentScalerDoubles(presenter->Scaler) && sourceWidth > 0 && sourceHeight > 0
-        && sourceWidth <= NTVDD_FRAME_MAX_WIDTH && sourceHeight <= NTVDD_FRAME_MAX_HEIGHT)
+    if (PresentScalerHasEffect(presenter->Scaler) && PresentEffectBuffersReady())
     {
-        PresentScale2x8(presenter->Snapshot, sourceWidth, sourceHeight, sourceWidth, g_PresentScaled);
-        pixels = g_PresentScaled;
-        sourceWidth *= PRESENT_SCALE2X_FACTOR;
-        sourceHeight *= PRESENT_SCALE2X_FACTOR;
+        effectScale = PresentEffectScale(
+            sourceWidth,
+            sourceHeight,
+            pictureWidth,
+            pictureHeight,
+            PRESENT_EFFECT_MAX_PIXELS);
     }
 
     ZeroMemory(dib, sizeof *dib);
@@ -408,7 +407,7 @@ static const BYTE *PresentSnapshotDib(
         dib->Colors[index].rgbReserved = 0;
     }
 
-    if (isSplit || isDirect)           /* resolve to a 32bpp DIB */
+    if (isSplit || isDirect || effectScale > 1)            /* resolve to a 32bpp DIB */
     {
         INT row;
         INT column;
@@ -423,6 +422,24 @@ static const BYTE *PresentSnapshotDib(
 
         dib->Header.biBitCount = PRESENT_BPP_DIRECT;
         pixels = (const BYTE *)resolved32;
+    }
+
+    if (effectScale > 1)
+    {
+        PresentEffectRender(
+            resolved32,
+            sourceWidth,
+            sourceHeight,
+            sourceWidth,
+            presenter->Scaler,
+            effectScale,
+            g_PresentEffectScratch,
+            g_PresentEffect);
+        pixels = (const BYTE *)g_PresentEffect;
+        sourceWidth *= effectScale;
+        sourceHeight *= effectScale;
+        dib->Header.biWidth = (LONG)sourceWidth;
+        dib->Header.biHeight = -(LONG)sourceHeight;        /* top-down */
     }
 
     *sourceWidthOut = sourceWidth;
@@ -564,18 +581,17 @@ static VOID PresentGdi(PPRESENT_DDRAW presenter)
     memoryDc = PresentMemoryTarget(presenter, windowDc, clientWidth, clientHeight);
     dc = memoryDc ? memoryDc : windowDc;
 
-    pixels = PresentSnapshotDib(presenter, &dib, &sourceWidth, &sourceHeight, PRESENT_SNAPSHOT_2X);
-    /* [CAUTION]: THE INTEGER FIT USES sw/sh, WHICH ARE POST-SCALE2X. That is deliberate: the
-     * blit source is what has to divide into the destination. Snapping to a multiple
-     * of the ORIGINAL 320 while blitting a 640-wide scale2x source would give 2.5x
-     * and put the uneven pixels straight back.
-     */
-    {   /* #325: one layout for every path, from the FRAME's size (not the post-Scale2x
-             source): a window is sized to the picture, maximised/fullscreen fit by the
+    {   /* #325: one layout for every path, from the FRAME's size (not the effect pass's
+             output): a window is sized to the picture, maximised/fullscreen fit by the
              Fit setting. */
         INT isScreen = presenter->IsFullscreen || IsZoomed(presenter->Window);
         PresentLayout(presenter->Aspect, isScreen ? presenter->Fit : PRESENT_FIT_WHOLE, isScreen, clientWidth, clientHeight,
                        presenter->SnapshotWidth, presenter->SnapshotHeight, &destinationX, &destinationY, &destinationWidth, &destinationHeight); }
+
+    /* #158: the layout comes first because the effect pass draws at a multiple of the
+     * frame that fits the picture (PresentEffectScale).
+     */
+    pixels = PresentSnapshotDib(presenter, &dib, &sourceWidth, &sourceHeight, destinationWidth, destinationHeight);
 
     if (!memoryDc)
         PresentWaitVerticalBlank(presenter);                                 /* buffered: waits before its one blit */
@@ -595,18 +611,6 @@ static VOID PresentGdi(PPRESENT_DDRAW presenter)
     }
 
     PresentBlitPicture(dc, destinationX, destinationY, destinationWidth, destinationHeight, pixels, &dib, sourceWidth, sourceHeight, presenter->Filter);   /* #325 */
-
-    if (PresentScalerHasScanlines(presenter->Scaler))
-    {
-        HBRUSH brush = PresentScanlineBrush();
-
-        if (brush)
-        {
-            HGDIOBJ oldObject = SelectObject(dc, brush);
-            PatBlt(dc, destinationX, destinationY, destinationWidth, destinationHeight, PRESENT_ROP_PATAND);    /* PATAND */
-            SelectObject(dc, oldObject);
-        }
-    }
 
     /* #154: remember where the frame went, and show a text selection by inverting it. */
     presenter->LastDestinationX = destinationX;
@@ -1051,12 +1055,16 @@ static VOID PresentFullscreen(PPRESENT_DDRAW presenter)
      * regardless of which renderer is used.") A stretching Blt is FILTERED BY THE
      * DRIVER and DirectDraw cannot forbid it. With Filtering = Nearest the frame is
      * drawn into the back buffer's DC by GDI's StretchDIBits in COLORONCOLOR mode --
-     * the same exact-pixel routine, and the same picture (PresentSnapshotDib, with Scale2x),
+     * the same exact-pixel routine, and the same picture (PresentSnapshotDib, with the Scaler),
      * as the GDI renderer. [CAUTION] Not a hand-written per-pixel stretch into video memory:
      * that was tried first and was unplayably slow on the test machine (it read VRAM back to
-     * copy repeated rows). Bilinear keeps the driver's stretch, which IS bilinear.
+     * copy repeated rows). Bilinear keeps the driver's stretch, which IS bilinear --
+     * unless a Scaler is on (#158): the effect pass is drawn here or nowhere, and
+     * PresentBlitPicture's Bilinear is GDI's HALFTONE.
      */
-    if (presenter->Filter != PRESENT_FILTER_BILINEAR && presenter->SnapshotWidth > 0 && presenter->SnapshotHeight > 0)
+    if ((presenter->Filter != PRESENT_FILTER_BILINEAR || PresentScalerHasEffect(presenter->Scaler))
+        && presenter->SnapshotWidth > 0
+        && presenter->SnapshotHeight > 0)
     {
         HDC dc;
 
@@ -1074,7 +1082,7 @@ static VOID PresentFullscreen(PPRESENT_DDRAW presenter)
             PRESENT_SNAPSHOT_DIB dib;
             INT sourceWidth;
             INT sourceHeight;
-            const BYTE *pixels = PresentSnapshotDib(presenter, &dib, &sourceWidth, &sourceHeight, PRESENT_SNAPSHOT_2X);
+            const BYTE *pixels = PresentSnapshotDib(presenter, &dib, &sourceWidth, &sourceHeight, fitWidth, fitHeight);
             isDone = PresentBlitPicture(dc, fitX, fitY, fitWidth, fitHeight, pixels, &dib, sourceWidth, sourceHeight, presenter->Filter);   /* #325 */
             IDirectDrawSurface7_ReleaseDC(back, dc);
         }
@@ -1110,23 +1118,6 @@ static VOID PresentFullscreen(PPRESENT_DDRAW presenter)
 
     if (!isDone)
         PresentFullscreenSoftware(presenter, fitX, fitY, fitWidth, fitHeight);
-
-    /* #227: the Scanlines/CRT scaler on the exclusive path too -- the same AND pattern
-     * the GDI path lays over its stretched picture, on the back buffer's DC.
-     */
-    if (PresentScalerHasScanlines(presenter->Scaler))
-    {
-        HDC dc;
-        HBRUSH brush = PresentScanlineBrush();
-
-        if (brush && SUCCEEDED(IDirectDrawSurface7_GetDC(back, &dc)))
-        {
-            HGDIOBJ oldObject = SelectObject(dc, brush);
-            PatBlt(dc, fitX, fitY, fitWidth, fitHeight, PRESENT_ROP_PATAND);      /* PATAND */
-            SelectObject(dc, oldObject);
-            IDirectDrawSurface7_ReleaseDC(back, dc);
-        }
-    }
 
     {   HDC dc;                                   /* #138 on the exclusive path */
 

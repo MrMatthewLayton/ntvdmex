@@ -83,7 +83,7 @@ const SET_DEF g_SetDefinitions[SET_COUNT] = {
  */
 { "FullscreenRenderer", IDC_S_RENDERER,   SK_COMBO,      0,  0,   1,
                                           "GDI|DirectDraw" },
-{ "Scaler",            IDC_S_SCALER,      SK_COMBO,      0,  0,   4, "None|Scale2x|hq2x|Scanlines|CRT" },
+{ "Scaler",            IDC_S_SCALER,      SK_COMBO,      0,  0,   4, PRESENT_SCALER_ITEMS },
 /* #325: only consulted when the picture is not a whole multiple of the frame (a forced
  * ratio, Fill, a window too big for the screen). Sharp -- whole-multiple point-sampling,
  * then the remainder smoothed -- is APPENDED, so a stored 0/1 keeps its meaning; it is
