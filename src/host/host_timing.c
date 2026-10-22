@@ -925,13 +925,16 @@ INT Irq0CanDeliver(VOID)
          * guest was. Bounded: one line per 50 ms step of an episode, 8 lines per run.
          * cs:ip is the TIB's, i.e. the last V86 exit -- biased, but it is what the
          * heartbeat prints and it has named sites before.
+         * Measured from `now`, not a fresh GetTickCount(): both ends must carry the same
+         * `| 1`, or a tick-even `since` read back in the same tick is one ahead of the
+         * clock and the difference wraps to 4294967295 ms (#290).
          */
         if (since && g_TibDebug)
         {
             static DWORD lines = 0;
             static DWORD episode = 0;
             static DWORD step = 0;
-            DWORD milliseconds = GetTickCount() - since;
+            DWORD milliseconds = now - since;
 
             if (episode != since)
             {
