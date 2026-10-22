@@ -197,6 +197,47 @@ static VOID WowWinPaintWant(WORD window16, const RECT *rect, INT isErase)
     g_WowWinPaints[freeSlot].IsPending = 1;
 }
 
+/* The pending rectangle for a window, left pending, or 0 if there is none. */
+INT WowWinPaintPeek(WORD window16, PRECT output, PINT isErase)
+{
+    INT index;
+
+    for (index = 0; index < WOWWIN_MAXPAINT; ++index)
+        if (g_WowWinPaints[index].IsPending && g_WowWinPaints[index].Window16 == window16)
+        {
+            *output = g_WowWinPaints[index].Rect;
+
+            if (isErase)
+                *isErase = g_WowWinPaints[index].IsErase;
+
+            return 1;
+        }
+
+    return 0;
+}
+
+/* #328: the guest validated part of its window (ValidateRect), so the pending rectangle
+ * loses that part -- all of it for a NULL rectangle. A remainder that is not a rectangle
+ * stays whole (SubtractRect's rule): a repaint too many, never one too few.
+ */
+VOID WowWinPaintValidate(WORD window16, const RECT *rect)
+{
+    INT index;
+
+    for (index = 0; index < WOWWIN_MAXPAINT; ++index)
+        if (g_WowWinPaints[index].IsPending && g_WowWinPaints[index].Window16 == window16)
+        {
+            RECT remainder;
+
+            if (!rect || !SubtractRect(&remainder, &g_WowWinPaints[index].Rect, rect))
+                g_WowWinPaints[index].IsPending = 0;
+            else
+                g_WowWinPaints[index].Rect = remainder;
+
+            return;
+        }
+}
+
 /* Take the pending rectangle for a window, or 0 if there is none. */
 INT WowWinPaintTake(WORD window16, PRECT output, PINT isErase)
 {

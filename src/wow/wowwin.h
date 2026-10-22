@@ -232,7 +232,9 @@ extern DWORD g_WowWinPumpCalls;
 
 DWORD DpmiSelectorBase(WORD selector);            /* main.c: a selector's linear base */
 INT WowWinThreadTimerFire(const MSG *message);
+INT WowWinPaintPeek(WORD window16, PRECT output, PINT isErase);
 INT WowWinPaintTake(WORD window16, PRECT output, PINT isErase);
+VOID WowWinPaintValidate(WORD window16, const RECT *rect);
 INT WowWinReleaseChars(WORD window16, DWORD keyLParam);
 INT WowWinThreadTimerAdd(UINT_PTR id32, DWORD procedure);
 INT WowWinThreadTimerKill(UINT_PTR id32);
