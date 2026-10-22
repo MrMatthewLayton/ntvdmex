@@ -6411,6 +6411,11 @@ INT WowUserCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
         }
 
         ValidateRect(window->Window32, hasRect ? &rect : NULL);
+        /* #328: and the relay's paint record, which GetUpdateRect now reports. Write
+         * paints its document with GetUpdateRect + GetDC + ValidateRect, never
+         * BeginPaint, so nothing else would ever clear it.
+         */
+        WowWinPaintValidate(window16, hasRect ? &rect : NULL);
         Wow32SetReturn(frame, 1);
         return 1;
     }
@@ -7992,6 +7997,26 @@ INT WowUserCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
                                 return 1; }
 
         hasAny = GetUpdateRect(window->Window32, &rect, erase ? TRUE : FALSE) ? 1 : 0;
+        /* #328 (Write): THE RELAY ALREADY EMPTIED THE REAL REGION. wowwin's WM_PAINT ran
+         * the OS's BeginPaint/EndPaint and kept the rectangle in the paint record for
+         * the guest's BeginPaint, so the real window reports clean. Write's document
+         * window opens its WM_PAINT with GetUpdateRect and returns without painting
+         * when it is told FALSE -- an area uncovered by another window stayed as the
+         * other window's pixels. The record is the update region the guest still
+         * has; report it, and leave it for BeginPaint.
+         */
+        {   RECT pendingRect;
+
+            if (WowWinPaintPeek(window16, &pendingRect, NULL))
+            {
+                if (hasAny)
+                    UnionRect(&rect, &rect, &pendingRect);
+                else
+                    rect = pendingRect;
+
+                hasAny = 1;
+            }
+        }
 
         if (rectBytes)
         {
