@@ -100,7 +100,7 @@ leaves EIP on the BOP, so the guest keeps running its ISRs while it "waits".
 
 | AH | Unit | Status | Where / what is missing | Verification |
 |---|---|---|---|---|
-| `30h` | DOS version, OEM, serial | **IMPL** | `:918-927`; the version is a setting, per process (`dos_version_word`, #208) | **oracle** while the test machine is set to 6.22 — see [sweep.md](sweep.md) |
+| `30h` | DOS version, OEM, serial | **IMPL** | `:918-927`; the version is a setting, per process (`dos_version_word`, #208). #28: the configured version also decides which services exist -- `src/dos/dos_version.h` (RBIL "DOS x.y+": 59h-62h 3.0/3.1, 65h-68h 3.3, 69h/6Ah/6Ch 4.0, 3305h 4.0, 3306h 5.0); one the version lacks answers as 6.22 answers past its table (AL=00h CF clear; 33xxh AL=FFh). 5.00 and up lose nothing; AH=71h (stock's LFN) is never gated | **oracle** while the test machine is set to 6.22 — see [sweep.md](sweep.md) |
 | `31h` | terminate and stay resident | **IMPL** | `:1446-1463`; the host resizes and keeps vectors | **oracle** except `tsr.paras.still.held` (`0x26` vs `0x21`, open) |
 | `32h` | DPB for drive DL | **PART** | as `1Fh` (`:1386-1415`), including #48's derived FAT layout | **oracle**, AL only (`p_rest`); `p_devchn dpb.c.layout` owed |
 | `33h` | Ctrl-Break flag, boot drive, true version | **IMPL** | `:2335-2368`; `00h`–`02h` state, `05h` = C:, `06h` true version | **oracle** (`p_subfn`, `p_ver`) |

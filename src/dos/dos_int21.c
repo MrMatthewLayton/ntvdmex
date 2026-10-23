@@ -19,6 +19,7 @@
 #include "dos_ctab.h"       /* CP437 tables dumped from the 6.22 oracle */
 #include "dos_auxprn.h"     /* #251: the AUX/PRN driver entries (guest code) */
 #include "dos_lfn.h"        /* #210: the long-filename API's pure half */
+#include "dos_version.h"    /* #28: which services the configured version has */
 
 /* Characters, drives, paths. */
 #define DOS_INT21_PATH_SIZE                     300
@@ -1700,6 +1701,33 @@ INT DosInt21(PDOS_MACHINE machine)
             isLfnAlias = subfunction;
             function = (subfunction == DOS_INT21_LFN_SERVER_OPEN) ? DOS_FN_EXTENDED_OPEN : subfunction;
         }
+    }
+
+    /* #28: A SERVICE THE CONFIGURED VERSION DOES NOT HAVE IS ANSWERED AS THAT VERSION
+     * ANSWERS IT -- see dos_version.h for the table and its sources. The Settings
+     * version decides (VersionMajor/Minor), not the per-process report XP's shell gets.
+     * An LFN alias (716Ch served by 6Ch) is the LFN API's, which every version keeps.
+     */
+    { INT versionAnswer = isLfnAlias ? DOS_VERSION_HAS
+                        : DosVersionAnswer(machine->VersionMajor, machine->VersionMinor, (BYTE)function, (BYTE)(R_AX & BYTE_MASK));
+
+      if (versionAnswer != DOS_VERSION_HAS)
+      {
+          trace = LogPut(trace, "  INT21 AH=0x"); trace = LogHexByte(trace, (UINT)function);
+          trace = LogPut(trace, " AL=0x"); trace = LogHexByte(trace, (UINT)(R_AX & BYTE_MASK));
+          trace = LogPut(trace, " not in the configured DOS version -- answered as that version\r\n");
+
+          if (versionAnswer == DOS_VERSION_LACKS_SUBFUNCTION)
+              SETAX((R_AX & HIGH_BYTE_MASK) | DOS_INT21_SUBFUNCTION_INVALID_AL);       /* AL=FF, carry left alone */
+          else
+          {
+              SETAX(R_AX & HIGH_BYTE_MASK);                                         /* AL=00h, CF clear */
+              OKCF();
+          }
+
+          machine->TraceCursor = trace;
+          return shouldContinue;
+      }
     }
 
     if (function == DOS_FN_EXIT)                       /* terminate */
