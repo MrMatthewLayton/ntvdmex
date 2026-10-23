@@ -1258,6 +1258,18 @@ VOID PresentDdrawShutdown(PPRESENT_DDRAW presenter)
     }
 }
 
+/* #332: LEAVING FULLSCREEN REPAINTS THE DESKTOP, NOT ONLY OUR WINDOW. The user saw the
+ * last fullscreen frame stay on screen after switching back, with our window drawn over
+ * it, until dragging something across it cleared it: after RestoreDisplayMode and the
+ * return to DDSCL_NORMAL nothing told the other windows the screen was theirs again.
+ * RedrawWindow on the desktop (NULL), with RDW_ALLCHILDREN, invalidates every top-level
+ * window and the wallpaper.
+ */
+static VOID PresentRepaintDesktop(VOID)
+{
+    RedrawWindow(NULL, NULL, NULL, RDW_INVALIDATE | RDW_ERASE | RDW_ALLCHILDREN | RDW_FRAME);
+}
+
 INT PresentDdrawSetFullscreen(PPRESENT_DDRAW presenter, INT isOn)
 {
     if (isOn == presenter->IsFullscreen)
@@ -1273,6 +1285,10 @@ INT PresentDdrawSetFullscreen(PPRESENT_DDRAW presenter, INT isOn)
     {
         presenter->IsFullscreen = isOn;
         InvalidateRect(presenter->Window, NULL, TRUE);
+
+        if (!isOn)
+            PresentRepaintDesktop();                                 /* #332 */
+
         return 0;
     }
 
@@ -1297,6 +1313,7 @@ INT PresentDdrawSetFullscreen(PPRESENT_DDRAW presenter, INT isOn)
         IDirectDraw7_RestoreDisplayMode(PRESENT_DIRECT_DRAW);
         IDirectDraw7_SetCooperativeLevel(PRESENT_DIRECT_DRAW, presenter->Window, DDSCL_NORMAL);
         InvalidateRect(presenter->Window, NULL, TRUE);
+        PresentRepaintDesktop();                                     /* #332 */
     }
 
     presenter->IsFullscreen = isOn;
