@@ -21,6 +21,7 @@
 #include "dos_lfn.h"        /* #210: the long-filename API's pure half */
 #include "dos_version.h"    /* #28: which services the configured version has */
 #include "dos_fatimg.h"     /* #240: drive A: as a disk image */
+#include "dos_fcbfind.h"    /* #240: the drive an FCB search lists */
 
 /* Characters, drives, paths. */
 #define DOS_INT21_PATH_SIZE                     300
@@ -92,7 +93,6 @@
 #define DOS_INT21_SERIAL_LOW                    0x0000
 #define DOS_INT21_ATTRIBUTE_VOLUME              0x08
 #define DOS_INT21_VOLUME_SIZE                   128
-#define DOS_INT21_ALL_PATTERN_SIZE              8
 
 /* The find-first DTA's reserved area: our search, as DOS keeps its own there. */
 #define DOS_INT21_FIND_DRIVE_C                  3                       /* The drive byte: C: */
@@ -481,6 +481,7 @@ static DWORD g_DosImageSectorsPerCluster = 0;
 static DWORD g_DosImageClusters = 0;
 static DWORD g_DosImageFreeClusters = 0;
 static BYTE  g_DosImageMedia = 0;
+static CHAR  g_DosImageLabel[FAT_IMAGE_NAME_SIZE];       /* The image's volume label; "" = none */
 
 VOID DosInt21SetProtectedMode(INT isOn)
 {
@@ -949,6 +950,7 @@ static INT DosImageExtract(VOID)
     g_DosImageClusters = image.ClusterCount;
     g_DosImageFreeClusters = FatImageFreeClusters(&image);
     g_DosImageMedia = image.Media;
+    FatImageVolumeLabel(&image, g_DosImageLabel);           /* DIR's "Volume in drive A is ..." */
     VirtualFree(data, 0, MEM_RELEASE);
     g_DosImageState = DOS_IMAGE_STATE_READY;
     DosImageNote("  #240 A: image mounted at the DOS level from ", g_DosImageFile);
@@ -3450,10 +3452,21 @@ INT DosInt21(PDOS_MACHINE machine)
                     INT volumeIndex;
                     volatile BYTE *extension;
                     INT isExtended = (fcb != (volatile BYTE *)((R_DS << PARAGRAPH_SHIFT) + (R_DX & WORD_MASK))) ? DOS_INT21_XFCB_HEADER : 0;
+                    INT isImageDrive = g_DosImageMode && DosFcbSearchDrive(fcb[0], DosCurrentDrive(machine)) == DOS_IMAGE_DRIVE;
+                    INT isLabel;
                     volume[0] = 0;
 
-                    if (!GetVolumeInformationA("C:\\", volume, sizeof volume,
-                                               NULL, NULL, NULL, NULL, 0) || !volume[0])
+                    if (isImageDrive)                          /* #240: the image's own label */
+                    {
+                        isLabel = DosImageEnsure() && g_DosImageLabel[0];
+
+                        if (isLabel)
+                            DosImageAppend(volume, sizeof(volume), g_DosImageLabel, NULL);
+                    }
+                    else
+                        isLabel = GetVolumeInformationA("C:\\", volume, sizeof volume, NULL, NULL, NULL, NULL, 0) && volume[0];
+
+                    if (!isLabel)
                     {
                         if (machine->FcbFind)
                         {
@@ -3479,7 +3492,7 @@ INT DosInt21(PDOS_MACHINE machine)
                         dta[DOS_INT21_XFCB_ATTRIBUTE] = DOS_INT21_ATTRIBUTE_VOLUME;
                     }
 
-                    extension[0] = DOS_INT21_FIND_DRIVE_C;                     /* drive C: */
+                    extension[0] = isImageDrive ? DOS_IMAGE_DRIVE + 1 : DOS_INT21_FIND_DRIVE_C;   /* A: (#240) or C: */
 
                     for (volumeIndex = 0; volumeIndex < DOS_FCB_NAME_SIZE; ++volumeIndex)
                     {
@@ -3525,11 +3538,10 @@ INT DosInt21(PDOS_MACHINE machine)
                  * against each entry's 8.3 name -- see DosFindMatches. The drive byte
                  * picks the directory: "X:*" is that drive's current directory.
                  */
-                HANDLE find;
-                CHAR allPattern[DOS_INT21_ALL_PATTERN_SIZE];
+                HANDLE find = INVALID_HANDLE_VALUE;
+                CHAR allPattern[DOS_INT21_PATH_SIZE];
                 INT index;
                 INT isNoDirectory;
-                INT count = 0;
 
                 if (machine->FcbFind)
                 {
@@ -3540,15 +3552,15 @@ INT DosInt21(PDOS_MACHINE machine)
                 for (index = 0; index < DOS_FCB_NAME_SIZE; ++index)
                     machine->FcbTemplate[index] = fcb[DOS_INT21_FCB_NAME + index];
 
-                if (fcb[0])
-                {
-                    allPattern[count++] = (CHAR)('A' + fcb[0] - 1);
-                    allPattern[count++] = ':';
-                }
+                /* #240: the current drive may be one Win32 cannot stand on -- the image A:
+                 * above all, where "*" listed the PROCESS directory (bin\) -- so the
+                 * pattern takes DosGuestPath's prefix, then the image's mapping.
+                 */
+                DosFcbSearchPattern(fcb[0], machine->VirtualDrive, allPattern, sizeof(allPattern));
+                DosImageMapPath(allPattern, sizeof(allPattern));
 
-                allPattern[count++] = '*';
-                allPattern[count] = 0;
-                find = DosFindFirst(allPattern, machine->FcbTemplate, mask, &findData, &isNoDirectory);
+                if (!g_DosImageRefusal)
+                    find = DosFindFirst(allPattern, machine->FcbTemplate, mask, &findData, &isNoDirectory);
 
                 if (find != INVALID_HANDLE_VALUE)
                 {
@@ -3597,7 +3609,7 @@ INT DosInt21(PDOS_MACHINE machine)
              */
             if (!received)
             {
-                machine->LastError = DOS_ERR_NO_MORE_FILES;
+                machine->LastError = g_DosImageRefusal ? g_DosImageRefusal : DOS_ERR_NO_MORE_FILES;   /* #240: 21 = no disk */
                 FCB_FAIL();
             }
             else
@@ -3636,7 +3648,8 @@ INT DosInt21(PDOS_MACHINE machine)
                     dta[DOS_INT21_XFCB_ATTRIBUTE] = (BYTE)(findData.dwFileAttributes & DOS_LFN_ATTRIBUTE_MASK);
                 }
 
-                extension[0] = DOS_INT21_FIND_DRIVE_C;                         /* drive C: */
+                extension[0] = (g_DosImageMode && DosFcbSearchDrive(fcb[0], DosCurrentDrive(machine)) == DOS_IMAGE_DRIVE)
+                             ? DOS_IMAGE_DRIVE + 1 : DOS_INT21_FIND_DRIVE_C;  /* A: (#240) or C: */
                 DosFcbPutName(extension + 1, baseName);
                 extension[DOS_INT21_DIRENTRY_ATTRIBUTE] = (BYTE)(findData.dwFileAttributes & DOS_LFN_ATTRIBUTE_MASK);
 
