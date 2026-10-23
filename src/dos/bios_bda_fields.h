@@ -72,6 +72,7 @@
 #define BIOS_BDA_EGA_SWITCHES               0x88
 #define BIOS_BDA_VGA_FLAGS                  0x89
 #define BIOS_BDA_KEYBOARD_FLAGS3            0x96
+#define BIOS_BDA_KEYBOARD_LED_FLAGS         0x97        /* Bits 0-2 LEDs, 4 ACK seen, 5 RESEND seen (IBM PC/AT TR) */
 #define BIOS_BDA_WAIT_FLAG_POINTER          0x98        /* INT 15h AH=83h: the flag's far pointer */
 #define BIOS_BDA_WAIT_FLAG_SEGMENT          0x9A
 #define BIOS_BDA_WAIT_COUNT                 0x9C        /* DWORD: microseconds left */

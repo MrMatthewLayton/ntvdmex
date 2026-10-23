@@ -590,6 +590,78 @@ INT main(VOID)
             VddBusIo(&bus, 0x92, 1, 0, &value);
             CHECK(input.ControllerResetsAsked == before + 2, "a20: port 92h fast reset is counted too");
         }
+
+        /* #180: THE KEYBOARD ANSWERS ITS COMMANDS. What p_kbd4 measured on 6.22/QEMU,
+         * dosbox-x and PCem: FAh to every command and parameter, EEh echoed, F2h -> FA AB 41
+         * behind a translating 8042, and a reply even after ADh.
+         */
+        {
+#define KBD_SEND(byteValue)     do { value = (byteValue); VddBusIo(&bus, 0x60, 1, 0, &value); } while (0)
+#define KBD_READ()              (VddBusIo(&bus, 0x60, 1, 1, &value), (BYTE)value)
+#define KBC_STATUS()            (VddBusIo(&bus, 0x64, 1, 1, &value), (BYTE)value)
+#define KBC_COMMAND(byteValue)  do { value = (byteValue); VddBusIo(&bus, 0x64, 1, 0, &value); } while (0)
+            BYTE first;
+            BYTE second;
+            BYTE third;
+            VddInputReset(&input);
+            KBD_SEND(0xEE);
+            CHECK((KBC_STATUS() & 0x01) && KBD_READ() == 0xEE, "kbd: EEh echoes EEh");
+            KBD_SEND(0xF2);
+            first = KBD_READ();
+            second = KBD_READ();
+            third = KBD_READ();
+            CHECK(first == 0xFA && second == 0xAB && third == 0x41, "kbd: F2h -> FA AB 41 (translating 8042)");
+            KBD_SEND(0xED);
+            first = KBD_READ();
+            KBD_SEND(0x02);
+            second = KBD_READ();
+            CHECK(first == 0xFA && second == 0xFA && input.LedState == 0x02, "kbd: EDh and its LED byte are each ACKed; the LEDs are kept");
+            KBD_SEND(0xF3);
+            first = KBD_READ();
+            KBD_SEND(0x20);
+            second = KBD_READ();
+            CHECK(first == 0xFA && second == 0xFA && input.TypematicByte == 0x20, "kbd: F3h and its rate are each ACKed; the rate is kept");
+            KBD_SEND(0xF4);
+            CHECK(KBD_READ() == 0xFA, "kbd: F4h (enable) ACKed");
+            KBD_SEND(0xFF);
+            first = KBD_READ();
+            second = KBD_READ();
+            CHECK(first == 0xFA && second == 0xAA && input.LedState == 0, "kbd: FFh -> FA, then the self test's AA; LEDs back off");
+            KBD_SEND(0x10);
+            CHECK(KBD_READ() == 0xFE, "kbd: a byte that is no command -> FEh (resend)");
+            KBD_SEND(0xFE);
+            CHECK(KBD_READ() == 0xAA, "kbd: FEh resends the last reply");
+            CHECK((KBC_STATUS() & 0x01) == 0, "kbd: nothing left over");
+
+            /* ADh holds the NEXT byte, not the one already presented. */
+            VddInputReset(&input);
+            VddInputPushScanCode(&input, 0x1E);
+            KBC_COMMAND(0xAD);
+            VddInputPushScanCode(&input, 0x1F);
+            CHECK(KBD_READ() == 0x1E, "kbc: ADh -- the byte already in the buffer is still read");
+            CHECK((KBC_STATUS() & 0x01) == 0, "kbc: ...and the next one waits (OBF clear)");
+            KBC_COMMAND(0xAE);
+            CHECK((KBC_STATUS() & 0x01) && KBD_READ() == 0x1F, "kbc: AEh sends the byte that waited");
+
+            /* A keyboard command re-enables the interface: the reply arrives after ADh. */
+            KBC_COMMAND(0xAD);
+            KBD_SEND(0xEE);
+            CHECK((KBC_STATUS() & 0x01) && KBD_READ() == 0xEE, "kbc: a reply arrives even after ADh");
+
+            /* The BIOS INT 09h: an ACK is a flag in 0040:0097, never a key. */
+            {   WORD key;
+            InputTestFresh(&input, &bus);
+            VddInputPushScanCode(&input, 0xFA);
+            VddInputBiosConsume(&input);
+            CHECK((g_BiosDataArea[0x97] & 0x10) && VddInputPop(&input, &key) == 0, "int09: FAh sets 0097 bit 4 and stores no key");
+            VddInputPushScanCode(&input, 0xFE);
+            VddInputBiosConsume(&input);
+            CHECK((g_BiosDataArea[0x97] & 0x20) && VddInputPop(&input, &key) == 0, "int09: FEh sets 0097 bit 5 and stores no key"); }
+#undef KBD_SEND
+#undef KBD_READ
+#undef KBC_STATUS
+#undef KBC_COMMAND
+        }
         VddInputReset(&input);
     }
 
@@ -997,7 +1069,10 @@ INT main(VOID)
         EXPECT(0x1E61, "kbc D2h: ...'a' in the ring");
         value = 0x3A;
         VddBusIo(&bus, 0x60, 1, 0, &value);              /* no D2h: a KEYBOARD cmd */
-        CHECK(VddInputScanCodesQueued(&input) == 0, "kbc D2h: one byte per command (the next 60h write is not a keystroke)");
+        value = 0;
+        VddBusIo(&bus, 0x60, 1, 1, &value);
+        CHECK(VddInputScanCodesQueued(&input) == 0 && value == 0xFE,
+              "kbc D2h: one byte per command (the next 60h write goes to the keyboard, which asks for it again: FEh, #180)");
         VddBusSetSinks(&bus, 0, 0, 0, 0);
 
         /* (e) */
