@@ -3094,7 +3094,14 @@ static VOID WowUserDefaultPaint(PWOWUSER_WINDOW window, INT isDialog)
     if (!WowWinPaintTake(window->Window16, &rect, &shouldErase) || !shouldErase)
         return;
 
-    dc = GetDCEx(window->Window32, NULL, DCX_CACHE | DCX_CLIPCHILDREN);
+    /* #283: and SIBLINGS as the style says, as BeginPaint does. Every top-level window
+     * has WS_CLIPSIBLINGS, and without it the erase painted straight over the
+     * windows above this one: Terminal's first paint, dispatched from the modal loop
+     * of its own Default Serial Port dialog, greyed out that dialog's frame and
+     * controls (only its client, erased next, came back).
+     */
+    dc = GetDCEx(window->Window32, NULL, DCX_CACHE | DCX_CLIPCHILDREN
+                 | ((GetWindowLongA(window->Window32, GWL_STYLE) & WS_CLIPSIBLINGS) ? DCX_CLIPSIBLINGS : 0));
 
     if (!dc)
         return;
