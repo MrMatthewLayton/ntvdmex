@@ -91,6 +91,11 @@
 /* Build the device descriptor to hand to VddBusAdd(). */
 #define DMA_DEVICE_NAME                 "dma"
 
+#define DMA_VDD_SET_ADDRESS             0x01    /* Vddsvc.h VDD_DMA_ADDR */
+#define DMA_VDD_SET_COUNT               0x02    /* VDD_DMA_COUNT */
+#define DMA_VDD_SET_PAGE                0x04    /* VDD_DMA_PAGE */
+#define DMA_VDD_SET_STATUS              0x08    /* VDD_DMA_STATUS */
+
 /* WHO IS ASSERTING DREQ? THE DEVICE KNOWS; THE 8237 ONLY SEES THE PIN:
  * Status bits 7:4 report each channel's DREQ input. On the bus that is a wire the
  * card drives; here the card's own state already says whether it wants the bus (an
@@ -210,6 +215,24 @@ typedef struct _DMA_STATE
 
 typedef const DMA_STATE *PCDMA_STATE;
 
+/* #11: A CHANNEL AS A VDD SEES IT -- vddsvc.h's VDD_DMA_INFO, field for field: the
+ * channel's CURRENT address and count, its page, the controller's status byte for it
+ * (bit 0 terminal count, bit 4 request, in this channel's position within the
+ * controller), its mode byte and its mask bit. VDDQueryDMA reads it, VDDSetDMA writes
+ * the parts its flags name.
+ */
+typedef struct _DMA_VDD_INFO
+{
+    WORD Address;
+    WORD Count;
+    WORD Page;
+    BYTE Status;
+    BYTE Mode;
+    BYTE Mask;
+} DMA_VDD_INFO, *PDMA_VDD_INFO;
+
+typedef const DMA_VDD_INFO *PCDMA_VDD_INFO;
+
 INT  VddDmaInitialize(_In_ PVDD_BUS bus, _In_ PVOID context);
 VOID VddDmaReset(_In_ PVOID context);
 
@@ -271,6 +294,27 @@ UINT32 VddDmaWrite(
     _In_reads_(byteCount) const BYTE *source,
     _In_ UINT32 byteCount,
     _Out_opt_ INT *isTerminalCount);
+
+/* 0 for a channel past the last (or the cascade, 4), else 1. */
+INT VddDmaQueryInfo(_In_ PCDMA_STATE state, _In_ BYTE channelNumber, _Out_ PDMA_VDD_INFO info);
+INT VddDmaSetInfo(
+    _Inout_ PDMA_STATE state,
+    _In_ BYTE channelNumber,
+    _In_ WORD flags,
+    _In_ PCDMA_VDD_INFO info);
+
+/* #11: VDDRequestDMA. Moves up to `length` bytes between the guest's DMA buffer and
+ * `buffer` in the direction the channel's mode names -- a READ transfer (memory to
+ * device) fills `buffer`, a WRITE transfer (device to memory) empties it -- and answers
+ * the bytes moved, advancing the address and count as the device itself would. A
+ * NULL buffer or a zero length moves nothing and answers the bytes left (VddDmaRemaining).
+ * A verify-mode, masked or cascade channel moves nothing: 0.
+ */
+DWORD VddDmaRequest(
+    _Inout_ PDMA_STATE state,
+    _In_ BYTE channelNumber,
+    _Inout_opt_ BYTE *buffer,
+    _In_ DWORD length);
 
 static inline NTVDD_DEVICE VddDmaDevice(_In_ PDMA_STATE state)
 { NTVDD_DEVICE device;

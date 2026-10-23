@@ -40,11 +40,13 @@
 #define SHIM_MISSING_GLOBAL16           "WOWGlobal*16: no host entry"
 #define SHIM_MISSING_IO_HOOK            "VDDInstallIOHook: no host entry"
 #define SHIM_TERMINATE_VDM              "VDDTerminateVDM: the VDD asked to end the VDM"
+#define SHIM_MISSING_VDD_SERVICE        "VDD service API (#11): no host entry"
 #define SHIM_NO_HANDLE16                0
 #define SHIM_NO_RESULT                  0
+#define SHIM_NO_IRQ                     0xFFFF  /* VDDReserveIrqLine's failure */
 
-#define SHIM_WCB16_PASCAL               0   /* wownt32.h: WCB16_PASCAL */
-#define SHIM_ONE_DWORD_ARGUMENT         4   /* Bytes */
+#define SHIM_WCB16_PASCAL               0       /* wownt32.h: WCB16_PASCAL */
+#define SHIM_ONE_DWORD_ARGUMENT         4       /* Bytes */
 
 /* s91 (#309): krnl386's own global heap, through the host (shim_global16). Ops:
  * 0 GlobalAlloc(flags, cb) 1 GlobalFree(h) 2 GlobalLock(h) 3 GlobalUnlock(h)
@@ -52,14 +54,14 @@
  * The operation codes are the host's too: SHIM_GLOBAL_* in shim_api.h.
  */
 #define SHIM_NO_ARGUMENT                0
-#define SHIM_GLOBAL_FREED               0   /* Win16 GlobalFree: 0 = freed */
-#define SHIM_SELECTOR_SHIFT             16  /* A 16:16 pointer's selector */
+#define SHIM_GLOBAL_FREED               0       /* Win16 GlobalFree: 0 = freed */
+#define SHIM_SELECTOR_SHIFT             16      /* A 16:16 pointer's selector */
 #define SHIM_KEEP_HIGH_WORD             0xFFFF0000u
 #define SHIM_KEEP_ALL_BUT_LOW_BYTE      0xFFFFFF00u
 #define SHIM_KEEP_ALL_BUT_HIGH_BYTE     0xFFFF00FFu
 #define SHIM_FLAG_MASK                  1
 #define SHIM_FLAG_BIT                   1u
-#define SHIM_CARRY_FLAG                 0   /* EFLAGS bit numbers */
+#define SHIM_CARRY_FLAG                 0       /* EFLAGS bit numbers */
 #define SHIM_PARITY_FLAG                2
 #define SHIM_AUXILIARY_FLAG             4
 #define SHIM_ZERO_FLAG                  6
@@ -116,6 +118,17 @@ typedef struct _NTVDMEX_SHIM_API
     PVOID  (*MapFlat)(WORD segment, DWORD offset, INT isProtectedMode);
     BOOL   (*InstallIoHook)(HANDLE vddHandle, WORD rangeCount, const VOID *ranges, const VOID *handlers);
     VOID   (*RemoveIoHook)(HANDLE vddHandle, WORD rangeCount, const VOID *ranges);
+    /* 4 (#11): the rest of vddsvc.h -- memory hooks, DMA, IRQ lines, memory, user hooks. */
+    BOOL   (*InstallMemoryHook)(HANDLE vddHandle, PVOID start, DWORD count, PVOID handler);
+    BOOL   (*RemoveMemoryHook)(HANDLE vddHandle, PVOID start, DWORD count);
+    DWORD  (*RequestDma)(HANDLE vddHandle, WORD channel, PVOID buffer, DWORD length);
+    BOOL   (*QueryDma)(HANDLE vddHandle, WORD channel, PVOID info);
+    BOOL   (*SetDma)(HANDLE vddHandle, WORD channel, WORD flags, PVOID info);
+    WORD   (*ReserveIrq)(HANDLE vddHandle, WORD line);
+    BOOL   (*ReleaseIrq)(HANDLE vddHandle, WORD line);
+    BOOL   (*VddMemory)(INT operation, HANDLE vddHandle, PVOID address, DWORD size);
+    BOOL   (*InstallUserHook)(HANDLE vddHandle, PVOID create, PVOID terminate, PVOID block, PVOID resume);
+    BOOL   (*RemoveUserHook)(HANDLE vddHandle);
 } NTVDMEX_SHIM_API, *PNTVDMEX_SHIM_API;
 
 typedef const NTVDMEX_SHIM_API *PCNTVDMEX_SHIM_API;
@@ -388,6 +401,115 @@ __declspec(dllexport) VOID WINAPI VDDSimulateInterrupt(INT picAdapter, BYTE line
 {
     if (g_HasShimApi && g_ShimApi.IcaInterrupt)
         g_ShimApi.IcaInterrupt(picAdapter, line, count);
+}
+
+/* #11: THE REST OF vddsvc.h. Every one forwards; with no host entry it fails, loudly --
+ * FALSE, 0, or VDD_SVC_NO_IRQ (FFFFh) for VDDReserveIrqLine.
+ * BOOL VDDInstallMemoryHook(hVdd, pStart, count, MemoryHandler) and its undo
+ */
+__declspec(dllexport) BOOL WINAPI VDDInstallMemoryHook(
+    HANDLE vddHandle,
+    PVOID start,
+    DWORD count,
+    PVOID handler)
+{
+    if (g_HasShimApi && g_ShimApi.InstallMemoryHook)
+        return g_ShimApi.InstallMemoryHook(vddHandle, start, count, handler);
+
+    ShimReportMissing(SHIM_MISSING_VDD_SERVICE);
+    return FALSE;
+}
+
+__declspec(dllexport) BOOL WINAPI VDDDeInstallMemoryHook(HANDLE vddHandle, PVOID start, DWORD count)
+{
+    return (g_HasShimApi && g_ShimApi.RemoveMemoryHook) ? g_ShimApi.RemoveMemoryHook(vddHandle, start, count) : FALSE;
+}
+
+/* DWORD VDDRequestDMA(hVdd, iChannel, Buffer, length); BOOL VDDQueryDMA(hVdd, iChannel,
+ * PVDD_DMA_INFO); BOOL VDDSetDMA(hVdd, iChannel, fDMA, PVDD_DMA_INFO)
+ */
+__declspec(dllexport) DWORD WINAPI VDDRequestDMA(
+    HANDLE vddHandle,
+    WORD channel,
+    PVOID buffer,
+    DWORD length)
+{
+    if (g_HasShimApi && g_ShimApi.RequestDma)
+        return g_ShimApi.RequestDma(vddHandle, channel, buffer, length);
+
+    ShimReportMissing(SHIM_MISSING_VDD_SERVICE);
+    return SHIM_NO_RESULT;
+}
+
+__declspec(dllexport) BOOL WINAPI VDDQueryDMA(HANDLE vddHandle, WORD channel, PVOID info)
+{
+    return (g_HasShimApi && g_ShimApi.QueryDma) ? g_ShimApi.QueryDma(vddHandle, channel, info) : FALSE;
+}
+
+__declspec(dllexport) BOOL WINAPI VDDSetDMA(HANDLE vddHandle, WORD channel, WORD flags, PVOID info)
+{
+    return (g_HasShimApi && g_ShimApi.SetDma) ? g_ShimApi.SetDma(vddHandle, channel, flags, info) : FALSE;
+}
+
+/* WORD VDDReserveIrqLine(hVdd, IrqLine) -- FFFFh asks for any free line, and is the failure */
+__declspec(dllexport) WORD WINAPI VDDReserveIrqLine(HANDLE vddHandle, WORD line)
+{
+    return (g_HasShimApi && g_ShimApi.ReserveIrq) ? g_ShimApi.ReserveIrq(vddHandle, line) : SHIM_NO_IRQ;
+}
+
+__declspec(dllexport) BOOL WINAPI VDDReleaseIrqLine(HANDLE vddHandle, WORD line)
+{
+    return (g_HasShimApi && g_ShimApi.ReleaseIrq) ? g_ShimApi.ReleaseIrq(vddHandle, line) : FALSE;
+}
+
+/* BOOL VDDAllocMem / VDDFreeMem / VDDIncludeMem / VDDExcludeMem(hVdd, Address, Size) */
+static BOOL ShimVddMemory(INT operation, HANDLE vddHandle, PVOID address, DWORD size)
+{
+    if (g_HasShimApi && g_ShimApi.VddMemory)
+        return g_ShimApi.VddMemory(operation, vddHandle, address, size);
+
+    ShimReportMissing(SHIM_MISSING_VDD_SERVICE);
+    return FALSE;
+}
+
+__declspec(dllexport) BOOL WINAPI VDDAllocMem(HANDLE vddHandle, PVOID address, DWORD size)
+{
+    return ShimVddMemory(SHIM_VDD_MEMORY_ALLOC, vddHandle, address, size);
+}
+
+__declspec(dllexport) BOOL WINAPI VDDFreeMem(HANDLE vddHandle, PVOID address, DWORD size)
+{
+    return ShimVddMemory(SHIM_VDD_MEMORY_FREE, vddHandle, address, size);
+}
+
+__declspec(dllexport) BOOL WINAPI VDDIncludeMem(HANDLE vddHandle, PVOID address, DWORD size)
+{
+    return ShimVddMemory(SHIM_VDD_MEMORY_INCLUDE, vddHandle, address, size);
+}
+
+__declspec(dllexport) BOOL WINAPI VDDExcludeMem(HANDLE vddHandle, PVOID address, DWORD size)
+{
+    return ShimVddMemory(SHIM_VDD_MEMORY_EXCLUDE, vddHandle, address, size);
+}
+
+/* BOOL VDDInstallUserHook(hVdd, Ucr, Uterm, Ublock, Uresume) and its undo */
+__declspec(dllexport) BOOL WINAPI VDDInstallUserHook(
+    HANDLE vddHandle,
+    PVOID create,
+    PVOID terminate,
+    PVOID block,
+    PVOID resume)
+{
+    if (g_HasShimApi && g_ShimApi.InstallUserHook)
+        return g_ShimApi.InstallUserHook(vddHandle, create, terminate, block, resume);
+
+    ShimReportMissing(SHIM_MISSING_VDD_SERVICE);
+    return FALSE;
+}
+
+__declspec(dllexport) BOOL WINAPI VDDDeInstallUserHook(HANDLE vddHandle)
+{
+    return (g_HasShimApi && g_ShimApi.RemoveUserHook) ? g_ShimApi.RemoveUserHook(vddHandle) : FALSE;
 }
 
 __declspec(dllexport) VOID WINAPI VDDTerminateVDM(VOID)

@@ -28,3 +28,13 @@ echo "Built: $OUT"
   -o "$ROOT/build/intecho.dll" "$ROOT/sdk/sample/intecho.c" \
   -nostdlib -Wl,--entry,0 -lkernel32
 echo "Built: $ROOT/build/intecho.dll"
+# The third sample (#11, SDK 2): a Microsoft-ABI VDD using the vddsvc calls. Its imports
+# come from NTVDM.EXE by name, through an import library built from sdk/lib/ntvdm.def --
+# which is the check that the .def's STDCALL decorations match sdk/include/ntvdmex-vddsvc.h.
+DLLTOOL="${DLLTOOL:-i686-w64-mingw32-dlltool}"
+"$DLLTOOL" -k -d "$ROOT/sdk/lib/ntvdm.def" -l "$ROOT/build/libntvdm.a"
+"$CC" -std=c99 -Wall -Wextra -O2 -shared \
+  -I "$ROOT/sdk/include" \
+  -o "$ROOT/build/vddsvc.dll" "$ROOT/sdk/sample/vddsvc.c" \
+  -nostdlib -Wl,--entry,_DllEntryPoint@12 -Wl,--enable-stdcall-fixup "$ROOT/build/libntvdm.a" -lkernel32   # by path: the toolchain has a libntvdm.a of its own
+echo "Built: $ROOT/build/vddsvc.dll"

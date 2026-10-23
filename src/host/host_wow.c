@@ -14,6 +14,7 @@
 #include "host_wow.h"
 #include <commctrl.h>
 #include "host_state.h"
+#include "host_vddsvc.h"
 #include "log.h"
 #include "ne.h"
 #include "wow32.h"
@@ -220,6 +221,17 @@ typedef struct
     PVOID (*MapFlat)(WORD segment, DWORD offset, INT isProtectedMode);
     BOOL   (*InstallIoHook)(HANDLE vddHandle, WORD rangeCount, PCVOID ranges, PCVOID handlers);
     VOID   (*RemoveIoHook)(HANDLE vddHandle, WORD rangeCount, PCVOID ranges);
+    /* version 4 (#11): the rest of vddsvc.h -- see host_vddsvc.c */
+    BOOL   (*InstallMemoryHook)(HANDLE vddHandle, PVOID start, DWORD count, PVOID handler);
+    BOOL   (*RemoveMemoryHook)(HANDLE vddHandle, PVOID start, DWORD count);
+    DWORD  (*RequestDma)(HANDLE vddHandle, WORD channel, PVOID buffer, DWORD length);
+    BOOL   (*QueryDma)(HANDLE vddHandle, WORD channel, PVOID info);
+    BOOL   (*SetDma)(HANDLE vddHandle, WORD channel, WORD flags, PVOID info);
+    WORD   (*ReserveIrq)(HANDLE vddHandle, WORD line);
+    BOOL   (*ReleaseIrq)(HANDLE vddHandle, WORD line);
+    BOOL   (*VddMemory)(INT operation, HANDLE vddHandle, PVOID address, DWORD size);
+    BOOL   (*InstallUserHook)(HANDLE vddHandle, PVOID create, PVOID terminate, PVOID block, PVOID resume);
+    BOOL   (*RemoveUserHook)(HANDLE vddHandle);
 } NTVDMEX_SHIM_API;
 
 enum
@@ -3531,6 +3543,16 @@ VOID WowShimsLoad(VOID)
     shimApi.MapFlat = ShimMapFlat;
     shimApi.InstallIoHook = ShimInstallIoHook;
     shimApi.RemoveIoHook = ShimRemoveIoHook;
+    shimApi.InstallMemoryHook = HostVddInstallMemoryHook;
+    shimApi.RemoveMemoryHook = HostVddRemoveMemoryHook;
+    shimApi.RequestDma = HostVddRequestDma;
+    shimApi.QueryDma = HostVddQueryDma;
+    shimApi.SetDma = HostVddSetDma;
+    shimApi.ReserveIrq = HostVddReserveIrq;
+    shimApi.ReleaseIrq = HostVddReleaseIrq;
+    shimApi.VddMemory = HostVddMemory;
+    shimApi.InstallUserHook = HostVddInstallUserHook;
+    shimApi.RemoveUserHook = HostVddRemoveUserHook;
 
     for (index = 0; index < WOW_SHIMS; ++index)
     {

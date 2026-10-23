@@ -22,6 +22,7 @@
 #include "host_mouse.h"
 #include "host_timing.h"
 #include "host_video.h"
+#include "host_vddsvc.h"
 #define HMA_ERROR_PROTECTED         0xE1                /* g_HmaError: committed but not accessible */
 
 /* INT 21h AH=4Bh EXEC.  GH #30:
@@ -1017,6 +1018,7 @@ PSTR ExecBegin(DOS_MACHINE *machine, volatile BYTE *tib, PSTR cursor)
     DosJftExec(machine, child);    /* s91: JFT edits the parent made directly (COMMAND.COM's `>`) */
     ++g_ExecDepth;
     machine->PspSegment = child;
+    HostVddUserCreate((WORD)child);                     /* #11: a VDD's user hook, the new program's PDB */
     machine->DtaSegment = child;
     machine->DtaOffset = DOS_PSP_DEFAULT_DTA;        /* DOS resets the DTA to PSP:80 */
     VDM_REG(tib, VTIB_CS)  = image.CodeSegment;
@@ -1250,6 +1252,7 @@ INT DosTerminate(DOS_MACHINE *machine, PVOID tib, PSTR *logCursor, PSTR base)
     PSTR cursor = *logCursor;
 
     (VOID)cursor;
+    HostVddUserTerminate((WORD)machine->PspSegment);   /* #11: a VDD's user hook, while its PDB is current */
 
             if (g_ExecDepth > 0)
             {
