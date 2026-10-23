@@ -915,7 +915,7 @@ INT WINAPI WinMain(
      * changes. See StatusUpdate.
      */
 
-    StartupBuildDos(&cursor, readCount, &image, programPathBuffer, args, &machine, report);
+    StartupBuildDos(&cursor, readCount, &image, programPathBuffer, args, &machine);
 
     cursor = StartupAttachDevices(cursor);
     StartupLoadTuningKnobs();
