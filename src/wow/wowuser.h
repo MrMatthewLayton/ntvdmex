@@ -963,6 +963,7 @@ VOID WowCommRts(INT id, INT on);
 DWORD DpmiSelectorBase(WORD selector);
 PWOWUSER_WINDOW WowUserNewWindow(VOID);
 PWOWUSER_WINDOW WowUserFindWindow(WORD window16);
+INT WowUserDestroyDialog(WORD window16, PSTR note, INT noteCapacity, PINT noteLengthInOut);
 PWOWUSER_CLASS WowUserFindClass(PCSTR name);
 WORD WowUserSystemResourceMintIcon(HICON icon);
 HICON WowUserSystemResourceIcon(WORD token, PINT picked, INT width, INT height);

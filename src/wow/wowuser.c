@@ -2148,6 +2148,15 @@ static INT WowUserDestroy(WORD window16, PSTR note, INT noteCapacity, PINT noteL
         return 1;
 }
 
+/* #328: the modal loop's DestroyWindow. Win16's DialogBox destroys its dialog when
+ * EndDialog ends the loop; ours is the loop, so it is ours to do. Same path as the
+ * guest's own DestroyWindow: WM_DESTROY sent, the record and its children released.
+ */
+INT WowUserDestroyDialog(WORD window16, PSTR note, INT noteCapacity, PINT noteLengthInOut)
+{
+    return WowUserDestroy(window16, note, noteCapacity, noteLengthInOut);
+}
+
 static LONG WowUserDefProc(
     PWOW32_FRAME frame,
     PWOWUSER_WINDOW window,

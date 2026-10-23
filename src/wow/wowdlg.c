@@ -323,11 +323,23 @@ INT WowDlgStep(
             WowNotePut(note, noteCapacity, &noteLength, " message(s), 0x");
             WowNoteHex(note, noteCapacity, &noteLength, GetTickCount() - dialog->StartTime, WOW_HEX_DWORD_DIGITS);
             WowNotePut(note, noteCapacity, &noteLength, " ms. ");
-            /* The window itself is USER's to destroy and ours to stop showing:
-             * EndDialog's own arm already hid it when Win32 declined to end a
-             * window that is not a real dialog. Nothing to do here but leave.
+            /* [CAUTION]: #328: AND THE DIALOG IS DESTROYED, as Win16's DialogBox does once
+             * EndDialog ends its loop. USER.87 returns as soon as our thunk does, so
+             * nobody else will: the window was only HIDDEN (EndDialog's arm), its
+             * record lived on, and a notification still queued for it -- Terminal's
+             * Phone Number edit sends EN_UPDATE -- was dispatched to the dead dialog's
+             * procedure after DialogBox returned. Terminal faulted there ("Illegal
+             * Instruction in <unknown>", the garbled error box the user reported).
+             * The owner is given back first (WowDlgUnwind), then the window goes.
              */
-            WowDlgUnwind(dialog, (DWORD)dialog->Result);
+            {   WORD dialog16 = dialog->Window;
+
+                WowDlgUnwind(dialog, (DWORD)dialog->Result);
+
+                if (WowUserFindWindow(dialog16))
+                    WowUserDestroyDialog(dialog16, note, noteCapacity, &noteLength);
+            }
+
             continue;              /* an OUTER modal dialog may still be running */
         }
 
