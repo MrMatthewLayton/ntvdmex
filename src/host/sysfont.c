@@ -483,8 +483,8 @@ PCSTR SysFontBuildInto(PCSTR faceName, SYSFONT_TABLES *tables, SYSFONT_REPORT *r
     static SYSFONT_FACE userFace;
     struct
     {
-        BITMAPINFOHEADER h;
-        RGBQUAD pal[SYSFONT_STAGE_COLOURS];
+        BITMAPINFOHEADER Header;
+        RGBQUAD Palette[SYSFONT_STAGE_COLOURS];
     } bitmapInfo;  /* 1bpp needs BOTH entries */
     PVOID bits = NULL;
     HDC dc = CreateCompatibleDC(NULL);
@@ -504,13 +504,13 @@ PCSTR SysFontBuildInto(PCSTR faceName, SYSFONT_TABLES *tables, SYSFONT_REPORT *r
     }
 
     ZeroMemory(&bitmapInfo, sizeof bitmapInfo);
-    bitmapInfo.h.biSize = sizeof bitmapInfo.h;
-    bitmapInfo.h.biWidth = SYSFONT_STAGE_WIDTH;
-    bitmapInfo.h.biHeight = -SYSFONT_MAX_HEIGHT;                      /* top-down */
-    bitmapInfo.h.biPlanes = 1;
-    bitmapInfo.h.biBitCount = 1;
-    bitmapInfo.h.biCompression = BI_RGB;
-    bitmapInfo.pal[1].rgbRed = bitmapInfo.pal[1].rgbGreen = bitmapInfo.pal[1].rgbBlue = SYSFONT_WHITE_LEVEL;
+    bitmapInfo.Header.biSize = sizeof bitmapInfo.Header;
+    bitmapInfo.Header.biWidth = SYSFONT_STAGE_WIDTH;
+    bitmapInfo.Header.biHeight = -SYSFONT_MAX_HEIGHT;                      /* top-down */
+    bitmapInfo.Header.biPlanes = 1;
+    bitmapInfo.Header.biBitCount = 1;
+    bitmapInfo.Header.biCompression = BI_RGB;
+    bitmapInfo.Palette[1].rgbRed = bitmapInfo.Palette[1].rgbGreen = bitmapInfo.Palette[1].rgbBlue = SYSFONT_WHITE_LEVEL;
     bitmap = CreateDIBSection(dc, (BITMAPINFO *)&bitmapInfo, DIB_RGB_COLORS, &bits, NULL, 0);
 
     if (!bitmap || !bits)
