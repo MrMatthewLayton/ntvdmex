@@ -913,8 +913,14 @@
 
 #define WOWUSER_OPENCOMM                    0x00c8
 
-/* Pascal order: base = the LAST argument pushed. OpenComm(dev, cbIn, cbOut). */
-#define WOWUSER_OC_ARG_DEV                  4
+/* Pascal order: base = the LAST argument pushed. OpenComm(dev, cbIn, cbOut) -- BUT USER.EXE's
+ * own OpenComm puts TWO MORE WORDS in front before it thunks: the block is 12 bytes, not 8.
+ * #334, measured (runs/s101/g5/w_comm_host.log, args=0x0c): `0BBF 2AB2 0080 0400 <off> <sel>`
+ * -- a selector and paragraph USER allocated just before the call, then cbOut, cbIn and the
+ * device name. At +4 the old offset read 0400:0080, found nothing, and answered IE_BADID for
+ * every port. The other comm offsets were never measured this way.
+ */
+#define WOWUSER_OC_ARG_DEV                  8
 #define WOWUSER_CC_ARG_ID                   0
 #define WOWUSER_RC_ARG_CB                   0
 #define WOWUSER_RC_ARG_BUF                  2
