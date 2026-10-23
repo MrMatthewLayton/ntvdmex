@@ -173,6 +173,7 @@
 /* The rest of INT 24h's AH: bit 0 = a WRITE, bits 2-1 = the area. */
 #define DOS_CRIT_WRITE                      1
 #define DOS_CRIT_AREA_SHIFT                 1
+#define DOS_CRIT_AREA_DIRECTORY             2
 #define DOS_CRIT_AREA_DATA                  3
 #define DOS_CRIT_AH_PATH_CALL               0x1A    /* p_crit crit.*.int24 BX=1A00 */
 
@@ -295,6 +296,20 @@ static inline BYTE DosCritInt24Ah(_In_ BYTE function)
                | (DOS_CRIT_AREA_DATA << DOS_CRIT_AREA_SHIFT) | DOS_CRIT_WRITE;      /* 3Fh */
 
     return DOS_CRIT_AH_PATH_CALL;                /* p_crit crit.*.int24 BX=1A00 */
+}
+
+/* AH for INT 24h from the failing function AND the error. A WRITE-PROTECTED disk fails a
+ * path call (create, delete, rename, mkdir ...) WRITING the directory -- the read before it
+ * succeeded -- so DOS says "Write protect error writing drive A": bit 0 set, area 2, and
+ * RETRY + FAIL as DirWrite allows them (MS-DOS 4.0 DISK*.ASM, as above). The s101 rig
+ * showed "reading" for a COPY onto the write-protected image. 3Fh/40h keep their own AH.
+ */
+static inline BYTE DosCritInt24AhFor(_In_ BYTE function, _In_ BYTE errorCode)
+{
+    if (errorCode == DOS_ERR_WRITE_PROTECT && function != DOS_CRIT_FUNCTION_READ && function != DOS_CRIT_FUNCTION_WRITE)
+        return DOS_CRIT_ALLOW_FAIL | DOS_CRIT_ALLOW_RETRY | (DOS_CRIT_AREA_DIRECTORY << DOS_CRIT_AREA_SHIFT) | DOS_CRIT_WRITE;   /* 1Dh */
+
+    return DosCritInt24Ah(function);
 }
 
 /* AX the failed call returns when the handler answers FAIL (59h then says 53h).

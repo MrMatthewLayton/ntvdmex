@@ -7124,7 +7124,7 @@ INT DosInt21(PDOS_MACHINE machine)
 
         machine->IsCritPending = 1;
         machine->CritAl = drive;
-        machine->CritAh = DosCritInt24Ah((BYTE)function);
+        machine->CritAh = DosCritInt24AhFor((BYTE)function, (BYTE)(R_AX & BYTE_MASK));
         machine->CritCode = (BYTE)((R_AX & BYTE_MASK) - DOS_INT21_HARD_ERROR_FIRST);
     }
     /* #275: A 3Fh/40h HARDWARE ERROR WHERE INT 24h CANNOT BE RAISED IS ANSWERED AS
