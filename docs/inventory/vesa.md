@@ -63,8 +63,8 @@ runtime half still has no oracle. **4F0Ah, the protected-mode interface, exists 
 | §14 VBE 3.0 4F0Bh and the supplemental functions | 7 | 4 | — | 1 | 1 | 1 |
 | §15 The linear frame buffer | 5 | 3 | 1 | — | — | 1 |
 | §16 Presentation | 8 | 7 | — | — | 1 | — |
-| §17 The mode list | 34 | 28 | — | — | 6 | — |
-| **Total** | **171** | **144** | **7** | **2** | **15** | **3** |
+| §17 The mode list | 34 | 32 | — | — | 2 | — |
+| **Total** | **171** | **148** | **7** | **2** | **11** | **3** |
 
 Before #226: 170 units, 124 IMPL, 15 PART, 2 STORE, 26 MISS, 3 N/A. #226 added one unit (§16,
 the VESA mode's own display timing) and moved 15 rows (9 PART→IMPL, 5 MISS→IMPL, 1 MISS→PART);
@@ -381,10 +381,10 @@ the code, not a measurement. *Shown on the test machine* lists what a guest actu
 | `10Ah` | VBE | 132x43 text, 8x8 (1056x344) | text | 264 | 1 | **IMPL** | — |
 | `10Bh` | VBE | 132x50 text, 8x8 (1056x400) | text | 264 | 1 | **IMPL** | — |
 | `10Ch` | VBE | 132x60 text, 8x8 (1056x480) | text | 264 | 1 | **IMPL** | — (off-VM `:437`) |
-| `102h` | VBE | 800x600, 16 colours | 4, planar | — | — | **MISS** | not in the list |
-| `104h` | VBE | 1024x768, 16 colours | 4, planar | — | — | **MISS** | not in the list |
-| `106h` | VBE | 1280x1024, 16 colours | 4, planar | — | — | **MISS** | not in the list |
-| `6Ah` | VBE (7-bit twin of `102h`, set by `INT 10h AH=00h`) | 800x600, 16 colours | planar | — | — | **MISS** | not a standard mode we define either (`video-bios.md`'s surface) |
+| `102h` | VBE | 800x600, 16 colours | 4, planar | 100 a plane | 3 | **IMPL** (#326) | — (off-VM `video_test.c` T11c). Mode 12h's register file and planar engine at 800x600; planes from a 256 KB store, 4F05h banks the window; no LFB; 4F06h/4F07h answer `034Fh` |
+| `104h` | VBE | 1024x768, 16 colours | 4, planar | 128 a plane | 1 | **IMPL** (#326) | — (off-VM T11c: 4F01 fields) |
+| `106h` | VBE | 1280x1024, 16 colours | 4, planar | 160 a plane | 0 | **IMPL** (#326) | — (off-VM T11c: bank 2 write, render, AH=0Dh) |
+| `6Ah` | VBE (7-bit twin of `102h`, set by `INT 10h AH=00h`) | 800x600, 16 colours | planar | 100 a plane | 3 | **IMPL** (#326) | `AH=00h AL=6Ah` is a 4F02h of `102h` (AL bit 7 = D15); 4F01h answers for `6Ah` too; not repeated in the list. ⚠ A protected-mode guest's NATIVE A0000 stores do not reach these modes' planes (the host's 64 KB plane sections back mode 12h only) -- unverified on the test machine |
 | `81FFh` | VBE special: all of VRAM, contents preserved; needs a ModeInfoBlock, must not be listed | — | packed | — | — | **MISS** | 4F01 and 4F02 both refuse it (`:578`: `1FFh` is not in the table) |
 | Standard VGA modes via 4F02 (BH=0, BL=mode) | §3.0 "may be initialized through VBE Function 02h" | — | — | — | — | **MISS** | `014Fh`. Permitted while they are not in our list (§4.5), but a guest that sets 13h through 4F02 is refused |
 
@@ -426,8 +426,8 @@ VGA layer, `mkind`, `40:49h`, D5), 3 (4F07 BL=80h — VDD half), 4 (4F03 D14/D15
 8. **OffScreenMemOffset/Size** (§4): report the VRAM beyond the displayed page to a 2.0
    caller, or claim VBE 3.0 (where the bytes are reserved) together with its fields. ⚠ `p_vesa`
    grades these bytes and both oracles say 0 — changing them moves parity.
-9. **Missing modes and depths** (§16, §17): the planar 16-colour VESA modes `102h`/`104h`/
-   `106h` (and `6Ah`), 32bpp 8:8:8:8 modes (the converter needs a 32-bit arm too), and
+9. **Missing modes and depths** (§16, §17): ~~the planar 16-colour VESA modes `102h`/`104h`/
+   `106h` (and `6Ah`)~~ (#326), 32bpp 8:8:8:8 modes (the converter needs a 32-bit arm too), and
    `81FFh`.
 10. **4F06/4F07 in VESA text modes** (§9–§10): each answers `034Fh` where the spec expects the
     call to work; needs the text renderer to take a pitch and a start.

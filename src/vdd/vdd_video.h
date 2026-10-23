@@ -63,6 +63,13 @@
  * construction.
  */
 #define VIDEO_PLANE_SIZE                65536u                              /* Bytes/plane, as on a VGA */
+
+/* #326: WHAT BACKS A PLANE, WHICH AN SVGA HAS MORE OF THAN A VGA. The VESA 16-colour
+ * planar modes (102h 800x600, 104h 1024x768, 106h 1280x1024) need up to 160 KB per
+ * plane (1280 / 8 * 1024); the A0000 window still shows 64 KB of it, and 4F05h picks
+ * which 64 KB (VesaBank). VIDEO_PLANE_SIZE stays the VGA's plane and the window.
+ */
+#define VIDEO_PLANE_STORE_SIZE          0x40000u                            /* Bytes/plane behind a VESA planar mode */
 #define VIDEO_BPP_INDEXED               8
 
 /* INT 10h functions (AH) used outside the video VDD too. */
@@ -393,6 +400,7 @@ typedef struct _VIDEO_STATE
     BYTE  VesaBpp;                  /* 8/15/16/24 -- bits per pixel of the mode */
     UINT32 VesaStride;               /* bytes per scan line of the current mode */
     BYTE  IsVesaLfb;                  /* the mode was set with bit 14: LFB in use */
+    BYTE  IsVesaPlanar;               /* #326: a VESA 16-colour planar mode (102h/104h/106h, 6Ah) */
     WORD VesaModeFlags;           /* D14|D15 of the last 4F02 (4F03 returns them, #226) */
     BYTE  IsModeSetNoClear;           /* the last mode set (AH=00h AL bit 7 / 4F02h D15) did
                                            not clear memory: BDA 40:87h bit 7 (#226)    */
@@ -410,7 +418,7 @@ typedef struct _VIDEO_STATE
      */
     UINT32 VesaArgb[(UINT32)VIDEO_VESA_MAX_WIDTH * VIDEO_VESA_MAX_HEIGHT];
     BYTE  VesaVram[VIDEO_VESA_VRAM];  /* full packed-256 framebuffer */
-    BYTE  Planes[VIDEO_PLANES][VIDEO_PLANE_SIZE];  /* mode 12h: 4 bit-planes (640x480x16) */
+    BYTE  Planes[VIDEO_PLANES][VIDEO_PLANE_STORE_SIZE];  /* the 4 bit-planes: mode 12h's first 64 KB, a VESA planar mode's all (#326) */
     /* VGA planar write engine (Sequencer 3C4/3C5 + Graphics Controller 3CE/3CF) */
     BYTE SequencerIndex;
     BYTE GcIndex;
