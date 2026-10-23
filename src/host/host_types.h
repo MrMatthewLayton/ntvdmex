@@ -119,6 +119,8 @@
 #define DPMI_PMRET_OFF          0x0070
 #define DPMI_RAW2PM_OFF         0x005C
 #define DPMI_RAW2RM_OFF         0x0074
+#define DPMI_RAW2PM_BOP         0x58    /* 0306h real -> protected (entered in V86); serviced since #268 */
+#define DPMI_RAW2RM_BOP         0x59    /* 0306h protected -> real (entered in PM) */
 
 /* INT 31h 0305 state save/restore. Both procedures are FAR CALLed with AL=0 save /
  * AL=1 restore, ES:(E)DI = buffer, and MUST PRESERVE ALL REGISTERS. We keep the whole

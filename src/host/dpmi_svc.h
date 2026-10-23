@@ -40,6 +40,7 @@
 #define DPMI_E_INVALID_SEL                      0x8022  /* Invalid selector */
 #define DPMI_E_INVALID_HANDLE                   0x8023  /* Invalid handle */
 #define DPMI_E_INVALID_CB                       0x8024  /* Invalid callback */
+#define DPMI_E_INVALID_LINEAR                   0x8025  /* Invalid linear address (#268) */
 
 /* ONE MACHINE, DESCRIBED ONCE: 1687h AND 0400h:
  * Both report the processor class in CL, and they disagreed: 1687h said 4 (s79, the
@@ -254,6 +255,63 @@
 #define DPMI_RESIZE_INPLACE                     1
 #define DPMI_RESIZE_MOVE                        2
 
+/* #268: THE #248 REMAINDERS -- VALUES, NOT JUST SELECTORS.
+ * #248 made a bad SELECTOR an error. These are the calls whose selector is fine but whose
+ * VALUE is not -- the spec's 8021h (invalid value) and 8025h (invalid linear address) --
+ * and the two services whose answer was a shape rather than a check: 0100h above 64 KB,
+ * and 0500h's block. (The spec is not held in the repo; docs/ref/SOURCES.md.)
+ *
+ * [CAUTION]: UNDER WOW NONE OF THE VALUE CHECKS APPLY. krnl386 owns the table, it was never
+ * measured against these refusals, and a refused descriptor call is a dead Win16 session
+ * rather than a visible error. The callers skip them when the guest owns the table.
+ */
+/* XP's LDT validator refuses any descriptor whose base lies past MmHighestUserAddress (a
+ * 2 GB-user build): the cap 0007h judges a new base against.
+ */
+#define DPMI_XP_LDT_MAX_LINEAR                  0x7FFEFFFFu
+
+/* 0008h: "Limits greater than 1 MB must have the low 12 bits set" -- above 1 MB the
+ * descriptor counts the limit in 4 KB pages (G = 1), so 0x123456 is a limit no descriptor
+ * can hold, and the host must not round it silently. 0xFFFFFFFF (DOS/4GW's flat 4 GB)
+ * passes, and DpmiInstall() then clamps it to the LDT cap -- a separate, logged deviation.
+ */
+#define DPMI_BYTE_LIMIT_MAX                     0xFFFFFu
+#define DPMI_PAGE_LIMIT_LOW_BITS                0xFFFu
+
+/* 0009h: CL = the access byte, CH (32-bit hosts) = descriptor byte 6. Refused (8021h): S = 0
+ * (a system descriptor is not the client's), conforming code, and CH bit 5 (must be 0).
+ *
+ * [CAUTION]: THE DPL RULE IS DELIBERATELY NOT ENFORCED. ZAR (DOS/16M) builds its VESA LFB
+ * selector with 0009h CX=8092h -- DPL 0 -- and DpmiInstall() forces every present
+ * descriptor to DPL 3 instead (s74c, the ZAR VESA fix).
+ */
+#define DPMI_ACCESS_S                           0x10
+#define DPMI_ACCESS_EXECUTABLE                  0x08
+#define DPMI_ACCESS_CONFORMING                  0x04
+#define DPMI_RIGHTS_RESERVED_BIT                0x2000u
+
+/* 0100h ABOVE 64 KB: "contiguous descriptors will be allocated", each next one based 64 KB
+ * above the last with a 64 KB limit and the last holding the remainder; on a 32-bit host
+ * the FIRST spans the whole block. `paragraphs` 0 is one descriptor with limit 0.
+ */
+#define DPMI_DOS_CHAIN_PARAGRAPHS               0x1000u
+#define DPMI_DOS_CHAIN_SPAN                     0x10000u
+
+/* 0306h, THE RAW MODE SWITCH. Both directions take the new state in the same registers:
+ * AX = DS, CX = ES, DX = SS, (E)BX = (E)SP, SI = CS, (E)DI = (E)IP; FS and GS are 0
+ * afterwards. Into real mode they are SEGMENTS and the offsets 16 bits wide; into
+ * protected mode they are SELECTORS and EBX/EDI full width for a 32-bit client.
+ */
+typedef struct _DPMI_RAW_SWITCH
+{
+    WORD  Ds;
+    WORD  Es;
+    WORD  Ss;
+    WORD  Cs;
+    DWORD Esp;
+    DWORD Eip;
+} DPMI_RAW_SWITCH, *PDPMI_RAW_SWITCH;
+
 INT DpmiIsSelectorValid(WORD selector, INT indexLimit, INT isAllocated, INT isGuestOwnedTable);
 
 WORD DpmiCallbackEntry(WORD base, INT slot);
@@ -264,5 +322,30 @@ INT DpmiCallbackSlotAt(WORD base, WORD codeSegment, WORD wantedSegment, WORD ins
  */
 INT DpmiCallbackSlotOf(WORD base, WORD codeSegment, WORD wantedSegment, WORD offset);
 INT DpmiResizePlan(UINT32 newSize, UINT32 committed, UINT32 *copy);
+INT DpmiLimitOk(DWORD limit);
+INT DpmiAccessOk(WORD rights);
+
+/* 0007h: a base past the cap is 8025h. Only the BASE is judged: base + limit past the cap
+ * is the flat-selector case DpmiInstall() clamps and installs, and refusing it would break
+ * every DOS/4GW game.
+ */
+INT DpmiBaseOk(DWORD base, DWORD cap);
+INT DpmiDosChainCount(WORD paragraphs);
+VOID DpmiDosChainDescriptor(WORD paragraphs, INT index, DWORD *baseOffset, DWORD *limit);
+
+/* 0500h: the whole 30h block from the pool and what the client holds now (the live 0501h
+ * blocks, page-rounded). Free counts drop as 0501h allocates; totals stay; no paging
+ * file (0); the reserved DWORDs are -1. The pool is a promise, not a limit.
+ */
+VOID DpmiFreeMemoryInfo(DWORD info[DPMI_FREE_INFO_DWORDS], DWORD poolPages, DWORD usedPages);
+VOID DpmiRawSwitchPlan(
+    DWORD eax,
+    DWORD ebx,
+    DWORD ecx,
+    DWORD edx,
+    DWORD esi,
+    DWORD edi,
+    INT isWide,
+    PDPMI_RAW_SWITCH target);
 
 #endif /* NTVDMEX_DPMI_SVC_H */

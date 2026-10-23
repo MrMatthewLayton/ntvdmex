@@ -59,14 +59,12 @@ it. The guest shelf is the integration test.
 **Every host service that a comment in our code says an extender calls has an arm.** No
 row below is MISS for a call our code records an extender making. What stays open:
 
-1. **INT 31h `0306h` hands out two raw-switch entries that nothing services.**
-   `host_dpmi_int.c:6858-6875` returns `DOS_HDLR_SEG:DPMI_RAW2PM_OFF` and
-   `selector:DPMI_RAW2RM_OFF`. `host_startup.c:4241-4246` plants BOP `58h`/`59h` there.
-   No dispatcher in `src/` tests for `DPMI_RAW2PM_BOP` or `DPMI_RAW2RM_BOP`: a grep finds
-   only the defines, the plant and the `0306h` arm. In V86, BOP `58h` from a guest is
-   also NTVDM's third-party BOP (`NTVDM_BOP_ISV`, `src/vdm/ntvdm.h:257`,
-   `host_exec.c:2211`). dpmi.md §5 and [bop.md](bop.md) both mark this IMPL. **Here it is
-   PART.** Whether an extender ever jumps to these entries is not known (§9).
+1. ~~**INT 31h `0306h` hands out two raw-switch entries that nothing services.**~~ **Done in
+   #268** (UNMEASURED): BOP `59h` in PM is taken by origin and runs the client's real mode
+   in the nested V86 run until BOP `58h` at `DOS_HDLR_SEG:DPMI_RAW2PM_OFF`, also by origin
+   -- so a guest's own `C4 C4 58` (NTVDM's third-party BOP) is still the guest's. See
+   [dpmi.md](dpmi.md) §5. Whether an extender ever jumps to these entries is still not
+   known (§9).
 2. **Only INT 21h goes to an extender's own PM handler.** DOS/4GW also installs handlers
    for other vectors. The comment that scopes routing to INT 21h (`host_dpmi_int.c:8360-8369`)
    gives as its reason that "`0300` ... currently only implements INT 21h". #247 removed
@@ -140,7 +138,7 @@ that no comment names an extender caller, not that the extender never calls it.
 | `0300h` simulate real-mode interrupt | "a Watcom/DOS4GW program ... calls int86(), and int86 under an extender is 0300" (`host_dpmi_int.c:884-888`, evidence from ZAR's video driver) | **IMPL** | `:6955`; dpmi.md §5 (#247) |
 | `0302h` call real-mode procedure with an IRET frame | DOS/4GW's PM INT 21h handler forwards to real-mode DOS this way (`host_dpmi_int.c:383-386`) | **PART** | `:6961`. dpmi.md §5's PART: a procedure that never returns still gets CF=0 after 128 nested events |
 | `0305h` state save / restore addresses | not named | **IMPL** | `:6836-6857`; both routines are a `RETF` (`host_startup.c:4247-4248`) |
-| `0306h` raw mode-switch addresses | DOS/4GW: "it tests CF from 0306" (`host_startup.c:286-287`, `host_dpmi_int.c:6860-6864`) | **PART** | The addresses are returned with CF=0 (`host_dpmi_int.c:6858-6875`), but nothing services a jump to either entry (Headline 1) |
+| `0306h` raw mode-switch addresses | DOS/4GW: "it tests CF from 0306" (`host_startup.c:286-287`, `host_dpmi_int.c:6860-6864`) | **IMPL** (#268, UNMEASURED) | The addresses are returned with CF=0, and both entries are serviced since #268 (Headline 1; [dpmi.md](dpmi.md) §5) |
 | `0501h` allocate memory block | DOS/4GW: one block per LE object, sized to the object's page-rounded virtual size (`host_types.h:337-345`, `host_dpmi_int.c:1252-1260`) | **IMPL** | `:6937`; dpmi.md §7 |
 | `0701h`-`0703h` paging hints | Doom: "asks 0702 six times" (`host_dpmi_int.c:6561`) | **IMPL** | `:6573-6587`, advisory CF=0 |
 | `0A00h` vendor API | DOS/4GW: "asks, is refused, and carries on" (`host_dpmi_int.c:6791-6797`) | **IMPL** | Refused with CF=1. dpmi.md §8 marks it MISS against stock NTVDM's vendor API. For the extenders, our comment records that the refusal is enough. Counted IMPL here because the refusal is the answer this caller is recorded as taking |
@@ -209,9 +207,7 @@ that no comment names an extender caller, not that the extender never calls it.
 These came up while reading the code. The repo does not answer them, so they are not rows.
 
 1. **Does DOS/4GW or DOS/16M ever jump to the `0306h` raw-switch entries?** If one does,
-   what happens when BOP `58h`/`59h` arrives with no arm to service it, and in V86 is BOP
-   `58h` taken as NTVDM's third-party BOP (`host_exec.c:2211`)? This also bears on the
-   IMPL that dpmi.md §5 and bop.md give `0306h`.
+   Since #268 both entries are serviced (by origin), but no run has exercised them.
 2. **Which INT 15h function does DOS/4GW ask when it is given a command-line argument?**
    `host_bios.c:1068-1073` and `host_startup.c:4382-4386` both record that it quits with
    an argument, and neither names the function. Is that still true after #206 and #244?
