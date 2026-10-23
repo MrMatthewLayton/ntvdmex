@@ -439,6 +439,7 @@
 #define DOS_BOP_INT21               0x20
 #define DOS_BOP_INT20               0x30
 #define DOS_BOP_XMS_ENTRY           0x43
+#define DOS_BOP_IPX_ENTRY           0x7A                /* #315: the IPX far-call entry (IPX's own INT is 7Ah) */
 
 /* Which entries of the table krnl386 actually reads, and what each becomes.
  * Only these six are consulted; the rest are present so the table has stock's

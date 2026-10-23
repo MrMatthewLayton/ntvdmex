@@ -4208,6 +4208,11 @@ VOID StartupBuildDos(
     for (index = 0; index < sizeof(xmsBopStub); ++index)
         handlerArea[XMS_ENTRY_OFF + index] = xmsBopStub[index];                                                   /* XMS far-call entry */
 
+    {   static const BYTE ipxBopStub[] = { VDM_BOP0, VDM_BOP1, DOS_BOP_IPX_ENTRY, X86_OP_RETF };   /* #315 */
+
+        for (index = 0; index < sizeof(ipxBopStub); ++index)
+            handlerArea[IPX_ENTRY_OFF + index] = ipxBopStub[index]; }
+
     /* [CAUTION]: GH #47: a non-zero word at XMS_ENTRY_OFF+0x45 WAS TRIED AND REFUTED.
      * MEM.EXE skips its whole extended-memory report on a zero word at +0x45 of
      * some structure, and that structure looked like the XMS entry. It is not:

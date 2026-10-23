@@ -12,6 +12,7 @@
  */
 
 #include "host_bios.h"
+#include "host_ipx.h"
 #include "host_state.h"
 #include "log.h"
 #include "bios_kbdact.h"
@@ -1513,6 +1514,15 @@ INT V86BiosBop(volatile BYTE *tib, UINT bopNumber, PSTR *logCursor, PSTR base)
             VDM_SET16(tib, VTIB_ES, DOS_HDLR_SEG);
             VDM_SET16(tib, VTIB_EBX, XMS_ENTRY_OFF);
         }
+        /* #315: IPX. Answered only where the host HAS IPX (Winsock AF_IPX, i.e. NWLink);
+         * otherwise not at all -- AL stays 00h, "not installed", as stock without NWLink.
+         */
+        else if (ax == MULTIPLEX_IPX_INSTALLATION_CHECK && HostIpxInstallCheck())
+        {
+            VDM_SET16(tib, VTIB_EAX, (VDM_REG(tib, VTIB_EAX) & HIGH_BYTE_MASK) | MULTIPLEX_IPX_INSTALLED);
+            VDM_SET16(tib, VTIB_ES, DOS_HDLR_SEG);
+            VDM_SET16(tib, VTIB_EDI, IPX_ENTRY_OFF);
+        }
         else if (ax == MULTIPLEX_DPMI_INSTALLATION_CHECK)                             /* DPMI installation check (SPIKE) */
         {
             /* AX=0 present; BX bit0=1 (32-bit programs supported, run 81); CL = the CPU
@@ -1616,6 +1626,17 @@ INT V86BiosBop(volatile BYTE *tib, UINT bopNumber, PSTR *logCursor, PSTR base)
          *      g_WowVendorSelector for what happens when that is refused.
          */
         VDM_REG(tib, VTIB_EIP) += VDM_BOP_LENGTH;                        /* -> the IRET (CF) */
+        V86BOP_RET(V86BOP_DONE);
+    }
+
+    /* #315: the IPX far-call entry -- only at the address 7A00h handed out (the s78 rule:
+     * 7Ah is a number a guest's own BOP may use too).
+     */
+    if (bopNumber == DOS_BOP_IPX_ENTRY && VDM_REG16(tib, VTIB_CS) == DOS_HDLR_SEG
+        && VDM_REG16(tib, VTIB_EIP) == IPX_ENTRY_OFF)
+    {
+        HostIpxEntry(tib);
+        VDM_REG(tib, VTIB_EIP) += VDM_BOP_LENGTH;                        /* -> the RETF */
         V86BOP_RET(V86BOP_DONE);
     }
 

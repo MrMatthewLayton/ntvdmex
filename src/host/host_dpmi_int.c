@@ -7391,6 +7391,17 @@ static INT DpmiServiceInt2F(
         VDM_SET16(tib, VTIB_EDI, DPMI_ENTRY_OFF);
         cursor = LogPut(cursor, " -> DPMI present");
     }
+    else if (ax == MULTIPLEX_IPX_INSTALLATION_CHECK)
+    {
+        /* #315: NOT OFFERED TO A PM CALLER, ON PURPOSE. The IPX entry is a real-mode
+         * address (DOS_HDLR_SEG:IPX_ENTRY_OFF) and its ECBs hold real-mode pointers, so
+         * a protected-mode far call to it is not something this host can honour. AL
+         * stays 00h, "not installed". A DPMI program reaches IPX as its extender does:
+         * INT 2Fh through 0300h and the entry through 0301h, both in real mode, where
+         * the V86 arm answers.
+         */
+        cursor = LogPut(cursor, " -> IPX: not offered in PM (real-mode interface; use 0300h/0301h)");
+    }
     else if (ax == MULTIPLEX_DEVICE_API_ENTRY)
     {
         VDM_SET16(tib, VTIB_ES, 0);
@@ -8541,6 +8552,22 @@ static INT WowFinishCallback(
     return HOST_FLOW_NEXT;
 }
 
+/* #315: a DPMI client's far pointer (selector, offset) for the NetBIOS device. NULL for a
+ * null selector or memory that is not there -- the device then answers "invalid buffer".
+ */
+static PVOID NetBiosMapProtectedMode(PVOID context, WORD selector, DWORD offset)
+{
+    DWORD linear;
+
+    (VOID)context;
+
+    if (!selector)
+        return NULL;
+
+    linear = DpmiSelectorBase(selector) + offset;
+    return HostWritable((PVOID)(ULONG_PTR)linear, 1) ? (PVOID)(ULONG_PTR)linear : NULL;
+}
+
 INT DpmiServicePmIntBody(DOS_MACHINE *machine, volatile BYTE *tib, DWORD vector, UINT steps)
 {
     CHAR report[2048];
@@ -8860,6 +8887,47 @@ INT DpmiServicePmIntBody(DOS_MACHINE *machine, volatile BYTE *tib, DWORD vector,
 
                         VDM_REG(tib, VTIB_EIP) += DPMI_PM_BOP_LENGTH;               /* past the 2-byte PM BOP */
                         (VOID)base;                                 /* no per-poll logging (would flood) */
+                        return 1;
+                    }
+
+                    /* #315: NETBIOS FROM PROTECTED MODE. A DPMI client's INT 5Ch / INT 2Ah used
+                     * to fall through to "unexpected PM stop" and end the run. The NCB is at
+                     * ES:(E)BX and its buffer pointer is a selector:offset -- both resolved
+                     * through the client's selectors, then the same service V86 uses.
+                     *
+                     * [CAUTION]: A NO-WAIT NCB'S POST ROUTINE IS NOT CALLED FOR A PM CLIENT. The
+                     * command still completes before INT 5Ch returns (retcode and cmd_cplt are
+                     * final, as for V86), so a program that polls them works; one that waits
+                     * only for its POST does not. The V86 path runs POST by pushing a real-mode
+                     * frame; a PM POST needs a PM frame of the client's width, which nothing
+                     * here builds yet. Counted (PostsSkippedProtectedMode), logged once.
+                     */
+                    if (vector == VECTOR_NETBIOS || vector == VECTOR_NETWORK)
+                    {
+                        NTVDD_REGISTERS registers;
+                        DWORD ncbOffset = DpmiSelectorIs32((WORD)VDM_REG16(tib, VTIB_CS))
+                                        ? VDM_REG(tib, VTIB_EBX) : VDM_REG16(tib, VTIB_EBX);
+                        RegistersLoad(&registers, tib);
+                        HOST_LOCK();
+                        ++g_Net.ProtectedModeCalls;
+                        VddNetBiosCall(&g_Net, &registers, (BYTE)vector, ncbOffset, NetBiosMapProtectedMode, NULL);
+
+                        if (g_Net.IsPostPending)
+                        {
+                            g_Net.IsPostPending = 0;
+
+                            if (g_Net.PostsSkippedProtectedMode++ == 0)
+                            {
+                                cursor = LogPut(cursor, "NETBIOS (PM): a no-wait NCB's POST at 0x"); cursor = LogHex(cursor, g_Net.PostSegment);
+                                cursor = LogPut(cursor, ":0x"); cursor = LogHex(cursor, g_Net.PostOffset);
+                                cursor = LogPut(cursor, " is not called for a PM client (the NCB is already complete)\r\n");
+                                LogAppend(LOG_PATH, base, cursor); cursor = base;
+                            }
+                        }
+
+                        HOST_UNLOCK();
+                        RegistersStore(&registers, tib);
+                        VDM_REG(tib, VTIB_EIP) += DPMI_PM_BOP_LENGTH;
                         return 1;
                     }
 
