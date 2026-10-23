@@ -1267,6 +1267,128 @@ static BYTE DosSftValue(PDOS_MACHINE machine, UINT handle)
     return DOS_PSP_JFT_CLOSED;
 }
 
+/* #48: NOTE WHAT AN OPEN TOLD US, for the SFT mirror -- the name (FCB form), the mode the
+ * guest asked for, and the PSP that owns the file. Indexes past the guest block (and the three
+ * devices) have nowhere to show it.
+ */
+static VOID DosSftNote(PDOS_MACHINE machine, BYTE value, WORD segment, WORD offset, WORD openMode)
+{
+    CHAR path[DOS_INT21_PATH_SIZE];
+
+    if (value < DOS_INT21_SFT_FIRST_HOST || value >= DOS_SFT_ENTRIES)
+        return;
+
+    DosGuestPath(machine, segment, offset, path, sizeof path);
+    DosSftNameFromPath(path, machine->SftName[value]);
+    machine->SftOpenMode[value] = openMode;
+    machine->SftOwner[value] = machine->PspSegment;
+}
+
+/* #48: THE GUEST'S SFT, REBUILT FROM WHAT IS OPEN. SftHost[] stays the truth; this writes the
+ * mirror a program walking SysVars+04h reads (MEM /D, PC Tools-style file lists, krnl386).
+ * Entry i is JFT value i: 0 AUX, 1 CON, 2 PRN (the standard devices, referenced by the standard
+ * handles still bound to them, mapped as DosSftValue maps them), 3.. a host file (referenced
+ * by every DOS handle on it).
+ *
+ * [CAUTION]: CALLED AFTER AN OPEN, CLOSE OR DUP AND AT AH=52h -- NOT ON EVERY READ, WRITE OR
+ * SEEK. Size and position are read from the handle when it runs, so a walker that asks AH=52h
+ * first (as one must, to find the chain) sees them current; one that keeps the pointer and
+ * re-reads later sees them as of the last open/close. Re-querying every handle on every byte of
+ * I/O would cost far more than any walker is worth.
+ * The block and its size come from SysVars+04h itself, so this follows whichever block the host
+ * planted (DOS's, or WOW's from the host pool); none planted -> nothing to do.
+ */
+static VOID DosSftRefresh(PDOS_MACHINE machine)
+{
+    static const CHAR deviceNames[DOS_INT21_SFT_FIRST_HOST][DOS_FCB_NAME_SIZE + 1] = { "AUX        ", "CON        ", "PRN        " };
+    static const WORD deviceInfo[DOS_INT21_SFT_FIRST_HOST] = { DOS_INT21_DEVICE_INFO_AUX, DOS_INT21_DEVICE_INFO_CONSOLE, DOS_INT21_DEVICE_INFO_PRN };
+    volatile BYTE *sysVars;
+    WORD sftOffset;
+    WORD sftSegment;
+    PBYTE block;
+    UINT count;
+    UINT index;
+
+    if (!machine->SysvarsSegment)
+        return;
+
+    sysVars = (volatile BYTE *)(ULONG_PTR)(((DWORD)machine->SysvarsSegment << PARAGRAPH_SHIFT) + machine->SysvarsOffset);
+    sftOffset = *(volatile WORD *)(sysVars + DOS_SYSVARS_SFT);
+    sftSegment = *(volatile WORD *)(sysVars + DOS_SYSVARS_SFT + X86_WORD_SIZE);
+
+    if (!sftSegment || sftSegment == DOS_SFT_LAST)
+        return;
+
+    block = (PBYTE)(ULONG_PTR)(((DWORD)sftSegment << PARAGRAPH_SHIFT) + sftOffset);
+    count = (UINT)(block[DOS_SFT_COUNT] | (block[DOS_SFT_COUNT + 1] << BYTE_SHIFT));
+
+    if (count > DOS_SFT_ENTRIES)
+        count = DOS_SFT_ENTRIES;
+
+    for (index = 0; index < count; ++index)
+    {
+        DOS_SFT_FILE file;
+        UINT handle;
+        UINT byteIndex;
+
+        for (byteIndex = 0; byteIndex < sizeof file; ++byteIndex)
+            ((PBYTE)&file)[byteIndex] = 0;
+
+        if (index < DOS_INT21_SFT_FIRST_HOST)
+        {
+            for (handle = 0; handle < DOS_INT21_STD_OPEN_BITS; ++handle)
+            {
+                UINT device = (handle == DOS_INT21_STDAUX_HANDLE) ? DOS_PSP_JFT_AUX_ENTRY
+                            : (handle == DOS_INT21_STDPRN_HANDLE) ? DOS_PSP_JFT_PRN_ENTRY : DOS_PSP_JFT_STDIN_ENTRY;
+
+                if (device == index && (handle >= DOS_MAX_FILES || !machine->FileHandles[handle]) && (machine->StdOpen & (1u << handle)))
+                    ++file.References;
+            }
+
+            for (byteIndex = 0; byteIndex < DOS_FCB_NAME_SIZE; ++byteIndex)
+                file.Name[byteIndex] = (BYTE)deviceNames[index][byteIndex];
+
+            file.OpenMode = DOS_INT21_OPEN_READ_WRITE;
+            file.DeviceInfo = deviceInfo[index];
+            file.OwnerPsp = machine->PspSegment;
+        }
+        else if (machine->SftHost[index])
+        {
+            HANDLE host = machine->SftHost[index];
+            FILETIME fileTime;
+            FILETIME localTime;
+
+            for (handle = 0; handle < DOS_MAX_FILES; ++handle)
+                if (machine->FileHandles[handle] == host)
+                    ++file.References;
+
+            if (file.References)
+            {
+                for (byteIndex = 0; byteIndex < DOS_FCB_NAME_SIZE; ++byteIndex)
+                    file.Name[byteIndex] = machine->SftName[index][byteIndex];
+
+                file.OpenMode = machine->SftOpenMode[index];
+                file.OwnerPsp = machine->SftOwner[index];
+                file.DeviceInfo = DOS_INT21_DEVICE_INFO_FILE;                  /* what AX=4400h answers for it */
+
+                if (GetFileType(host) == FILE_TYPE_DISK)
+                {
+                    file.Size = GetFileSize(host, NULL);
+                    file.Position = SetFilePointer(host, 0, NULL, FILE_CURRENT);
+
+                    if (GetFileTime(host, NULL, NULL, &fileTime) && FileTimeToLocalFileTime(&fileTime, &localTime))
+                        FileTimeToDosDateTime(&localTime, &file.Date, &file.Time);
+                }
+            }
+        }
+
+        if (file.References)
+            DosSftEntryBuild(DosSftEntryAt(block, index), &file);
+        else
+            DosSftEntryClear(DosSftEntryAt(block, index));
+    }
+}
+
 static VOID DosJftPut(PDOS_MACHINE machine, UINT handle, BYTE value)
 {
     UINT count;
@@ -1539,6 +1661,7 @@ INT DosInt21(PDOS_MACHINE machine)
     DWORD callOffset = 0;
     INT   isCallFramed  = 0;
     BYTE isLfnAlias = 0;                        /* #210: the AL of a 71xxh served by xxh */
+    BYTE inputAl;
 
     #define R_AX VDM_REG(tib, VTIB_EAX)
     #define R_BX VDM_REG(tib, VTIB_EBX)
@@ -1592,6 +1715,7 @@ INT DosInt21(PDOS_MACHINE machine)
         : (volatile WORD *)(((VDM_REG(tib, VTIB_SS) & WORD_MASK) << PARAGRAPH_SHIFT)
                             + (((VDM_REG(tib, VTIB_ESP) & WORD_MASK) + X86_FRAME16_FLAGS) & WORD_MASK));
     function = (R_AX >> BYTE_SHIFT) & BYTE_MASK;
+    inputAl = (BYTE)(R_AX & BYTE_MASK);                                         /* #48: 3Dh's mode, before AX is the handle */
     machine->Trampoline = 0;
     /* #251: resume the V86 guest in the AUX/PRN driver code -- see dos_auxprn.asm. */
     #define AUXPRN_TRAMP(entry) (machine->Trampoline = (WORD)(DOS_AUXPRN_OFF + (entry)))
@@ -4713,18 +4837,18 @@ INT DosInt21(PDOS_MACHINE machine)
     }
     else if (function == DOS_FN_GET_LIST_OF_LISTS)                /* get list of lists -> ES:BX */
     {
-        /* The word at ES:BX-2 is the first MCB segment, and that is the field a
-         * memory walker actually follows -- it is filled in truthfully from our
-         * own MCB chain. The rest of SysVars is a stub, so it is ZEROED rather
-         * than left as whatever was in memory: a walker that follows a garbage
-         * DPB or SFT pointer wanders off into nonsense, which is the silent
-         * failure #27 exists to remove, whereas a null pointer stops it.
+        /* The host builds SysVars at start-up (host_startup.c; layout in dos_sysvars.h, measured
+         * on 6.22): the first MCB at ES:BX-2, the DPB chain, the SFT block, CLOCK$/CON, the CDS
+         * array, LASTDRIVE and the inline NUL header with the device chain behind it. #48: the
+         * SFT entries mirror what is open, and are brought up to date here, because a walker
+         * asks for this pointer first.
          */
         if (machine->SysvarsSegment)
         {
+            DosSftRefresh(machine);
             SET16(R_ES, machine->SysvarsSegment);
             SET16(R_BX, machine->SysvarsOffset);
-            trace = LogPut(trace, "  INT21 AH=52 list-of-lists (MCB head only; rest stubbed)\r\n");
+            trace = LogPut(trace, "  INT21 AH=52 list-of-lists (MCB, DPB, SFT, CDS, devices; SFT refreshed)\r\n");
             OKCF();
         }
         else
@@ -6160,15 +6284,28 @@ INT DosInt21(PDOS_MACHINE machine)
     if (!g_DosInt21IsProtectedMode && !(*guestFlags & 1))
     {
         if (function == DOS_FN_CREATE || function == DOS_FN_OPEN || function == DOS_FN_CREATE_TEMP || function == DOS_FN_CREATE_NEW || function == DOS_FN_EXTENDED_OPEN)
-            DosJftPut(machine, (UINT)(R_AX & WORD_MASK), DosSftValue(machine, (UINT)(R_AX & WORD_MASK)));
+        {
+            BYTE value = DosSftValue(machine, (UINT)(R_AX & WORD_MASK));
+            DosJftPut(machine, (UINT)(R_AX & WORD_MASK), value);
+            /* #48: 6Ch names the file at DS:SI and takes its mode in BL; the rest at DS:DX, 3Dh's in AL. */
+            DosSftNote(machine, value, (WORD)R_DS,
+                       (WORD)((function == DOS_FN_EXTENDED_OPEN) ? R_SI : R_DX),
+                       (WORD)((function == DOS_FN_EXTENDED_OPEN) ? (R_BX & BYTE_MASK)
+                              : (function == DOS_FN_OPEN) ? inputAl : DOS_INT21_OPEN_READ_WRITE));
+            DosSftRefresh(machine);
+        }
         else if (function == DOS_FN_DUP || function == DOS_FN_DUP2)
         {
             UINT sourceHandle = (UINT)(R_BX & WORD_MASK);
             UINT targetHandle = (function == DOS_FN_DUP) ? (UINT)(R_AX & WORD_MASK) : (UINT)(R_CX & WORD_MASK);
             DosJftPut(machine, targetHandle, DosSftValue(machine, sourceHandle));
+            DosSftRefresh(machine);
         }
         else if (function == DOS_FN_CLOSE)
+        {
             DosJftPut(machine, (UINT)(R_BX & WORD_MASK), DOS_PSP_JFT_CLOSED);
+            DosSftRefresh(machine);
+        }
     }
 
     /* AND WHAT WE ANSWERED, WHICH IS THE HALF THAT WAS MISSING:

@@ -406,6 +406,13 @@ typedef struct _DOS_MACHINE
      */
     BYTE  JftKnown[DOS_PSP_JFT_HANDLES];
     HANDLE   SftHost[DOS_SFT_INDEXES];
+    /* #48: what the guest's SFT (SysVars+04h) shows for an index below DOS_SFT_ENTRIES --
+     * noted when the open succeeds, because only the open knows the name and the mode.
+     * See DosSftRefresh.
+     */
+    BYTE  SftName[DOS_SFT_ENTRIES][DOS_FCB_NAME_SIZE];
+    WORD  SftOpenMode[DOS_SFT_ENTRIES];
+    WORD  SftOwner[DOS_SFT_ENTRIES];
     INT      HandleDepth;
     /* AH=11h/12h: the 11-byte template the live FCB search matches against (s81) --
      * see DosFindMatches in dos_int21.c.
