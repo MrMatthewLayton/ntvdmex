@@ -29,6 +29,24 @@ from a **mode number** plus a handful of special cases bolted on where a guest f
 a program that fills a whole plane before switching … and approximate for one that
 interleaves planes mid-scan. Documented as an approximation because it is one."*
 
+⚠ **The headline count above is from 2026-09-22 and is stale.** Since then #266, #324,
+#325 and #185 (2026-10-23) have put CR09/CR11/CR17, SR1, SR3, AR12, AR13, CR08 (text)
+and 3C6 into the picture; the per-register rows below are current, the sentence is not.
+
+### #185 (2026-10-23): the mode-Y heuristics stay
+
+Plan steps 3-5 ended with "retire `modey_flush`/`ymap`". **Not done, on purpose.** The
+heuristics (`YMap*`, the mode-Y snapshot/flush) exist because the A0000 aperture is
+*mapped RAM* (see "STEP 4 AS STATED IS NOT IMPLEMENTABLE" below): an unchained guest's
+writes land in one 64 KB window with no trap, so which plane a byte belongs to has to be
+recovered from the map-mask history, not from the address generator. Deriving addressing
+from CR14/CR17/SR4 tells the *renderer* how to read the planes; it cannot tell the host
+which plane a write it never saw went to. Retiring the heuristics needs every guest write
+to the aperture to reach the planar engine (A0000 protected, or the interpreter), which
+is the #183/#172 pipeline question, not a register one. The off-VM battery has no test
+that proves register-derived addressing reproduces the snapshots for Mode X/Y on the
+shelf, so they stay until there is one.
+
 ---
 
 ## 1. External / General registers
@@ -56,9 +74,9 @@ guest setting Mode X writes `0xE3` here. We never see it.
 | Reg | Name | Status | Evidence |
 |---|---|---|---|
 | SR0 | Reset | **MISS** | falls through `seq_set_data` |
-| SR1 | **Clocking Mode** | **PART** | bit 5 *Screen Off* blanks the presented frame (#266, `vid_frame`); bits 0/3 (8/9 dot, dot clock ÷2) still not modelled |
+| SR1 | **Clocking Mode** | **IMPL** | bit 5 *Screen Off* blanks the presented frame (#266); bit 0 *8/9 dot* sets the text cell width (#324, `VideoTextCellWidthOf`, `vdd_video.c:7716`); bit 3 *dot clock ÷2* has **no pixel effect in frame space** (#185): the frame counts pixels from CR01 (`VideoGeometryOf`), and ÷2 only doubles each pixel's width on the monitor, which the presenter's aspect already does. Bits 2/4 (shift load) are the 256-colour path's, see GR5 |
 | SR2 | Map Mask | **IMPL** | `seq_set_data`, index 2 |
-| SR3 | **Character Map Select** | **PART** | stored and read back; INT 10h `1103h` writes it (#266); the renderer draws one font whatever it selects |
+| SR3 | **Character Map Select** | **IMPL** | #185: each text cell draws from map A (attribute bit 3 set) or map B (`VideoFontBlockFor`, `vdd_video.c:7673`; bit layout in [`ref/vga.md`](../ref/vga.md) §4). Block 0 is the loaded user font or the ROM tables; blocks 1-7 are what AH=11h AL=00h/10h loaded with BL = the block (`FontBlocks`), and a block nobody loaded draws the ROM font. ⚠ A font written into plane 2 **directly** (the sequencer's font-load configuration, not INT 10h) is not captured -- only the BIOS loads reach a block |
 | SR4 | Memory Mode | **PART** | bit 3 (Chain-4) only; bits 1–2 dropped |
 
 **SR1** carries bit 3 *Dot Clock ÷2* (the 320-wide modes), bit 0 *8/9 dot characters*
@@ -80,7 +98,7 @@ text mode and the CGA modes address memory, which we special-case by `mkind` ins
 | 0x05 | End Horizontal Retrace | **MISS** | — |
 | 0x06 | Vertical Total | **IMPL** | `crtc_vtotal_lo` |
 | 0x07 | Overflow | **IMPL** | `crtc_overflow` |
-| 0x08 | **Preset Row Scan** | **MISS** | — |
+| 0x08 | **Preset Row Scan** | **PART** | #185, **text modes**: bits 4-0 start the picture on that scanline of the first character row, bits 6-5 pan it by whole character clocks (`VideoTextPanPixels` / `VideoRenderTextShifted`, `vdd_video.c:7806-7826`). The planar and mode-Y renderers do not apply it yet (their vertical smooth scroll is the start address, which is how every shelf game scrolls) |
 | 0x09 | Maximum Scan Line | **PART** | **bit 6 only** (line-compare bit 9); bits 0–4 char height and **bit 7 scan doubling dropped** |
 | 0x0A | Cursor Start | **IMPL** | `cur_shape` |
 | 0x0B | Cursor End | **IMPL** | `cur_shape` |
@@ -116,8 +134,8 @@ infer that difference from `SR4` bit 3 alone and then approximate the rest.
 | GR2 | Color Compare | **IMPL** | added s7x for Lemmings |
 | GR3 | Data Rotate / Function | **IMPL** | `func_rotate` |
 | GR4 | Read Map Select | **IMPL** | `read_map` |
-| GR5 | Graphics Mode | **PART** | bits 0–1 write mode, bit 3 read mode. **bit 4 Odd/Even, bit 5 Shift Register, bit 6 256-Color Shift all dropped** |
-| GR6 | **Miscellaneous** (Graphics/Alpha, Chain Odd/Even, **Memory Map Select**) | **MISS** | — |
+| GR5 | Graphics Mode | **PART** | bits 0–1 write mode, bit 3 read mode. Bits 4-6 (odd/even, CGA shift, 256-colour shift) are **not read**: which pixel formatter runs is chosen by the mode kind (text / CGA / planar / linear 8 / mode Y), and every mode definition sets these bits to match its kind. A guest that flips one of them within a mode is drawn as the mode, not as the bits (#185: not changed -- see "The mode-Y heuristics stay" below) |
+| GR6 | **Miscellaneous** (Graphics/Alpha, Chain Odd/Even, **Memory Map Select**) | **MISS** | Stored and read back. The memory map (bits 3-2) cannot move what the guest sees: the A0000/B8000 apertures are **mapped RAM** in the VDM, not trapped addresses (§"STEP 4 AS STATED IS NOT IMPLEMENTABLE" below), so relocating them is a host mapping change, not a register (#185) |
 | GR7 | Color Don't Care | **IMPL** | — |
 | GR8 | Bit Mask | **IMPL** | `bit_mask` |
 
@@ -133,8 +151,8 @@ CGA-interleave shift and **bit 6** the 256-colour shift: the packed-pixel format
 | 0x00–0x0F | Palette | **IMPL** | `attr_out`, `vdd_video.c:279` |
 | 0x10 | Mode Control | **PART** | stored in `attr_mode`; **bit 6 (8-bit colour), bit 5 (pixel-pan compat), bit 3 (blink) consumed only indirectly** |
 | 0x11 | Overscan Colour | **IMPL** | `vpal[16]` |
-| 0x12 | **Colour Plane Enable** | **MISS** | `default: break;  /* 12h plane enable, 13h pan */` — `vdd_video.c:312` |
-| 0x13 | **Horizontal Pixel Panning** | **MISS** | same line |
+| 0x12 | **Colour Plane Enable** | **IMPL** | #185: the 4-bit attribute pixel is ANDed with it before the palette registers (`VideoPlaneEnable` / `VideoPaletteRefresh`, `vdd_video.c:921-929`); a write refreshes the palette. Before any guest write it is `0Fh` (every mode definition's value) |
+| 0x13 | **Horizontal Pixel Panning** | **IMPL** | latched at the frame (`DisplayPan`, s83); planar (`vdd_video.c:8271`), mode Y in half-pixels (`:8392`), and since #185 text, with the 9-dot rule (8 = none, 0-7 = 1-8 dots; `VideoTextPanPixels`) -- applied only once a guest has written it |
 | 0x14 | Colour Select | **IMPL** | `attr_cse` |
 
 The comment at `vdd_video.c:312` names both missing registers and drops them. **AR13 is
@@ -146,7 +164,7 @@ exists here, so any guest that smooth-scrolls can only judder in 8-pixel steps.
 
 | Port | Register | Status | Evidence |
 |---|---|---|---|
-| 3C6 | **Pixel Mask** | **MISS** | not claimed — reads return the bus default |
+| 3C6 | **Pixel Mask** | **IMPL** | #185: ANDed with every DAC address -- the 8-bit pixel in 256-colour modes, the attribute stage's output otherwise (`VideoPaletteRefresh`); a write refreshes the palette, so a mask fade shows, mid-frame ones as raster splits. Power-on and every mode set: `FFh` |
 | 3C7 | W: read index / R: DAC state | **PART** | write index only, `dac_out`, `vdd_video.c:1658` |
 | 3C8 | Write index | **IMPL** | — |
 | 3C9 | Data (3× 6-bit) | **IMPL** | `dac_comp`/`dac_latch` |

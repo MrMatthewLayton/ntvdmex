@@ -123,6 +123,7 @@
 #define VIDEO_VESA_LFB_PHYSICAL         0xE0000000u
 #define VIDEO_VESA_MAX_WIDTH            NTVDD_FRAME_MAX_WIDTH /* Widest mode advertised = what the presenter shows */
 #define VIDEO_VESA_MAX_HEIGHT           NTVDD_FRAME_MAX_HEIGHT
+#define VIDEO_FONT_BLOCKS               8                                   /* #185: character generators in plane 2 */
 #define VIDEO_FRAME_MAX                 (NTVDD_FRAME_MAX_WIDTH * NTVDD_FRAME_MAX_HEIGHT) /* Glyph/planar render target: 132 cols x 60 rows fits */
 
 /* How a mode is rendered.  Before this, only 13h and 12h were branched on and
@@ -700,6 +701,15 @@ typedef struct _VIDEO_STATE
     BYTE  UserFont[256 * 16];
     BYTE  UserFontRows;
     BYTE  IsUserFontOn;
+    /* #185: FONT BLOCKS 1-7, WHICH SR3 CAN SELECT. A VGA keeps up to eight character
+     * generators in plane 2; Character Map Select (SR3) names two of them, map A for cells
+     * with attribute bit 3 set and map B for the rest -- the 512-character mode. Block 0 is
+     * UserFont / the ROM tables above, exactly as before. Blocks 1-7 hold what AH=11h
+     * AL=00h/10h loaded with BL = the block; a block nobody loaded draws the ROM font.
+     * `FontBlocksLoaded` bit n = block n holds a load.
+     */
+    BYTE  FontBlocks[VIDEO_FONT_BLOCKS - 1][256 * 16];
+    BYTE  FontBlocksLoaded;
     BYTE  FontQueryCount;
     /* Every mode set, with what it RESOLVED TO. Added after a mode-table change
      * silently altered mode 12h rendering: the STAGE2 line said "modes

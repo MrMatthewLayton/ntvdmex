@@ -126,7 +126,7 @@ Each surface gets two documents, doing two different jobs:
 
 | Surface | Primary sources | Inventory | Ref |
 |---|---|---|---|
-| **VGA / CRTC / sequencer / graphics / attribute / DAC** | IBM VGA TechRef; FreeVGA | [vga.md](vga.md) — **71 enumerated, measured** (2026-09-22) | ✅ [`ref/vga.md`](../ref/vga.md) |
+| **VGA / CRTC / sequencer / graphics / attribute / DAC** | IBM VGA TechRef; FreeVGA | [vga.md](vga.md) — **71 enumerated, measured** (2026-09-22); #185 (2026-10-23): 3C6, AR12, AR13 (text too), SR3, CR08 (text) in the picture; GR6/GR5 4-6 and the mode-Y heuristics left, with the reason | ✅ [`ref/vga.md`](../ref/vga.md) |
 | **VESA VBE 2.0 / 3.0** | `docs/ref/vbe20.pdf`, `docs/ref/vbe30.pdf` | [vesa.md](vesa.md) — 171 units: 148 IMPL, 7 PART, 2 STORE, 11 MISS, 3 N/A (#326: the planar modes) | [PDFs held](../ref/) |
 | **8254 PIT** | Intel 8254 datasheet | [pit.md](pit.md) — 34 units: 26 IMPL, 4 PART, 1 STORE, 3 N/A (re-cited 2026-10-01) | ✅ [`ref/pit.md`](../ref/pit.md) |
 | 8259A PIC | Intel 8259A datasheet | [pic.md](pic.md) — marked 2026-09-23, group table | ✅ [`ref/pic.md`](../ref/pic.md) |

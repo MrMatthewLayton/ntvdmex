@@ -62,6 +62,8 @@ BYTE g_VgaFont8x16[VGA_FONT_CHARACTERS][VGA_FONT16_HEIGHT];
 #define VIDEO_AR_OVERSCAN                       0x11
 #define VIDEO_AR_PAN                            0x13
 #define VIDEO_AR_COLOR_SELECT                   0x14
+#define VIDEO_AR_PLANE_ENABLE                   0x12        /* #185: colour plane enable, bits 0-3 */
+#define VIDEO_AR_PLANE_ENABLE_ALL               0x0F
 #define VIDEO_AR_MODE_P54S                      0x80        /* AR10 bit 7: P5-4 from AR14 */
 #define VIDEO_AR_BLINK_SHIFT                    3
 #define VIDEO_AR_PALETTE_MASK                   0x3F
@@ -79,6 +81,10 @@ BYTE g_VgaFont8x16[VGA_FONT_CHARACTERS][VGA_FONT16_HEIGHT];
 #define VIDEO_CR_VERTICAL_DISPLAY_END           0x12
 #define VIDEO_CR_VERTICAL_BLANK_START           0x15
 #define VIDEO_CR_LINE_COMPARE                   0x18
+#define VIDEO_CR_PRESET_ROW_SCAN                0x08        /* #185 */
+#define VIDEO_CR08_ROW_MASK                     0x1F        /* bits 4-0: preset row scan */
+#define VIDEO_CR08_BYTE_PAN_SHIFT               5           /* bits 6-5: byte panning */
+#define VIDEO_CR08_BYTE_PAN_MASK                0x03u
 
 /* Raster-split bookkeeping (VideoPaletteSplitNote). */
 #define VIDEO_ROW_NONE                          0xFFFFu
@@ -444,6 +450,13 @@ BYTE g_VgaFont8x16[VGA_FONT_CHARACTERS][VGA_FONT16_HEIGHT];
 #define VIDEO_FONT_QUERIES                      4
 #define VIDEO_SR_CLOCKING_MODE                  1
 #define VIDEO_SR_CHARACTER_MAP                  3
+#define VIDEO_SR3_MAP_A_LOW_SHIFT               2           /* #185: SR3 bits 3-2 = map A, bits 1-0 */
+#define VIDEO_SR3_MAP_A_HIGH_SHIFT              3           /* SR3 bit 5 -> map A bit 2 */
+#define VIDEO_SR3_MAP_B_HIGH_SHIFT              2           /* SR3 bit 4 -> map B bit 2 */
+#define VIDEO_SR3_MAP_LOW_MASK                  0x03u
+#define VIDEO_FONT_BLOCK_MASK                   0x07u       /* AH=11h BL: the font block */
+#define VIDEO_SR3_MAP_HIGH_BIT                  0x04u
+#define VIDEO_ATTRIBUTE_INTENSITY               0x08u       /* attribute bit 3: map A or B */
 #define VIDEO_SR1_SCREEN_OFF                    0x20u
 #define VIDEO_MISC_RAM_ENABLE                   0x02u
 
@@ -898,10 +911,30 @@ static INT  VideoBeam(
     UINT32 *verticalBlank,
     UINT32 *frameNumber,
     UINT32 *line);   /* fwd: defined with VideoStatusIn */
+/* #185: THE TWO MASKS ON THE WAY TO THE DAC (docs/ref/vga.md, Attribute Controller and
+ * DAC). A 4-bit attribute pixel is ANDed with AR12, Colour Plane Enable, before it
+ * indexes the 16 palette registers; the 8-bit DAC address that comes out of the
+ * attribute stage (or straight out of a 256-colour pixel) is ANDed with 3C6, the Pixel
+ * Mask, before it indexes the DAC. Both are per-pixel on the hardware; applying them
+ * here, where the presented palette is composed, is the same thing for every pixel at
+ * once -- and it is how a guest's mask fade or plane-disable shows at all.
+ * AR12 before a guest has written it is 0Fh: every mode definition loads 0Fh, and a
+ * path that loads none (a VESA set) must not turn every pixel into colour 0.
+ */
+static BYTE VideoPlaneEnable(PCVIDEO_STATE state)
+{
+    if (!state->AttributeWrites[VIDEO_AR_PLANE_ENABLE])
+        return VIDEO_AR_PLANE_ENABLE_ALL;
+
+    return (BYTE)(state->AttributeRegisters[VIDEO_AR_PLANE_ENABLE] & VIDEO_AR_PLANE_ENABLE_ALL);
+}
+
 static VOID VideoPaletteRefresh(PVIDEO_STATE state)
 {
     INT index;
     UINT32 prev[NTVDD_PALETTE_ENTRIES];
+    BYTE mask = state->DacMask;
+    BYTE planeEnable = VideoPlaneEnable(state);
 
     for (index = 0; index < NTVDD_PALETTE_ENTRIES; ++index)
         prev[index] = state->Palette[index];
@@ -915,13 +948,13 @@ static VOID VideoPaletteRefresh(PVIDEO_STATE state)
     if (state->ModeKind == VIDEO_KIND_LINEAR8 || (state->IsVesa && state->VesaBpp <= VIDEO_BPP_INDEXED))
     {
         for (index = 0; index < NTVDD_PALETTE_ENTRIES; ++index)
-            state->Palette[index] = state->Dac[index];
+            state->Palette[index] = state->Dac[index & mask];
     }
     else
     {
         for (index = 0; index < VIDEO_EGA_PALETTE_REGISTERS; ++index)
         {
-            BYTE value = (BYTE)(state->PaletteRegisters[index] & VIDEO_AR_PALETTE_MASK);
+            BYTE value = (BYTE)(state->PaletteRegisters[index & planeEnable] & VIDEO_AR_PALETTE_MASK);
             /* AR14 Color Select supplies the high DAC bits on a real VGA; zero by
              * default, which makes this the identity.
              */
@@ -929,11 +962,11 @@ static VOID VideoPaletteRefresh(PVIDEO_STATE state)
                 value = (BYTE)((value & VIDEO_AR_PALETTE_LOW) | ((state->AttributeColorSelect & VIDEO_AR_CSE_P54) << VIDEO_AR_CSE_SHIFT));
 
             value = (BYTE)(value | ((state->AttributeColorSelect & VIDEO_AR_CSE_P76) << VIDEO_AR_CSE_SHIFT));
-            state->Palette[index] = state->Dac[value];
+            state->Palette[index] = state->Dac[value & mask];
         }
 
         for (index = VIDEO_EGA_PALETTE_REGISTERS; index < NTVDD_PALETTE_ENTRIES; ++index)
-            state->Palette[index] = state->Dac[index];
+            state->Palette[index] = state->Dac[index & mask];
     }
 
     VideoPaletteSplitNote(state, prev);
@@ -1199,8 +1232,12 @@ static VOID VideoAttributeOut(PVOID context, WORD port, BYTE width, UINT32 value
         VideoPaletteRefresh(state);
         break;
 
+    case VIDEO_AR_PLANE_ENABLE:
+        VideoPaletteRefresh(state);                                 /* #185: AR12 masks the pixel */
+        break;
+
     default:
-        break;                                  /* 12h plane enable, 13h pan */
+        break;                                  /* 13h pan: VideoLatch, above */
     }
 }
 
@@ -5045,6 +5082,41 @@ static VOID VideoInt10(PVOID context, PNTVDD_REGISTERS registers)
                      */
                     VIDEO_UNIMPLEMENTED_SET(state->UnimplementedFunctions, VIDEO_FUNCTION_FONT);
                 }
+                else if (VddGetBx(registers) & VIDEO_FONT_BLOCK_MASK)
+                {
+                    /* #185: A BLOCK OTHER THAN 0 IS ITS OWN CHARACTER GENERATOR. It is drawn
+                     * only where SR3 selects it (VideoFontBlockFor) -- the 512-character
+                     * mode, or a whole screen switched to another font with AH=11h AL=03h.
+                     */
+                    UINT block = VddGetBx(registers) & VIDEO_FONT_BLOCK_MASK;
+                    BYTE *blockFont = state->FontBlocks[block - 1];
+                    UINT index;
+                    UINT line;
+
+                    if (!(state->FontBlocksLoaded & (1u << block)))
+                    {
+                        UINT candidate;
+
+                        for (candidate = 0; candidate < VGA_FONT_CHARACTERS; ++candidate)
+                            for (line = 0; line < VIDEO_CELL_HEIGHT; ++line)
+                                blockFont[candidate * VIDEO_CELL_HEIGHT + line] = g_VgaFont8x16[candidate][line];
+                    }
+
+                    for (index = 0; index < characterCount && (first + index) < VGA_FONT_CHARACTERS; ++index)
+                        for (line = 0; line < VIDEO_CELL_HEIGHT; ++line)
+                            blockFont[(first + index) * VIDEO_CELL_HEIGHT + line] =
+                                (line < bytesPerCharacter) ? fontSource[index * bytesPerCharacter + line] : 0;
+
+                    state->FontBlocksLoaded |= (BYTE)(1u << block);
+                    state->IsDirty = 1;
+
+                    if (al == (VIDEO_FONT_RECALCULATE | VIDEO_FONT_LOAD_USER) && state->ModeKind == VIDEO_KIND_TEXT)
+                    {
+                        state->CellHeight = bytesPerCharacter;
+                        state->Rows = VideoTextRowsFor(bytesPerCharacter);
+                        VideoInt43Rom(state, bytesPerCharacter);
+                    }
+                }
                 else
                 {
                     UINT index;
@@ -5093,7 +5165,12 @@ static VOID VideoInt10(PVOID context, PNTVDD_REGISTERS registers)
                  * caller that follows 1102h with its own CRTC programming expects.
                  */
                 BYTE height = (BYTE)(((al & VIDEO_FONT_LOAD_MASK) == VIDEO_FONT_LOAD_8X8) ? VGA_FONT8_HEIGHT : ((al & VIDEO_FONT_LOAD_MASK) == VIDEO_FONT_LOAD_8X14) ? VGA_FONT14_HEIGHT : VGA_FONT16_HEIGHT);
-                state->IsUserFontOn = 0;              /* back to the ROM tables */
+                UINT romBlock = VddGetBx(registers) & VIDEO_FONT_BLOCK_MASK;
+
+                if (romBlock)
+                    state->FontBlocksLoaded &= (BYTE)~(1u << romBlock);          /* #185: block n is the ROM font again */
+                else
+                    state->IsUserFontOn = 0;              /* back to the ROM tables */
 
                 if ((al & VIDEO_FONT_RECALCULATE) && state->ModeKind == VIDEO_KIND_TEXT)
                 {
@@ -7300,6 +7377,7 @@ static VOID VideoExternalOut(PVOID context, WORD port, BYTE width, UINT32 value)
     {
         state->DacMask   = (BYTE)value;
         state->DacMaskWrites++;
+        VideoPaletteRefresh(state);                                 /* #185: the mask ANDs every pixel */
     }
 
     /* 3CA and 3CC are READ-ONLY aliases (Feature Control / Misc Output); a write
@@ -7758,8 +7836,28 @@ static VOID VideoWrite(PVOID context, UINT32 offset, BYTE value)
  * table for the cell height in force -- 8x8 after a 1112h, 8x14 after 1111h, 8x16
  * otherwise. One predictable branch in the ordinary case.
  */
-static const BYTE *VideoGlyphRows(PCVIDEO_STATE state, BYTE character)
+/* #185: WHICH FONT BLOCK A CELL IS DRAWN FROM. Character Map Select (SR3; IBM VGA
+ * Technical Reference, Sequencer "Character Map Select Register"): map A = bits 5,3,2,
+ * map B = bits 4,1,0, each a block number 0-7; a cell whose attribute bit 3 is set
+ * draws from map A, any other from map B. With A = B (the power-on 00h) bit 3 picks
+ * nothing and is only colour -- which is every ordinary text screen.
+ */
+static UINT VideoFontBlockFor(PCVIDEO_STATE state, BYTE attribute)
 {
+    BYTE select = state->SequencerRegisters[VIDEO_SR_CHARACTER_MAP];
+    UINT mapA = ((select >> VIDEO_SR3_MAP_A_LOW_SHIFT) & VIDEO_SR3_MAP_LOW_MASK) | ((select >> VIDEO_SR3_MAP_A_HIGH_SHIFT) & VIDEO_SR3_MAP_HIGH_BIT);
+    UINT mapB = (select & VIDEO_SR3_MAP_LOW_MASK) | ((select >> VIDEO_SR3_MAP_B_HIGH_SHIFT) & VIDEO_SR3_MAP_HIGH_BIT);
+
+    return (attribute & VIDEO_ATTRIBUTE_INTENSITY) ? mapA : mapB;
+}
+
+static const BYTE *VideoGlyphRows(PCVIDEO_STATE state, BYTE character, BYTE attribute)
+{
+    UINT block = VideoFontBlockFor(state, attribute);
+
+    if (block && (state->FontBlocksLoaded & (1u << block)))
+        return &state->FontBlocks[block - 1][character * VIDEO_CELL_HEIGHT];
+
     if (state->IsUserFontOn)
         return &state->UserFont[character * VIDEO_CELL_HEIGHT];
 
@@ -7810,7 +7908,7 @@ static VOID VideoRenderCell(PVIDEO_STATE state, INT row, INT column, BYTE charac
     INT isLineGraphics = cellWidth == VIDEO_CHARACTER_CLOCK_9 && (state->AttributeMode & VIDEO_AR_MODE_LINE_GRAPHICS) && character >= VIDEO_LINE_GRAPHICS_FIRST && character <= VIDEO_LINE_GRAPHICS_LAST;
     BYTE foreground = attribute & VIDEO_ATTRIBUTE_COLOUR_MASK;
     BYTE background;
-    const BYTE *glyph = VideoGlyphRows(state, character);
+    const BYTE *glyph = VideoGlyphRows(state, character, attribute);
 
     if (state->IsBlink)
     {
@@ -7838,6 +7936,102 @@ static VOID VideoRenderCell(PVIDEO_STATE state, INT row, INT column, BYTE charac
 }
 
 static VOID VideoDrawHardwareCursor(PVIDEO_STATE state);
+static VOID VideoDrawHardwareCursorAt(
+    PVIDEO_STATE state,
+    INT shiftX,
+    INT shiftY,
+    INT width,
+    INT height);
+
+/* #185: ONE TEXT PIXEL -- column glyphX, line glyphY of the cell holding `character` and
+ * `attribute`. The same rules as VideoRenderCell (blink or bright background, the ninth
+ * column), for the shifted renderer below, which samples cells rather than drawing them.
+ */
+static BYTE VideoTextPixel(
+    PCVIDEO_STATE state,
+    BYTE character,
+    BYTE attribute,
+    INT glyphX,
+    INT glyphY,
+    INT cellWidth)
+{
+    const BYTE *glyph = VideoGlyphRows(state, character, attribute);
+    BYTE foreground = attribute & VIDEO_ATTRIBUTE_COLOUR_MASK;
+    BYTE background;
+    BYTE bits = glyph[glyphY];
+
+    if (state->IsBlink)
+    {
+        background = (BYTE)((attribute >> VIDEO_ATTRIBUTE_BACKGROUND_SHIFT) & VIDEO_ATTRIBUTE_BACKGROUND_DIM);
+
+        if ((attribute & VIDEO_ATTRIBUTE_BLINK) && state->IsBlinkOffPhase)
+            foreground = background;
+    }
+    else
+        background = (BYTE)((attribute >> VIDEO_ATTRIBUTE_BACKGROUND_SHIFT) & VIDEO_ATTRIBUTE_COLOUR_MASK);
+
+    if (glyphX < VIDEO_CHARACTER_CLOCK_8)
+        return (bits & (VIDEO_GLYPH_LEFT_BIT >> glyphX)) ? foreground : background;
+
+    return (cellWidth == VIDEO_CHARACTER_CLOCK_9 && (state->AttributeMode & VIDEO_AR_MODE_LINE_GRAPHICS)
+            && character >= VIDEO_LINE_GRAPHICS_FIRST && character <= VIDEO_LINE_GRAPHICS_LAST
+            && (bits & VIDEO_GLYPH_RIGHT_BIT)) ? foreground : background;
+}
+
+/* #185: THE TEXT PICTURE'S SMOOTH SCROLL (docs/ref/vga.md, CRTC and Attribute Controller):
+ * horizontally, Horizontal Pixel Panning (AR13, the latched DisplayPan) -- in a 9-dot
+ * mode 8 means no shift and 0-7 shift 1-8 dots; in an 8-dot mode 0-7 shift 0-7 -- plus
+ * Preset Row Scan's byte panning (CR08 bits 6-5), whole character clocks; vertically,
+ * Preset Row Scan bits 4-0, the scanline of the first character row the picture starts
+ * on. Every one of them is 0 in every mode a BIOS sets, so the ordinary frame is drawn
+ * by the cell renderer exactly as before and only a guest that scrolls comes here.
+ */
+static INT VideoTextPanPixels(PCVIDEO_STATE state, INT cellWidth)
+{
+    UINT pan = state->DisplayPan & VIDEO_AR_PAN_MASK;
+    UINT bytePan = ((UINT)state->CrtcRegisters[VIDEO_CR_PRESET_ROW_SCAN] >> VIDEO_CR08_BYTE_PAN_SHIFT) & VIDEO_CR08_BYTE_PAN_MASK;
+    INT pixels;
+
+    /* Only a pan the GUEST wrote. A state no guest has panned can hold 0 here (the
+     * register file's reset, or a latch before the first frame), and in a 9-dot mode 0
+     * is a one-dot shift; every BIOS text mode sets 08h, "no shift".
+     */
+    if (!state->AttributeWrites[VIDEO_AR_PAN])
+        pixels = 0;
+    else if (cellWidth == VIDEO_CHARACTER_CLOCK_9)
+        pixels = (pan == VIDEO_PAN_PIXELS) ? 0 : (pan < VIDEO_PAN_PIXELS ? (INT)pan + 1 : 0);
+    else
+        pixels = (pan < VIDEO_PAN_PIXELS) ? (INT)pan : 0;
+
+    return pixels + (INT)bytePan * cellWidth;
+}
+
+static VOID VideoRenderTextShifted(PVIDEO_STATE state, INT shiftX, INT shiftY)
+{
+    INT cellHeight = state->CellHeight ? state->CellHeight : VIDEO_CELL_HEIGHT;
+    INT cellWidth = VideoTextCellWidthOf(state);
+    INT width = state->Columns * cellWidth;
+    INT height = state->Rows * cellHeight;
+    INT pixelX;
+    INT pixelY;
+
+    for (pixelY = 0; pixelY < height; ++pixelY)
+    {
+        INT sourceY = pixelY + shiftY;
+        INT cellRow = sourceY / cellHeight;
+        INT glyphY = sourceY % cellHeight;
+        BYTE *output = &state->FrameBuffer[pixelY * width];
+
+        for (pixelX = 0; pixelX < width; ++pixelX)
+        {
+            INT sourceX = pixelX + shiftX;
+            BYTE *cell = VideoDisplayCell(state, cellRow, sourceX / cellWidth);   /* past the last column: the counter runs on */
+            output[pixelX] = VideoTextPixel(state, cell[0], cell[1], sourceX % cellWidth, glyphY, cellWidth);
+        }
+    }
+
+    VideoDrawHardwareCursorAt(state, shiftX, shiftY, width, height);
+}
 
 /* THE TEXT SCREEN AS THE GUEST WROTE IT, not as we drew it:
  * An instrument for exactly one question, and it is a question screenshots cannot
@@ -7904,6 +8098,16 @@ VOID VddVideoRender(PVIDEO_STATE state)                 /* text glyph render */
     state->IsBlinkOffPhase = (BYTE)((state->IsBlink && state->TimeUs)
                               ? ((state->TimeUs() % VIDEO_BLINK_PERIOD_US) >= VIDEO_BLINK_HALF_US) : 0);
 
+    {   INT shiftX = VideoTextPanPixels(state, VideoTextCellWidthOf(state));
+        INT shiftY = state->CrtcRegisters[VIDEO_CR_PRESET_ROW_SCAN] & VIDEO_CR08_ROW_MASK;
+
+        if (shiftX || shiftY)
+        {
+            VideoRenderTextShifted(state, shiftX, shiftY);                  /* #185 */
+            return;
+        }
+    }
+
     for (row = 0; row < state->Rows; ++row)
         for (column = 0; column < state->Columns; ++column)
         {
@@ -7938,6 +8142,20 @@ VOID VddVideoTextCursor(PVIDEO_STATE state, INT column, INT row, WORD andMask, W
 }
 
 static VOID VideoDrawHardwareCursor(PVIDEO_STATE state)
+{
+    INT cellHeight = state->CellHeight ? state->CellHeight : VIDEO_CELL_HEIGHT;
+    INT cellWidth = VideoTextCellWidthOf(state);
+
+    VideoDrawHardwareCursorAt(state, 0, 0, state->Columns * cellWidth, state->Rows * cellHeight);
+}
+
+/* The cursor of a picture scrolled by (shiftX, shiftY) pixels (#185), clipped to it. */
+static VOID VideoDrawHardwareCursorAt(
+    PVIDEO_STATE state,
+    INT shiftX,
+    INT shiftY,
+    INT width,
+    INT height)
 {
     INT glyphY;
     INT glyphX;
@@ -7994,8 +8212,13 @@ static VOID VideoDrawHardwareCursor(PVIDEO_STATE state)
 
             for (glyphY = (INT)start; glyphY <= (INT)end; ++glyphY)
                 for (glyphX = 0; glyphX < cellWidth; ++glyphX)              /* all nine: the CRTC does */
-                    state->FrameBuffer[(state->CursorRow*cellHeight + glyphY) * stride
-                           + state->CursorColumn*cellWidth + glyphX] = foreground;
+                {
+                    INT pixelY = state->CursorRow*cellHeight + glyphY - shiftY;
+                    INT pixelX = state->CursorColumn*cellWidth + glyphX - shiftX;
+
+                    if (pixelY >= 0 && pixelY < height && pixelX >= 0 && pixelX < width)
+                        state->FrameBuffer[pixelY * stride + pixelX] = foreground;
+                }
         }
     }
 }
@@ -8745,6 +8968,7 @@ VOID VddVideoReset(PVOID context)
     state->CellHeight = VIDEO_CELL_HEIGHT;
     state->IsBlink = 1;
     state->IsUserFontOn = 0;
+    state->FontBlocksLoaded = 0;                                    /* #185: blocks 1-7 empty at power-on */
     state->AttributeMode = (BYTE)(state->AttributeMode | VIDEO_AR_MODE_BLINK);
     state->CrtcCursor = 0;
     state->ModeQueryCount = 0;
