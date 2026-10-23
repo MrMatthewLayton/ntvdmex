@@ -40,6 +40,18 @@
 #define BIOS_BDA_KEYBOARD_TAIL              0x1C
 #define BIOS_BDA_KEYBOARD_BUFFER            0x1E        /* 16 entries, 2 bytes each -- POST's bounds */
 #define BIOS_BDA_KEYBOARD_BUFFER_END        0x3E        /* One past the last entry -- POST's bounds */
+
+/* #178: the diskette service's own state (IBM PC/AT Technical Reference, DSKETTE). */
+#define BIOS_BDA_DISKETTE_RECALIBRATE       0x3E        /* Bit per drive: recalibrated; bit 7: the IRQ6 flag */
+#define BIOS_BDA_DISKETTE_MOTOR_STATUS      0x3F        /* Bits 0-3: motor on per drive; bit 7: a write */
+#define BIOS_BDA_DISKETTE_MOTOR_COUNT       0x40        /* Ticks until the motors go off */
+#define BIOS_BDA_DISKETTE_STATUS            0x41        /* The last operation's status (INT 13h AH) */
+#define BIOS_BDA_DISKETTE_RESULT            0x42        /* The controller's 7 result bytes: ST0 ST1 ST2 C H R N */
+#define BIOS_BDA_DISKETTE_RESULT_BYTES      7
+#define BIOS_DISKETTE_MOTOR_BITS            0x0F
+#define BIOS_DISKETTE_MOTOR_WRITE           0x80
+#define BIOS_DISKETTE_RECALIBRATE_IRQ       0x80
+#define BIOS_DISKETTE_MOTOR_WAIT            37          /* ~2 s of ticks: the AT BIOS's MOTOR_WAIT (25h) */
 #define BIOS_BDA_VIDEO_MODE                 0x49
 #define BIOS_BDA_VIDEO_COLUMNS              0x4A
 #define BIOS_BDA_VIDEO_COLUMNS_HIGH         0x4B

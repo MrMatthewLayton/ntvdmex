@@ -34,6 +34,16 @@ extern HANDLE g_Stdio;
 
 PDOS_DISK_GEOMETRY DiskFor(UINT drive);
 INT DiskIo(UINT drive, UINT32 lba, UINT count, BYTE *guest, INT write);
+/* #178: the floppy image, lent to the 82077AA (PFDC_MEDIA_GEOMETRY / PFDC_MEDIA_TRANSFER). */
+INT HostFdcGeometry(PVOID context, BYTE drive, PFDC_GEOMETRY geometry);
+INT HostFdcTransfer(
+    PVOID context,
+    BYTE drive,
+    WORD cylinder,
+    BYTE head,
+    BYTE sector,
+    PBYTE buffer,
+    INT isWrite);
 VOID HostSetFlags(volatile BYTE *tib, BYTE carryFlag, BYTE zeroFlag);
 VOID HostXms(volatile BYTE *tib);
 VOID HostEms(volatile BYTE *tib);

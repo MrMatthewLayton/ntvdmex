@@ -1594,6 +1594,44 @@ INT DiskIo(UINT drive, UINT32 lba, UINT count, BYTE *guest, INT write)
     return moved == want;
 }
 
+/* #178: THE SAME IMAGE, LENT TO THE 82077AA. A guest that drives the controller itself
+ * reads the very bytes INT 13h reads; the chip asks through these and never sees a handle.
+ */
+INT HostFdcGeometry(PVOID context, BYTE drive, PFDC_GEOMETRY geometry)
+{
+    PDOS_DISK_GEOMETRY disk = DiskFor(drive);
+
+    (VOID)context;
+
+    if (!disk)
+        return 0;
+
+    geometry->Cylinders = disk->Cylinders;
+    geometry->Heads = (BYTE)disk->Heads;
+    geometry->SectorsPerTrack = (BYTE)disk->SectorsPerTrack;
+    return 1;
+}
+
+INT HostFdcTransfer(
+    PVOID context,
+    BYTE drive,
+    WORD cylinder,
+    BYTE head,
+    BYTE sector,
+    PBYTE buffer,
+    INT isWrite)
+{
+    PDOS_DISK_GEOMETRY disk = DiskFor(drive);
+    DWORD lba = 0;
+
+    (VOID)context;
+
+    if (!disk || !DosDiskChsToLba(disk, cylinder, head, sector, &lba))
+        return 0;
+
+    return DiskIo(drive, lba, 1, buffer, isWrite);
+}
+
 VOID StdioFlush(VOID)
 {
     DWORD bytesWritten = 0;
