@@ -3828,6 +3828,7 @@ INT WowUserCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
         DWORD style;
         DWORD controlStyle;
         INT   isShowDeferred = 0;
+        INT   isHiddenChild;
         INT count;
         INT positionX;
         INT positionY;
@@ -3860,6 +3861,15 @@ INT WowUserCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
 
         style = WowDlgTemplateDword(templateBytes, 0);
         controlStyle = style;           /* what we actually CREATE it with */
+        /* #320: a CHILD dialog whose template omits WS_VISIBLE stays hidden, as
+         * CreateDialog leaves it ("if the template specifies WS_VISIBLE, CreateDialog
+         * displays the dialog box"); its program shows it when it wants it. Terminal's
+         * function-key bar (DIALOG 24, 44800040) is one: stock keeps it hidden, and
+         * ours showed it and took 40 pixels from the terminal. Top-level dialogs keep
+         * the show below -- Calc, Charmap, Sound Recorder and Media Player are popups
+         * without WS_VISIBLE too, and that path is measured working for them.
+         */
+        isHiddenChild = (style & WS_CHILD) && !(style & WS_VISIBLE);
         count = templateBytes[WOWDLG_TEMPLATE_COUNT];
         positionX  = (INT)(SHORT)WowDlgTemplateWord(templateBytes, WOWDLG_TEMPLATE_X);
         positionY  = (INT)(SHORT)WowDlgTemplateWord(templateBytes, WOWDLG_TEMPLATE_Y);
@@ -4348,7 +4358,8 @@ INT WowUserCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
          * buttons and no group boxes painted, and the deferred show was then a
          * no-op on a window already visible.
          */
-        if (window->Window32 && !(style & WS_VISIBLE) && !isModal && (!g_WowUserSend16 || !frame->IsCallbackAllowed))
+        if (window->Window32 && !(style & WS_VISIBLE) && !isModal && !isHiddenChild
+            && (!g_WowUserSend16 || !frame->IsCallbackAllowed))
             ShowWindow(window->Window32, SW_SHOW);
 
         /* [INFO]: SAY WHICH ONE THIS IS, EVERY TIME. Until the modal loop exists, a
@@ -4525,10 +4536,10 @@ INT WowUserCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
                 isSent = g_WowUserSend16(window->Window16, WM_INITDIALOG, firstFocus,
                                    Wow32ArgDword(frame, WOWUSER_CD_ARG_PARAM), &result16);
 
-                if (isSent && !g_WowUserIsInitDialogShown && window->Window32 && IsWindow(window->Window32))
+                if (isSent && !g_WowUserIsInitDialogShown && !isHiddenChild && window->Window32 && IsWindow(window->Window32))
                     ShowWindow(window->Window32, SW_SHOW);
 
-                if (!isSent && window->Window32)
+                if (!isSent && !isHiddenChild && window->Window32)
                     ShowWindow(window->Window32, SW_SHOW);
 
                 g_WowUserInitDialogWindow = savedWindow;
@@ -4547,7 +4558,7 @@ INT WowUserCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
                 WowNotePut(note, noteCapacity, &noteLength, " + WM_INITDIALOG (modeless)");
             }
         }
-        else if (!isModal && window->Window32 && !IsWindowVisible(window->Window32)
+        else if (!isModal && !isHiddenChild && window->Window32 && !IsWindowVisible(window->Window32)
                    && g_WowUserSend16 && frame->IsCallbackAllowed)
         {
             ShowWindow(window->Window32, SW_SHOW);  /* no procedure: shown as before */
