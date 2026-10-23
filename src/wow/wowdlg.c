@@ -397,6 +397,12 @@ INT WowDlgStep(
             WowNotePut(note, noteCapacity, &noteLength, "MODAL 0x");
             WowNoteHex(note, noteCapacity, &noteLength, dialog->Window, WOW_HEX_WORD_DIGITS);
             WowNotePut(note, noteCapacity, &noteLength, " -> WM_INITDIALOG ");
+
+            /* #328: a modal dialog is shown AFTER this; visible here means something
+             * showed it early, and the deferred show below will then do nothing.
+             */
+            if (window->Window32 && IsWindowVisible(window->Window32))
+                WowNotePut(note, noteCapacity, &noteLength, "[★ ALREADY VISIBLE] ");
         }
         else
         {
@@ -417,6 +423,10 @@ INT WowDlgStep(
             if (dialog->IsShowDeferred && window->Window32)
             {
                 dialog->IsShowDeferred = 0;
+
+                if (IsWindowVisible(window->Window32))  /* #328: the procedure showed it itself */
+                    WowNotePut(note, noteCapacity, &noteLength, "[VISIBLE BEFORE THE SHOW] ");
+
                 ShowWindow(window->Window32, SW_SHOW);
                 WowNotePut(note, noteCapacity, &noteLength, "MODAL 0x");
                 WowNoteHex(note, noteCapacity, &noteLength, dialog->Window, WOW_HEX_WORD_DIGITS);
