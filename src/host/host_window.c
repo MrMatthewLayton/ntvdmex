@@ -4582,6 +4582,8 @@ static LRESULT CALLBACK HostWindowProcedure(HWND window, UINT message, WPARAM wP
 
             InterlockedExchangeAdd(&g_MouseDx, (LONG)rawInput.data.mouse.lLastX);
             InterlockedExchangeAdd(&g_MouseDy, (LONG)rawInput.data.mouse.lLastY);
+            InterlockedExchangeAdd(&g_Ps2Dx, (LONG)rawInput.data.mouse.lLastX);     /* #199: the PS/2 device's own */
+            InterlockedExchangeAdd(&g_Ps2Dy, (LONG)rawInput.data.mouse.lLastY);
             /* While captured the pointer is clipped, so WM_MOUSEMOVE stops telling the
              * truth about position -- drive the driver cursor from the deltas instead,
              * so INT 33h 03h still reports somewhere sensible.

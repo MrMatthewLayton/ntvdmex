@@ -1093,6 +1093,16 @@ INT V86BiosBop(volatile BYTE *tib, UINT bopNumber, PSTR *logCursor, PSTR base)
                     BCF_SET();
                 }
             }
+            else if (int15Ah == BIOS_SYSTEM_POINTING_DEVICE)           /* PS/2 mouse BIOS (#199) */
+            {
+                BYTE pointingStatus = Ps2BiosService(tib);
+                BSETAX((WORD)((pointingStatus << BYTE_SHIFT) | (VDM_REG(tib, VTIB_EAX) & BYTE_MASK)));
+
+                if (pointingStatus)
+                    BCF_SET();
+                else
+                    BCF_CLR();
+            }
             else if (int15Ah == BIOS_SYSTEM_GET_EBDA)           /* EBDA segment (#253) */
             {
                 /* ES = the EBDA, CF=0, AX untouched -- as SeaBIOS answers it

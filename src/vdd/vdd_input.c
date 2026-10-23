@@ -74,6 +74,12 @@
 #define INPUT_STATUS_IDLE                       0x14    /* SYS (POST done) + INH (not held) */
 #define INPUT_STATUS_OUTPUT_FULL                0x01    /* OBF */
 #define INPUT_STATUS_LAST_WRITE_COMMAND         0x08    /* A2 */
+#define INPUT_STATUS_AUX_OUTPUT_FULL            0x20    /* AUXB: the byte at 60h is the mouse's (#199) */
+#define INPUT_KBC_TEST_AUX                      0xA9    /* #199: auxiliary interface test */
+#define INPUT_KBC_TEST_AUX_OK                   0x00    /* ...no error (IBM PS/2 TR) */
+#define INPUT_KBC_WRITE_AUX                     0xD4    /* #199: the next 60h byte goes to the mouse */
+#define INPUT_COMMAND_BYTE_AUX_IRQ              0x02    /* Command byte bit 1: IRQ12 enable */
+#define INPUT_AUX_IRQ                           12
 #define INPUT_KBC_READ_COMMAND_BYTE             0x20
 #define INPUT_KBC_WRITE_COMMAND_BYTE            0x60
 #define INPUT_KBC_DISABLE_AUX                   0xA7
@@ -218,6 +224,11 @@ typedef struct _KEYBOARD_OVERRIDE
     BYTE Plain;
     BYTE Shifted;
 } KEYBOARD_OVERRIDE, *PKEYBOARD_OVERRIDE;
+
+/* #199: is the mouse's head byte presentable at 60h? A byte already presented stays so;
+ * otherwise it waits behind a ready keyboard byte and while the aux clock is disabled.
+ */
+static INT InputAuxAvailable(PCINPUT_STATE state);
 
 static const WORD g_InputScanCodeTable[INPUT_SCANCODE_TABLE_LAST + 1][INPUT_SCANCODE_COLUMNS] = {
     { 0x0000, 0x0000, 0x0000, 0x0000 },                 /* 00: none */
@@ -531,6 +542,12 @@ static INT InputScanCodeAvailable(PCINPUT_STATE state)
     if ((state->ControllerCommandByte & INPUT_COMMAND_BYTE_KEYBOARD_DISABLED) && !state->IsScanCodeIrqUp)
         return 0;
 
+    /* #199: ONE OUTPUT BUFFER. While the mouse's byte is in it (IRQ12 already raised for
+     * it), the keyboard's next byte waits -- or the IRQ12 handler would read a scancode.
+     */
+    if (state->IsAuxPresented && !state->IsScanCodeIrqUp)
+        return 0;
+
     if (state->TimeMicroseconds && state->TimeMicroseconds() < state->ScanCodeHoldUntil)
         return 0;
 
@@ -554,8 +571,39 @@ static BYTE InputScanCodePop(PINPUT_STATE state)
     return scanCode;
 }
 
+static INT InputAuxAvailable(PCINPUT_STATE state)
+{
+    if (!AuxDeviceQueued(&state->Aux))
+        return 0;
+
+    if (state->IsAuxPresented)
+        return 1;
+
+    if (state->ControllerCommandByte & INPUT_COMMAND_BYTE_AUX_DISABLED)
+        return 0;
+
+    return !state->IsScanCodeIrqUp && !InputScanCodeAvailable(state);
+}
+
+/* #199: present the mouse's head byte once the output buffer is the mouse's to use, and
+ * raise IRQ12 for it if the command byte enables that.
+ */
+static VOID InputAuxPoll(PINPUT_STATE state)
+{
+    if (state->IsAuxPresented || !InputAuxAvailable(state))
+        return;
+
+    state->IsAuxPresented = 1;
+
+    if ((state->ControllerCommandByte & INPUT_COMMAND_BYTE_AUX_IRQ) && state->Bus)
+    {
+        ++state->AuxIrqs;
+        VddRaiseIrq(state->Bus, INPUT_AUX_IRQ);
+    }
+}
+
 /* Raise IRQ1 for the head byte if it is presented and nobody has announced it. */
-VOID VddInputPoll(PINPUT_STATE state)
+static VOID InputKeyboardPoll(PINPUT_STATE state)
 {
     if (state->IsScanCodeIrqUp || !InputScanCodeAvailable(state))
         return;
@@ -565,6 +613,26 @@ VOID VddInputPoll(PINPUT_STATE state)
 
     if (state->Bus)
         VddRaiseIrq(state->Bus, 1);
+}
+
+/* Present what is ready: the keyboard's byte first, then the mouse's (#199). */
+VOID VddInputPoll(PINPUT_STATE state)
+{
+    InputKeyboardPoll(state);
+    InputAuxPoll(state);
+}
+
+INT VddInputAuxMove(PINPUT_STATE state, LONG dx, LONG dy, BYTE buttons)
+{
+    INT queued = AuxDeviceMove(&state->Aux, dx, dy, buttons);
+
+    InputAuxPoll(state);
+    return queued;
+}
+
+INT VddInputAuxIsStreaming(PCINPUT_STATE state)
+{
+    return AuxDeviceIsStreaming(&state->Aux);
 }
 
 INT VddInputScanCodesQueued(PCINPUT_STATE state)
@@ -1374,6 +1442,8 @@ static VOID InputKeyboardPortIn(PVOID context, WORD port, BYTE width, UINT32 *va
 
         if (state->IsControllerReplyReady || InputScanCodeAvailable(state))
             status |= INPUT_STATUS_OUTPUT_FULL;                                                                   /* OBF */
+        else if (InputAuxAvailable(state))
+            status |= INPUT_STATUS_OUTPUT_FULL | INPUT_STATUS_AUX_OUTPUT_FULL;                          /* #199: OBF + AUXB */
 
         if (state->IsLastWriteCommand)
             status |= INPUT_STATUS_LAST_WRITE_COMMAND;                                           /* A2 */
@@ -1398,6 +1468,15 @@ static VOID InputKeyboardPortIn(PVOID context, WORD port, BYTE width, UINT32 *va
     }
 
     state->Port60Reads++;
+
+    /* #199: the mouse's byte, when it is the one presented. */
+    if (!InputScanCodeAvailable(state) && InputAuxAvailable(state))
+    {
+        *value = AuxDevicePop(&state->Aux);
+        state->IsAuxPresented = 0;
+        VddInputPoll(state);
+        return;
+    }
 
     if (InputScanCodeAvailable(state))
     {
@@ -1488,12 +1567,21 @@ static VOID InputKeyboardPortOut(PVOID context, WORD port, BYTE width, UINT32 va
             VddInputPoll(state);                                     /* #180: what waited is sent now */
             break;
 
+        case INPUT_KBC_TEST_AUX:                                                  /* #199 */
+            InputControllerReply(state, INPUT_KBC_TEST_AUX_OK);
+            break;
+
+        case INPUT_KBC_WRITE_AUX:                                                 /* #199: the next 60h byte is the mouse's */
+            state->ControllerCommand = byteValue;
+            break;
+
         case INPUT_KBC_DISABLE_AUX:
             state->ControllerCommandByte |= INPUT_COMMAND_BYTE_AUX_DISABLED;
             break;   /* disable aux clock */
 
         case INPUT_KBC_ENABLE_AUX:
             state->ControllerCommandByte &= (BYTE)~INPUT_COMMAND_BYTE_AUX_DISABLED;
+            InputAuxPoll(state);                                                  /* #199: what waited is sent */
             break;
 
         /* [WARNING]: FEh PULSES THE CPU RESET LINE, and we do not have one to pulse. It is
@@ -1518,6 +1606,15 @@ static VOID InputKeyboardPortOut(PVOID context, WORD port, BYTE width, UINT32 va
         state->ControllerCommandByte = byteValue;
         state->ControllerCommand = 0;
         VddInputPoll(state);                                         /* #180: bit 4 may have cleared */
+        InputAuxPoll(state);                                                      /* #199: bits 1 and 5 may have changed */
+        return;
+    }
+
+    if (state->ControllerCommand == INPUT_KBC_WRITE_AUX)                          /* #199: a byte for the mouse */
+    {
+        state->ControllerCommand = 0;
+        AuxDeviceWrite(&state->Aux, byteValue);
+        InputAuxPoll(state);
         return;
     }
 
@@ -1829,6 +1926,8 @@ VOID VddInputReset(PVOID context)
     state->IsScanCodeIrqUp = 0;
     state->IsExtendedPending = 0;
     state->E1Pending = 0;
+    AuxDeviceReset(&state->Aux);                       /* #199: the mouse powers up quiet */
+    state->IsAuxPresented = 0;
     /* THE CONTROLLER'S POST STATE:
      * A machine DOS is running on has been through POST, so: the keyboard
      * interrupt and translation are enabled in the command byte, and the
