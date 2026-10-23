@@ -693,8 +693,16 @@
 
 /* The comm services: what wowcomm_* and the Win16 answers carry. */
 #define WOWUSER_COMM_BUFFER_SIZE            512
-#define WOWUSER_COMM_ALREADY_OPEN           (-5)                        /* WowCommOpen: the port is open */
-#define WOWUSER_COMM_FAILED                 (-2)                        /* The answer these arms give on error */
+
+/* #334: OpenComm's IE_ codes, Win16's documented values -- and stock XP's own answers
+ * (tests/probes/win16/w_comm.asm on the test machine: "XYZ" -1, COM1/COM9 with no host
+ * port -10, CloseComm of a bad id -1).
+ */
+#define WOWUSER_IE_BADID                    (-1)                        /* Not a device name / not an open id */
+#define WOWUSER_IE_OPEN                     (-2)                        /* The port is already open */
+#define WOWUSER_IE_HARDWARE                 (-10)                       /* The port is not there to open */
+#define WOWUSER_COMM_ALREADY_OPEN           WOWUSER_IE_OPEN
+#define WOWUSER_COMM_FAILED                 WOWUSER_IE_BADID            /* A comm call on an id that is not open */
 #define WOWUSER_COMSTAT16_INQUEUE           1                           /* COMSTAT (Win16): cbInQue */
 #define WOWUSER_COMSTAT16_OUTQUEUE          3                           /* ...cbOutQue */
 #define WOWUSER_MINUS_ONE32                 0xFFFFFFFF
@@ -943,15 +951,14 @@ extern INT (*g_WowUserSend16Blob)(WORD window16, WORD message, WORD wParam, PBYT
 
 /* BATCH FOUR: what CARDFILE and WINFILE still want that is answerable (Importance = 2):
  *
- * [CAUTION]: THE COMM FAMILY ANSWERS "NO SUCH PORT", AND THAT IS THE TRUTH, NOT A STUB.
- * This host's BIOS equipment word claims ONE parallel port and NO serial ports
- * -- deliberately, because writing COM1..COM4 into the BDA would be inventing
- * hardware nothing answers for, and COMM.DRV's LibMain returns whatever is at
- * that BDA slot (session 36). So there is no port to open, and
- * IE_BADID (-2) is exactly what Windows returns for a port id that does not
- * exist. CARDFILE uses these to AUTODIAL; it gets a clean refusal and works
- * without a modem, which is the same thing a real machine with no COM port
- * would give it.
+ * [CAUTION]: THE COMM FAMILY ANSWERS "NO SUCH PORT", AND THAT IS THE TRUTH, NOT A STUB. This host's
+ * BIOS equipment word claims ONE parallel port and NO serial ports -- deliberately, because writing
+ * COM1..COM4 into the BDA would be inventing hardware nothing answers for, and COMM.DRV's LibMain
+ * returns whatever is at that BDA slot (session 36). So there is no port to open. (#334: the answer
+ * for that is IE_HARDWARE, -10, measured on stock; this note used to say IE_BADID -2, which is
+ * neither the documented value nor stock's.) CARDFILE uses these to AUTODIAL; it gets a clean
+ * refusal and works without a modem, which is the same thing a real machine with no COM port would
+ * give it.
  */
 /* Provided by the host (main.c) over vdd_comm -- DECLARATIONS ONLY, because this
  * header must not see host internals. See the note beside them.

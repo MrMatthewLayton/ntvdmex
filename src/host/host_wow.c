@@ -495,22 +495,19 @@ INT WowCommOpen(PCSTR device)
      * else -- including the LPTn a guest may legally pass -- is not ours.
      */
     if (!device)
-        return WOWUSER_COMM_FAILED;                                                 /* IE_BADID */
+        return WOWUSER_IE_BADID;
 
     if ((device[0] != 'C' && device[0] != 'c') || (device[1] != 'O' && device[1] != 'o')
         || (device[2] != 'M' && device[2] != 'm'))
-        return WOWUSER_COMM_FAILED;
+        return WOWUSER_IE_BADID;                                                 /* not a COM device at all */
 
     index = device[3] - '1';
 
-    if (index < 0 || index >= WOWCOMM_MAX)
-        return WOWUSER_COMM_FAILED;                                                  /* no such port */
-
-    if (!VddCommIsFitted(&g_Comm, index))
-        return WOWUSER_COMM_FAILED;
+    if (index < 0 || index >= WOWCOMM_MAX || !VddCommIsFitted(&g_Comm, index))
+        return WOWUSER_IE_HARDWARE;                                              /* COMn, but no such port */
 
     if (g_WowCommOpen[index])
-        return WOWUSER_COMM_ALREADY_OPEN;                                                    /* IE_OPEN */
+        return WOWUSER_IE_OPEN;
 
     g_WowCommOpen[index] = 1;
     g_WowCommEvent[index] = 0;
