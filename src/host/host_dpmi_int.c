@@ -5153,13 +5153,18 @@ static INT DpmiInt21Write(
         INT device   = (!bound && bh < BITS_PER_DWORD && ((machine->StdOpen >> bh) & 1u));
         VDM_REG(tib, VTIB_EFLAGS) &= ~EFLAGS_CF_U;
 
-        if (device && (bh == DOS_HANDLE_AUX || bh == DOS_HANDLE_PRN))       /* AUX / PRN */
+        /* #272: a device slot is the device its JFT entry names (DOS_MACHINE::DeviceKind), so
+         * a duplicate of PRN prints wherever it sits -- not just slots 3 and 4.
+         */
+        BYTE deviceKind = (device && bh < DOS_INT21_DEVICE_SLOTS) ? machine->DeviceKind[bh] : (BYTE)DOS_PSP_JFT_STDIN_ENTRY;
+
+        if (device && deviceKind != DOS_PSP_JFT_STDIN_ENTRY)       /* AUX / PRN */
         {
             DWORD item;
 
             for (item = 0; item < count; ++item)
             {
-                if (bh == DOS_HANDLE_PRN)
+                if (deviceKind == DOS_PSP_JFT_PRN_ENTRY)
                     (VOID)DosPrnOut(NULL, bytes[item]);
                 else
                     DosAuxOut(NULL, bytes[item]);

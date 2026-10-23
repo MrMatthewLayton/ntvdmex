@@ -70,6 +70,16 @@
  */
 #define DOS_DEV_SLOTS   32
 
+/* #272: WHICH DEVICE A DEVICE SLOT IS. A slot's identity is the system file it names in
+ * the JFT -- DOS's own numbering, SFT 0 AUX, 1 CON, 2 PRN (dos_psp.h) -- so a duplicate of
+ * PRN in slot 5, or AH=46h pointing handle 1 at PRN, is still the PRINTER. Before this a
+ * device slot's identity was its NUMBER: 3 was AUX, 4 was PRN and every other one the
+ * console, so a duplicate of PRN printed on the screen.
+ */
+#define DOS_DEVICE_AUX  0   /* = DOS_PSP_JFT_AUX_ENTRY */
+#define DOS_DEVICE_CON  1   /* = DOS_PSP_JFT_STDIN_ENTRY */
+#define DOS_DEVICE_PRN  2   /* = DOS_PSP_JFT_PRN_ENTRY */
+
 /* Is slot `handle` bound to a real file?  A bound handle is a file WHATEVER ITS
  * NUMBER: that is rule 2, and it is what lets a redirected handle 1 read, write,
  * seek and close like the file it is.  Guards the caller's bounds too, so a
@@ -93,6 +103,27 @@ static BOOL DosHandleIsDevice(
     _In_ UINT handle)
 {
     return handle < DOS_DEV_SLOTS && fileHandles[handle] == 0 && (deviceMask & (1u << handle)) != 0;
+}
+
+/* The device a standard slot starts as: 3 AUX, 4 PRN, the rest the console. */
+static BYTE DosDeviceDefault(_In_ UINT handle)
+{
+    return (BYTE)(handle == 3 ? DOS_DEVICE_AUX : handle == 4 ? DOS_DEVICE_PRN : DOS_DEVICE_CON);
+}
+
+/* Every slot back to its default identity. */
+static VOID DosDeviceReset(_Out_writes_(DOS_DEV_SLOTS) PBYTE deviceKind)
+{
+    UINT handle;
+
+    for (handle = 0; handle < DOS_DEV_SLOTS; ++handle)
+        deviceKind[handle] = DosDeviceDefault(handle);
+}
+
+/* The device slot `handle` is, or DOS_DEVICE_CON for a slot past the table. */
+static BYTE DosDeviceOf(_In_reads_(DOS_DEV_SLOTS) const BYTE *deviceKind, _In_ UINT handle)
+{
+    return (handle < DOS_DEV_SLOTS) ? deviceKind[handle] : (BYTE)DOS_DEVICE_CON;
 }
 
 /* Mark slot `handle` as a character device, or clear it. Returns 0 when the slot is

@@ -55,6 +55,7 @@ INT PmRwHardwareFail(
     PSTR *logCursor);
 INT DosPrnOut(PVOID context, BYTE character);
 VOID DosAuxOut(PVOID context, BYTE character);
+INT DosAuxIn(PVOID context, PBYTE character);
 INT DosTerminate(DOS_MACHINE *machine, PVOID tib, PSTR *logCursor, PSTR base);
 INT HostHasFloppy(VOID);
 INT HostHasCdrom(VOID);
