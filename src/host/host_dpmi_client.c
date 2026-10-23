@@ -2438,6 +2438,18 @@ static VOID DpmiRunClient(
             LogAppend(LOG_PATH, base, cursor); SerialOut(base, cursor); cursor = base;
         }
 
+        /* #268: 0306h's protected-to-real entry. Ours by ORIGIN -- our handler code
+         * selector at DPMI_RAW2RM_OFF -- never by the BOP number.
+         */
+        if (event == VDM_EVENT_BOP && g_DpmiHandlerSelector && currentCs == g_DpmiHandlerSelector
+            && eip == DPMI_RAW2RM_OFF)
+        {
+            if (DpmiRawSwitchToRealMode(&cursor, base, tib, machine))
+                continue;
+
+            break;
+        }
+
         vector = (event == VDM_EVENT_BOP) ? DpmiBopVector(currentCs, eip) : 0;
         g_DpmiLastVector = vector;
         g_PmTopDispatch = 1;          /* #256: consumed by this dispatch */

@@ -750,8 +750,8 @@ guest's (`g_bop_from_guest`, `main.c:560`, set at `:28964`).
 | `0x56` | `DPMI_PMRET_BOP` | DPMI PM-return catcher | IMPL | `:601`, `:27062` |
 | `0x57` | `DPMI_FAULT_BOP` | PM fault trampoline | IMPL | `:684`, `:17647`, `:17687` ⚠ **shared** |
 | `0x57` | `WOWCALL_BOP_CODE` | WOW 16-bit call return | IMPL | `wowcall.h:89`, `main.c:16823` ⚠ **shared** |
-| `0x58` | `DPMI_RAW2PM_BOP` | DPMI 0306 real→PM | **PLANTED, NOT SERVICED** (2026-10-23, #268) | `:614`, `:27069` |
-| `0x59` | `DPMI_RAW2RM_BOP` | DPMI 0306 PM→real | **PLANTED, NOT SERVICED** (2026-10-23, #268) | `:616`, `:27071` |
+| `0x58` | `DPMI_RAW2PM_BOP` | DPMI 0306 real→PM | **IMPL** (#268, unmeasured): ends the nested raw real-mode run, by origin (`DOS_HDLR_SEG:DPMI_RAW2PM_OFF`) | `:614`, `:27069` |
+| `0x59` | `DPMI_RAW2RM_BOP` | DPMI 0306 PM→real | **IMPL** (#268, unmeasured): the PM loop, by origin (handler code selector : `DPMI_RAW2RM_OFF`) | `:616`, `:27071` |
 | `0x5A` | `DPMI_FLTRET_BOP` | fault-handler return | IMPL | `:699`, `:17692` |
 | `0x67` | — | INT 67h EMM | IMPL | `:25796` / `:29561-29568` |
 | `0x11`–`0x17`, `0x25`–`0x29`, `0x30` (INT 20h) | — | BIOS and DOS-adjacent services | IMPL/PART | table `:25806-25811` / arm `:29037-29383` — marked per unit in [bios-misc.md](bios-misc.md) and [dos-services.md](dos-services.md) |

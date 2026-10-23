@@ -50,16 +50,16 @@ not 1.0 (the first is closed by #247):
 | Group | Units | IMPL | PART | STORE | MISS | N/A |
 |---|---|---|---|---|---|---|
 | §1 Detection, entry, initial state | 4 | 4 | — | — | — | — |
-| §2 Descriptors `0000h`–`000Fh` | 15 | 10 | 3 | — | 1 | 1 |
+| §2 Descriptors `0000h`–`000Fh` | 15 | 12 | 1 | — | 1 | 1 |
 | §3 DOS memory `0100h`–`0102h` | 3 | 3 | — | — | — | — |
 | §4 Interrupts, exceptions, virtual IF | 9 | 8 | 1 | — | — | — |
-| §5 Translation `0300h`–`0306h` | 7 | 3 | 4 | — | — | — |
+| §5 Translation `0300h`–`0306h` | 7 | 4 | 3 | — | — | — |
 | §6 Version and capabilities `0400h`/`0401h` | 2 | 1 | — | — | 1 | — |
-| §7 Memory `0500h`–`050Bh` | 6 | 3 | 1 | — | 2 | — |
+| §7 Memory `0500h`–`050Bh` | 6 | 4 | — | — | 2 | — |
 | §8 Paging, physical mapping, vendor, debug | 7 | 4 | 1 | — | 2 | — |
 | §9 DPMI 1.0 extras, and NTVDM's private pair | 5 | 2 | — | — | 3 | — |
 | §10 INT 21h from protected mode | 6 | 2 | 3 | — | — | 1 |
-| **Total** | **64** | **40** | **13** | **—** | **9** | **2** |
+| **Total** | **64** | **44** | **9** | **—** | **9** | **2** |
 
 ---
 
@@ -81,10 +81,10 @@ not 1.0 (the first is closed by #247):
 | `0002h` | segment to descriptor | **IMPL** | `:23237-23257`; from a host-private pool, and says so when it spills |
 | `0003h` | selector increment | **IMPL** | `:23258-23264`, 8 |
 | `0004h`/`0005h` | lock / unlock selector | **N/A** | reserved in 0.9; `default:` CF=1 |
-| `0006h` | get segment base | **IMPL** | `:23155-23160` |
-| `0007h` | set segment base | **IMPL** (#248) | invalid selector → `8022h` (same rule and WOW exception as `0001h`). `8025h` (base outside the client's space) not checked |
-| `0008h` | set segment limit | **PART** | host chooses G (the ZAR fix); invalid selector → `8022h` (#248). ⚠ the spec's `8021h` for a limit > 1 MB whose low 12 bits are not all set is not checked |
-| `0009h` | set access rights | **PART** | marking a region CODE patches its INT sites; invalid selector → `8022h` (#248). ⚠ the access byte itself is not validated (`8021h`) — DPL is forced to 3 at install instead (ZAR) |
+| `0006h` | get segment base | **IMPL** (#268) | `host_dpmi_int.c:6860`; an invalid selector → `8022h` (the `0007h` rule and WOW exception). It used to answer CF=0 and the code base |
+| `0007h` | set segment base | **IMPL** (#248, #268) | invalid selector → `8022h` (same rule and WOW exception as `0001h`); a base past XP's LDT cap (`DPMI_XP_LDT_MAX_LINEAR`) → `8025h` (`host_dpmi_int.c:6906`, `DpmiBaseOk`), not under WOW |
+| `0008h` | set segment limit | **IMPL** (#268) | host chooses G (the ZAR fix); invalid selector → `8022h` (#248); a limit > 1 MB whose low 12 bits are not all set → `8021h` (`DpmiLimitOk`, `dpmi_svc.c:71`), not under WOW |
+| `0009h` | set access rights | **IMPL** (#268) | marking a region CODE patches its INT sites; invalid selector → `8022h` (#248); S=0, conforming code or CH bit 5 → `8021h` (`DpmiAccessOk`), not under WOW. ⚠ DPL deliberately NOT enforced (ZAR's `8092h`); it is forced to 3 at install |
 | `000Ah` | create alias | **IMPL** (#248) | invalid source → `8022h` (was: an alias of the code base); no descriptor → `8011h` |
 | `000Bh` | get descriptor | **IMPL** | `:23272-23289` |
 | `000Ch` | set descriptor | **PART** | `:23290-23318`; rejects indices ≥ **512** while the table holds `DPMI_LDT_MAX` = 2048 (`:2377`) — a selector above `0FFFh` cannot be set this way |
@@ -96,9 +96,9 @@ not 1.0 (the first is closed by #247):
 
 | AX | Function | Status | Where / what is missing |
 |---|---|---|---|
-| `0100h` | allocate DOS memory → segment + selector | **IMPL** | `:22875-22928`; on failure names every MCB's owner in the log |
+| `0100h` | allocate DOS memory → segment + selector | **IMPL** (#268) | `host_dpmi_int.c:1706`; on failure names every MCB's owner in the log. Above 64 KB a CHAIN of contiguous descriptors (`DpmiDosChainInstall` `:1593`): the first spans the block (a 32-bit host), each next +64 KB, the last the remainder |
 | `0101h` | free DOS memory | **IMPL** (#248) | the selector must name a live `0100h` block (`8022h` otherwise — the PSP selector used to free the program's own block); a DOS refusal returns DOS's code; the descriptor goes back on the free list and `0100h` takes from it (the leak ran the LDT dry after ~2000 calls, then the failure path's MCB dump overran a 2 KB stack buffer and killed the host — s87) |
-| `0102h` | resize DOS memory | **IMPL** | `:22941-22962` |
+| `0102h` | resize DOS memory | **IMPL** (#268) | the chain grows only into the free indices right after it (`8011h` otherwise, before DOS is asked) and shrinks by releasing its tail (`host_dpmi_int.c:6570`) |
 
 ## 4. Interrupts, exceptions, virtual interrupt flag
 
@@ -124,7 +124,7 @@ not 1.0 (the first is closed by #247):
 | `0303h` | allocate real-mode callback | **PART** | 16 slots (#248; was 4), `8015h` when full. ⚠ The callback's ENTRY contract is not the spec's: the host pre-pops the far return into the RMCS and hands the handler `DS:SI = 0017h:0` instead of the real-mode SS:SP — a spec-conforming handler pops twice. Never exercised: no shelf guest has invoked a callback in any recorded run |
 | `0304h` | free real-mode callback | **IMPL** (#248) | `CX:DX` must be exactly a live callback address, else `8024h` |
 | `0305h` | state save/restore addresses | **IMPL** | `:23319-23337`; both routines are register-preserving no-ops, buffer size 40h — nothing of ours needs saving across a raw switch |
-| `0306h` | raw mode-switch addresses | **PART** | the addresses are returned (`host_dpmi_int.c:6858`) and BOPs `58h`/`59h` planted at them (`host_startup.c:4241-4246`), but **nothing services either BOP**: a client that switches raw ends on "UNIMPLEMENTED BOP". Re-marked 2026-10-23 (#257, [dos-extenders.md](dos-extenders.md)); work in #268 |
+| `0306h` | raw mode-switch addresses | **IMPL** (#268, UNMEASURED) | the PM loop takes BOP `59h` at our handler code selector by origin (`host_dpmi_client.c:2418`); `DpmiRawSwitchToRealMode` (`host_dpmi_int.c:550`) runs the client's real mode in the nested V86 run until BOP `58h` at `DOS_HDLR_SEG:DPMI_RAW2PM_OFF`, then enters PM (AX/CX/DX/BX/SI/DI = DS/ES/SS/SP/CS/IP both ways, FS=GS=0). No client has been seen to use it |
 
 ## 6. Version and capabilities
 
@@ -137,7 +137,7 @@ not 1.0 (the first is closed by #247):
 
 | AX | Function | Status | Where / what is missing |
 |---|---|---|---|
-| `0500h` | free memory information | **PART** | `:23354-23396`: a fixed 64 MB / 4000h pages in every field, **never reduced by allocations** — a client that sizes itself from free pages after allocating is told nothing changed |
+| `0500h` | free memory information | **IMPL** (#268) | `host_dpmi_int.c:1432`, `DpmiFreeMemoryInfo` (`dpmi_svc.c:128`): the free fields drop by the live `0501h` blocks as committed; totals fixed; paging file 0; reserved -1 |
 | `0501h` | allocate memory block (linear = host address; handle = address) | **IMPL** | the handle record (`g_dpmi_owned`, 4096) refuses with `8016h` when full rather than overflow silently (#248) |
 | `0502h` | free memory block | **IMPL** | forgets the block's patch sites too; a handle not in the record is `8023h` (#248 — it used to `VirtualFree` whatever address it was given, host memory included) |
 | `0503h` | resize memory block | **IMPL** (#248) | in place while the size fits the committed pages; otherwise a new block, the contents copied, patch-map entries re-keyed, the old freed; new address and handle returned. `8021h` size 0, `8023h` unknown handle |

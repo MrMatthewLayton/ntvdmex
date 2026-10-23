@@ -295,9 +295,7 @@
  * safe. NB offset 0x58 is DOS_IRET_STUB_OFF and BOP 0x57 is DPMI_FAULT_BOP; these
  * take the next free slots in both namespaces.
  */
-#define DPMI_RAW2PM_BOP             0x58                                /* Real -> protected (entered in V86) */
-
-#define DPMI_RAW2RM_BOP             0x59                                /* Protected -> real (entered in PM) */
+/* DPMI_RAW2PM_BOP (0x58) and DPMI_RAW2RM_BOP (0x59) are in host_types.h: #268 services them. */
 
 /* EMS (M4): the LIM page frame is a 64KB RAM window in the UMA. VdmMapEmsFrame
  * scans the conventional page-frame segments AFTER VdmInitialize for a free 64KB

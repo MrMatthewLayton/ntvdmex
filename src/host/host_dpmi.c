@@ -38,7 +38,7 @@
  * from PspIsDescriptorValid; run 30 confirmed base 0 / limit 0x7FFEF / G=1 installs
  * while a true 4GB selector does not. Used to clamp a client's flat selector.
  */
-#define XP_LDT_MAX_LINEAR                   0x7FFEFFFFu
+/* The value is DPMI_XP_LDT_MAX_LINEAR (dpmi_svc.h), shared with 0007h's base check (#268). */
 
 #define DPMI_FAULT_BOP                      0x57                /* BOP number planted at the handler code:COFF */
 
@@ -632,7 +632,7 @@ VOID DpmiInstall(INT index)
              * The clamp is LOUD -- a client that then walks off the end of a segment it
              * believes is 4GB must not look like a mystery.
              */
-            DWORD cap = XP_LDT_MAX_LINEAR;
+            DWORD cap = DPMI_XP_LDT_MAX_LINEAR;
             DWORD descriptorLow = low;
             DWORD descriptorHigh = high;
             DWORD want = g_Ldt[index].Limit;
