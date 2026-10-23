@@ -44,6 +44,14 @@ extern volatile LONG g_MouseTextCursorAnd;
 extern DWORD g_MouseStateBadPointer;
 extern DWORD g_MouseI33Unimplemented;
 
+/* #199: THE PS/2 MOUSE, FOR A PROGRAM THAT BRINGS ITS OWN DRIVER. Raw motion for it,
+ * accumulated beside g_MouseDx/Dy (WM_INPUT) and drained only by Ps2MousePump.
+ */
+extern volatile LONG g_Ps2Dx;
+extern volatile LONG g_Ps2Dy;
+extern DWORD g_Ps2Packets;        /* packets queued at the 8042's aux port */
+extern DWORD g_Ps2Calls;          /* calls into a C207h handler */
+
 VOID HostMouseButton(INT button, INT down);
 UINT I33Width(VOID);
 UINT I33Height(VOID);
@@ -65,6 +73,18 @@ INT MouseAnyHandler(VOID);
 INT MouseEventQueueTake(MOUSE_EVENT_ENTRY *event, LONG *outAx, WORD *segment, DWORD *offset);
 VOID MouseCallbackTry(volatile BYTE *tib);
 VOID MouseCallbackReturn(volatile BYTE *tib);
+
+/* Exec loop, V86 thread, beside MouseCallbackTry: feed the host's mouse to whichever
+ * PS/2 consumer a program set up -- an INT 15h C207h handler (called, as the BIOS's IRQ12
+ * handler calls it), or a driver streaming through the 8042 (packets at the aux port,
+ * IRQ12). Neither set up: the motion is discarded, and INT 33h is served as before.
+ */
+VOID Ps2MousePump(volatile BYTE *tib);
+
+/* INT 15h AX=C2xxh from V86: runs the service, sets BH/BL/CL/DL as it answers, and
+ * returns the status for AH (CF = status != 0).
+ */
+BYTE Ps2BiosService(volatile BYTE *tib);
 VOID MouseDrawGraphicsCursor(BYTE *pixels, INT width, INT height, INT stride);
 
 #endif

@@ -39,9 +39,9 @@ entitles a guest to make -- or `32h` says plainly that it is absent.** What is l
    not in video memory (a decision, recorded on the row). The arrow used to be stamped
    into the frame, which in mode 13h is the guest's own A0000 aperture: it wrote the
    pointer into guest VRAM and never restored it. Fixed with the same change.
-4. **There is no pointing hardware.** No PS/2 auxiliary device behind the 8042, no
-   INT 15h `AH=C2h`, no serial mouse on COM1. A guest that brings its own mouse driver
-   finds nothing to drive.
+4. **There is a PS/2 mouse now (#199), and still no serial one.** The PS/2 auxiliary
+   device behind the 8042 and INT 15h `AH=C2h` are implemented (§3, unmeasured); a guest
+   that brings a PS/2 driver has something to drive. No serial mouse on COM1.
 
 | Group | Units | IMPL | PART | STORE | MISS | N/A |
 |---|---|---|---|---|---|---|
@@ -120,10 +120,10 @@ snapping (`i33_snap`).
 
 | Unit | Status | Notes |
 |---|---|---|
-| PS/2 auxiliary device on the 8042 (`D4h` write-to-aux, `AUXB` status, IRQ12) | **MISS** | `kbd_hw_out` handles `A7h`/`A8h` as command-byte bits only (`vdd_input.c:605-606`); `D4h` is not decoded and nothing raises IRQ12 |
-| INT 15h `AH=C2h` PS/2 pointing-device BIOS | **MISS** | falls to the INT 15h unimplemented arm, `AH=86h CF=1` (`main.c:29193-29208`) |
+| PS/2 auxiliary device on the 8042 (`D4h` write-to-aux, `AUXB` status, IRQ12) | **IMPL** *(#199, unmeasured)* | the device is `src/vdd/vdd_aux.c` (`FFh` -> `FA AA 00`, `F2h` -> `FA 00`, `F3h`/`E8h` + parameter, `E6h`/`E7h`, `E9h` status, `EAh`/`F0h`/`EBh` stream/remote, `EEh`/`ECh` wrap, `F4h`/`F5h`/`F6h`, `FEh` resend, anything else `FEh`) and its 3-byte packets; the 8042 side is `vdd_input.c` (`D4h`, `A9h` -> `00h`, `A7h`/`A8h` and command-byte bit 5 hold its bytes, bit 1 enables IRQ12; one output buffer: a ready keyboard byte goes first, and while the mouse's byte is presented the keyboard waits). The host feeds it raw motion once a program has it streaming (`Ps2MousePump`). aux_test (39), input_test. `p_ps2aux` written, **not yet run** |
+| INT 15h `AH=C2h` PS/2 pointing-device BIOS | **IMPL** *(#199, unmeasured)* | `AuxBiosService` (vdd_aux.c), called from the V86 INT 15h arm: `C200h`-`C207h` per RBIL INT 15/AX=C2xx; `C200h` enable without a `C207h` handler -> `AH=05h`; a bad `BH` -> `AH=02h`; `C208h`+ -> `AH=01h`. The `C207h` handler is far-called once per packet with status, X, Y, Z on the stack, through the INT 33h callback's slot and return stub (`Ps2CallbackTry`). ⚠ V86 only: a PM client's INT 15h `C2h` still falls to the PM arm's unsupported answer. aux_test T7. `p_ps2aux` `ps2.c20x.*` **not yet run** |
 | Serial mouse on COM1 (the `'M'` identification, 3-byte packets) | **MISS** | `vdd_comm.c` has no mouse source; the host never feeds pointer data into a UART. ([uart.md](uart.md) records PCem's `'M'` byte) |
-| A guest that loads its **own** `MOUSE.COM` | **MISS** | follows from the three above: its INT 33h replaces ours and then finds no device. Nobody has tried it |
+| A guest that loads its **own** `MOUSE.COM` | **PART** *(#199)* | a PS/2 `MOUSE.COM` now has a device to find, through the 8042 or INT 15h `C2h` -- whichever it drives, the host's motion goes there, and ours (INT 33h) is untouched because such a driver has hooked INT 33h itself. ⚠ **Nobody has tried it**: needs a real `MOUSE.COM` on the rig. A serial-only driver still finds nothing |
 
 ---
 
@@ -175,5 +175,6 @@ QBasic's mouse and Doom's mouse-look run through.
    VRAM" matters; re-gate a game with its own graphics cursor by hand.
 4. ~~`20h` must not reset; `1Dh`/`1Eh`, `22h`/`23h` should answer~~ -- done, oracle-
    verified (#249).
-5. The PS/2 auxiliary device and INT 15h `C2h`, so a guest-loaded driver has hardware
-   (#199).
+5. ~~The PS/2 auxiliary device and INT 15h `C2h`, so a guest-loaded driver has hardware
+   (#199)~~ -- done in code (§3); owed: `p_ps2aux` on the oracles, and a real PS/2
+   `MOUSE.COM` on the rig.

@@ -1937,6 +1937,7 @@ VOID HostRunExecLoop(
         V86DeliverKeyboardIrq(tib);
         V86DeliverDeviceIrq(tib);   /* see the helper: shared with the nested 0301/0302 loop */
         MouseCallbackTry(tib);          /* INT 33h 0Ch events, under the same gate as an IRQ */
+        Ps2MousePump(tib);              /* #199: a program's own PS/2 driver, if it set one up */
         /* Mirror the guest's IF into EFLAGS.VIF before handing the context back. On VME
          * hardware the kernel's deliverability test reads VIF, and VIF is lost every time
          * we synthesise an interrupt frame ourselves -- so a guest that has interrupts

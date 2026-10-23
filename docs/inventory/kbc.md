@@ -62,7 +62,7 @@ below. The tables in §1–§5 carry the **before → after** so the reasoning s
 | 2 | **SYS** | ✅ **IMPL** | set; a machine that has POSTed reads **1** |
 | 3 | A2 | ✅ **IMPL** | `IsLastWriteCommand`, `vdd_input.c:1390`; **starts SET** — see below |
 | 4 | INH | ✅ **IMPL** | set: the keyboard is not inhibited |
-| 5 | AUXB | **N/A** | no PS/2 aux path to fill it |
+| 5 | AUXB | **IMPL** *(#199)* | set with OBF while the presented byte is the PS/2 mouse's (`vdd_input.c`, `InputAuxAvailable`); see [mouse.md](mouse.md) §3 |
 | 6:7 | TIMEOUT / PARITY | **N/A** | error conditions a model has no way to produce |
 
 ⚠ **IBF reading 0 is the lucky direction and worth recording as such.** The canonical
@@ -86,6 +86,9 @@ commands are now answered.
 | `D1h` **write output port** | ✅ **IMPL** | the A20 gate, `vdd_input.c:1483` |
 | `D2h` write keyboard output buffer | ✅ **IMPL** *(#244)* | the next `60h` byte goes into the scancode FIFO as if typed, IRQ1 included (`kbd_hw_out`). A PS/2 / AMI-KBC command (the AT 8042 lacked it) — from documentation; `p_kbd3` injects through it, so its `int09.4f.*` rows also say which oracles have it. input_test T13(d) |
 | `FEh` pulse reset | ⚠ **COUNTED** | a VDD cannot reboot its own host; `kbc_reset_asked` |
+| `A9h` test aux interface | ✅ **IMPL** *(#199)* | returns `00h` (no error) |
+| `D4h` write to aux device | ✅ **IMPL** *(#199)* | the next `60h` byte goes to the PS/2 mouse (`vdd_aux.c`); its replies come out with `AUXB` and IRQ12 (command-byte bit 1) |
+| `A7h`/`A8h` disable/enable aux | ✅ **IMPL** *(#199)* | the command byte's bit 5, which now holds the mouse's next byte; `A8h` presents what waited |
 
 ⛔ **`D0h` was worse than "missing", and this is why the reply lives in its own byte.**
 The command was discarded, so the guest's next read of `60h` returned `sc_last` — **the

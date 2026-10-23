@@ -18,6 +18,7 @@
 #define NTVDMEX_VDD_INPUT_H
 
 #include "vdd_bus.h"
+#include "vdd_aux.h"                    /* #199: the PS/2 mouse on the aux port */
 #include "../dos/bios_bda_fields.h"     /* the BDA's fields */
 
 /* A key event's flags, as the host passes them on. */
@@ -196,6 +197,14 @@ typedef struct _INPUT_STATE
     BYTE  Layout;            /* #136: 0 US, 1 UK, 2 German, 3 French (SET_KBLAYOUT) */
     BYTE  E1Pending;        /* #254: bytes left of an E1 (Pause) sequence */
     UINT32 BiosActions[INPUT_ACTION_KINDS];   /* #254: INPUT_ACTION_* raised, by kind (STAGE2 counter) */
+    /* #199: THE AUXILIARY PORT. The PS/2 mouse behind 8042 command D4h, its bytes coming
+     * out through the same output buffer with status bit 5 (AUXB) and IRQ12. A keyboard
+     * byte that is ready goes first; an aux byte waits while command-byte bit 5 disables
+     * the aux clock. See vdd_aux.h.
+     */
+    AUX_DEVICE Aux;
+    BYTE  IsAuxPresented;          /* the head aux byte is in the output buffer (IRQ12 raised if enabled) */
+    UINT32 AuxIrqs;                /* IRQ12s raised */
 } INPUT_STATE, *PINPUT_STATE;
 
 typedef const INPUT_STATE *PCINPUT_STATE;
@@ -214,6 +223,14 @@ WORD VddInputDosKey(WORD key);
  */
 VOID VddInputPoll(PINPUT_STATE state);
 INT  VddInputScanCodesQueued(PCINPUT_STATE state);     /* bytes in the FIFO, held or not */
+
+/* #199: the host moved the mouse -- feed the aux device (dx right, dy DOWN-positive, buttons
+ * as AUX_PACKET_LEFT/RIGHT/MIDDLE). A packet is queued only if a program has the device
+ * streaming. Returns 1 if one was.
+ */
+INT  VddInputAuxMove(PINPUT_STATE state, LONG dx, LONG dy, BYTE buttons);
+/* #199: has a program put the aux device into stream mode with reporting on? */
+INT  VddInputAuxIsStreaming(PCINPUT_STATE state);
 
 /* BIOS ring ops, all operating on the guest's buffer at 0040:001E.
  * (push = UI thread; pop/peek = V86 thread; caller serialises.)

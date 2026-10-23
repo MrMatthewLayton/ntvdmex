@@ -184,6 +184,7 @@ add_executable(ntvdmhost
     src/host/capture_scale.c
     src/vdd/vdd_video.c
     src/vdd/vdd_input.c
+    src/vdd/vdd_aux.c
     src/vdd/vdd_speaker.c
     src/vdd/vdd_joy.c
     src/vdd/present_ddraw.c

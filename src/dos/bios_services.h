@@ -45,6 +45,7 @@
 #define BIOS_SYSTEM_EXTENDED_MEMORY             0x88
 #define BIOS_SYSTEM_GET_CONFIGURATION           0xC0
 #define BIOS_SYSTEM_GET_EBDA                    0xC1
+#define BIOS_SYSTEM_POINTING_DEVICE             0xC2        /* #199: PS/2 mouse, AL = function (RBIL INT 15/AX=C2xx) */
 #define BIOS_MOVE_BLOCK_SOURCE                  0x10        /* AH=87h's GDT: the source descriptor */
 #define BIOS_MOVE_BLOCK_DESTINATION             0x18
 #define BIOS_MOVE_BLOCK_WORDS_MAX_U             0x8000u     /* CX: 64 KB, one descriptor's reach */

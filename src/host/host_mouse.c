@@ -157,6 +157,20 @@ volatile LONG g_MouseTextCursorAnd = I33_DEFAULT_TEXT_AND;
 volatile LONG g_MouseTextCursorXor = I33_DEFAULT_TEXT_XOR;
 DWORD g_MouseStateBadPointer;    /* 16h/17h: ES:DX we refused to dereference */
 DWORD g_MouseI33Unimplemented;      /* calls that reached `default:` -- see there */
+
+/* #199: THE PS/2 MOUSE, FOR A PROGRAM THAT BRINGS ITS OWN DRIVER:
+ * Our INT 33h serves every program that asks it. A MOUSE.COM, or a game's private PS/2
+ * code, does not ask: it either programs the mouse through the 8042 (D4h, then the
+ * device's replies and packets at port 60h with IRQ12), or asks the BIOS (INT 15h
+ * C2xxh) to call it per packet. vdd_aux.c is that device; this feeds it the host's
+ * mouse, and only once a program has set one of the two up -- so a guest that never
+ * touches either sees nothing new, and our INT 33h is untouched in every case (a guest
+ * that brings a driver has hooked INT 33h itself and no longer reaches ours).
+ */
+volatile LONG g_Ps2Dx;
+volatile LONG g_Ps2Dy;
+DWORD g_Ps2Packets;
+DWORD g_Ps2Calls;
 static volatile LONG g_MousePressX[MS_BTNS];
 static volatile LONG g_MousePressY[MS_BTNS];
 static volatile LONG g_MouseReleaseX[MS_BTNS];
@@ -287,6 +301,8 @@ static PCSTR const g_MouseCursorShape[OVERLAY_CURSOR_ROWS] = {
     "     oXXo",
     "      oo",
 };
+static AUX_BIOS g_Ps2Bios;
+static BYTE g_Ps2LastButtons;
 
 /* An offset register from the caller: full-width from a 32-bit PM caller, a word from
  * V86, 16-bit PM, or a 0300 excursion (s74c, the 0Ch handler ZAR installs at
@@ -1994,4 +2010,196 @@ VOID MouseDrawGraphicsCursor(BYTE *pixels, INT width, INT height, INT stride)
 
     I33GraphicsCursorDraw(pixels, width, height, stride, cursorX, cursorY, (INT)g_MouseHotX, (INT)g_MouseHotY,
                 g_MouseGraphicsCursorScreen[buffer], g_MouseGraphicsCursorCurrent[buffer], I33_GC_ONES_COLOUR, cga4Map);
+}
+
+/* The motion and buttons since the last packet. Raw counts when raw input works; else
+ * the change in the driver pointer, as I33TakeMotion's fallback. 1 if anything changed.
+ */
+static INT Ps2TakeMotion(LONG *deltaX, LONG *deltaY, BYTE *buttons)
+{
+    static LONG lastX = I33_FALLBACK_X;
+    static LONG lastY = I33_FALLBACK_Y;
+    LONG positionX = g_MouseX;
+    LONG positionY = g_MouseY;
+
+    if (g_MouseRawOk)
+    {
+        *deltaX = InterlockedExchange(&g_Ps2Dx, 0);
+        *deltaY = InterlockedExchange(&g_Ps2Dy, 0);
+    }
+    else
+    {
+        *deltaX = positionX - lastX;
+        *deltaY = positionY - lastY;
+    }
+
+    lastX = positionX;
+    lastY = positionY;
+    *buttons = (BYTE)(g_MouseButtons & (AUX_PACKET_LEFT | AUX_PACKET_RIGHT | AUX_PACKET_MIDDLE));
+    return *deltaX || *deltaY || *buttons != g_Ps2LastButtons;
+}
+
+/* May a far call be injected now? The same gate MouseCallbackTry applies: one callback
+ * in flight, guest interrupts on, never inside the INT 09h stub's own BOP.
+ */
+static INT Ps2CallbackAllowed(volatile BYTE *tib)
+{
+    DWORD cs = VDM_REG16(tib, VTIB_CS);
+    DWORD ip = VDM_REG16(tib, VTIB_EIP);
+    DWORD flags;
+    const volatile BYTE *returnStub = (const volatile BYTE *)(ULONG_PTR)((DOS_HDLR_SEG << PARAGRAPH_SHIFT) + MS_CB_RET_OFF);
+
+    if (g_MouseCallbackActive)
+        return 0;
+
+    if (cs == DOS_HDLR_SEG)
+    {
+        if (ip >= DOS_HDLR_INT09_STUB_OFF && ip < DOS_HDLR_INT09_STUB_OFF + VDM_BOP_LENGTH)
+            return 0;
+
+        if ((ip >= DOS_HDLR_INT08_STUB_OFF && ip < DOS_HDLR_INT08_STUB_END) || ip == DOS_HDLR_INT09_STUB_OFF + VDM_BOP_LENGTH)
+            flags = EFLAGS_IF;
+        else
+            flags = PeekWord((VDM_REG16(tib, VTIB_SS) << PARAGRAPH_SHIFT) + ((VDM_REG16(tib, VTIB_ESP) + X86_FRAME16_FLAGS) & WORD_MASK));
+    }
+    else
+        flags = VDM_REG(tib, VTIB_EFLAGS);
+
+    if (!IfOrVif(flags))
+        return 0;
+
+    return returnStub[0] == VDM_BOP0 && returnStub[1] == VDM_BOP1 && returnStub[VDM_BOP_NUMBER_OFFSET] == MS_CB_BOP;
+}
+
+/* Call the C207h handler with one packet, as the BIOS's IRQ12 handler does: push status,
+ * X, Y, Z (each a word, high byte 0), then a far call. The handler RETFs to our return
+ * BOP (MS_CB_RET_OFF), and MouseCallbackReturn restores the whole interrupted context --
+ * which also drops the four words, as the BIOS's ADD SP,8 does.
+ */
+static VOID Ps2CallbackTry(volatile BYTE *tib)
+{
+    LONG deltaX;
+    LONG deltaY;
+    BYTE buttons;
+    BYTE packet[AUX_PACKET_BYTES];
+    WORD stackWords[4];
+    DWORD ss;
+    DWORD sp;
+    INT index;
+
+    if (!Ps2CallbackAllowed(tib) || !Ps2TakeMotion(&deltaX, &deltaY, &buttons))
+        return;
+
+    g_Ps2LastButtons = buttons;
+    AuxDevicePacket(deltaX, deltaY, buttons, packet);
+    stackWords[0] = packet[0];                                     /* status, pushed first */
+    stackWords[1] = packet[1];                                     /* X */
+    stackWords[2] = packet[2];                                     /* Y */
+    stackWords[3] = 0;                                             /* Z */
+    g_MouseCallbackSaved.Eax = VDM_REG(tib, VTIB_EAX);
+    g_MouseCallbackSaved.Ebx = VDM_REG(tib, VTIB_EBX);
+    g_MouseCallbackSaved.Ecx = VDM_REG(tib, VTIB_ECX);
+    g_MouseCallbackSaved.Edx = VDM_REG(tib, VTIB_EDX);
+    g_MouseCallbackSaved.Esi = VDM_REG(tib, VTIB_ESI);
+    g_MouseCallbackSaved.Edi = VDM_REG(tib, VTIB_EDI);
+    g_MouseCallbackSaved.Ebp = VDM_REG(tib, VTIB_EBP);
+    g_MouseCallbackSaved.Esp = VDM_REG(tib, VTIB_ESP);
+    g_MouseCallbackSaved.Eip = VDM_REG(tib, VTIB_EIP);
+    g_MouseCallbackSaved.Eflags = VDM_REG(tib, VTIB_EFLAGS);
+    g_MouseCallbackSaved.Cs  = VDM_REG(tib, VTIB_CS);
+    g_MouseCallbackSaved.Ds  = VDM_REG(tib, VTIB_DS);
+    g_MouseCallbackSaved.Es  = VDM_REG(tib, VTIB_ES);
+    g_MouseCallbackSaved.Ss  = VDM_REG(tib, VTIB_SS);
+    ss = VDM_REG16(tib, VTIB_SS);
+    sp = VDM_REG16(tib, VTIB_ESP);
+
+    for (index = 0; index < 4; ++index)
+    {
+        sp = (sp - X86_WORD_SIZE) & WORD_MASK;
+        PokeWord((ss << PARAGRAPH_SHIFT) + sp, stackWords[index]);
+    }
+
+    sp = (sp - X86_WORD_SIZE) & WORD_MASK;
+    PokeWord((ss << PARAGRAPH_SHIFT) + sp, DOS_HDLR_SEG);
+    sp = (sp - X86_WORD_SIZE) & WORD_MASK;
+    PokeWord((ss << PARAGRAPH_SHIFT) + sp, MS_CB_RET_OFF);
+    VDM_SET16(tib, VTIB_ESP, (WORD)sp);
+    VDM_SET16(tib, VTIB_CS,  g_Ps2Bios.HandlerSegment);
+    VDM_SET16(tib, VTIB_EIP, g_Ps2Bios.HandlerOffset);
+    g_MouseCallbackActive = 1;
+    g_MouseCallbackSince = GetTickCount() | 1;
+    ++g_Ps2Calls;
+}
+
+VOID Ps2MousePump(volatile BYTE *tib)
+{
+    LONG deltaX;
+    LONG deltaY;
+    BYTE buttons;
+    INT isStreaming;
+
+    if (AuxBiosIsActive(&g_Ps2Bios))
+    {
+        if (!g_DpmiPm)
+            Ps2CallbackTry(tib);
+
+        return;
+    }
+
+    /* [CAUTION]: THIS RUNS ON EVERY EXEC-LOOP PASS, SO THE COMMON CASE TAKES NO LOCK. Nothing
+     * streaming is one flag read, unlocked (only port writes on this same thread change it);
+     * frame pacing on the rig has regressed before from less than a lock per pass.
+     */
+    isStreaming = VddInputAuxIsStreaming(&g_Input);
+
+    if (!isStreaming)                                    /* nobody listening: no stale burst later */
+    {
+        if (g_Ps2Dx || g_Ps2Dy)
+        {
+            InterlockedExchange(&g_Ps2Dx, 0);
+            InterlockedExchange(&g_Ps2Dy, 0);
+        }
+
+        return;
+    }
+
+    /* One packet at a time: the next waits until the guest has read the last, so a busy
+     * guest sees the newest movement rather than a backlog (the device's own sample rate
+     * is far above our pump's).
+     */
+    if (AuxDeviceQueued(&g_Input.Aux) || !Ps2TakeMotion(&deltaX, &deltaY, &buttons))
+        return;
+
+    g_Ps2LastButtons = buttons;
+    HOST_LOCK();
+
+    if (VddInputAuxMove(&g_Input, deltaX, deltaY, buttons))
+        ++g_Ps2Packets;
+
+    HOST_UNLOCK();
+}
+
+BYTE Ps2BiosService(volatile BYTE *tib)
+{
+    AUX_BIOS_RESULT result;
+    BYTE function = (BYTE)(VDM_REG(tib, VTIB_EAX) & BYTE_MASK);
+    BYTE bh = (BYTE)((VDM_REG(tib, VTIB_EBX) >> BYTE_SHIFT) & BYTE_MASK);
+
+    HOST_LOCK();
+    AuxBiosService(&g_Input.Aux, &g_Ps2Bios, function, bh, (WORD)VDM_REG16(tib, VTIB_ES), (WORD)VDM_REG16(tib, VTIB_EBX), &result);
+    HOST_UNLOCK();
+
+    if (result.Outputs & AUX_BIOS_SET_BH)
+        VDM_SET16(tib, VTIB_EBX, (WORD)((VDM_REG16(tib, VTIB_EBX) & BYTE_MASK) | (result.Bh << BYTE_SHIFT)));
+
+    if (result.Outputs & AUX_BIOS_SET_BL)
+        VDM_SET16(tib, VTIB_EBX, (WORD)((VDM_REG16(tib, VTIB_EBX) & HIGH_BYTE_MASK) | result.Bl));
+
+    if (result.Outputs & AUX_BIOS_SET_CL)
+        VDM_SET16(tib, VTIB_ECX, (WORD)((VDM_REG16(tib, VTIB_ECX) & HIGH_BYTE_MASK) | result.Cl));
+
+    if (result.Outputs & AUX_BIOS_SET_DL)
+        VDM_SET16(tib, VTIB_EDX, (WORD)((VDM_REG16(tib, VTIB_EDX) & HIGH_BYTE_MASK) | result.Dl));
+
+    return result.Status;
 }

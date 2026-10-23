@@ -31,9 +31,17 @@ static UINT64 g_FakeMicroseconds = 0;
 
 static UINT32 g_Irq1Count = 0;
 
+static UINT32 g_Irq12Count = 0;
+
 static UINT64 InputTestFakeClock(VOID)
 {
     return g_FakeMicroseconds;
+}
+
+static VOID InputTestCountIrq12(PVOID context, BYTE irq)
+{
+    if (irq == 12)
+        ++*(PUINT32)context;
 }
 
 static VOID InputTestCountIrq(PVOID context, BYTE irq)
@@ -663,6 +671,60 @@ INT main(VOID)
 #undef KBD_READ
 #undef KBC_STATUS
 #undef KBC_COMMAND
+        }
+
+        /* #199: THE AUXILIARY PORT -- D4h routes a byte to the PS/2 mouse, whose answer
+         * comes out at 60h with AUXB (status bit 5) and IRQ12 when command-byte bit 1 asks.
+         */
+        {
+#define KBC_COMMAND(byteValue)  do { value = (byteValue); VddBusIo(&bus, 0x64, 1, 0, &value); } while (0)
+#define KBC_DATA(byteValue)     do { value = (byteValue); VddBusIo(&bus, 0x60, 1, 0, &value); } while (0)
+#define KBC_STATUS()            (VddBusIo(&bus, 0x64, 1, 1, &value), (BYTE)value)
+#define KBC_READ()              (VddBusIo(&bus, 0x60, 1, 1, &value), (BYTE)value)
+            BYTE status;
+            BYTE first;
+            BYTE second;
+            VddInputReset(&input);
+            g_Irq12Count = 0;
+            VddBusSetSinks(&bus, InputTestCountIrq12, &g_Irq12Count, 0, 0);
+            KBC_COMMAND(0xA9);
+            CHECK(KBC_READ() == 0x00, "aux: A9h interface test -> 00h");
+            KBC_COMMAND(0xD4);
+            KBC_DATA(0xF2);                                   /* get ID, through the 8042 */
+            status = KBC_STATUS();
+            CHECK((status & 0x21) == 0x21, "aux: D4h F2h -> OBF and AUXB");
+            first = KBC_READ();
+            second = KBC_READ();
+            CHECK(first == 0xFA && second == 0x00, "aux: ...the mouse answers FA 00");
+            CHECK(g_Irq12Count == 0, "aux: no IRQ12 while command-byte bit 1 is clear (POST)");
+            KBC_COMMAND(0x60);
+            KBC_DATA(0x47);                                   /* IRQ1 + IRQ12 on, translation, SYS */
+            KBC_COMMAND(0xD4);
+            KBC_DATA(0xF4);                                   /* enable reporting */
+            CHECK(KBC_READ() == 0xFA && g_Irq12Count == 1, "aux: F4h -> FA, with IRQ12");
+            CHECK(VddInputAuxIsStreaming(&input), "aux: the host now feeds it");
+            CHECK(VddInputAuxMove(&input, 1, 0, 0) == 1 && (KBC_STATUS() & 0x21) == 0x21, "aux: a move -> a packet, AUXB");
+            first = KBC_READ();
+            CHECK(first == 0x08 && KBC_READ() == 0x01 && KBC_READ() == 0x00, "aux: the packet is 08 01 00");
+            /* the keyboard's byte goes first, and the mouse's waits behind it */
+            VddInputPushScanCode(&input, 0x1E);
+            (VOID)VddInputAuxMove(&input, 2, 0, 0);
+            status = KBC_STATUS();
+            CHECK((status & 0x21) == 0x01 && KBC_READ() == 0x1E, "aux: a keyboard byte first (OBF, no AUXB)");
+            CHECK((KBC_STATUS() & 0x21) == 0x21 && KBC_READ() == 0x08, "aux: ...then the mouse's");
+            (VOID)KBC_READ();
+            (VOID)KBC_READ();
+            /* command-byte bit 5 (aux clock off) holds the mouse */
+            KBC_COMMAND(0xA7);
+            (VOID)VddInputAuxMove(&input, 3, 0, 0);
+            CHECK((KBC_STATUS() & 0x21) == 0, "aux: A7h holds its bytes");
+            KBC_COMMAND(0xA8);
+            CHECK((KBC_STATUS() & 0x21) == 0x21, "aux: A8h sends what waited");
+            VddBusSetSinks(&bus, 0, 0, 0, 0);
+#undef KBC_COMMAND
+#undef KBC_DATA
+#undef KBC_STATUS
+#undef KBC_READ
         }
         VddInputReset(&input);
     }
