@@ -1588,7 +1588,7 @@ VOID DosInt21FloppyShutdown(VOID)
  * drive so it resolves (and fails) THERE. "X:..." and "\\server" are left alone.
  * A device name survives the prefix: Win32 reads "A:CON" as CON, as DOS does.
  */
-static VOID DosGuestPath(
+static VOID DosGuestPathRaw(
     PCDOS_MACHINE machine,
     DWORD segment,
     DWORD offset,
@@ -1615,6 +1615,22 @@ static VOID DosGuestPath(
     DosImageMapPath(destination, capacity);                       /* #240: A: as an image */
 }
 
+/* The guest's path as Win32 will see it -- and, #241, handed to the host first, so a
+ * file on the ISO-backed CD drive is there by the time Win32 opens it.
+ */
+static VOID DosGuestPath(
+    PCDOS_MACHINE machine,
+    DWORD segment,
+    DWORD offset,
+    PSTR destination,
+    INT capacity)
+{
+    DosGuestPathRaw(machine, segment, offset, destination, capacity);
+
+    if (machine->PathPrepare)
+        machine->PathPrepare(machine->PathPrepareContext, destination);
+}
+
 /* #240: is 3Bh's path one on the image drive? Resolves it (DosGuestPath) as a side effect.
  * A bare "A:" is path not found, as 6.22 answers for a bare "C:".
  */
@@ -1633,6 +1649,38 @@ static INT DosImageIsChdir(PDOS_MACHINE machine, DWORD segment, DWORD offset)
 
     DosGuestPath(machine, segment, offset, mapped, sizeof(mapped));
     return g_DosImageTouched;
+}
+
+/* #241: is this path on the read-only CD drive? Resolved the way Win32 will resolve it
+ * (relative paths against that drive's own current directory). Nothing is prepared:
+ * a delete or a rename that is going to be refused must not first copy the file out.
+ */
+static INT DosPathIsOnCdrom(PCDOS_MACHINE machine, PCSTR path)
+{
+    CHAR fullPath[DOS_INT21_PATH_SIZE];
+    PSTR filePart;
+    DWORD length;
+
+    if (machine->CdromDrive < 0)
+        return 0;
+
+    length = GetFullPathNameA(path, sizeof fullPath, fullPath, &filePart);
+
+    if (!length || length >= sizeof fullPath || fullPath[1] != ':')
+        return 0;
+
+    return ((fullPath[0] | ASCII_CASE_BIT) - 'a') == machine->CdromDrive;
+}
+
+static INT DosGuestPathIsOnCdrom(PCDOS_MACHINE machine, DWORD segment, DWORD offset)
+{
+    CHAR path[DOS_INT21_PATH_SIZE];
+
+    if (machine->CdromDrive < 0)
+        return 0;
+
+    DosGuestPathRaw(machine, segment, offset, path, sizeof path);
+    return DosPathIsOnCdrom(machine, path);
 }
 
 VOID DosInt21Initialize(PDOS_MACHINE machine, WORD firstMcb)
@@ -1668,6 +1716,10 @@ VOID DosInt21Initialize(PDOS_MACHINE machine, WORD firstMcb)
     machine->IsBreakOn = 0;  /* BREAK=OFF, DOS's default. [CAUTION] m is a stack local and this
                                function sets fields one by one -- nothing zeroes it */
     machine->VirtualDrive = -1;  /* the current drive is the process current directory's */
+    machine->CdromDrive = -1;    /* #241: no ISO-backed CD drive until the host mounts one */
+    machine->CdromSectors = 0;
+    machine->PathPrepare = 0;
+    machine->PathPrepareContext = 0;
     machine->PspSegment = DOS_PSP_SEG;
     {   INT index2;          /* s91: the JFT a fresh PSP carries (DosPspBuild) */
         static const BYTE initialJft[DOS_INT21_STD_HANDLES] = { DOS_PSP_JFT_STDIN_ENTRY, DOS_PSP_JFT_STDOUT_ENTRY, DOS_PSP_JFT_STDERR_ENTRY, DOS_PSP_JFT_AUX_ENTRY, DOS_PSP_JFT_PRN_ENTRY };
@@ -2246,6 +2298,7 @@ INT DosInt21(PDOS_MACHINE machine)
     INT   isCallFramed  = 0;
     BYTE isLfnAlias = 0;                        /* #210: the AL of a 71xxh served by xxh */
     BYTE inputAl;
+    INT isCdromRefused = 0;                     /* #241: a write to the read-only CD drive */
 
     #define R_AX VDM_REG(tib, VTIB_EAX)
     #define R_BX VDM_REG(tib, VTIB_EBX)
@@ -2446,7 +2499,49 @@ INT DosInt21(PDOS_MACHINE machine)
                      : (WORD)(R_BX & BYTE_MASK);          /* 7143h: BL */
     g_DosImageIsCurrent = g_DosImageMode && machine->VirtualDrive == DOS_IMAGE_DRIVE;
 
-    if (function == DOS_FN_EXIT)                       /* terminate */
+    /* #241: THE CD-ROM IS READ-ONLY. A write-class call whose path lands on the ISO-backed
+     * MSCDEX drive answers 5, access denied -- the answer MSCDEX's redirector gives -- before
+     * any arm can create, delete or rename something in the cache directory behind it.
+     * Opens for writing need no guard: the files there are read-only, so Win32 refuses them.
+     */
+    if (machine->CdromDrive >= 0)
+    {
+        BYTE subfunction = (BYTE)(R_AX & BYTE_MASK);
+        INT isOnCdrom = 0;
+
+        if (function == DOS_FN_CREATE || function == DOS_FN_CREATE_NEW || function == DOS_FN_CREATE_TEMP
+            || function == DOS_FN_MKDIR || function == DOS_FN_RMDIR || function == DOS_FN_DELETE
+            || (function == DOS_FN_FILE_ATTRIBUTES && subfunction == DOS_INT21_SET))
+            isOnCdrom = DosGuestPathIsOnCdrom(machine, R_DS, R_DX);
+        else if (function == DOS_FN_RENAME)
+            isOnCdrom = DosGuestPathIsOnCdrom(machine, R_DS, R_DX) || DosGuestPathIsOnCdrom(machine, R_ES, R_DI);
+        else if (function == DOS_FN_LFN && (subfunction == DOS_INT21_LFN_DELETE
+                 || (subfunction == DOS_INT21_LFN_ATTRIBUTES && ((R_BX & BYTE_MASK) & 1))))   /* 7143h BL odd = a set */
+            isOnCdrom = DosGuestPathIsOnCdrom(machine, R_DS, R_DX);
+        else if (function == DOS_FN_EXTENDED_OPEN && DosGuestPathIsOnCdrom(machine, R_DS, R_SI))
+        {
+            /* 6Ch/716Ch: refused if it asks to write, to replace, or to create a file the
+             * disc does not have; opening an existing file for reading is fine.
+             */
+            CHAR path[DOS_INT21_PATH_SIZE];
+            DosGuestPath(machine, R_DS, R_SI, path, sizeof path);
+            isOnCdrom = (R_BX & DOS_EXT_OPEN_ACCESS_MASK) != 0
+                        || (R_DX & DOS_EXT_OPEN_ACTION_MASK) == DOS_EXT_OPEN_IF_EXISTS_TRUNCATE
+                        || GetFileAttributesA(path) == INVALID_FILE_ATTRIBUTES;
+        }
+
+        if (isOnCdrom)
+            isCdromRefused = 1;
+    }
+
+    if (isCdromRefused)
+    {
+        SETAX(DOS_ERR_ACCESS_DENIED);
+        ERRCF();
+        trace = LogPut(trace, "  INT21 AH=0x"); trace = LogHex(trace, function);
+        trace = LogPut(trace, " on the CD-ROM (read-only) -> AX=5\r\n");
+    }
+    else if (function == DOS_FN_EXIT)                       /* terminate */
     {
         machine->ExitCode = (INT)(R_AX & BYTE_MASK);  /* DOS errorlevel */
         trace = LogPut(trace, "  ==> DOS terminate (AH=4Ch), exit code AL=0x");
@@ -3452,7 +3547,8 @@ INT DosInt21(PDOS_MACHINE machine)
                     INT volumeIndex;
                     volatile BYTE *extension;
                     INT isExtended = (fcb != (volatile BYTE *)((R_DS << PARAGRAPH_SHIFT) + (R_DX & WORD_MASK))) ? DOS_INT21_XFCB_HEADER : 0;
-                    INT isImageDrive = g_DosImageMode && DosFcbSearchDrive(fcb[0], DosCurrentDrive(machine)) == DOS_IMAGE_DRIVE;
+                    INT searchDrive = DosFcbSearchDrive(fcb[0], DosCurrentDrive(machine));
+                    INT isImageDrive = g_DosImageMode && searchDrive == DOS_IMAGE_DRIVE;
                     INT isLabel;
                     volume[0] = 0;
 
@@ -3463,8 +3559,19 @@ INT DosInt21(PDOS_MACHINE machine)
                         if (isLabel)
                             DosImageAppend(volume, sizeof(volume), g_DosImageLabel, NULL);
                     }
-                    else
-                        isLabel = GetVolumeInformationA("C:\\", volume, sizeof volume, NULL, NULL, NULL, NULL, 0) && volume[0];
+                    else if (searchDrive == machine->CdromDrive)      /* #241: the disc's own label */
+                    {
+                        isLabel = machine->CdromLabel[0] != 0;
+
+                        if (isLabel)
+                            lstrcpynA(volume, machine->CdromLabel, sizeof volume);
+                    }
+                    else                                            /* the searched drive's, not always C:'s */
+                    {
+                        CHAR root[] = "C:\\";
+                        root[0] = (CHAR)('A' + searchDrive);
+                        isLabel = GetVolumeInformationA(root, volume, sizeof volume, NULL, NULL, NULL, NULL, 0) && volume[0];
+                    }
 
                     if (!isLabel)
                     {
@@ -3558,6 +3665,9 @@ INT DosInt21(PDOS_MACHINE machine)
                  */
                 DosFcbSearchPattern(fcb[0], machine->VirtualDrive, allPattern, sizeof(allPattern));
                 DosImageMapPath(allPattern, sizeof(allPattern));
+
+                if (machine->PathPrepare)                         /* #241: the disc's directory laid out first */
+                    machine->PathPrepare(machine->PathPrepareContext, allPattern);
 
                 if (!g_DosImageRefusal)
                     find = DosFindFirst(allPattern, machine->FcbTemplate, mask, &findData, &isNoDirectory);
@@ -5496,6 +5606,17 @@ INT DosInt21(PDOS_MACHINE machine)
 
             OKCF();
         }
+        else if (driveNumber && (INT)driveNumber - 1 == machine->CdromDrive)
+        {
+            /* #241: a CD-ROM is full -- one 2048-byte sector a cluster, the disc's size,
+             * nothing free -- whatever the disk under the cache directory has.
+             */
+            SETAX(1);
+            SET16(R_BX, 0);
+            SET16(R_CX, (WORD)DOS_CDROM_SECTOR_SIZE);
+            SET16(R_DX, machine->CdromSectors > WORD_MASK ? WORD_MASK : machine->CdromSectors);
+            OKCF();
+        }
         else if (driveNumber <= DOS_DRIVE_LETTERS && GetDiskFreeSpaceA(rootPointer, &sectorsPerCluster, &bytesPerSector, &freeClusters, &totalClusters))
         {
             SETAX((WORD)sectorsPerCluster);
@@ -5708,6 +5829,9 @@ INT DosInt21(PDOS_MACHINE machine)
                 type = GetDriveTypeA(root);
             }
 
+            if (type && (INT)drive - 1 == machine->CdromDrive)
+                type = DRIVE_CDROM;                               /* #241: the cache behind it is a fixed disk */
+
             if (!type || type == DRIVE_NO_ROOT_DIR) /* invalid drive */
             {
                 SETAX(DOS_ERR_INVALID_DRIVE);
@@ -5724,7 +5848,7 @@ INT DosInt21(PDOS_MACHINE machine)
                 /* DX = the device attribute word; bit 12 = the drive is remote.
                  * Nothing else in it is load-bearing for the callers we have.
                  */
-                SET16(R_DX, (type == DRIVE_REMOTE) ? DOS_INT21_IOCTL_REMOTE_BIT : DOS_INT21_NONE);
+                SET16(R_DX, (type == DRIVE_REMOTE || (INT)drive - 1 == machine->CdromDrive) ? DOS_INT21_IOCTL_REMOTE_BIT : DOS_INT21_NONE);   /* #241: MSCDEX's drive is a redirector's */
                 OKCF();
             }
             else

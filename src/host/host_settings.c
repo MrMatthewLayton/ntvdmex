@@ -23,6 +23,7 @@
 #include "host_input.h"
 #include "host_timing.h"
 #include "capture_video.h"
+#include "host_cdrom.h"
 #define UITICK_CHOICES          5   /* The Settings combo's entries */
 
 /* fsinteger.flag -- SNAP FULLSCREEN TO WHOLE PIXEL MULTIPLES. OFF BY DEFAULT (Importance = 1):
@@ -149,6 +150,7 @@ static const BYTE g_SettingsLiveIds[] = {
     SET_RESTARTCAPTURE,                          /* #155: read by Capture Video */
     SET_VIDEOCODEC, SET_VIDEOQUALITY, SET_VIDEOKEYFRAMES,   /* #155: read when a recording starts */
     SET_FSRES,                                   /* #331: read when fullscreen is entered */
+    SET_CDPHYS,                                  /* #241: the ISO-backed CD-ROM (live: HostCdromApply) */
 };
 
 static PCSTR const g_SettingsTabs[NTVDMEX_PAGE_COUNT] = {
@@ -220,9 +222,6 @@ static PCSTR SettingsDeadWhy(INT settingId)
         return "the 1 MB address wrap is not modelled, so the line is always "
                            "enabled -- the gate FLAG follows the guest through 8042 / 92h / XMS";
 
-    case SET_CDPHYS:
-        return "no CD-ROM drive is mounted into DOS yet (#240/#241)";
-
     default:
         return "not used";
     }
@@ -232,9 +231,6 @@ static PCSTR SettingsDeadWhyText(INT index)
 {
     switch (index)
     {
-    case SET_STR_CDROM:
-        return "no CD-ROM drive is mounted into DOS yet (#240/#241)";
-
     case SET_STR_SOUNDFONT:
         return "no SoundFont synth in NTVDMEX; MIDI=SoundFont uses a "
                                    "host SF2 driver, which keeps its own list";
@@ -290,7 +286,7 @@ VOID SettingsLogSources(VOID)
             cursor = LogPut(cursor, " OVERRIDDEN by "); cursor = LogPut(cursor, g_ShellOverride);
         }
 
-        if (index == SET_STR_FLOPPYA || index == SET_STR_SHELL || index == SET_STR_TEXTFONT || index == SET_STR_CAPTURE)
+        if (index == SET_STR_FLOPPYA || index == SET_STR_CDROM || index == SET_STR_SHELL || index == SET_STR_TEXTFONT || index == SET_STR_CAPTURE)   /* #241: CdRomImage is live */
             cursor = LogPut(cursor, "\r\n");
         else { cursor = LogPut(cursor, " (stored only -- "); cursor = LogPut(cursor, SettingsDeadWhyText(index));
                cursor = LogPut(cursor, ", GH #136)\r\n"); }
@@ -540,6 +536,7 @@ VOID SettingsApplyLive(HWND window)
 {
     SettingsApply(window, &g_Settings, SETTINGS_APPLY_LIVE);
     SettingsApplyTextFont();
+    HostCdromApply(g_Settings.Strings[SET_STR_CDROM], !g_Settings.Values[SET_CDPHYS]);    /* #241: live, as the floppy is */
     SettingsApplyPresent(&g_PresentDdraw, &g_Settings);
     /* [CAUTION]: THE ASPECT CHANGES THE BASE SIZE, so it has to re-size too -- picking 16:9
      * while the window is 4:3-shaped and leaving it alone would show the lock as

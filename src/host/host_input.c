@@ -557,7 +557,6 @@ LRESULT CALLBACK LowLevelKeyboardProcedure(INT code, WPARAM wParam, LPARAM lPara
  *                     without remapping views on every gate toggle (dos_xms.h). The
  *                     gate FLAG already follows the guest; locking it would change the
  *                     default, which today honours a guest's disable.
- *     CdRomUsePhysical, CdRomImage -- no CD-ROM is mounted into DOS (#240/#241).
  *     SoundFontPath -- there is no SF2 synth in this host; Midi=SoundFont routes to a
  *                     host SoundFont DRIVER, which keeps its own list (midi_route.h).
  *   (FloppyAImage IS live: it is what INT 13h opens. JoystickType and

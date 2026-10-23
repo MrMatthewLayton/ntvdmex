@@ -163,6 +163,8 @@
 /* AH=44h IOCTL (AL) and AH=3Dh open modes (AL bits 0-2). */
 #define DOS_INT21_IOCTL_GET_DEVICE_INFO         0x00
 #define DOS_INT21_OPEN_ACCESS_MASK              7       /* AL bits 0-2: read, write, read/write */
+#define DOS_CDROM_SECTOR_SIZE                   2048    /* #241: what 36h reports for the CD drive */
+#define DOS_CDROM_LABEL_SIZE                    12      /* #241: an 11-character volume label and its NUL */
 #define DOS_INT21_OPEN_WRITE                    1
 #define DOS_INT21_OPEN_READ_WRITE               2
 #define DOS_INT21_IOCTL_SET_DEVICE_INFO         0x01
@@ -376,6 +378,17 @@ typedef struct _DOS_MACHINE
      * listed one drive on a machine with four. (s72)
      */
     INT      VirtualDrive;
+    /* #241: THE MSCDEX DRIVE BACKED BY AN ISO IMAGE (0 = A:), or -1. Its letter is a real
+     * Win32 drive -- the host maps it onto a cache directory -- so every path call works
+     * unchanged; what the DOS layer adds is that the medium is READ-ONLY (a write-class
+     * call answers 5, as MSCDEX's redirector does) and that a path is handed to the host
+     * first (PathPrepare) so the file it names exists before Win32 is asked for it.
+     */
+    INT      CdromDrive;
+    DWORD    CdromSectors;    /* #241: the disc's 2048-byte sectors (36h reports them, none free) */
+    CHAR     CdromLabel[DOS_CDROM_LABEL_SIZE];    /* #241: the disc's volume id as DIR's label ("" = none) */
+    VOID   (*PathPrepare)(PVOID context, PCSTR path);
+    PVOID    PathPrepareContext;
     /* WHICH OF THE FIVE STANDARD HANDLES ARE STILL OPEN (bits 0-4, set at startup).
      * fh[0..4] are NULL because they are devices, not files, so "NULL" cannot also
      * mean "free" for them -- and the difference is load-bearing. DOS hands out the

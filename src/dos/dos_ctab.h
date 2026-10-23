@@ -107,4 +107,15 @@ static inline BYTE DosCtabUpcase437(_In_ BYTE character)
     return character;
 }
 
+/* INT 2Fh AX=1213h, DOS's own "uppercase character" (Ralf Brown's Interrupt List): the
+ * character is the WORD the caller pushed before the INT; AL comes back as its upper
+ * case, AH and the stack untouched. COMMAND.COM's critical-error handler upper-cases the
+ * key through it before comparing with A/R/I/F -- left unanswered, AL stayed 13h, no key
+ * ever matched, and "Abort, Retry, Fail?" asked forever (s101 rig report, #241 test).
+ */
+static inline WORD DosCtabMultiplexUppercaseAx(_In_ WORD ax, _In_ WORD pushedCharacter)
+{
+    return (WORD)((ax & HIGH_BYTE_MASK) | DosCtabUpcase437((BYTE)(pushedCharacter & BYTE_MASK)));
+}
+
 #endif /* NTVDMEX_DOS_CTAB_H */

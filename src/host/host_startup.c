@@ -36,6 +36,7 @@
 #include "host_window.h"
 #include "host_wow.h"
 #include "host_vddsvc.h"
+#include "host_cdrom.h"
 
 /* LOG_PATH now lives in log.h -- see the note there. */
 /* Both are written by the runner and READ by us, so they are cfg, not out. */
@@ -682,6 +683,9 @@ static VOID StartupBuildDriveTables(
             rootText[2] = '\\';
             rootText[3] = 0;
             driveTypes[drive] = GetDriveTypeA(rootText);
+
+            if ((INT)drive == HostCdromDrive())
+                driveTypes[drive] = DRIVE_CDROM;          /* #241: a cache directory underneath, a CD-ROM to DOS */
 
             if (driveTypes[drive] != DRIVE_FIXED && driveTypes[drive] != DRIVE_RAMDISK
                 && driveTypes[drive] != DRIVE_REMOVABLE)
@@ -3223,6 +3227,11 @@ VOID StartupConnectDosToHost(DOS_MACHINE *machine)
     machine->ConsoleInNoWait = HostConsoleInNoBlock;                   /* AH=06 DL=FF non-blocking read */
     machine->ConsolePeek = HostConsolePeek;                   /* AH=0B/06 non-blocking status */
     machine->SetTicks = HostSetTicks;               /* AH=2Dh reloads 0040:006C (#250) */
+    machine->CdromDrive = HostCdromDrive();          /* #241: the ISO-backed MSCDEX drive, if any */
+    machine->CdromSectors = HostCdromSectors();
+    HostCdromLabel(machine->CdromLabel);
+    machine->PathPrepare = (machine->CdromDrive >= 0) ? HostCdromPrepare : 0;
+    machine->PathPrepareContext = NULL;
     machine->TicksContext = NULL;
     machine->PrinterOut  = DosPrnOut;                     /* #251: PRN/AUX when not in V86 */
     machine->AuxOut  = DosAuxOut;
@@ -5035,6 +5044,10 @@ INT StartupConfigure(PSTR *cursorIo, CHAR *report, INT *exitCodeOut)
     SettingsLoad(&g_Settings);
     g_SettingsDisk = g_Settings;          /* nothing has overridden anything yet */
     SettingsApply(NULL, &g_Settings, SETTINGS_APPLY_STARTUP);
+    /* #241: an ISO image as the CD-ROM. Before the drive tables are built, so the letter
+     * it takes is one of the drives they describe.
+     */
+    HostCdromMount(&cursor, g_Settings.Strings[SET_STR_CDROM], !g_Settings.Values[SET_CDPHYS]);
     /* Log only the LIVE settings -- the ones the SettingsApply* functions actually
      * push into the machine. The stored-but-not-yet-honoured ones would make this
      * line four times longer and every value in it would be a claim the run cannot

@@ -37,6 +37,7 @@
 #include "host_settings.h"
 #include "host_timing.h"
 #include "host_video.h"
+#include "host_cdrom.h"
 
 /* dwExtraInfo tag on keystrokes WE synthesise with SendInput (the Start-menu
  * suppression Ctrl tap), so our own WM_KEYDOWN/UP handlers recognise and drop them
@@ -2569,6 +2570,7 @@ VOID HostPanicRelease(VOID)
 {
     ClipCursor(NULL);
     HostFullscreenDisplayRestore();                              /* #331: the user's display mode */
+    HostCdromUnmount();                    /* #241: the drive mapping outlives the process otherwise */
 
     if (g_LowLevelKeyboard)
     {
