@@ -926,7 +926,7 @@ enum
 };   /* startup limits: instance numbers, knob ranges */
 enum
 {
-    NESTED_V86_ROUNDS_MAX = 128, NESTED_V86_EVENTS_MAX = 4096, PM_INT21_HANDLE_LIMIT = 24, PM_INT21_LOCK_REGION = 0xFF80
+    NESTED_V86_ROUNDS_MAX = 128, NESTED_V86_EVENTS_MAX = 4096, PM_INT21_LOCK_REGION = 0xFF80
 };   /* DpmiServicePmIntBody: 0301h's nested run (waiting passes, all passes), PM INT 21h */
 typedef struct
 {

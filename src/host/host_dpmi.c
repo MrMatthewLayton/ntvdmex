@@ -40,7 +40,7 @@
  */
 #define XP_LDT_MAX_LINEAR                   0x7FFEFFFFu
 
-#define DPMI_FAULT_BOP                      0x57            /* BOP number planted at the handler code:COFF */
+#define DPMI_FAULT_BOP                      0x57                /* BOP number planted at the handler code:COFF */
 
 /* Where the client's exception handler's FAR RETURN lands. DPMI 0.9 puts a return CS:IP
  * at the bottom of the exception frame and the handler exits through it with a `retf`
@@ -114,11 +114,11 @@
  */
 #define DPMI_S2D_MAX                        64
 
-#define DPMI_FAULT_TRAMPOLINE_LDT_LIMIT     510             /* The trampoline takes two descriptors */
+#define DPMI_FAULT_TRAMPOLINE_LDT_LIMIT     (DPMI_LDT_MAX - 2) /* The trampoline takes two descriptors (#334: was 510, under a 512 bound) */
 
-#define DPMI_PATCH_REGION_MAX_U             0x00400000u     /* Larger = a flat selector, not a region */
+#define DPMI_PATCH_REGION_MAX_U             0x00400000u         /* Larger = a flat selector, not a region */
 
-#define DPMI_PATCH_FLOOR                    0x600           /* Below: the IVT, the BDA and DOS's own area */
+#define DPMI_PATCH_FLOOR                    0x600               /* Below: the IVT, the BDA and DOS's own area */
 
 /* A REFLECTED INTERRUPT IS THE ONE TRACE THAT CAN OUTRUN THE GUEST (Importance = 4):
  * Every dispatch below writes two LogAppend lines (~350 bytes) and does two
@@ -157,8 +157,8 @@
  * rate-limited regime, because a trace that simply stops reads as a crash (the rule
  * LogAppend's own cap follows).
  */
-#define PM_DISP_LOG_MAX                     24              /* Always-loud lines per (vec, AH) */
-#define PM_DISP_QUIET_MS                    100u            /* ...then at most one more per pair per this */
+#define PM_DISP_LOG_MAX                     24                  /* Always-loud lines per (vec, AH) */
+#define PM_DISP_QUIET_MS                    100u                /* ...then at most one more per pair per this */
 
 #define DPMI_REFLECT_STACK_TOP              0xFB00 /* DpmiReflectIrqToRm: the real-mode stack it lends the ISR */
 
@@ -373,7 +373,7 @@ INT DpmiSelectorIs32(WORD selector)
 {
     INT index = DPMI_SELECTOR_INDEX(selector & WORD_MASK);
 
-    if (index < 1 || index >= DPMI_LDT_LEGACY_LIMIT)
+    if (index < 1 || index >= DPMI_LDT_MAX)
         return 0;
 
     return (g_Ldt[index].Flags & DPMI_DESCRIPTOR_FLAG_BIG) != 0;
@@ -872,7 +872,7 @@ INT DpmiSelectorDescriptor(WORD selector, UINT32 *accessRights, UINT32 *limit)
 {
     INT index = DPMI_SELECTOR_INDEX(selector & WORD_MASK);
 
-    if (index < 1 || index >= DPMI_LDT_LEGACY_LIMIT || g_Ldt[index].Access == 0)
+    if (index < 1 || index >= DPMI_LDT_MAX || g_Ldt[index].Access == 0)
         return 0;
 
     if (accessRights)
@@ -2318,7 +2318,7 @@ VOID DpmiInvokeCallback(DOS_MACHINE *machine, volatile BYTE *tib, INT slot)
             break;
         }
 
-        if (event == 3)
+        if (event == DPMI_ENTER_EVENT_PENDING)
             continue;               /* DpmiEnterProtectedMode reports "interrupt pending, not entered" -- retry */
 
         vector = (event == VDM_EVENT_BOP) ? DpmiBopVector(VDM_REG16(tib, VTIB_CS), eip) : 0;   /* a patched INT the handler issued */
@@ -2356,8 +2356,8 @@ VOID DpmiInvokeCallback(DOS_MACHINE *machine, volatile BYTE *tib, INT slot)
     VDM_REG(tib,VTIB_EIP)=*(volatile WORD*)(callStructureBytes+RMCS_IP);
     VDM_SET16(tib,VTIB_SS,*(volatile WORD*)(callStructureBytes+RMCS_SS));
     VDM_REG(tib,VTIB_ESP)=*(volatile WORD*)(callStructureBytes+RMCS_SP);
-    VDM_SET16(tib,VTIB_FS,*(volatile WORD*)(callStructureBytes+RMCS_SS));
-    VDM_SET16(tib,VTIB_GS,*(volatile WORD*)(callStructureBytes+RMCS_SS));
+    VDM_SET16(tib,VTIB_FS,*(volatile WORD*)(callStructureBytes+RMCS_FS));   /* #334: was RMCS_SS */
+    VDM_SET16(tib,VTIB_GS,*(volatile WORD*)(callStructureBytes+RMCS_GS));
     lineCursor = LogPut(lineCursor, callbackDone ? "  0303-cb: PM handler returned (OK)\r\n" : "  0303-cb: PM handler NO-RET\r\n");
     LogAppend(LOG_PATH, lineBuffer, lineCursor); SerialOut(lineBuffer, lineCursor); lineCursor = lineBuffer;
 }
@@ -2580,7 +2580,7 @@ quietEntry:
             break;
         }
 
-        if (event == 3)
+        if (event == DPMI_ENTER_EVENT_PENDING)
             continue;                                  /* "interrupt pending" -> retry */
 
         if (event == VDM_EVENT_IO || event == VDM_EVENT_IO_HW || event == VDM_EVENT_GPFAULT)
@@ -4244,7 +4244,7 @@ INT DpmiInjectPmIrq(DOS_MACHINE *machine, volatile BYTE *tib, UINT interruptVect
             break;
         }
 
-        if (event == 3)
+        if (event == DPMI_ENTER_EVENT_PENDING)
             continue;                                 /* "interrupt pending, not entered" -> retry */
 
         if (event == VDM_EVENT_IO || event == VDM_EVENT_IO_HW || event == VDM_EVENT_GPFAULT)

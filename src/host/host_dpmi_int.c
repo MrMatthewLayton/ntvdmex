@@ -1371,7 +1371,7 @@ static VOID DpmiInt31SetDescriptor(PSTR *cursorIo, volatile BYTE * const tib, IN
 
     DpmiRmcsProbe(tib, esBase, 4, 0);       /* observation only */
 
-    if (ldtIndex < 1 || ldtIndex >= DPMI_LDT_LEGACY_LIMIT) { VDM_REG(tib, VTIB_EFLAGS) |= EFLAGS_CF_U;
+    if (ldtIndex < 1 || ldtIndex >= DPMI_LDT_MAX) { VDM_REG(tib, VTIB_EFLAGS) |= EFLAGS_CF_U;
                                  cursor = LogPut(cursor, " -> bad sel");
                                  {
                                      *cursorIo = cursor;
@@ -4752,7 +4752,7 @@ static INT DpmiInt21Free(
                        cursor = LogHex(cursor, error); }
             else { VDM_REG(tib, VTIB_EFLAGS) &= ~EFLAGS_CF_U;
 
-                   if (ldtIndex >= 3 && ldtIndex < DPMI_LDT_MAX)
+                   if (ldtIndex >= DPMI_FIRST_CLIENT_INDEX && ldtIndex < DPMI_LDT_MAX)     /* #334: 3 is the initial SS */
                    {
                        g_Ldt[ldtIndex].Base = g_Ldt[ldtIndex].Limit = 0;
                    }
@@ -5077,7 +5077,7 @@ static INT DpmiInt21CreateOpen(
         {
         }
 
-               if (slot < PM_INT21_HANDLE_LIMIT) { machine->FileHandles[slot] = file;
+               if (slot < DOS_MAX_FILES) { machine->FileHandles[slot] = file;     /* #334: as V86 does; was 24 */
                VDM_SET16(tib, VTIB_EAX, slot);
 
                                 if (ah == DOS_FN_CREATE || ah == DOS_FN_CREATE_NEW)

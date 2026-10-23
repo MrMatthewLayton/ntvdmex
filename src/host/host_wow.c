@@ -3656,7 +3656,7 @@ INT WowCall16SyncEx(
         event  = VDM_REG(tib, VTIB_EVENT);
         eip = DpmiPmEip(tib);
 
-        if (event == 3)
+        if (event == DPMI_ENTER_EVENT_PENDING)
             continue;
 
         if (event == VDM_EVENT_IO || event == VDM_EVENT_IO_HW || event == VDM_EVENT_GPFAULT)
