@@ -37,6 +37,7 @@ extern DWORD g_Irq1In09;
 extern DWORD g_Irq1In08;
 extern DWORD g_Irq1Checks;
 extern DWORD g_Irq1NoIf;
+extern DWORD g_Irq1Masked;
 extern INT g_Headless;
 extern DWORD g_Irq1Injected;
 extern UINT g_CaptureMs;
