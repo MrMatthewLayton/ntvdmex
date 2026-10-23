@@ -37,6 +37,14 @@ imports:
         dw      U,  5                   ; 2  InitApp
         dw      U, 200                  ; 3  OpenComm
         dw      U, 207                  ; 4  CloseComm
+        dw      U, 205                  ; 5  WriteComm
+        dw      U, 204                  ; 6  ReadComm
+        dw      U, 206                  ; 7  TransmitCommChar
+        dw      U, 203                  ; 8  GetCommError
+        dw      U, 215                  ; 9  FlushComm
+        dw      U, 208                  ; 10 SetCommEventMask
+        dw      U, 209                  ; 11 GetCommEventMask
+        dw      U, 214                  ; 12 EscapeCommFunction
 NIMP    equ     ($ - imports) / 4
 
 m_kernel:  db   'KERNEL', 0
@@ -70,6 +78,14 @@ WAITEVENT       equ iat + 4*1
 INITAPP         equ iat + 4*2
 OPENCOMM        equ iat + 4*3
 CLOSECOMM       equ iat + 4*4
+WRITECOMM       equ iat + 4*5
+READCOMM        equ iat + 4*6
+TRANSMITCHAR    equ iat + 4*7
+GETCOMMERROR    equ iat + 4*8
+FLUSHCOMM       equ iat + 4*9
+SETEVENTMASK    equ iat + 4*10
+GETEVENTMASK    equ iat + 4*11
+ESCAPECOMM      equ iat + 4*12
 
 ; ── DGROUP (segment 2) offsets. mkne.py zero-fills it; nothing else uses it. ─
 D_HINST         equ 0x40
@@ -143,6 +159,89 @@ start:
         mov     si, s_com1b
         mov     dx, d_com1
         call    opencase
+
+; #334: each comm call once on the open port, so the host log's frame dumps say where
+; USER.EXE's thunk puts every argument (it adds words of its own in front: OpenComm
+; and CloseComm were measured). The answers are reported, but the FRAMES are the point.
+        mov     si, s_write
+        call    wcs
+        push    word [D_COM1]
+        push    cs
+        mov     ax, d_at
+        push    ax
+        mov     ax, 3
+        push    ax
+        call far [cs:WRITECOMM]               ; WriteComm(id, lpBuf, 3)
+        call    whex
+        call    wnl
+
+        mov     si, s_tx
+        call    wcs
+        push    word [D_COM1]
+        mov     ax, 'X'
+        push    ax
+        call far [cs:TRANSMITCHAR]            ; TransmitCommChar(id, 'X')
+        call    whex
+        call    wnl
+
+        mov     si, s_err
+        call    wcs
+        push    word [D_COM1]
+        xor     ax, ax
+        push    ax
+        push    ax
+        call far [cs:GETCOMMERROR]            ; GetCommError(id, NULL)
+        call    whex
+        call    wnl
+
+        mov     si, s_read
+        call    wcs
+        push    word [D_COM1]
+        push    ds
+        mov     ax, D_HEX
+        push    ax
+        mov     ax, 1
+        push    ax
+        call far [cs:READCOMM]                ; ReadComm(id, ds:D_HEX, 1)
+        call    whex
+        call    wnl
+
+        mov     si, s_flush
+        call    wcs
+        push    word [D_COM1]
+        mov     ax, 1
+        push    ax
+        call far [cs:FLUSHCOMM]               ; FlushComm(id, 1 = receive queue)
+        call    whex
+        call    wnl
+
+        mov     si, s_setev
+        call    wcs
+        push    word [D_COM1]
+        mov     ax, 1
+        push    ax
+        call far [cs:SETEVENTMASK]            ; SetCommEventMask(id, EV_RXCHAR) -> DX:AX
+        mov     ax, dx                        ; the selector half: 0 = failed
+        call    whex
+        call    wnl
+
+        mov     si, s_getev
+        call    wcs
+        push    word [D_COM1]
+        mov     ax, 1
+        push    ax
+        call far [cs:GETEVENTMASK]            ; GetCommEventMask(id, EV_RXCHAR)
+        call    whex
+        call    wnl
+
+        mov     si, s_esc
+        call    wcs
+        push    word [D_COM1]
+        mov     ax, 5
+        push    ax
+        call far [cs:ESCAPECOMM]              ; EscapeCommFunction(id, SETDTR=5)
+        call    whex
+        call    wnl
 
         mov     si, s_close
         call    wcs
@@ -273,6 +372,15 @@ s_a:      db 'STEP=A', 13, 10, 0
 s_com1:   db 'CASE=comm.open.com1 SIG=AX AX=', 0
 s_com1b:  db 'CASE=comm.open.com1.again SIG=AX AX=', 0
 s_close:  db 'CASE=comm.close.first SIG=AX AX=', 0
+s_write:  db 'CASE=comm.write SIG=AX AX=', 0
+s_tx:     db 'CASE=comm.transmitchar SIG=AX AX=', 0
+s_err:    db 'CASE=comm.geterror SIG=AX AX=', 0
+s_read:   db 'CASE=comm.read SIG=AX AX=', 0
+s_flush:  db 'CASE=comm.flush SIG=AX AX=', 0
+s_setev:  db 'CASE=comm.seteventmask SIG=DX DX=', 0
+s_getev:  db 'CASE=comm.geteventmask SIG=AX AX=', 0
+s_esc:    db 'CASE=comm.escape SIG=AX AX=', 0
+d_at:     db 'AT', 13
 s_com9:   db 'CASE=comm.open.com9 SIG=AX AX=', 0
 s_bad:    db 'CASE=comm.open.notaport SIG=AX AX=', 0
 d_com1:   db 'COM1', 0

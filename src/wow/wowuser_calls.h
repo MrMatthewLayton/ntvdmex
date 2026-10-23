@@ -918,10 +918,16 @@
  * #334, measured (runs/s101/g5/w_comm_host.log, args=0x0c): `0BBF 2AB2 0080 0400 <off> <sel>`
  * -- a selector and paragraph USER allocated just before the call, then cbOut, cbIn and the
  * device name. At +4 the old offset read 0400:0080, found nothing, and answered IE_BADID for
- * every port. The other comm offsets were never measured this way.
+ * every port.
  */
 #define WOWUSER_OC_ARG_DEV                  8
-#define WOWUSER_CC_ARG_ID                   0
+
+/* CloseComm(id) has the same two leading words as OpenComm: a 6-byte block, id at +4
+ * (measured, runs/s101/g7: `15EE 0B87 0000`). The rest of the comm family is laid out
+ * exactly as pushed -- measured the same way (WriteComm, ReadComm, TransmitCommChar,
+ * GetCommError, FlushComm, Set/GetCommEventMask, EscapeCommFunction), offsets below.
+ */
+#define WOWUSER_CC_ARG_ID                   4
 #define WOWUSER_RC_ARG_CB                   0
 #define WOWUSER_RC_ARG_BUF                  2
 #define WOWUSER_RC_ARG_ID                   6
