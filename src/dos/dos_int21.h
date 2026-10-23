@@ -529,4 +529,17 @@ BYTE DosInt21CurrentDrive(_In_ PCDOS_MACHINE machine);
 
 INT DosInt21(_Inout_ PDOS_MACHINE machine);
 
+/* #240: drive A: as a disk image at the DOS level (dos_int21.c, "DRIVE A: AS A DISK IMAGE").
+ * `isImageMode` 1 = A: is the image `imagePath` (NULL or "" = the drive is empty); 0 = A:
+ * is the host's own. Safe to call again with the same values (the copy is kept) or new
+ * ones (the next A: path reads the new disk).
+ */
+VOID DosInt21SetFloppyImage(_In_ INT isImageMode, _In_opt_ PCSTR imagePath);
+
+/* #240: INT 13h wrote the image -- the DOS-level copy is stale. */
+VOID DosInt21FloppyChanged(VOID);
+
+/* #240: delete this process's extracted copies (at exit). */
+VOID DosInt21FloppyShutdown(VOID);
+
 #endif /* DOS_INT21_H */

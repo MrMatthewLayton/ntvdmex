@@ -226,6 +226,28 @@ the 82077AA ([fdc.md](fdc.md)); the FDC's head never moves.
 | Fixed disks (`DL=80h`+), B:, and the EDD extensions (`41h`+) | **N/A** | by design: no raw access to the host's disks; answered "not ready" (`AH=80h`) | — |
 | INT 25h / 26h absolute read / write (LBA) | **IMPL** | `:29359-29374`; A: only | provisional (`int25.absread`) |
 | INT 13h drives the FDC chip (DMA channel 2, the head position) | **PART** | the image is read directly; the chip's state never changes, which is why `p_fdc dumpreg` and `p_dma dma.status.idle` differ from the oracles | — |
+| INT 13h on the PHYSICAL drive (Settings > Drives > Floppy = physical, the PC has one) | **IMPL** (#240) | `FloppyImagePath()` (`host_dos.c`) opens `\\.\A:` when no `cfg\FLOPPY.IMG` is present -- the harness's disk still wins; an empty drive is asked again on the next call | **rig owed** (needs a machine with a floppy drive) |
+
+### The image as DOS drive A: (#240)
+
+With Settings > Drives > Floppy = **image**, A: at the INT 21h level is the image's FAT12/FAT16
+filesystem (`src/dos/dos_fatimg.c`, read-only, off-VM tested by `tests/unit/fatimg_test.c`;
+`dos_int21.c` "DRIVE A: AS A DISK IMAGE"). The files are read into a private directory and
+every A: path is pointed into it; A: is a virtual current drive with its own directory.
+
+| Unit | Status | Where / what is missing | Verification |
+|---|---|---|---|
+| Open / read / seek / close, FindFirst/Next, 43h get attributes, file times (3Dh, 3Fh, 42h, 3Eh, 4Eh/4Fh, 5700h, 6Ch/716Ch open) | **IMPL** | the extracted copy, through the same Win32 arms as any drive | fatimg_test (reader); **rig owed** |
+| 0Eh select A:, 19h, 3Bh chdir, 47h current directory, 60h/7160h truename -- in A: terms | **IMPL** | `DosImageIsChdir`, the 47h/3Bh image arms, the truename arms; the host directory never reaches the guest | fatimg_test (`FatImageResolvePath`: `.`/`..`/`\`); **rig owed** |
+| 1Bh/1Ch drive info, 36h free space | **IMPL** | from the image's BPB and FAT (media byte included) | **rig owed** |
+| FCB calls on A: (0Fh open, 14h/21h reads, 23h size) | **IMPL** | `DosFcbName` maps them too | **rig owed** |
+| WRITES: 3Ch/5Ah/5Bh create, 41h delete, 56h rename, 39h/3Ah, 43h set, 6Ch create/truncate, 7141h/7143h set, FCB 13h/16h/17h | **write protected** (by design) | error **19** -> the program's INT 24h, as a write-protect tab; FCB calls answer AL=FFh | **rig owed** |
+| 40h write through a handle opened on A: | **write protected** (by design) | opened for reading underneath; the failed write is reported as 19 on drive A: | **rig owed** |
+| An empty drive (image mode, blank path) | **IMPL** | every A: path answers **21** (not ready) -> INT 24h; 36h answers FFFFh; 47h/60h still answer (no disk read, as DOS) | **rig owed** |
+| INT 13h writes the image | **IMPL** | `DiskIo` marks the DOS copy stale; the next A: path reads a fresh one | **rig owed** |
+| Writing through DOS to the image (persisting) | **MISS** | needs a FAT writer and a way to share the file with INT 13h safely | — |
+| 4Eh with only the volume-label attribute on A: | **MISS** | the label is in the image (`FatImageVolumeLabel`), not yet answered | — |
+| FCB writes (15h/22h/28h) on A: report a short write (AL=01h), not INT 24h | **PART** | the FCB arms have no INT 24h path of their own | — |
 
 ---
 

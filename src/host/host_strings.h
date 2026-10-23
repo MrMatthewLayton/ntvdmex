@@ -67,6 +67,7 @@
 #define HOST_PROGRAM_NONE                       "(none)"            /* The status strip before a program */
 #define HOST_STOCK_NTVDM_NAME                   "ntvdm.exe"         /* Windows' own VDM, looked for by process name */
 #define HOST_FLOPPY_A_ROOT                      "A:\\"
+#define HOST_FLOPPY_A_DEVICE                    "\\\\.\\A:"         /* #240: the drive itself, for INT 13h */
 #define HOST_FLOPPY_B_ROOT                      "B:\\"
 #define HOST_SHIM_SUBDIRECTORY                  "bin\\wowshim\\"
 #define HOST_SCREENSHOT_EXTENSION               ".bmp"              /* #155: <program>-<time>.bmp */

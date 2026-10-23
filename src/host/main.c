@@ -946,6 +946,7 @@ INT WINAPI WinMain(
      * way so it does not force-exit us mid-flush and lose the DOS output.
      */
     InterlockedExchange(&g_WoundDown, 1);
+    DosInt21FloppyShutdown();                  /* #240: the A: image's extracted copy */
 
     g_CommandInfo.ExitCode = (ULONG)machine.ExitCode;
     /* Flush captured DOS output to the console + the log.

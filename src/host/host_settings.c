@@ -352,6 +352,13 @@ VOID SettingsApply(HWND window, const NTVDMEX_SETTINGS *settings, INT live)
      */
     g_FloppyImage     = ((!settings->Values[SET_FLOPPYPHYS] || !HostHasFloppy()) && settings->Strings[SET_STR_FLOPPYA][0])
                      ? settings->Strings[SET_STR_FLOPPYA] : NULL;
+    /* #240: ...and the DOS level follows it. A: is the image when image mode is CHOSEN (a
+     * blank path is then an empty drive), or when it is forced on a PC with no floppy and
+     * an image is named. A PC with no floppy and nothing named keeps its old A: answer.
+     */
+    g_FloppyPhysical  = settings->Values[SET_FLOPPYPHYS] && HostHasFloppy();
+    DosInt21SetFloppyImage(!settings->Values[SET_FLOPPYPHYS] || (!g_FloppyPhysical && settings->Strings[SET_STR_FLOPPYA][0]),
+                           g_FloppyImage);
     g_HostCursorMode   = (INT)settings->Values[SET_HOSTCURSOR];                   /* s84 */
     /* #136: read at start-up only -- see g_DosMemoryTop. */
     g_ConventionalKbWant   = BiosClampConventionalKb((UINT)settings->Values[SET_CONVKB]);
