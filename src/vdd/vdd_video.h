@@ -1064,6 +1064,7 @@ VOID VddCursorLines(
     _Out_ UINT *end,
     _Out_ INT *isHidden);
 VOID VddVideoPutChar(_Inout_ PVIDEO_STATE state, _In_ BYTE character);      /* console teletype sink */
+VOID VddVideoConsoleChar(_Inout_ PVIDEO_STATE state, _In_ BYTE character);  /* DOS console output: TAB expanded */
 
 /* Planar A0000 access (mode 12h): the host calls these from the memory-write trap
  * so direct framebuffer writes run through the VGA write-modes into the 4 planes.
