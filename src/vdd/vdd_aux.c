@@ -88,18 +88,18 @@ static LONG AuxClamp(LONG value, BYTE *overflow, BYTE overflowBit)
 VOID AuxDevicePacket(LONG dx, LONG dy, BYTE buttons, BYTE *packet)
 {
     BYTE first = (BYTE)(AUX_PACKET_ALWAYS_ONE | (buttons & (AUX_PACKET_LEFT | AUX_PACKET_RIGHT | AUX_PACKET_MIDDLE)));
-    LONG x = AuxClamp(dx, &first, AUX_PACKET_X_OVERFLOW);
-    LONG y = AuxClamp(-dy, &first, AUX_PACKET_Y_OVERFLOW);   /* the device's Y is up-positive */
+    LONG movementX = AuxClamp(dx, &first, AUX_PACKET_X_OVERFLOW);
+    LONG movementY = AuxClamp(-dy, &first, AUX_PACKET_Y_OVERFLOW);   /* the device's Y is up-positive */
 
-    if (x < 0)
+    if (movementX < 0)
         first |= AUX_PACKET_X_SIGN;
 
-    if (y < 0)
+    if (movementY < 0)
         first |= AUX_PACKET_Y_SIGN;
 
     packet[0] = first;
-    packet[1] = (BYTE)(x & AUX_BYTE_MASK);
-    packet[2] = (BYTE)(y & AUX_BYTE_MASK);
+    packet[1] = (BYTE)(movementX & AUX_BYTE_MASK);
+    packet[2] = (BYTE)(movementY & AUX_BYTE_MASK);
 }
 
 static VOID AuxQueuePacket(PAUX_DEVICE device, LONG dx, LONG dy)
