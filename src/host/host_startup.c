@@ -3984,8 +3984,7 @@ PSTR StartupAttachDevices(PSTR cursor)
     VddBusAdd(&g_Bus, &g_SbDevice);             /* Sound Blaster 16: 0x220-0x22F */
     g_Mpu.Sink = HostMidiSink;
     g_Mpu.UartHook = HostMidiUartMode;      /* #155: start the built-in synth early */
-    {   static const WORD mpuBases[5] = { 0x300, 0x310, 0x320, 0x330, 0x340 };   /* #235 */
-        g_Mpu.BasePort = mpuBases[g_Settings.Values[SET_MPUADDR] <= ARRAYSIZE(mpuBases) - 1 ? g_Settings.Values[SET_MPUADDR] : MPU_DEFAULT_BASE_CHOICE]; }
+    g_Mpu.BasePort = VddMpuBaseForChoice(g_Settings.Values[SET_MPUADDR]);           /* #235, #342 */
     g_MpuDevice = VddMpuDevice(&g_Mpu);
     VddBusAdd(&g_Bus, &g_MpuDevice);            /* MPU-401 MIDI: 0x330/0x331 */
     /* The Gravis UltraSound: 240h-24Fh and 340h-347h, IRQ 11, DMA 3 (docs/ref/gus.md).

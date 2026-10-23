@@ -40,6 +40,8 @@
 #define MPU_OK                      0
 #define MPU_FAILED                  (-1)
 
+static const WORD g_MpuBasePorts[MPU_BASE_CHOICES] = { 0x300, 0x310, 0x320, 0x330, 0x340 };
+
 static VOID MpuInputQueuePush(PMPU_STATE state, BYTE value)
 {
     if (state->InputQueueLength >= MPU_INPUT_QUEUE_SIZE)
@@ -334,6 +336,11 @@ VOID VddMpuReset(PVOID context)
     state->SysExSink = sysExSink;
     state->SysExContext = sysExContext;
     state->UartHook = uartHook;
+}
+
+WORD VddMpuBaseForChoice(DWORD choice)
+{
+    return g_MpuBasePorts[choice < MPU_BASE_CHOICES ? choice : MPU_DEFAULT_BASE_CHOICE];
 }
 
 INT VddMpuInitialize(PVDD_BUS bus, PVOID context)
