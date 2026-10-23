@@ -20,10 +20,10 @@ static INT g_Failed;
 static BYTE g_Source[16 * 16 * 3];
 static BYTE g_Target[640 * 3 * 480];
 
-/* Pixel (x, y) of the output picture, counted from the TOP, as B, G, R packed in a DWORD. */
-static DWORD CaptureScaleTestAt(DWORD outputWidth, DWORD outputHeight, DWORD x, DWORD y)
+/* Pixel (column, row) of the output picture, counted from the TOP, as B, G, R packed in a DWORD. */
+static DWORD CaptureScaleTestAt(DWORD outputWidth, DWORD outputHeight, DWORD column, DWORD row)
 {
-    const BYTE *pixel = g_Target + (SIZE_T)(outputHeight - 1 - y) * CaptureScaleStride(outputWidth) + x * 3;
+    const BYTE *pixel = g_Target + (SIZE_T)(outputHeight - 1 - row) * CaptureScaleStride(outputWidth) + column * 3;
 
     return pixel[0] | ((DWORD)pixel[1] << 8) | ((DWORD)pixel[2] << 16);
 }
@@ -31,17 +31,17 @@ static DWORD CaptureScaleTestAt(DWORD outputWidth, DWORD outputHeight, DWORD x, 
 /* A source frame whose every pixel names itself: B = x, G = y, R = 0x80. */
 static VOID CaptureScaleTestFill(DWORD width, DWORD height)
 {
-    DWORD y;
+    DWORD row;
 
-    for (y = 0; y < height; ++y)
+    for (row = 0; row < height; ++row)
     {
-        DWORD x;
+        DWORD column;
 
-        for (x = 0; x < width; ++x)
+        for (column = 0; column < width; ++column)
         {
-            BYTE *pixel = g_Source + (y * width + x) * 3;
-            pixel[0] = (BYTE)x;
-            pixel[1] = (BYTE)y;
+            BYTE *pixel = g_Source + (row * width + column) * 3;
+            pixel[0] = (BYTE)column;
+            pixel[1] = (BYTE)row;
             pixel[2] = 0x80;
         }
     }
