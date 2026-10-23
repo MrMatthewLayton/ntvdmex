@@ -31,7 +31,9 @@
 #define BIOS_EQUIPMENT_SERIAL_SHIFT         9
 #define BIOS_EQUIPMENT_SERIAL_COUNT_MASK    7
 #define BIOS_EQUIPMENT_GAMEPORT             0x1000
-#define BIOS_EQUIPMENT_ONE_PARALLEL         0x4000      /* Bits 14-15 = 1 */
+#define BIOS_EQUIPMENT_PARALLEL_MASK_U      0xC000u     /* Bits 14-15: how many parallel ports */
+#define BIOS_EQUIPMENT_PARALLEL_SHIFT       14
+#define BIOS_EQUIPMENT_PARALLEL_COUNT_MASK  3
 #define BIOS_BDA_MEMORY_KB                  0x13        /* WORD: base memory in KB, = INT 12h */
 #define BIOS_BDA_SHIFT_FLAGS                0x17        /* Shift/ctrl/alt + lock state (INT 16h AH=02) */
 #define BIOS_BDA_SHIFT_FLAGS2               0x18        /* Extended shift flags (INT 16h AH=12) */

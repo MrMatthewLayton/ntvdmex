@@ -3892,8 +3892,12 @@ PSTR StartupAttachDevices(PSTR cursor)
       g_Comm.Ports[3].BasePort = COMM_COM4_BASE;
       g_Comm.Ports[3].Irq = COMM_COM2_IRQ;
       g_Comm.Ports[3].IsFitted = 1;
-      g_Comm.Printers[0].BasePort = LPT_DEFAULT_BASE;
-      g_Comm.Printers[0].IsFitted = 1;   /* LPT1 data/strobe */
+      g_Comm.Printers[0].BasePort = LPT1_BASE;          /* #311: stock's three, LPT1 at 3BCh */
+      g_Comm.Printers[0].IsFitted = 1;
+      g_Comm.Printers[1].BasePort = LPT2_BASE;
+      g_Comm.Printers[1].IsFitted = 1;
+      g_Comm.Printers[2].BasePort = LPT3_BASE;
+      g_Comm.Printers[2].IsFitted = 1;
       g_Comm.Sink = ComTransmitSink;
       g_Comm.SinkContext = NULL;
       g_Comm.PrinterSink = LptTransmitSink;
@@ -3923,9 +3927,12 @@ PSTR StartupAttachDevices(PSTR cursor)
         for (callbackIndex = 0; callbackIndex < BIOS_BDA_COM_PORTS; ++callbackIndex)
             biosDataArea[callbackIndex] = (WORD)(VddCommIsFitted(&g_Comm, callbackIndex) ? g_Comm.Ports[callbackIndex].BasePort : 0); }
 
-      biosDataArea[BIOS_BDA_LPT_BASES / X86_WORD_SIZE] = (WORD)(VddLptIsFitted(&g_Comm, 0) ? LPT_DEFAULT_BASE : 0);   /* LPT1 */
-      biosDataArea[BIOS_BDA_LPT_BASES / X86_WORD_SIZE + 1] = 0;
-      biosDataArea[BIOS_BDA_LPT_BASES / X86_WORD_SIZE + 2] = 0; }                         /* LPT2..LPT3: none fitted */
+      { INT printerIndex;                                                          /* #311: LPT1-LPT3 from the slots */
+
+        for (printerIndex = 0; printerIndex < BIOS_BDA_LPT_PORTS; ++printerIndex)
+            biosDataArea[BIOS_BDA_LPT_BASES / X86_WORD_SIZE + printerIndex] =
+                (WORD)(VddLptIsFitted(&g_Comm, printerIndex) ? g_Comm.Printers[printerIndex].BasePort : 0); } }
+
     /* 000E, 0010, 0013 AND THE EBDA, FROM THE FUNCTIONS INT 11h/12h CALL. (#253)
      * 0040:000E is LPT4 on a PC and the EBDA segment on an AT and later; this block
      * used to zero it as "LPT4: none", which on an AT reads as "no EBDA" -- while

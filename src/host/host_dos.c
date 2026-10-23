@@ -1214,7 +1214,7 @@ INT PmRwHardwareFail(
 INT DosPrnOut(PVOID context, BYTE character)
 {
     (VOID)context;
-    return LptSpoolPut(character);
+    return LptSpoolPut(0, character);                     /* PRN is LPT1 */
 }
 
 VOID DosAuxOut(PVOID context, BYTE character)
