@@ -4099,6 +4099,7 @@ VOID StartupBuildDos(
         handlerArea[DOS_HDLR_INT21_STUB_OFF + index] = bop[index];
 
     *(volatile WORD *)IVT_OFFSET_ADDRESS(VECTOR_DOS) = DOS_HDLR_INT21_STUB_OFF;                        /* IVT[0x21].offset */
+    *(volatile BYTE *)(ULONG_PTR)BIOS_PRINT_SCREEN_STATUS_LINEAR = BIOS_PRINT_SCREEN_STATUS_OK;      /* #317: 0050:0000 is the BIOS's */
     *(volatile WORD *)IVT_SEGMENT_ADDRESS(VECTOR_DOS) = DOS_HDLR_SEG;                  /* IVT[0x21].segment */
     handlerArea[DOS_DBCS_OFF] = 0;
     handlerArea[DOS_DBCS_OFF + 1] = 0;     /* empty DBCS table */

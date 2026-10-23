@@ -321,7 +321,7 @@ DWORD g_Kb4FCalls;
 DWORD g_Kb4FTranslate;
 DWORD g_PrintScreenJobs;
 DWORD g_PrintScreenErrors;
-BYTE       g_PrintScreenStatus = BIOS_PRINT_SCREEN_STATUS_OK;   /* what 0050:0000 would hold */
+BYTE       g_PrintScreenStatus = BIOS_PRINT_SCREEN_STATUS_OK;   /* a mirror of 0050:0000, for the report */
 DWORD          g_ExecPriority     = 0;   /* guest thread priority class; see EXECPRIO_PATH */
 INT            g_QiRaise      = 0;
 INT            g_QiVif        = 0;   /* start the guest with EFLAGS.VIF set */

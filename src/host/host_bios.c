@@ -371,15 +371,11 @@ enum
  * hand back the first byte. next: judge INT 17h's AH, hand back the next byte. At the
  * end the cursor goes back, every saved register is restored, CF=1.
  *
- * [WARNING]: THE STATUS BYTE IS NOT AT 0050:0000 HERE, AND CANNOT BE WITHOUT A LAYOUT CHANGE.
- * 0050:0000 is DOS_HDLR_SEG:0000 -- the first byte of OUR INT 21h stub (`C4 C4 20 CF`,
- * IVT[21h] = 0050:0000). Writing the IBM status values there (01h busy, 00h done) would
- * turn every INT 21h into garbage the moment someone pressed Print Screen. So the
- * status lives in g_PrintScreenStatus (same values, same meaning) and the guest reads C4h
- * at 0050:0000. [CAUTION] The converse hazard predates this: a program that DISABLES print
- * screen the classic way, `mov byte [0050:0000],1`, overwrites our INT 21h stub. Moving
- * the stub off 0050:0000 is its own change (IVT[21h], the PM INT 21h paths, WOW) --
- * filed in the #274 report, not done in passing.
+ * #317: THE STATUS BYTE IS AT 0050:0000, AS THE IBM ROUTINE KEEPS IT. Our INT 21h stub
+ * used to sit there; it moved to DOS_HDLR_INT21_STUB_OFF. So the byte means what software
+ * expects: 01h while printing (a nested INT 05h returns at once), 00h done, FFh error --
+ * and a program that disables Print Screen the classic way, `mov byte [0050:0000],1`,
+ * now does exactly that. g_PrintScreenStatus mirrors it for the run report.
  */
 static BIOS_PRINT_SCREEN_JOB g_PrintScreen;
 static DWORD      g_PrintScreenSaved[PRINT_SCREEN_SAVED_REGISTERS];
@@ -418,9 +414,10 @@ static VOID PrintScreenBop(volatile BYTE *tib, INT begin)
     {
         NTVDD_REGISTERS registers;
 
-        if (g_PrintScreen.IsActive)
+        if (g_PrintScreen.IsActive
+            || *(volatile BYTE *)(ULONG_PTR)BIOS_PRINT_SCREEN_STATUS_LINEAR == BIOS_PRINT_SCREEN_STATUS_BUSY)
         {
-            VDM_REG(tib, VTIB_EFLAGS) |= EFLAGS_CF_U;
+            VDM_REG(tib, VTIB_EFLAGS) |= EFLAGS_CF_U;                /* printing, or disabled by a program */
             return;
         }
 
@@ -428,6 +425,7 @@ static VOID PrintScreenBop(volatile BYTE *tib, INT begin)
             g_PrintScreenSaved[index] = VDM_REG(tib, savedRegisters[index]);
 
         g_PrintScreenStatus = BIOS_PRINT_SCREEN_STATUS_BUSY;
+        *(volatile BYTE *)(ULONG_PTR)BIOS_PRINT_SCREEN_STATUS_LINEAR = BIOS_PRINT_SCREEN_STATUS_BUSY;
         ZeroMemory(&registers, sizeof registers);
         registers.Eax = VIDEO_FUNCTION_GET_MODE << BYTE_SHIFT;
         PrintScreenInt10(&registers);               /* AH = columns, BH = page */
@@ -468,6 +466,7 @@ static VOID PrintScreenBop(volatile BYTE *tib, INT begin)
         registers.Edx = g_PrintScreen.Cursor;
         PrintScreenInt10(&registers); }
     g_PrintScreenStatus = (status == BIOS_PRINT_SCREEN_STEP_ERROR) ? BIOS_PRINT_SCREEN_STATUS_ERROR : BIOS_PRINT_SCREEN_STATUS_OK;
+    *(volatile BYTE *)(ULONG_PTR)BIOS_PRINT_SCREEN_STATUS_LINEAR = g_PrintScreenStatus;
 
     if (status == BIOS_PRINT_SCREEN_STEP_ERROR)
         ++g_PrintScreenErrors;

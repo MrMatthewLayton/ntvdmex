@@ -26,8 +26,8 @@
  * ("WILL NOW SEND INITIAL LF,CR TO PRINTER"), and only screen bytes are tested.
  * p_kbd3 records the first bytes INT 17h receives so PCem's AMI BIOS settles it.
  *
- * [WARNING]: OURS KEEPS THAT STATUS HOST-SIDE (main.c g_prtsc_status), NOT AT 0050:0000:
- * that byte is DOS_HDLR_SEG:0000, the first byte of our INT 21h stub. See prtsc_bop.
+ * #317: THE STATUS IS AT 0050:0000, as the IBM routine keeps it (it used to be held
+ * host-side while our INT 21h stub occupied that byte; the stub moved). See PrintScreenBop.
  *
  * [CAUTION]: OURS READS THE SCREEN THROUGH OUR OWN INT 10h, HOST-SIDE, not through the guest's
  * INT 10h vector: a program that hooked INT 10h would see the IBM routine's 2000
@@ -45,7 +45,7 @@
 
 #include "../ntvdmex_types.h"
 
-/* The status byte at 0050:0000 and its values (kept host-side here: see above). */
+/* The status byte at 0050:0000 and its values. */
 #define BIOS_PRINT_SCREEN_STATUS_LINEAR         0x500u  /* 0050:0000 */
 #define BIOS_PRINT_SCREEN_STATUS_BUSY           0x01
 #define BIOS_PRINT_SCREEN_STATUS_OK             0x00
