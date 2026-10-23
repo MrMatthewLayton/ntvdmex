@@ -666,7 +666,78 @@ VOID RegistersStore(NTVDD_REGISTERS *registers, volatile BYTE *tib)
  * (serviced, still WAITING -- EIP left on the BOP so it re-executes: INT 16h AH=00h
  * with no key, INT 15h AH=86h mid-countdown).
  */
-#define V86BOP_RET(v)               do { *logCursor = cursor; return (v); } while (0)
+/* #178: WHAT THE DISKETTE SERVICE LEAVES BEHIND. INT 13h reads the image directly, but
+ * the IBM BIOS it stands in for (PC/AT Technical Reference, DSKETTE; docs/ref/fdc.md 10)
+ * drives the 82077AA and keeps a record in 0040:003E-0048 that software reads back --
+ * and the head it moved is where the chip's own commands find it afterwards.
+ * C/H/R and `count` are what was asked for; `isOk` whether every sector moved.
+ */
+static VOID BiosDisketteRecord(
+    UINT drive,
+    PDOS_DISK_GEOMETRY geometry,
+    UINT cylinder,
+    UINT head,
+    UINT sector,
+    UINT count,
+    BYTE status,
+    INT isWrite,
+    INT isOk)
+{
+    volatile BYTE *bda = (volatile BYTE *)(ULONG_PTR)BIOS_BDA_BASE;
+    DWORD perCylinder = (DWORD)geometry->Heads * geometry->SectorsPerTrack;
+
+    if (drive >= FDC_DRIVES || !perCylinder)
+        return;
+
+    if (isOk && count > 1)                                  /* where the LAST sector was */
+    {
+        DWORD lastLba = ((DWORD)cylinder * perCylinder) + ((DWORD)head * geometry->SectorsPerTrack) + (sector - 1) + (count - 1);
+        cylinder = (UINT)(lastLba / perCylinder);
+        head = (UINT)((lastLba / geometry->SectorsPerTrack) % geometry->Heads);
+        sector = (UINT)(lastLba % geometry->SectorsPerTrack) + 1;
+    }
+
+    if (cylinder < geometry->Cylinders)
+        VddFdcSetCylinder(&g_Fdc, (BYTE)drive, (BYTE)cylinder);    /* the head stays where it read */
+
+    bda[BIOS_BDA_DISKETTE_RECALIBRATE] = (BYTE)((bda[BIOS_BDA_DISKETTE_RECALIBRATE] | (1u << drive)) & ~BIOS_DISKETTE_RECALIBRATE_IRQ);
+    bda[BIOS_BDA_DISKETTE_MOTOR_STATUS] = (BYTE)((bda[BIOS_BDA_DISKETTE_MOTOR_STATUS] & BIOS_DISKETTE_MOTOR_BITS & ~BIOS_DISKETTE_MOTOR_WRITE)
+                                                 | (1u << drive) | (isWrite ? BIOS_DISKETTE_MOTOR_WRITE : 0));
+    bda[BIOS_BDA_DISKETTE_MOTOR_COUNT] = BIOS_DISKETTE_MOTOR_WAIT;
+    bda[BIOS_BDA_DISKETTE_STATUS] = status;
+
+    /* The seven result bytes the chip would have handed back: the BIOS reads with MT set
+     * and EOT = the last sector, so a good read ends one sector on (side 1 after side 0's
+     * last, the next cylinder after side 1's); a failed one names the sector it wanted.
+     */
+    if (isOk)
+    {
+        if (sector < geometry->SectorsPerTrack)
+            ++sector;
+        else if (head == 0 && geometry->Heads > 1)
+        {
+            head = 1;
+            sector = 1;
+        }
+        else
+        {
+            ++cylinder;
+            head = 0;
+            sector = 1;
+        }
+    }
+
+    {   volatile BYTE *result = bda + BIOS_BDA_DISKETTE_RESULT;           /* ST0 ST1 ST2 C H R N */
+        *result++ = (BYTE)((isOk ? FDC_ST0_NORMAL : FDC_ST0_ABNORMAL) | (head << FDC_HEAD_SHIFT) | drive);
+        *result++ = (BYTE)(isOk ? 0 : FDC_ST1_NO_DATA);
+        *result++ = FDC_ST2_CLEAR;
+        *result++ = (BYTE)cylinder;
+        *result++ = (BYTE)head;
+        *result++ = (BYTE)sector;
+        *result = FDC_SIZE_CODE_512; }
+}
+
+#define V86BOP_RET(v)   do { *logCursor = cursor; return (v); } while (0)
 INT V86BiosBop(volatile BYTE *tib, UINT bopNumber, PSTR *logCursor, PSTR base)
 {
     PSTR cursor = *logCursor;
@@ -1189,6 +1260,13 @@ INT V86BiosBop(volatile BYTE *tib, UINT bopNumber, PSTR *logCursor, PSTR base)
                 BSETAX(0);
                 g_DiskStatus = 0;
                 BCF_CLR();
+
+                if (int13Dl < FDC_DRIVES)                       /* #178: every drive needs recalibrating again */
+                {
+                    volatile BYTE *bda = (volatile BYTE *)(ULONG_PTR)BIOS_BDA_BASE;
+                    bda[BIOS_BDA_DISKETTE_RECALIBRATE] = 0;
+                    bda[BIOS_BDA_DISKETTE_STATUS] = 0;
+                }
             }
             else if (int13Ah == BIOS_DISK_GET_STATUS)
             {
@@ -1246,12 +1324,15 @@ INT V86BiosBop(volatile BYTE *tib, UINT bopNumber, PSTR *logCursor, PSTR base)
                     BSETAX(BIOS_DISK_STATUS_SECTOR_NOT_FOUND << BYTE_SHIFT);
                     g_DiskStatus = BIOS_DISK_STATUS_SECTOR_NOT_FOUND;  /* sector not found */
                     BCF_SET();
+                    BiosDisketteRecord(int13Dl, int13Geometry, cylinder, head, sector, sectorCount,
+                                       (BYTE)g_DiskStatus, int13Ah == BIOS_DISK_WRITE, FALSE);     /* #178 */
                 }
                 else if (int13Ah == BIOS_DISK_VERIFY)        /* verify: bounds only */
                 {
                     BSETAX((WORD)sectorCount);
                     g_DiskStatus = 0;
                     BCF_CLR();
+                    BiosDisketteRecord(int13Dl, int13Geometry, cylinder, head, sector, sectorCount, 0, FALSE, TRUE);
                 }
                 else
                 {
@@ -1272,6 +1353,9 @@ INT V86BiosBop(volatile BYTE *tib, UINT bopNumber, PSTR *logCursor, PSTR base)
                         g_DiskStatus = BIOS_DISK_STATUS_SECTOR_NOT_FOUND;
                         BCF_SET();
                     }
+
+                    BiosDisketteRecord(int13Dl, int13Geometry, cylinder, head, sector, sectorCount,
+                                       (BYTE)g_DiskStatus, int13Ah == BIOS_DISK_WRITE, isOk);      /* #178 */
                 }
             }
             else

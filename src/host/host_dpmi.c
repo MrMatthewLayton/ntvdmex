@@ -3767,6 +3767,7 @@ INT DpmiAsyncInjectPm(UINT irq, CONTEXT *context)
             /* the one BIOS tick body, witness included (#262 -- vdd_pit.h) */
             VddPitBiosTick(&g_Pit, (volatile UINT32 *)(ULONG_PTR)(BIOS_BDA_BASE + BIOS_BDA_TICK_COUNT),
                           (volatile BYTE *)(ULONG_PTR)(BIOS_BDA_BASE + BIOS_BDA_MIDNIGHT_FLAG));
+                VddPitBiosTickHook(&g_Pit, (volatile BYTE *)(ULONG_PTR)BIOS_BDA_BASE);     /* #178: the motor countdown too */
 
             if (g_Irq0Pending > 0)
                 InterlockedDecrement(&g_Irq0Pending);

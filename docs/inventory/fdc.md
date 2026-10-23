@@ -4,7 +4,7 @@
 **▶ The hardware reference is [`../ref/fdc.md`](../ref/fdc.md)** — what the chip *does*.
 **Our implementation:** `src/vdd/vdd_fdc.c`, `src/vdd/vdd_fdc.h`.
 **Oracles:** MS-DOS 6.22 (QEMU), PCem (real AMI 486 BIOS), dosbox-x.
-DOS probe: `tests/probes/dos/p_fdc.asm` · off-VM battery: `tests/unit/fdc_test.c` (32 checks).
+DOS probe: `tests/probes/dos/p_fdc.asm` · off-VM battery: `tests/unit/fdc_test.c` (66 checks, #178).
 **Marked:** 2026-09-23, **from the code**, then re-marked against the test machine.
 
 ---
@@ -99,7 +99,7 @@ stronger one here because MSR *is* the protocol.
 | RQM/DIO handshake per byte | ✅ **IMPL** | measured: `fdc.cmdwait` `0080` on the test machine |
 | `CMD BSY` set on the first command byte, cleared on the **last** result byte | ✅ **IMPL** | `fdc_test.c` checks both edges — it is what lets a driver drain a result of unknown length |
 | Invalid command → one byte, `ST0 = 80h`, **and stays in frame** | ✅ **IMPL** | the framing matters more than the value: an unknown opcode that guessed a parameter count would eat the next real command |
-| Non-DMA execution (MSR bit 5) | ⛔ **MISS** | there is no execution phase to be in yet |
+| Non-DMA execution (MSR bit 5) | ✅ **IMPL** (#178) | SPECIFY's ND bit: the data moves through `3F5h`, MSR = RQM\|NDMA\|CB (+DIO on a read); without the 8237 there is no TC, so a transfer ends at EOT with ST1 EN, as the datasheet has it. ⚠ No per-byte IRQ6: the host polls MSR (`fdc_test.c` §178) |
 | RQM dropping between bytes | ⚠ **N/A-by-design** | we have no latency to model; observable only by timing, and in the direction that cannot hang anyone |
 
 ## 3. The commands
@@ -114,7 +114,8 @@ stronger one here because MSR *is* the protocol.
 | `04h` SENSE DRIVE STATUS (ST3) | ✅ **IMPL** | READY, TRACK0, TWO SIDE, head, drive |
 | `07h` RECALIBRATE · `0Fh` SEEK | ✅ **IMPL** | no result phase; the interrupt is the report |
 | `0Ah` READ ID | **PART** | answers from the present cylinder without touching the medium |
-| `06h` READ · `05h` WRITE · `02h` READ TRACK · `0Ch` READ DELETED · `0Dh` FORMAT | ⛔ **PART** | **see below** |
+| `06h` READ · `05h` WRITE · `02h` READ TRACK · `0Dh` FORMAT | ✅ **IMPL** (#178) | against the host's floppy image (lent through `MediaGeometry`/`MediaTransfer`, never opened twice), over 8237 channel 2 or non-DMA; R→EOT, MT onto side 1, stop at TC; C H R N per the datasheet's table; ID search against the present cylinder (ST2 wrong-cylinder), no medium → ST1 missing address mark, DMA masked or DMAGATE clear → ST1 overrun. **Unconfirmed on any machine: no oracle has run a data command against us** |
+| `09h` WRITE DELETED · `0Ch` READ DELETED | ⚠ **PART** | an image has no deleted-data marks: WRITE DELETED writes the data (the mark is lost); READ DELETED answers abnormal + ST2 control mark ("only normal data here") |
 
 ### ✅ The DUMPREG byte order was written from memory — and it is right
 
@@ -189,13 +190,13 @@ repair would be to *delete a command the part has*. Recorded as **implemented fr
 spec, unconfirmed by any machine** — which is the honest state, and a smaller claim than
 the rest of this page.
 
-⛔ **The data commands are PART, deliberately, and loudly.** They are recognised, consume
-their parameters, and terminate with the documented **abnormal termination** — ST0
-interrupt code `01`, ST1 bit 2 (*no data*), the full seven result bytes and the interrupt
-a real part raises. They do **not** answer *"invalid command"*: that would be a chip
-contradicting the `90h` it just gave for VERSION, and a driver can act on a media error
-where it cannot act on a controller that contradicts itself. `fdc_test.c` §14 asserts this
-known gap **so that closing it cannot be silent.**
+✅ **The data commands move data (#178, 2026-10-23).** Until then they were PART, loudly:
+recognised, parameters consumed, and an abnormal termination with ST1 *no data* — never
+*"invalid command"*, which would be a chip contradicting the `90h` it gave for VERSION.
+`fdc_test.c` §14 asserted that gap so closing it could not be silent; it now asserts the
+no-medium answer (ST1 missing address mark), and the new data-path section drives READ,
+WRITE, MT, EOT-without-TC, the ID search, FORMAT and non-DMA end to end against an
+in-memory image through a real 8237 model.
 
 ## 4. The wiring
 
@@ -204,8 +205,9 @@ known gap **so that closing it cannot be silent.**
 | **IRQ6** | ✅ **IMPL** | raised only in response to a command the guest issued, and gated on DOR bit 3 |
 | **DMAGATE** as a real gate | ✅ **IMPL** | ⛔ ignoring it is a *silent* kill: transfers complete, the interrupt never reaches the PIC, and nothing reports a wrong value anywhere |
 | Dormant by default | ✅ | the master IMR starts `0xFC` (IRQ0+IRQ1). A guest that does not ask sees no change — the property that made the RTC's IRQ8 safe to add |
-| **DMA channel 2** | ⛔ **MISS** | the 8237A model exists and channel 2 is idle. ⚠ It is also the channel a real transfer uses, which is why `p_dma.asm` refuses to touch it |
-| Motor-off timing | ⛔ **MISS** | the motor bits round-trip; nothing spins down |
+| **DMA channel 2** | ✅ **IMPL** (#178) | `VddDmaWrite`/`VddDmaRead` on channel 2; the 8237's TC ends the command. ⚠ Synchronous: the whole transfer happens inside the OUT that completes the command (observable only by timing). `p_dma.asm` still leaves channel 2 alone |
+| Motor-off timing | ✅ **IMPL** (#178) | the BIOS INT 08h's countdown, as a PIT `BiosTickHook` (`VddFdcBiosMotorTick`): `0040:0040` down to 0, then `0040:003F` motor bits clear and DOR = `0Ch` (IBM PC/AT TR, TIMER_INT) |
+| **INT 13h keeps the BIOS's record** | ✅ **IMPL** (#178) | after AH=02/03/04: `0040:003E` (drive recalibrated), `003F` (motor + write bit), `0040` (= 37 ticks), `0041` (status), `0042`–`0048` (ST0 ST1 ST2 C H R N as the chip would end), and the chip's present cylinder moved to where the read ended (`VddFdcSetCylinder`). AH=00 clears `003E`. **Unmeasured against an oracle's BDA** |
 
 ## 5. Still open
 

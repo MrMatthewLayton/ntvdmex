@@ -9,6 +9,7 @@
  */
 
 #include "vdd_fdc.h"
+#include "../dos/bios_bda_fields.h"     /* #178: the BIOS's diskette fields */
 
 /* The 82077AA command set (opcode bits 4:0) and how many bytes each takes, opcode
  * included.
@@ -45,7 +46,6 @@
 #define FDC_PARAMETER_5                 5
 #define FDC_PARAMETER_6                 6
 #define FDC_DRIVE_MASK                  3
-#define FDC_HEAD_SHIFT                  2
 #define FDC_DRIVE_0                     0
 #define FDC_DRIVE_1                     1
 #define FDC_DRIVE_2                     2
@@ -55,10 +55,22 @@
 #define FDC_MSR_IN_RESET                0x00
 #define FDC_ST0_INVALID_COMMAND         0x80    /* Interrupt code 10: invalid command */
 #define FDC_ST0_READY_CHANGED           0xC0    /* Interrupt code 11: polling */
-#define FDC_ST0_ABNORMAL                0x40    /* Interrupt code 01: abnormal termination */
 #define FDC_ST0_SEEK_END                0x20
-#define FDC_ST1_NO_DATA                 0x04    /* sector not found */
-#define FDC_ST2_CLEAR                   0x00
+#define FDC_ST1_END_OF_CYLINDER         0x80    /* #178: ran past EOT without a TC */
+#define FDC_ST1_OVERRUN                 0x10    /* #178: the DMA did not keep up (or never answered) */
+#define FDC_ST1_NOT_WRITABLE            0x02
+#define FDC_ST1_MISSING_ADDRESS_MARK    0x01    /* #178: no medium -- nothing on the track at all */
+#define FDC_ST2_CONTROL_MARK            0x40    /* #178: READ DELETED found a normal data mark */
+#define FDC_ST2_WRONG_CYLINDER          0x10    /* #178: the ID's C is not the track under the head */
+#define FDC_MULTI_TRACK                 0x80    /* Opcode bit 7: MT */
+#define FDC_SPECIFY_NON_DMA             0x01    /* SPECIFY byte 2 bit 0: ND */
+#define FDC_PARAMETER_1                 1
+#define FDC_ID_CYLINDER                 0       /* FORMAT's four ID bytes */
+#define FDC_ID_HEAD                     1
+#define FDC_ID_SECTOR                   2
+#define FDC_ID_SIZE_CODE                3
+#define FDC_FIRST_SECTOR                1
+#define FDC_DOR_AFTER_MOTOR_OFF         0x0C    /* What the BIOS writes when the countdown ends */
 #define FDC_ST3_READY_TWO_SIDE          0x28    /* READY | TWO SIDE */
 #define FDC_ST3_TRACK_0                 0x10
 #define FDC_VERSION_82077AA             0x90
@@ -66,7 +78,6 @@
 #define FDC_LOCK_BIT                    0x80    /* LOCK: opcode bit 7 */
 #define FDC_LOCK_RESULT_LOCKED          0x10
 #define FDC_LOCK_RESULT_UNLOCKED        0x00
-#define FDC_SIZE_CODE_512               2       /* N = 2: 512-byte sectors */
 
 /* Result layouts. */
 #define FDC_DATA_RESULT_BYTES           7
@@ -113,8 +124,7 @@
  * model, so we are always ready. That is a difference a guest can only observe
  * by timing, and it is in the direction that cannot hang anyone.
  *
- * [CAUTION]: NON-DMA (bit 5) IS NEVER SET, because there is no execution phase yet to be
- * in. It becomes real with the data commands.
+ * #178: NON-DMA (bit 5) is set through a non-DMA execution phase, and only then.
  */
 BYTE VddFdcMainStatus(PCFDC_STATE state)
 {
@@ -127,6 +137,13 @@ BYTE VddFdcMainStatus(PCFDC_STATE state)
         return FDC_MSR_IN_RESET;
 
     status = FDC_MSR_RQM;
+
+    /* #178: the non-DMA execution phase -- every data byte through 3F5h, and DIO says
+     * which way: set while the chip is handing a READ's data out.
+     */
+    if (state->Phase == FDC_PHASE_EXECUTION)
+        return (BYTE)(status | FDC_MSR_NDMA | FDC_MSR_CB
+                      | ((state->ExecOpcode == FDC_CMD_READ_DATA || state->ExecOpcode == FDC_CMD_READ_TRACK) ? FDC_MSR_DIO : 0));
 
     if (state->Phase == FDC_PHASE_RESULT)
         status |= FDC_MSR_DIO | FDC_MSR_CB;
@@ -338,6 +355,382 @@ static VOID FdcSeekDone(PFDC_STATE state, BYTE drive, BYTE head)
     FdcRaiseIrq(state);
 }
 
+/* #178: THE DATA COMMANDS:
+ * The medium is the host's image, lent through MediaGeometry/MediaTransfer; the bytes
+ * cross on the 8237's channel 2 (docs/ref/fdc.md 1), or -- with SPECIFY's ND bit set --
+ * through 3F5h one at a time with MSR bit 5 up (fdc.md 4). A command runs from its R
+ * to EOT (and, with MT, on to side 1), and stops at the 8237's TERMINAL COUNT: that is
+ * how a PC says "this many sectors" -- the BIOS programs the DMA count, not the chip.
+ *
+ * [CAUTION]: THE DMA TRANSFER IS SYNCHRONOUS. A real part moves a byte per DREQ over
+ * milliseconds; ours finishes inside the OUT that completes the command, as our seeks
+ * do. A guest can tell only by timing, and only in the direction that cannot hang it.
+ */
+static INT FdcIsNonDma(PCFDC_STATE state)
+{
+    return (state->HeadLoadNonDma & FDC_SPECIFY_NON_DMA) != 0;
+}
+
+static INT FdcIsReadCommand(BYTE opcode)
+{
+    return opcode == FDC_CMD_READ_DATA || opcode == FDC_CMD_READ_TRACK;
+}
+
+/* The end of a data command: the seven result bytes and IRQ6. C H R N are where the
+ * command ENDED, not where it was asked to start (fdc.md 6).
+ */
+static VOID FdcDataDone(PFDC_STATE state, BYTE interruptCode, BYTE status1, BYTE status2)
+{
+    BYTE status0 = (BYTE)(interruptCode | (state->ExecHead << FDC_HEAD_SHIFT) | state->ExecDrive);
+
+    FdcDataResult(state, status0, status1, status2,
+                  state->ExecCylinder, state->ExecHeadAddress, state->ExecSector, state->ExecSizeCode);
+    state->PendingSt0 = status0;
+    state->IsIrqPending = 1;
+    FdcRaiseIrq(state);
+}
+
+/* THE C/H/R THE CHIP MOVES ON TO (82077AA datasheet, the result-phase C/H/R/N table):
+ * R+1 within the track; at EOT with MT on side 0, on to side 1 sector 1 (same C); at
+ * EOT otherwise, C+1 and R = 1 -- H complemented if MT was set. Returns 1 in that last
+ * case: the command has run off its cylinder.
+ */
+static INT FdcAdvance(PFDC_STATE state)
+{
+    if (state->ExecSector < state->ExecEot)
+    {
+        state->ExecSector++;
+        return 0;
+    }
+
+    state->ExecSector = FDC_FIRST_SECTOR;
+
+    if (state->ExecIsMultiTrack && !(state->ExecHeadAddress & 1))
+    {
+        state->ExecHeadAddress ^= 1;
+        state->ExecHead ^= 1;
+        return 0;
+    }
+
+    if (state->ExecIsMultiTrack)
+        state->ExecHeadAddress ^= 1;
+
+    state->ExecCylinder++;
+    return 1;
+}
+
+/* Is the sector the command names actually under the head? 1 = yes; otherwise the
+ * ST1/ST2 bits that say why, as the chip reports a failed ID search.
+ */
+static INT FdcFindSector(PFDC_STATE state, PBYTE status1, PBYTE status2)
+{
+    FDC_GEOMETRY geometry;
+    BYTE track = state->PresentCylinder[state->ExecDrive];
+
+    *status1 = 0;
+    *status2 = FDC_ST2_CLEAR;
+
+    if (!state->MediaGeometry || !state->MediaTransfer
+        || !state->MediaGeometry(state->MediaContext, state->ExecDrive, &geometry)
+        || track >= geometry.Cylinders || state->ExecHead >= geometry.Heads)
+    {
+        *status1 = FDC_ST1_MISSING_ADDRESS_MARK;         /* no medium, or no track there */
+        return 0;
+    }
+
+    if (state->ExecCylinder != track)
+    {
+        *status1 = FDC_ST1_NO_DATA;                      /* the IDs on this track say another C */
+        *status2 = FDC_ST2_WRONG_CYLINDER;
+        return 0;
+    }
+
+    if (state->ExecHeadAddress != state->ExecHead || state->ExecSizeCode != FDC_SIZE_CODE_512
+        || state->ExecSector < FDC_FIRST_SECTOR || state->ExecSector > geometry.SectorsPerTrack)
+    {
+        *status1 = FDC_ST1_NO_DATA;
+        return 0;
+    }
+
+    return 1;
+}
+
+static INT FdcSectorIo(PFDC_STATE state, PBYTE buffer, INT isWrite)
+{
+    return state->MediaTransfer(state->MediaContext, state->ExecDrive, state->PresentCylinder[state->ExecDrive],
+                                state->ExecHead, state->ExecSector, buffer, isWrite);
+}
+
+/* Can channel 2 move a byte at all? DMAGATE clear disconnects the request line (fdc.md 7). */
+static INT FdcDmaConnected(PCFDC_STATE state)
+{
+    return state->Dma && (state->Dor & FDC_DOR_DMA_GATE);
+}
+
+/* DMA: every sector of the command now, until the 8237 says TC or the track runs out. */
+static VOID FdcRunDma(PFDC_STATE state)
+{
+    INT isWrite = !FdcIsReadCommand(state->ExecOpcode);
+
+    for (;;)
+    {
+        BYTE status1;
+        BYTE status2;
+        BYTE buffer[FDC_SECTOR_SIZE];
+        INT isTerminalCount = 0;
+        INT isEndOfCylinder;
+        UINT32 moved;
+
+        if (!FdcFindSector(state, &status1, &status2))
+        {
+            FdcDataDone(state, FDC_ST0_ABNORMAL, status1, status2);
+            return;
+        }
+
+        if (!FdcDmaConnected(state))
+        {
+            FdcDataDone(state, FDC_ST0_ABNORMAL, FDC_ST1_OVERRUN, FDC_ST2_CLEAR);
+            return;
+        }
+
+        if (isWrite)
+        {
+            moved = VddDmaRead(state->Dma, FDC_DMA_CHANNEL, buffer, FDC_SECTOR_SIZE, &isTerminalCount);
+
+            if (moved < FDC_SECTOR_SIZE && !isTerminalCount)
+            {
+                FdcDataDone(state, FDC_ST0_ABNORMAL, FDC_ST1_OVERRUN, FDC_ST2_CLEAR);
+                return;
+            }
+
+            if (!FdcSectorIo(state, buffer, TRUE))
+            {
+                FdcDataDone(state, FDC_ST0_ABNORMAL, FDC_ST1_NOT_WRITABLE, FDC_ST2_CLEAR);
+                return;
+            }
+
+            state->SectorsWritten++;
+        }
+        else
+        {
+            if (!FdcSectorIo(state, buffer, FALSE))
+            {
+                FdcDataDone(state, FDC_ST0_ABNORMAL, FDC_ST1_NO_DATA, FDC_ST2_CLEAR);
+                return;
+            }
+
+            moved = VddDmaWrite(state->Dma, FDC_DMA_CHANNEL, buffer, FDC_SECTOR_SIZE, &isTerminalCount);
+
+            if (moved < FDC_SECTOR_SIZE && !isTerminalCount)
+            {
+                FdcDataDone(state, FDC_ST0_ABNORMAL, FDC_ST1_OVERRUN, FDC_ST2_CLEAR);
+                return;
+            }
+
+            state->SectorsRead++;
+        }
+
+        isEndOfCylinder = FdcAdvance(state);
+
+        if (isTerminalCount)
+        {
+            FdcDataDone(state, FDC_ST0_NORMAL, 0, FDC_ST2_CLEAR);
+            return;
+        }
+
+        if (isEndOfCylinder)                    /* EOT passed with no TC: the datasheet's EN */
+        {
+            FdcDataDone(state, FDC_ST0_ABNORMAL, FDC_ST1_END_OF_CYLINDER, FDC_ST2_CLEAR);
+            return;
+        }
+    }
+}
+
+/* Non-DMA: open the sector at C/H/R for the host to move through 3F5h. 0 = the command
+ * has ended (with its result) instead.
+ */
+static INT FdcOpenSector(PFDC_STATE state)
+{
+    BYTE status1;
+    BYTE status2;
+
+    if (!FdcFindSector(state, &status1, &status2))
+    {
+        FdcDataDone(state, FDC_ST0_ABNORMAL, status1, status2);
+        return 0;
+    }
+
+    if (FdcIsReadCommand(state->ExecOpcode) && !FdcSectorIo(state, state->ExecBuffer, FALSE))
+    {
+        FdcDataDone(state, FDC_ST0_ABNORMAL, FDC_ST1_NO_DATA, FDC_ST2_CLEAR);
+        return 0;
+    }
+
+    state->ExecPosition = 0;
+    state->ExecLength = FDC_SECTOR_SIZE;
+    state->Phase = FDC_PHASE_EXECUTION;
+    return 1;
+}
+
+/* Non-DMA: the sector in flight is complete. Without the 8237 there is no TC, so the
+ * command runs to EOT and ends there with EN -- the datasheet's answer, and what a
+ * non-DMA driver expects.
+ */
+static VOID FdcSectorDone(PFDC_STATE state)
+{
+    if (!FdcIsReadCommand(state->ExecOpcode))
+    {
+        if (!FdcSectorIo(state, state->ExecBuffer, TRUE))
+        {
+            FdcDataDone(state, FDC_ST0_ABNORMAL, FDC_ST1_NOT_WRITABLE, FDC_ST2_CLEAR);
+            return;
+        }
+
+        state->SectorsWritten++;
+    }
+    else
+    {
+        state->SectorsRead++;
+    }
+
+    if (FdcAdvance(state))
+    {
+        FdcDataDone(state, FDC_ST0_ABNORMAL, FDC_ST1_END_OF_CYLINDER, FDC_ST2_CLEAR);
+        return;
+    }
+
+    FdcOpenSector(state);
+}
+
+/* FORMAT TRACK, one sector: `identity` is its C H R N, and the sector is filled with D.
+ * The ID is written where the head IS -- the physical track -- whatever C it names.
+ * 0 = the command has ended (with its result).
+ */
+static INT FdcFormatSector(PFDC_STATE state, const BYTE *identity)
+{
+    BYTE status1;
+    BYTE status2;
+    UINT byteIndex;
+
+    state->ExecCylinder = state->PresentCylinder[state->ExecDrive];      /* judged on the physical track */
+    state->ExecHeadAddress = state->ExecHead;
+    state->ExecSector = identity[FDC_ID_SECTOR];
+    state->ExecSizeCode = identity[FDC_ID_SIZE_CODE];
+
+    if (!FdcFindSector(state, &status1, &status2))
+    {
+        FdcDataDone(state, FDC_ST0_ABNORMAL, status1, status2);
+        return 0;
+    }
+
+    for (byteIndex = 0; byteIndex < FDC_SECTOR_SIZE; ++byteIndex)
+        state->ExecBuffer[byteIndex] = state->ExecFill;
+
+    if (!FdcSectorIo(state, state->ExecBuffer, TRUE))
+    {
+        FdcDataDone(state, FDC_ST0_ABNORMAL, FDC_ST1_NOT_WRITABLE, FDC_ST2_CLEAR);
+        return 0;
+    }
+
+    state->ExecCylinder = identity[FDC_ID_CYLINDER];                    /* the result reports the ID */
+    state->ExecHeadAddress = identity[FDC_ID_HEAD];
+
+    if (--state->ExecSectorsLeft == 0)
+    {
+        state->TracksFormatted++;
+        FdcDataDone(state, FDC_ST0_NORMAL, 0, FDC_ST2_CLEAR);
+        return 0;
+    }
+
+    return 1;
+}
+
+static VOID FdcFormat(PFDC_STATE state)
+{
+    state->ExecOpcode = FDC_CMD_FORMAT_TRACK;
+    state->ExecSizeCode = state->Command[FDC_PARAMETER_2];
+    state->ExecSectorsLeft = state->Command[FDC_PARAMETER_3];
+    state->ExecFill = state->Command[FDC_PARAMETER_5];
+    state->ExecCylinder = state->PresentCylinder[state->ExecDrive];
+    state->ExecHeadAddress = state->ExecHead;
+    state->ExecSector = FDC_FIRST_SECTOR;
+    state->LastEot = state->ExecSectorsLeft;
+
+    if (!state->ExecSectorsLeft)
+    {
+        FdcDataDone(state, FDC_ST0_NORMAL, 0, FDC_ST2_CLEAR);
+        return;
+    }
+
+    if (FdcIsNonDma(state))                             /* the IDs come through 3F5h */
+    {
+        state->ExecPosition = 0;
+        state->ExecLength = FDC_ID_BYTES;
+        state->Phase = FDC_PHASE_EXECUTION;
+        return;
+    }
+
+    for (;;)
+    {
+        BYTE identity[FDC_ID_BYTES];
+        INT isTerminalCount = 0;
+
+        if (!FdcDmaConnected(state)
+            || VddDmaRead(state->Dma, FDC_DMA_CHANNEL, identity, FDC_ID_BYTES, &isTerminalCount) < FDC_ID_BYTES)
+        {
+            FdcDataDone(state, FDC_ST0_ABNORMAL, FDC_ST1_OVERRUN, FDC_ST2_CLEAR);
+            return;
+        }
+
+        if (!FdcFormatSector(state, identity))
+            return;
+    }
+}
+
+/* READ DATA, WRITE DATA, READ TRACK, and the two DELETED forms. */
+static VOID FdcDataCommand(PFDC_STATE state, BYTE opcode)
+{
+    state->ExecOpcode = opcode;
+    state->ExecCylinder = state->Command[FDC_PARAMETER_2];
+    state->ExecHeadAddress = state->Command[FDC_PARAMETER_3];
+    state->ExecSector = state->Command[FDC_PARAMETER_4];
+    state->ExecSizeCode = state->Command[FDC_PARAMETER_5];
+    state->ExecEot = state->Command[FDC_PARAMETER_6];
+    state->ExecIsMultiTrack = (BYTE)((state->Command[0] & FDC_MULTI_TRACK) ? TRUE : FALSE);
+    state->LastEot = state->ExecEot;
+
+    if (opcode == FDC_CMD_READ_TRACK)                      /* the whole track, from its first sector */
+    {
+        state->ExecSector = FDC_FIRST_SECTOR;
+        state->ExecIsMultiTrack = 0;
+    }
+
+    /* [CAUTION]: AN IMAGE HAS NO DELETED-DATA MARKS. READ DELETED finds only normal data,
+     * which the chip reports as CONTROL MARK; WRITE DELETED writes the data, and its mark
+     * is lost with the image format. Neither has been seen on the shelf.
+     */
+    if (opcode == FDC_CMD_READ_DELETED_DATA)
+    {
+        BYTE status1;
+        BYTE status2;
+
+        if (!FdcFindSector(state, &status1, &status2))
+            FdcDataDone(state, FDC_ST0_ABNORMAL, status1, status2);
+        else
+            FdcDataDone(state, FDC_ST0_ABNORMAL, FDC_ST1_NO_DATA, FDC_ST2_CONTROL_MARK);
+
+        return;
+    }
+
+    if (opcode == FDC_CMD_WRITE_DELETED_DATA)
+        state->ExecOpcode = FDC_CMD_WRITE_DATA;
+
+    if (FdcIsNonDma(state))
+        FdcOpenSector(state);
+    else
+        FdcRunDma(state);
+}
+
 /* Every parameter byte has arrived: carry the command out. */
 static VOID FdcExecute(PFDC_STATE state)
 {
@@ -452,55 +845,25 @@ static VOID FdcExecute(PFDC_STATE state)
         FdcRaiseIrq(state);
         break;
 
-    /* THE DATA COMMANDS. RECOGNISED, AND HONESTLY FAILED:
-     *
-     * [WARNING]: THIS IS **PART** AND IT IS MARKED PART. They need the 8237A pointed at
-     * the image handle INT 13h already holds, which is the next step. Until
-     * then they terminate the way a real controller terminates over an
-     * unformatted track: ST0 interrupt code 01 (abnormal termination) with
-     * ST1 bit 2 (no data -- sector not found), the full seven result bytes,
-     * and the interrupt a real one would raise.
-     *
-     * [CAUTION]: The alternative -- answering 80h, "invalid command" -- would be a
-     * different and worse lie: it says the CONTROLLER does not know the
-     * command, on a chip that has just identified itself as a 90h part that
-     * by definition does. A driver can act on a media error. It cannot act on
-     * a controller that contradicts itself.
+    /* THE DATA COMMANDS (#178) -- against the host's image, over channel 2 or through
+     * 3F5h. See FdcDataCommand. A failure is the chip's own: ST0 interrupt code 01 with
+     * the ST1/ST2 reason, never "invalid command" -- a 90h part knows these commands, and
+     * a driver can act on a media error where it cannot act on a contradiction.
      */
     case FDC_CMD_READ_TRACK:
     case FDC_CMD_WRITE_DATA:
     case FDC_CMD_READ_DATA:
     case FDC_CMD_WRITE_DELETED_DATA:
     case FDC_CMD_READ_DELETED_DATA:
-    {
-        BYTE cylinder;
-        BYTE headAddress;
-        BYTE sector;
-        BYTE sizeCode;
-        drive = (BYTE)(state->Command[1] & FDC_DRIVE_MASK);
-        head  = (BYTE)((state->Command[1] >> FDC_HEAD_SHIFT) & 1);
-        cylinder = state->Command[FDC_PARAMETER_2];
-        headAddress = state->Command[FDC_PARAMETER_3];
-        sector = state->Command[FDC_PARAMETER_4];
-        sizeCode = state->Command[FDC_PARAMETER_5];
-        state->LastEot = state->Command[FDC_PARAMETER_6];
-        FdcDataResult(state, (BYTE)(FDC_ST0_ABNORMAL | (head << FDC_HEAD_SHIFT) | drive), FDC_ST1_NO_DATA, FDC_ST2_CLEAR,
-                        cylinder, headAddress, sector, sizeCode);
-        state->PendingSt0 = (BYTE)(FDC_ST0_ABNORMAL | (head << FDC_HEAD_SHIFT) | drive);
-        state->IsIrqPending = 1;
-        FdcRaiseIrq(state);
+        state->ExecDrive = (BYTE)(state->Command[1] & FDC_DRIVE_MASK);
+        state->ExecHead  = (BYTE)((state->Command[1] >> FDC_HEAD_SHIFT) & 1);
+        FdcDataCommand(state, opcode);
         break;
-    }
 
-    case FDC_CMD_FORMAT_TRACK:                  /* FORMAT TRACK -- same, and never destructive */
-        drive = (BYTE)(state->Command[1] & FDC_DRIVE_MASK);
-        head  = (BYTE)((state->Command[1] >> FDC_HEAD_SHIFT) & 1);
-        state->LastEot = state->Command[FDC_PARAMETER_3];
-        FdcDataResult(state, (BYTE)(FDC_ST0_ABNORMAL | (head << FDC_HEAD_SHIFT) | drive), FDC_ST1_NO_DATA, FDC_ST2_CLEAR,
-                        state->PresentCylinder[drive], head, 1, state->Command[FDC_PARAMETER_2]);
-        state->PendingSt0 = (BYTE)(FDC_ST0_ABNORMAL | (head << FDC_HEAD_SHIFT) | drive);
-        state->IsIrqPending = 1;
-        FdcRaiseIrq(state);
+    case FDC_CMD_FORMAT_TRACK:                  /* FORMAT TRACK -- destructive, as on the part */
+        state->ExecDrive = (BYTE)(state->Command[1] & FDC_DRIVE_MASK);
+        state->ExecHead  = (BYTE)((state->Command[1] >> FDC_HEAD_SHIFT) & 1);
+        FdcFormat(state);
         break;
 
     default:
@@ -519,6 +882,37 @@ static VOID FdcFifoWrite(PFDC_STATE state, BYTE value)
     if (state->Phase == FDC_PHASE_RESULT)
         return;
 
+    /* #178: non-DMA execution, the host supplying data -- a WRITE's sector, or FORMAT's
+     * four ID bytes per sector. (During a READ the host should not be writing; ignored.)
+     */
+    if (state->Phase == FDC_PHASE_EXECUTION)
+    {
+        if (FdcIsReadCommand(state->ExecOpcode))
+            return;
+
+        state->ExecBuffer[state->ExecPosition++] = value;
+
+        if (state->ExecPosition < state->ExecLength)
+            return;
+
+        if (state->ExecOpcode == FDC_CMD_FORMAT_TRACK)
+        {
+            BYTE identity[FDC_ID_BYTES];
+            UINT byteIndex;
+
+            for (byteIndex = 0; byteIndex < FDC_ID_BYTES; ++byteIndex)
+                identity[byteIndex] = state->ExecBuffer[byteIndex];
+
+            if (FdcFormatSector(state, identity))
+                state->ExecPosition = 0;                /* the next sector's ID */
+
+            return;
+        }
+
+        FdcSectorDone(state);
+        return;
+    }
+
     if (!state->CommandLength)
         state->CommandWanted = FdcCommandLength(value);
 
@@ -534,6 +928,20 @@ static VOID FdcFifoWrite(PFDC_STATE state, BYTE value)
 static BYTE FdcFifoRead(PFDC_STATE state)
 {
     BYTE value;
+
+    /* #178: non-DMA execution, the chip handing a READ's data out byte by byte. */
+    if (state->Phase == FDC_PHASE_EXECUTION)
+    {
+        if (!FdcIsReadCommand(state->ExecOpcode))
+            return 0;
+
+        value = state->ExecBuffer[state->ExecPosition++];
+
+        if (state->ExecPosition >= state->ExecLength)
+            FdcSectorDone(state);
+
+        return value;
+    }
 
     /* Reading when there is nothing to read hands back the last byte on a real
      * part. Returning 0xFF here would re-create the very ambiguity this device
@@ -674,12 +1082,20 @@ VOID VddFdcReset(PVOID context)
 {
     PFDC_STATE state = (PFDC_STATE)context;
     PVDD_BUS bus = state->Bus;
+    PDMA_STATE dma = state->Dma;                                     /* #178: links, not chip state */
+    PFDC_MEDIA_GEOMETRY mediaGeometry = state->MediaGeometry;
+    PFDC_MEDIA_TRANSFER mediaTransfer = state->MediaTransfer;
+    PVOID mediaContext = state->MediaContext;
     UINT byteIndex;
 
     for (byteIndex = 0; byteIndex < sizeof(*state); ++byteIndex)
         ((BYTE *)state)[byteIndex] = 0;
 
     state->Bus = bus;
+    state->Dma = dma;
+    state->MediaGeometry = mediaGeometry;
+    state->MediaTransfer = mediaTransfer;
+    state->MediaContext = mediaContext;
     /* WHAT POST LEAVES:
      * Out of reset, DMA and interrupts gated through, drive 0 selected, motors
      * off: DOR = 0Ch. MEASURED on 6.22/QEMU, which reads exactly 0Ch. PCem's
@@ -699,6 +1115,31 @@ VOID VddFdcReset(PVOID context)
      * phantom drives that changed while it was not looking.
      */
     state->PollDrive = FDC_DRIVES;
+}
+
+VOID VddFdcSetCylinder(PFDC_STATE state, BYTE drive, BYTE cylinder)
+{
+    state->PresentCylinder[drive & FDC_DRIVE_MASK] = cylinder;
+}
+
+VOID VddFdcBiosMotorTick(PVOID context, volatile BYTE *biosData)
+{
+    PFDC_STATE state = (PFDC_STATE)context;
+    BYTE count = biosData[BIOS_BDA_DISKETTE_MOTOR_COUNT];
+
+    if (!count)
+        return;                                 /* nothing counting down */
+
+    biosData[BIOS_BDA_DISKETTE_MOTOR_COUNT] = --count;
+
+    if (count)
+        return;
+
+    /* The count ran out: the motors go off, in the BIOS's record and at the chip. */
+    biosData[BIOS_BDA_DISKETTE_MOTOR_STATUS] &= (BYTE)~BIOS_DISKETTE_MOTOR_BITS;
+
+    if (state)
+        VddFdcPortOut(state, FDC_DOR, 1, FDC_DOR_AFTER_MOTOR_OFF);
 }
 
 INT VddFdcInitialize(PVDD_BUS bus, PVOID context)

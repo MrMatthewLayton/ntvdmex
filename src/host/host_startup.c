@@ -3775,6 +3775,16 @@ PSTR StartupAttachDevices(PSTR cursor)
      * both gates it through DOR bit 3 and unmasks it at the PIC, which starts
      * at 0xFC. See src/vdd/vdd_fdc.h.
      */
+    /* #178: AND NOW IT MOVES SECTORS. The data commands read and write the image INT 13h
+     * already holds (lent, never opened twice) over the 8237's channel 2; the BIOS tick
+     * counts its motors down, as the IBM BIOS's INT 08h does.
+     */
+    g_Fdc.Dma = &g_Dma;
+    g_Fdc.MediaGeometry = HostFdcGeometry;
+    g_Fdc.MediaTransfer = HostFdcTransfer;
+    g_Fdc.MediaContext = NULL;
+    g_Pit.BiosTickHook = VddFdcBiosMotorTick;
+    g_Pit.BiosTickHookContext = &g_Fdc;
     g_FdcDevice = VddFdcDevice(&g_Fdc);
     VddBusAdd(&g_Bus, &g_FdcDevice);            /* 82077AA: 3F2h-3F5h, 3F7h */
     /* THE IDE ADAPTER, FITTED, BOTH CHANNELS EMPTY. (GH #179):

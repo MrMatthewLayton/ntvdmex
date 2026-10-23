@@ -195,6 +195,13 @@ typedef struct _PIT_STATE
     BYTE  IsTickForeign;
     UINT32 TickWraps;
     UINT32 TickSince;
+    /* #178: SOMETHING ELSE THE BIOS's INT 08h DOES ON EVERY TICK. The IBM BIOS's timer
+     * handler also counts the diskette motor down (0040:0040) and switches the motors
+     * off when it reaches zero. That is the floppy's bookkeeping, not the timer's, so
+     * the PIT only calls out: NULL = nothing to do. Survives a reset, as the links do.
+     */
+    VOID   (*BiosTickHook)(PVOID context, volatile BYTE *biosData);
+    PVOID  BiosTickHookContext;
 } PIT_STATE, *PPIT_STATE;
 
 typedef const PIT_STATE *PCPIT_STATE;
@@ -295,6 +302,15 @@ static inline VOID VddPitBiosTick(
 
     *tickCount = count;
     state->TickWitness = count;
+}
+
+/* #178: the rest of the BIOS's INT 08h body -- whatever hooked the tick (see
+ * BiosTickHook). Every place that runs VddPitBiosTick runs this beside it.
+ */
+static inline VOID VddPitBiosTickHook(PPIT_STATE state, volatile BYTE *biosData)
+{
+    if (state->BiosTickHook)
+        state->BiosTickHook(state->BiosTickHookContext, biosData);
 }
 
 /* A count the BIOS/DOS itself just wrote (seed, AH=2Dh's reload): nothing foreign. */
