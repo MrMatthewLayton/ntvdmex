@@ -2363,7 +2363,8 @@ static INT32 HostInterp(volatile BYTE *tib, INT32 cap)
     VDM_REG(tib, VTIB_FS) = cpu.Segments[X86_SREG_FS];
     VDM_REG(tib, VTIB_GS) = cpu.Segments[X86_SREG_GS];
     /* update only the low 16 flag bits (arith + DF); keep VM/IOPL/IF etc. */
-    VDM_REG(tib, VTIB_EFLAGS) = (VDM_REG(tib, VTIB_EFLAGS) & HIGH_WORD_MASK_U) | (cpu.Flags & WORD_MASK_U);
+    /* #269: the low word and AC/ID -- the upper bits a POPFD in the slice may have changed. */
+    VDM_REG(tib, VTIB_EFLAGS) = (VDM_REG(tib, VTIB_EFLAGS) & ~(WORD_MASK_U | V86I_EFL_HI)) | (cpu.Flags & (WORD_MASK_U | V86I_EFL_HI));
     /* AND VIF WITH IT, FOR MODE Y. (s80) The loop's gate delivers when IF *or
      * VIF is set (GuestIfEnabled), because under VME a native STI sets VIF. An
      * interpreted CLI clears only IF here -- VIF stayed set, the gate saw "enabled",
@@ -2477,7 +2478,8 @@ static VOID DpmiInterpreterCpuStore(V86_CPU *cpu, volatile BYTE *tib)
     VDM_SET16(tib,VTIB_FS,cpu->Segments[X86_SREG_FS]);
     VDM_SET16(tib,VTIB_GS,cpu->Segments[X86_SREG_GS]);
     VDM_SET16(tib,VTIB_EIP,cpu->Ip);
-    VDM_REG(tib,VTIB_EFLAGS) = (VDM_REG(tib,VTIB_EFLAGS) & HIGH_WORD_MASK_U) | (cpu->Flags & WORD_MASK_U);
+    /* #269: the low word and AC/ID -- the upper bits a POPFD in the slice may have changed. */
+    VDM_REG(tib,VTIB_EFLAGS) = (VDM_REG(tib,VTIB_EFLAGS) & ~(WORD_MASK_U | V86I_EFL_HI)) | (cpu->Flags & (WORD_MASK_U | V86I_EFL_HI));
 }
 
 /* Returns 0 = client exited (INT 21h AH=4Ch), -1 = stopped on an unmodeled/

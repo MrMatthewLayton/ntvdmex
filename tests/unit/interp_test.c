@@ -219,6 +219,385 @@ static VOID InterpTestTrapFlagBattery(VOID)
       CHECK(InterpTestStepOnce(&cpu) == 0 && cpu.Ip == 0, "9C with TF set: declined"); }
 }
 
+/* #269: THE 386 REMAINDERS. The ALU ones are checked against the CPU this test runs on:
+ * on an x86 host each case runs natively (inline asm) and in the interpreter, from the same
+ * operands and the same incoming flags, and the result and all six status flags must agree
+ * -- the "undefined" ones included, since the guest runs on a real Intel CPU too.
+ */
+#if defined(__x86_64__) || defined(__i386__)
+#define INTERP_ORACLE_FLAGS     0x8D5u  /* OF SF ZF AF PF CF */
+static UINT64 g_OracleRandom = 0x9E3779B97F4A7C15ull;
+
+static UINT32 InterpOracleRandom(VOID)
+{
+    g_OracleRandom ^= g_OracleRandom << 13;
+    g_OracleRandom ^= g_OracleRandom >> 7;
+    g_OracleRandom ^= g_OracleRandom << 17;
+    return (UINT32)(g_OracleRandom >> 16);
+}
+
+/* One instruction natively: `operation` 0-3 BT/BTS/BTR/BTC base, offset; 4/5 BSF/BSR dest, src;
+ * 6/7 SHLD/SHRD dest, src, count. Returns the flags after; *destination is updated.
+ */
+static UINT32 InterpOracleNative(
+    INT operation,
+    INT is32,
+    UINT32 *destination,
+    UINT32 source,
+    BYTE count,
+    UINT32 flagsIn)
+{
+    unsigned long flags = flagsIn;
+    UINT32 value = *destination;
+    unsigned short word = (unsigned short)value;
+    unsigned short sourceWord = (unsigned short)source;
+#define ORACLE_RUN(text, operand, input) \
+    __asm__ volatile("push %0\n\tpopf\n\t" text "\n\tpushf\n\tpop %0" : "+r"(flags), "+r"(operand) : "r"(input), "c"(count) : "cc")
+
+    switch (operation * 2 + is32)
+    {
+    case 0:
+        ORACLE_RUN("btw %w2,%w1", word, sourceWord);
+        break;
+
+    case 1:
+        ORACLE_RUN("btl %2,%1", value, source);
+        break;
+
+    case 2:
+        ORACLE_RUN("btsw %w2,%w1", word, sourceWord);
+        break;
+
+    case 3:
+        ORACLE_RUN("btsl %2,%1", value, source);
+        break;
+
+    case 4:
+        ORACLE_RUN("btrw %w2,%w1", word, sourceWord);
+        break;
+
+    case 5:
+        ORACLE_RUN("btrl %2,%1", value, source);
+        break;
+
+    case 6:
+        ORACLE_RUN("btcw %w2,%w1", word, sourceWord);
+        break;
+
+    case 7:
+        ORACLE_RUN("btcl %2,%1", value, source);
+        break;
+
+    case 8:
+        ORACLE_RUN("bsfw %w2,%w1", word, sourceWord);
+        break;
+
+    case 9:
+        ORACLE_RUN("bsfl %2,%1", value, source);
+        break;
+
+    case 10:
+        ORACLE_RUN("bsrw %w2,%w1", word, sourceWord);
+        break;
+
+    case 11:
+        ORACLE_RUN("bsrl %2,%1", value, source);
+        break;
+
+    case 12:
+        ORACLE_RUN("shldw %%cl,%w2,%w1", word, sourceWord);
+        break;
+
+    case 13:
+        ORACLE_RUN("shldl %%cl,%2,%1", value, source);
+        break;
+
+    case 14:
+        ORACLE_RUN("shrdw %%cl,%w2,%w1", word, sourceWord);
+        break;
+
+    default:
+        ORACLE_RUN("shrdl %%cl,%2,%1", value, source);
+        break;
+    }
+
+#undef ORACLE_RUN
+    *destination = is32 ? value : (UINT32)word;
+    return (UINT32)flags;
+}
+
+static VOID InterpTestNativeOracle(VOID)
+{
+    static const char *const names[8] = { "BT", "BTS", "BTR", "BTC", "BSF", "BSR", "SHLD", "SHRD" };
+    INT operation;
+
+    for (operation = 0; operation < 8; ++operation)
+    {
+        INT is32;
+
+        for (is32 = 0; is32 <= 1; ++is32)
+        {
+            INT trial;
+            INT mismatches = 0;
+            INT declined = 0;
+            char message[112];
+
+            for (trial = 0; trial < 20000; ++trial)
+            {
+                V86_CPU cpu = InterpTestMakeCpu();
+                UINT32 destination = InterpOracleRandom();
+                UINT32 source = InterpOracleRandom();
+                BYTE count = (BYTE)(InterpOracleRandom() & 0x3F);
+                UINT32 flagsIn = (InterpOracleRandom() & INTERP_ORACLE_FLAGS) | 0x0002u;
+                UINT32 native;
+                UINT32 nativeFlags;
+                BYTE bytes[8];
+                INT length = 0;
+                UINT32 compared;
+
+                if ((trial & 7) == 0)
+                    source = 0;                                  /* BSF/BSR's zero source, often */
+
+                if (!is32)
+                {
+                    destination &= 0xFFFF;
+                    source &= 0xFFFF;
+                }
+
+                if (operation >= 6 && !is32 && (count & 0x1F) > 16)
+                    continue;                                    /* undefined on the CPU: declined, tested below */
+
+                native = destination;
+                nativeFlags = InterpOracleNative(operation, is32, &native, source, count, flagsIn);
+
+                if (is32)
+                    bytes[length++] = 0x66;
+
+                bytes[length++] = 0x0F;
+                bytes[length++] = (BYTE)(operation < 4 ? (0xA3 + 8 * operation) : operation == 4 ? 0xBC : operation == 5 ? 0xBD
+                                          : operation == 6 ? 0xA4 : 0xAC);
+                /* BT* and SHxD: r/m = AX (base / destination), reg = DX (offset / source).
+                 * BSF/BSR: reg = AX (destination), r/m = DX (source).
+                 */
+                bytes[length++] = (operation == 4 || operation == 5) ? 0xC2 : 0xD0;
+
+                if (operation >= 6)
+                    bytes[length++] = count;
+
+                cpu.Flags = flagsIn;
+                cpu.Registers[0] = destination;
+                cpu.Registers[2] = source;
+                InterpTestLoad(&cpu, 0x1000, 0, bytes, length);
+
+                if (!InterpTestStepOnce(&cpu))
+                {
+                    ++declined;
+                    continue;
+                }
+
+                /* The DEFINED flags: all six for BT* (which leaves the rest alone, as ours does);
+                 * ZF for BSF/BSR; CF/SF/ZF/PF for SHLD/SHRD, and OF at a count of 1.
+                 */
+                compared = operation < 4 ? INTERP_ORACLE_FLAGS : operation < 6 ? 0x040u
+                         : (0x0C5u | ((count & 0x1F) == 1 ? 0x800u : 0u));
+
+                if (((cpu.Flags ^ nativeFlags) & compared) || (cpu.Registers[0] & (is32 ? 0xFFFFFFFFu : 0xFFFFu)) != native)
+                {
+                    if (mismatches++ < 3)
+                        printf("    %s%s dst=%08X src=%08X cnt=%02X fin=%03X: native %08X/%03X ours %08X/%03X\n",
+                               names[operation], is32 ? "32" : "16", (unsigned)destination, (unsigned)source, count, (unsigned)flagsIn,
+                               (unsigned)native, (unsigned)(nativeFlags & INTERP_ORACLE_FLAGS),
+                               (unsigned)cpu.Registers[0], (unsigned)(cpu.Flags & INTERP_ORACLE_FLAGS));
+                }
+            }
+
+            snprintf(message, sizeof message, "#269 native oracle %s r/m%d: 20000 random cases agree (declined %d)",
+                     names[operation], is32 ? 32 : 16, declined);
+            CHECK(mismatches == 0 && declined == 0, message);
+        }
+    }
+}
+
+#endif
+
+static VOID InterpTest269Battery(VOID)
+{
+    printf("== #269: the 386 remainders ==\n");
+#if defined(__x86_64__) || defined(__i386__)
+    InterpTestNativeOracle();
+#endif
+    /* BT with a register offset into memory moves by whole operands: -17 = word -2, bit 15. */
+    { V86_CPU cpu = InterpTestMakeCpu();
+    BYTE bytes[] = { 0x0F, 0xAB, 0x17 };                    /* bts [bx],dx */
+      cpu.Segments[3] = 0x2000;
+      cpu.Registers[3] = 0x0100;
+      cpu.Registers[2] = 0xFFEF;                         /* -17 */
+      g_Memory[0x200FC] = 0x00;
+      g_Memory[0x200FD] = 0x00;
+      InterpTestLoad(&cpu, 0x1000, 0, bytes, sizeof bytes);
+      CHECK(InterpTestStepOnce(&cpu) == 1 && g_Memory[0x200FD] == 0x80 && !(cpu.Flags & EFLAGS_CF_U) && cpu.Ip == 3,
+            "#269 0F AB bts [bx],dx: offset -17 -> the word at bx-2, bit 15"); }
+    { V86_CPU cpu = InterpTestMakeCpu();
+    BYTE bytes[] = { 0x0F, 0xAB, 0x17 };                    /* bts [bx],dx below offset 0 */
+      cpu.Segments[3] = 0x2000;
+      cpu.Registers[3] = 0x0002;
+      cpu.Registers[2] = 0xFFC0;                         /* -64 -> bx - 8 */
+      InterpTestLoad(&cpu, 0x1000, 0, bytes, sizeof bytes);
+      CHECK(InterpTestStepOnce(&cpu) == 0, "#269 bt* whose operand leaves the 64 KB segment: declined"); }
+    { V86_CPU cpu = InterpTestMakeCpu();
+    BYTE bytes[] = { 0x0F, 0xBA, 0x2F, 0x13 };              /* bts word [bx], 19 -> bit 3 */
+      cpu.Segments[3] = 0x2000;
+      cpu.Registers[3] = 0x0300;
+      g_Memory[0x20300] = 0x00;
+      InterpTestLoad(&cpu, 0x1000, 0, bytes, sizeof bytes);
+      CHECK(InterpTestStepOnce(&cpu) == 1 && g_Memory[0x20300] == 0x08 && cpu.Ip == 4,
+            "#269 0F BA /5 bts [bx],19: an immediate offset is modulo 16"); }
+    { V86_CPU cpu = InterpTestMakeCpu();
+    BYTE bytes[] = { 0x0F, 0xBA, 0xE0, 0x01 };              /* BA /4 is BT; /0 is #UD */
+    BYTE undefinedForm[] = { 0x0F, 0xBA, 0xC0, 0x01 };
+      InterpTestLoad(&cpu, 0x1000, 0, bytes, sizeof bytes);
+      CHECK(InterpTestStepOnce(&cpu) == 1 && cpu.Ip == 4, "#269 0F BA /4 bt ax,1");
+      cpu = InterpTestMakeCpu();
+      InterpTestLoad(&cpu, 0x1000, 0, undefinedForm, sizeof undefinedForm);
+      CHECK(InterpTestStepOnce(&cpu) == 0, "#269 0F BA /0: the CPU's #UD"); }
+    { V86_CPU cpu = InterpTestMakeCpu();
+    BYTE bytes[] = { 0x0F, 0xA5, 0xD0 };                    /* shld ax,dx,cl with cl = 17 */
+      cpu.Registers[1] = 17;
+      InterpTestLoad(&cpu, 0x1000, 0, bytes, sizeof bytes);
+      CHECK(InterpTestStepOnce(&cpu) == 0, "#269 16-bit shld with a count past 16 (undefined): declined"); }
+    { V86_CPU cpu = InterpTestMakeCpu();
+    BYTE bytes[] = { 0x0F, 0xA4, 0xD0, 0x00 };              /* shld ax,dx,0 */
+      cpu.Flags = 0x08D7;
+      cpu.Registers[0] = 0x1234;
+      InterpTestLoad(&cpu, 0x1000, 0, bytes, sizeof bytes);
+      CHECK(InterpTestStepOnce(&cpu) == 1 && cpu.Registers[0] == 0x1234 && cpu.Flags == 0x08D7 && cpu.Ip == 4,
+            "#269 shld by 0: nothing changes, flags included"); }
+
+    /* LSS/LFS/LGS: offset, then segment. */
+    { V86_CPU cpu = InterpTestMakeCpu();
+    BYTE bytes[] = { 0x0F, 0xB2, 0x27, 0x0F, 0xB4, 0x0F };  /* lss sp,[bx] ; lfs cx,[bx] */
+    BYTE registerForm[] = { 0x0F, 0xB5, 0xC1 };            /* lgs ax,cx: #UD */
+      cpu.Segments[3] = 0x2000;
+      cpu.Registers[3] = 0x0400;
+      g_Memory[0x20400] = 0x34;
+      g_Memory[0x20401] = 0x12;
+      g_Memory[0x20402] = 0x00;
+      g_Memory[0x20403] = 0x30;
+      InterpTestLoad(&cpu, 0x1000, 0, bytes, sizeof bytes);
+      CHECK(InterpTestStepOnce(&cpu) == 1 && cpu.Segments[2] == 0x3000 && (cpu.Registers[4] & 0xFFFF) == 0x1234,
+            "#269 0F B2 lss sp,[bx]");
+      CHECK(InterpTestStepOnce(&cpu) == 1 && cpu.Segments[4] == 0x3000 && (cpu.Registers[1] & 0xFFFF) == 0x1234,
+            "#269 0F B4 lfs cx,[bx]");
+      cpu = InterpTestMakeCpu();
+      InterpTestLoad(&cpu, 0x1000, 0, registerForm, sizeof registerForm);
+      CHECK(InterpTestStepOnce(&cpu) == 0, "#269 0F B5 with a register operand: the CPU's #UD"); }
+
+    /* INS/OUTS through the host's port hooks (port 60h answers A5h; 3C5h is recorded). */
+    { V86_CPU cpu = InterpTestMakeCpu();
+    BYTE bytes[] = { 0xF3, 0x6C };                          /* rep insb */
+      cpu.Segments[0] = 0x2000;
+      cpu.Registers[7] = 0x0500;
+      cpu.Registers[2] = 0x0060;
+      cpu.Registers[1] = 3;
+      g_Memory[0x20503] = 0x00;
+      InterpTestLoad(&cpu, 0x1000, 0, bytes, sizeof bytes);
+      CHECK(InterpTestStepOnce(&cpu) == 1 && g_Memory[0x20500] == 0xA5 && g_Memory[0x20502] == 0xA5 && g_Memory[0x20503] == 0x00
+            && (cpu.Registers[7] & 0xFFFF) == 0x0503 && (cpu.Registers[1] & 0xFFFF) == 0,
+            "#269 F3 6C rep insb: three bytes from port DX into ES:DI"); }
+    { V86_CPU cpu = InterpTestMakeCpu();
+    BYTE bytes[] = { 0x2E, 0x6E };                          /* outsb cs:[si] */
+      cpu.Registers[6] = 0x0010;
+      cpu.Registers[2] = 0x03C5;
+      g_Port3C5 = 0;
+      InterpTestLoad(&cpu, 0x1000, 0, bytes, sizeof bytes);
+      g_Memory[0x10010] = 0x5A;
+      CHECK(InterpTestStepOnce(&cpu) == 1 && g_Port3C5 == 0x5A && (cpu.Registers[6] & 0xFFFF) == 0x0011,
+            "#269 2E 6E outsb: the segment override applies to the source"); }
+
+    /* 0x67: 32-bit addressing in real mode, declined past FFFFh. */
+    { V86_CPU cpu = InterpTestMakeCpu();
+    BYTE bytes[] = { 0x67, 0x8B, 0x44, 0x8B, 0x02 };        /* mov ax,[ebx+ecx*4+2] */
+      cpu.Segments[3] = 0x2000;
+      cpu.Registers[3] = 0x0100;
+      cpu.Registers[1] = 0x0010;
+      g_Memory[0x20142] = 0x78;
+      g_Memory[0x20143] = 0x56;
+      InterpTestLoad(&cpu, 0x1000, 0, bytes, sizeof bytes);
+      CHECK(InterpTestStepOnce(&cpu) == 1 && (cpu.Registers[0] & 0xFFFF) == 0x5678 && cpu.Ip == 5,
+            "#269 67 8B 44 8B 02 mov ax,[ebx+ecx*4+2]: SIB with a scale"); }
+    { V86_CPU cpu = InterpTestMakeCpu();
+    BYTE bytes[] = { 0x67, 0x8B, 0x03 };                    /* mov ax,[ebx], ebx = 10000h */
+      cpu.Registers[3] = 0x00010000u;
+      InterpTestLoad(&cpu, 0x1000, 0, bytes, sizeof bytes);
+      CHECK(InterpTestStepOnce(&cpu) == 0, "#269 67: an effective address past FFFFh is the CPU's #GP: declined"); }
+    { V86_CPU cpu = InterpTestMakeCpu();
+    BYTE bytes[] = { 0x66, 0x67, 0x8D, 0x84, 0x24, 0x00, 0x00, 0x01, 0x00 };   /* lea eax,[esp+10000h] */
+      cpu.Registers[4] = 0x0100;
+      InterpTestLoad(&cpu, 0x1000, 0, bytes, sizeof bytes);
+      CHECK(InterpTestStepOnce(&cpu) == 1 && cpu.Registers[0] == 0x00010100u && cpu.Ip == 9,
+            "#269 66 67 8D lea eax,[esp+10000h]: LEA touches no memory, so no limit"); }
+    { V86_CPU cpu = InterpTestMakeCpu();
+    BYTE bytes[] = { 0x67, 0x8B, 0x45, 0x04 };              /* mov ax,[ebp+4]: SS */
+      cpu.Segments[2] = 0x3000;
+      cpu.Segments[3] = 0x2000;
+      cpu.Registers[5] = 0x0100;
+      g_Memory[0x30104] = 0xCD;
+      g_Memory[0x30105] = 0xAB;
+      InterpTestLoad(&cpu, 0x1000, 0, bytes, sizeof bytes);
+      CHECK(InterpTestStepOnce(&cpu) == 1 && (cpu.Registers[0] & 0xFFFF) == 0xABCD, "#269 67 [ebp+disp8] defaults to SS"); }
+    { V86_CPU cpu = InterpTestMakeCpu();
+    BYTE bytes[] = { 0x67, 0xAA };                          /* stosb with 0x67: EDI, not modelled */
+      InterpTestLoad(&cpu, 0x1000, 0, bytes, sizeof bytes);
+      CHECK(InterpTestStepOnce(&cpu) == 0, "#269 67 AA: a 0x67 string op is the CPU's"); }
+
+    /* LOCK: legal on a read-modify-write of memory only. */
+    { V86_CPU cpu = InterpTestMakeCpu();
+    BYTE bytes[] = { 0xF0, 0x01, 0x07 };                    /* lock add [bx],ax */
+    BYTE registerForm[] = { 0xF0, 0x01, 0xC0 };            /* lock add ax,ax: #UD */
+    BYTE moveForm[] = { 0xF0, 0x89, 0x07 };                /* lock mov [bx],ax: #UD */
+      cpu.Segments[3] = 0x2000;
+      cpu.Registers[3] = 0x0600;
+      cpu.Registers[0] = 0x0003;
+      g_Memory[0x20600] = 0x04;
+      g_Memory[0x20601] = 0x00;
+      InterpTestLoad(&cpu, 0x1000, 0, bytes, sizeof bytes);
+      CHECK(InterpTestStepOnce(&cpu) == 1 && g_Memory[0x20600] == 0x07 && cpu.Ip == 3, "#269 F0 01 07 lock add [bx],ax");
+      cpu = InterpTestMakeCpu();
+      InterpTestLoad(&cpu, 0x1000, 0, registerForm, sizeof registerForm);
+      CHECK(InterpTestStepOnce(&cpu) == 0, "#269 lock on a register destination: the CPU's #UD");
+      cpu = InterpTestMakeCpu();
+      InterpTestLoad(&cpu, 0x1000, 0, moveForm, sizeof moveForm);
+      CHECK(InterpTestStepOnce(&cpu) == 0, "#269 lock mov: the CPU's #UD"); }
+
+    /* AC/ID: a 16-bit POPF leaves the upper half alone, as the CPU does. */
+    { V86_CPU cpu = InterpTestMakeCpu();
+    BYTE bytes[] = { 0x9D };
+      cpu.Flags = 0x00040202u;                           /* AC set */
+      cpu.Segments[2] = 0x2000;
+      cpu.Registers[4] = 0x0100;
+      g_Memory[0x20100] = 0x83;
+      g_Memory[0x20101] = 0x02;
+      InterpTestLoad(&cpu, 0x1000, 0, bytes, sizeof bytes);
+      CHECK(InterpTestStepOnce(&cpu) == 1 && (cpu.Flags & 0x00040000u) && (cpu.Flags & 0xFFFF) == 0x0283,
+            "#269 9D popf: the low word loads, AC (bit 18) stays"); }
+
+    /* The 16-bit RETF in PM: a 32-bit (D=1) target is the CPU's. */
+    g_V86SegmentToLinear = InterpTestSegmentToLinear;
+    g_V86SelectorDescriptor = InterpTestSelectorDescriptor;
+    { V86_CPU cpu = InterpTestMakeCpu();
+      cpu.Segments[1] = 0x08;                            /* code base 30800h */
+      cpu.Segments[2] = 0x10;                            /* stack base 31000h */
+      cpu.Registers[4] = 0x0100;
+      cpu.Ip = 0;
+      g_Memory[0x30800] = 0xCB;                          /* retf */
+      InterpTestPut32(0x31100, 0x00180200u);             /* IP 0200, CS 0018 (32-bit code) */
+      CHECK(InterpTestStepOnce(&cpu) == 0, "#269 CB retf (16-bit) to a D=1 segment in PM: declined");
+      InterpTestPut32(0x31100, 0x00080200u);             /* CS 0008, 16-bit code */
+      CHECK(InterpTestStepOnce(&cpu) == 1 && cpu.Segments[1] == 0x08 && cpu.Ip == 0x0200, "#269 CB retf to a 16-bit code segment: taken"); }
+    g_V86SegmentToLinear = 0;
+    g_V86SelectorDescriptor = 0;
+}
+
 static VOID InterpTestO32Battery(VOID)
 {
     printf("== #194: 0x66 stack/string/transfer forms, PM IRET ==\n");
@@ -1031,8 +1410,36 @@ INT main(VOID)
             "C8 enter 0x10,0: push BP, BP = SP, SP -= 0x10 (high halves kept)"); }
     { V86_CPU cpu = InterpTestMakeCpu();
     BYTE bytes[] = { 0xC8, 0x10, 0x00, 0x01 };            /* enter 0x10,1 */
+      cpu.Segments[2] = 0x2000;
+      cpu.Registers[4] = 0x0100;
+      cpu.Registers[5] = 0xBEEF;
       InterpTestLoad(&cpu, 0x1000, 0, bytes, sizeof bytes);
-      CHECK(InterpTestStepOnce(&cpu) == 0, "C8 enter with a nesting level: bail"); }
+      CHECK(InterpTestStepOnce(&cpu) == 1 && V86ReadMemory(0x200FE, 2) == 0xBEEF && V86ReadMemory(0x200FC, 2) == 0x00FE
+            && cpu.Registers[5] == 0x00FE && cpu.Registers[4] == 0x00EC && cpu.Ip == 4,
+            "#269 C8 enter 0x10,1: push BP, push FrameTemp, BP = FrameTemp, SP -= 0x10"); }
+    { V86_CPU cpu = InterpTestMakeCpu();
+    BYTE bytes[] = { 0xC8, 0x04, 0x00, 0x03 };            /* enter 4,3: two copied frame pointers */
+      cpu.Segments[2] = 0x2000;
+      cpu.Registers[4] = 0x0100;
+      cpu.Registers[5] = 0x0180;                         /* the caller's frame: [17E]=1111, [17C]=2222 */
+      g_Memory[0x2017E] = 0x11;
+      g_Memory[0x2017F] = 0x11;
+      g_Memory[0x2017C] = 0x22;
+      g_Memory[0x2017D] = 0x22;
+      InterpTestLoad(&cpu, 0x1000, 0, bytes, sizeof bytes);
+      CHECK(InterpTestStepOnce(&cpu) == 1 && V86ReadMemory(0x200FE, 2) == 0x0180 && V86ReadMemory(0x200FC, 2) == 0x1111
+            && V86ReadMemory(0x200FA, 2) == 0x2222 && V86ReadMemory(0x200F8, 2) == 0x00FE
+            && cpu.Registers[5] == 0x00FE && cpu.Registers[4] == 0x00F4,
+            "#269 C8 enter 4,3: the display (2 copied BPs + FrameTemp), then SP -= 4"); }
+    { V86_CPU cpu = InterpTestMakeCpu();
+    BYTE bytes[] = { 0x66, 0xC8, 0x08, 0x00, 0x00 };      /* 66 enter 8,0: push EBP, BP (16-bit stack) */
+      cpu.Segments[2] = 0x2000;
+      cpu.Registers[4] = 0x0100;
+      cpu.Registers[5] = 0xCAFEBEEFu;
+      InterpTestLoad(&cpu, 0x1000, 0, bytes, sizeof bytes);
+      CHECK(InterpTestStepOnce(&cpu) == 1 && V86ReadMemory(0x200FC, 4) == 0xCAFEBEEFu
+            && cpu.Registers[5] == 0xCAFE00FCu && cpu.Registers[4] == 0x00F4 && cpu.Ip == 5,
+            "#269 66 C8 enter 8,0: EBP pushed as a dword, BP <- SP (16-bit stack)"); }
 
     /* T20: LAR/LSL descriptor introspection -- run 55:
      * A DPMI C runtime reads a descriptor's access byte with LAR;CX / SHR.  *
@@ -1884,6 +2291,7 @@ INT main(VOID)
 
     InterpTestO32Battery();
     InterpTestTrapFlagBattery();
+    InterpTest269Battery();
     InterpTestO32Replay();
 
     printf("\n%d checks, %d failed\n", g_Total, g_Failures);
