@@ -4339,8 +4339,16 @@ INT WowUserCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
          * return, because it hangs the guest instead of ending it" -- is why
          * that file has FOUR named exits and why two paths in the arm below
          * still return immediately and say so.
+         *
+         * [CAUTION]: #328: NOT A MODAL ONE. Since s91 (#283) the modal loop shows every
+         * modal dialog after its WM_INITDIALOG (IsShowDeferred), and the two arms below
+         * show it when there is no loop. Showing it here as well put Terminal's
+         * Communications dialog on screen BEFORE it centred itself with a
+         * non-repainting MoveWindow: it arrived at its place with no frame, no
+         * buttons and no group boxes painted, and the deferred show was then a
+         * no-op on a window already visible.
          */
-        if (window->Window32 && !(style & WS_VISIBLE) && (isModal || !g_WowUserSend16 || !frame->IsCallbackAllowed))
+        if (window->Window32 && !(style & WS_VISIBLE) && !isModal && (!g_WowUserSend16 || !frame->IsCallbackAllowed))
             ShowWindow(window->Window32, SW_SHOW);
 
         /* [INFO]: SAY WHICH ONE THIS IS, EVERY TIME. Until the modal loop exists, a
