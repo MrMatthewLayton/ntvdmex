@@ -131,6 +131,9 @@
  */
 #define DPMI_SSR_OFF            0x0078
 
+/* #315: the IPX far-call entry INT 2Fh AX=7A00h hands out: BOP 7Ah ; RETF. */
+#define IPX_ENTRY_OFF           0x0084
+
 /* Shared IRET stub for every vector that has no real handler.
  *
  * IT USED TO LIVE AT 0x66 AND WAS BEING CLOBBERED. The DPMI real-mode callback
@@ -147,11 +150,11 @@
  *   0x58       >>> this stub <<<  0x59 AH=38h case map      0x5C-0x5E  DPMI raw RM->PM
  *   0x60-0x65  opt-in entry trampoline (qimode VIF; empty since the CB slots moved)
  *   0x70-0x72  DPMI PMRET         0x74-0x76  DPMI raw PM->RM     0x78  DPMI 0305 RETF
- *   0x80-0x82  DPMI fault BOP (code selector)
+ *   0x80-0x82  DPMI fault BOP (code selector)   0x84-0x87  IPX entry (#315)
  *   0x90-0xCF  DPMI CB slots (16 x 4; #248 -- were 4 slots at 0x60-0x6F)
  *   0xE0-0xE3  INT 33h event-handler return (MS_CB_RET_OFF)
  *   0xE4-0xE7  INT 21h BOP ; IRET (#317: moved off 0x00)
- *   free:      0x01-0x09, 0x83-0x8F, 0xD0-0xDF, 0xE8-0xFF
+ *   free:      0x01-0x09, 0x83, 0x88-0x8F, 0xD0-0xDF, 0xE8-0xFF
  */
 #define DOS_IRET_STUB_OFF       0x0058
 

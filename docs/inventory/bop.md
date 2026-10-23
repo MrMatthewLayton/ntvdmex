@@ -744,6 +744,7 @@ guest's (`g_bop_from_guest`, `main.c:560`, set at `:28964`).
 | `0x33` | — | INT 33h mouse | IMPL | `:25779` / `:28996-29000` |
 | `0x35` | `MS_CB_BOP` | mouse callback return | IMPL | `:7860` / `:29001-29004` |
 | `0x43` | — | XMS far-call entry (`RETF`) | IMPL | `:25795` / `:29531-29559` |
+| `0x7A` | `DOS_BOP_IPX_ENTRY` | IPX far-call entry (`RETF`), at `DOS_HDLR_SEG:IPX_ENTRY_OFF` (0084h) only (#315) | IMPL (unmeasured: needs NWLink) | `host_startup.c` (plant), `host_bios.c` `V86BiosBop` |
 | `0x50` | `DPMI_BOP` | DPMI real→PM switch | IMPL | `:550` / `:29573-29574`, gated on origin ⚠ **collides** |
 | `0x54` | `DPMI_RMRET_BOP` | DPMI 0300/0301 return catcher | IMPL | `:557`, `:27054` / `:20027`, `:23731` ⚠ **collides** |
 | `0x55` | `DPMI_CB_BOP` | DPMI 0303 real-mode callback entry | IMPL | `:598`, `:27059` / `:20033`, `:23740` |

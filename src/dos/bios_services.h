@@ -74,6 +74,8 @@
 #define MULTIPLEX_XMS_INSTALLATION_CHECK        0x4300
 #define MULTIPLEX_XMS_GET_ENTRY                 0x4310
 #define MULTIPLEX_XMS_INSTALLED                 0x80        /* AL */
+#define MULTIPLEX_IPX_INSTALLATION_CHECK        0x7A00      /* #315: NetWare IPX (RBIL INT 2F/7A00) */
+#define MULTIPLEX_IPX_INSTALLED                 0xFF        /* AL; ES:DI = the far-call entry */
 #define MULTIPLEX_DOS_TABLES                    0x122E      /* DL selects: see DOS_INT2F_TBL_* */
 #define MULTIPLEX_DEVICE_API_ENTRY              0x1684
 #define MULTIPLEX_DPMI_INSTALLATION_CHECK       0x1687

@@ -20,6 +20,7 @@
 #include "host_input.h"
 #include "host_io.h"
 #include "host_irq.h"
+#include "host_ipx.h"
 #include "host_mouse.h"
 #include "host_timing.h"
 #include "host_video.h"
@@ -1129,6 +1130,7 @@ static INT V86ServiceTimerBop(volatile BYTE * const tib)
         VddPicEndOfInterrupt(&g_Pic, PIC_IRQ_TIMER);
         HOST_UNLOCK();
         RegistersStore(&registers, tib);
+        HostIpxTick();                                        /* #315: arrived IPX packets */
         VDM_REG(tib, VTIB_EIP) += VDM_BOP_LENGTH;            /* -> CD 1C (chain user timer) */
         {
             return HOST_FLOW_CONTINUE;

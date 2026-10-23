@@ -134,6 +134,7 @@ add_executable(ntvdmhost
     src/host/host_mouse.c
     src/host/host_timing.c
     src/host/host_irq.c
+    src/host/host_ipx.c
     src/host/host_io.c
     src/host/host_vddsvc.c
     src/host/host_input.c
@@ -176,6 +177,7 @@ add_executable(ntvdmhost
     src/vdd/vdd_mpu.c
     src/vdd/vdd_comm.c
     src/vdd/vdd_net.c
+    src/vdd/vdd_ipx.c
     src/vdd/vdd_audio.c
     src/vdd/audio_wave.c
     src/vdd/audio_dmsynth.c
