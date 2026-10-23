@@ -23,6 +23,7 @@
 #include "host_mouse.h"
 #include "host_timing.h"
 #include "host_video.h"
+#include "host_vddsvc.h"
 #include "host_window.h"
 
 #define NTVDM_BOP_DOS   0x50                /* XP's COMMAND.COM: 1 site, in its version-refusal path */
@@ -1971,10 +1972,17 @@ VOID HostRunExecLoop(
                 continue;
         }
 
-        while (g_PauseWant && g_Running) /* #219 */
+        if (g_PauseWant && g_Running)                                               /* #219 */
         {
-            ++g_PauseCooperative;
-            Sleep(PAUSE_POLL_MS);
+            HostVddUserBlock();                                                     /* #11: the VDM is blocked */
+
+            while (g_PauseWant && g_Running)
+            {
+                ++g_PauseCooperative;
+                Sleep(PAUSE_POLL_MS);
+            }
+
+            HostVddUserResume();
         }
 
         CpuSpeedCooperativePark();                                                  /* #225 */

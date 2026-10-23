@@ -622,6 +622,46 @@ INT main(VOID)
         CHECK(status == 0x02, "status 08h: served on re-enable -- TC1, nothing pending");
     }
 
+    /* #11: THE VDD SERVICE API'S VIEW (VDDRequestDMA / VDDQueryDMA / VDDSetDMA). ----- */
+    {
+        DMA_VDD_INFO info;
+        BYTE source[16];
+        DmaTestProgram(&bus, 1, 0x32000, 15, 0x48);   /* single, READ (memory -> device), 16 bytes */
+
+        for (index = 0; index < 16; ++index)
+            g_GuestMemory[0x32000 + index] = (BYTE)(0xA0 + index);
+
+        CHECK(VddDmaRequest(&dma, 1, NULL, 0) == 16, "vdd: RequestDMA with no buffer answers the bytes left");
+        memset(buffer, 0, sizeof buffer);
+        CHECK(VddDmaRequest(&dma, 1, buffer, 8) == 8 && buffer[0] == 0xA0 && buffer[7] == 0xA7,
+              "vdd: RequestDMA on a READ channel fills the VDD's buffer from guest memory");
+        CHECK(VddDmaQueryInfo(&dma, 1, &info) && info.Address == 0x2008 && info.Count == 7 && info.Page == 0x03
+              && (info.Mode & 0x0C) == 0x08 && info.Mask == 0, "vdd: QueryDMA -- address and count advanced, page, mode, unmasked");
+        info.Address = 0x2000;
+        info.Count = 15;
+        CHECK(VddDmaSetInfo(&dma, 1, DMA_VDD_SET_ADDRESS | DMA_VDD_SET_COUNT, &info)
+              && VddDmaRequest(&dma, 1, buffer, 4) == 4 && buffer[0] == 0xA0, "vdd: SetDMA moves the address back; the next request starts there");
+        info.Status = 0x02 | (0x02 << 4);               /* TC and request for line 1 */
+        CHECK(VddDmaSetInfo(&dma, 1, DMA_VDD_SET_STATUS, &info) && dma.Channels[1].IsTerminalCount && (dma.Request[0] & 0x02),
+              "vdd: SetDMA status sets the channel's TC and request bits");
+        CHECK(VddDmaQueryInfo(&dma, 1, &info) && info.Status == 0x22, "vdd: ...and QueryDMA reads them back");
+        info.Status = 0;
+        VddDmaSetInfo(&dma, 1, DMA_VDD_SET_STATUS, &info);
+        CHECK(!dma.Channels[1].IsTerminalCount && !(dma.Request[0] & 0x02), "vdd: ...and clears them");
+
+        DmaTestProgram(&bus, 3, 0x33000, 15, 0x44);   /* single, WRITE (device -> memory) */
+
+        for (index = 0; index < 16; ++index)
+            source[index] = (BYTE)(0x10 + index);
+
+        CHECK(VddDmaRequest(&dma, 3, source, 16) == 16 && g_GuestMemory[0x33000] == 0x10 && g_GuestMemory[0x3300F] == 0x1F,
+              "vdd: RequestDMA on a WRITE channel empties the VDD's buffer into guest memory");
+        DmaTestProgram(&bus, 2, 0x34000, 15, 0x40);   /* single, VERIFY */
+        CHECK(VddDmaRequest(&dma, 2, buffer, 8) == 0, "vdd: a VERIFY channel moves nothing");
+        CHECK(VddDmaRequest(&dma, 4, buffer, 8) == 0 && !VddDmaQueryInfo(&dma, 4, &info) && !VddDmaQueryInfo(&dma, 8, &info),
+              "vdd: the cascade channel and channel 8 are refused");
+    }
+
     printf("-- %d checks, %d failures --\n", g_Total, g_Failures);
     return g_Failures ? 1 : 0;
 }

@@ -24,6 +24,7 @@
 #include "host_mouse.h"
 #include "host_timing.h"
 #include "host_video.h"
+#include "host_vddsvc.h"
 #include "host_window.h"
 #include "host_wow.h"
 
@@ -2298,10 +2299,17 @@ static VOID DpmiRunClient(
         if (!DpmiSelectorIs32((WORD)VDM_REG16(tib, VTIB_SS)))
             VDM_REG(tib, VTIB_ESP) &= WORD_MASK_U;
 
-        while (g_PauseWant && g_Running) /* #219 */
+        if (g_PauseWant && g_Running)                                               /* #219 */
         {
-            ++g_PauseCooperative;
-            Sleep(PAUSE_POLL_MS);
+            HostVddUserBlock();                                                     /* #11: the VDM is blocked */
+
+            while (g_PauseWant && g_Running)
+            {
+                ++g_PauseCooperative;
+                Sleep(PAUSE_POLL_MS);
+            }
+
+            HostVddUserResume();
         }
 
         CpuSpeedCooperativePark();                                                  /* #225 */

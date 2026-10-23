@@ -18,6 +18,7 @@
 #include "host_dpmi.h"
 #include "host_bios.h"
 #include "host_timing.h"
+#include "host_vddsvc.h"
 /* Used before their definitions below. */
 static VOID ModeYRemapSelectBody(PVOID context, INT mask);
 static VOID ModeYGr4CloseRun(VOID);
@@ -1489,8 +1490,8 @@ INT ModeYNeedsInterp(VOID)
  */
 enum
 {
-    PAGE_MAP_UNKNOWN = 0, PAGE_MAP_OK = 1, PAGE_MAP_BAD = 2
-};   /* g_PageMap: per 4 KB page of the low 1 MB */
+    PAGE_MAP_UNKNOWN = 0, PAGE_MAP_OK = 1, PAGE_MAP_BAD = 2, PAGE_MAP_HOOKED = 3
+};   /* g_PageMap: per 4 KB page of the low 1 MB; HOOKED = a VDD answers it (#11, host_vddsvc.c) */
 /* [CAUTION]: A STRAY GUEST POINTER MUST NOT JAM THE MACHINE (Importance = 2):
  * imem treats a guest LINEAR address as a HOST virtual address -- true for the low
  * megabyte NTVDM identity-maps, but the UMB region (0xC0000-0xEFFFF) has HOLES that
@@ -1535,6 +1536,25 @@ INT InterpreterMemoryPageOk(UINT32 linear)
     return g_PageMap[page] == PAGE_MAP_OK;
 }
 
+/* #11: a VDD's memory hook or claimed range covers these pages -- the interpreter's
+ * accesses to them go to host_vddsvc.c. Reset puts them back to "probe again".
+ */
+VOID HostPageMapHook(UINT32 linear, UINT32 byteCount)
+{
+    UINT32 page;
+
+    for (page = linear >> PAGE_SHIFT; page < (X86_REAL_MODE_SIZE_U >> PAGE_SHIFT) && page <= (linear + byteCount - 1) >> PAGE_SHIFT; ++page)
+        g_PageMap[page] = PAGE_MAP_HOOKED;
+}
+
+VOID HostPageMapReset(UINT32 linear, UINT32 byteCount)
+{
+    UINT32 page;
+
+    for (page = linear >> PAGE_SHIFT; page < (X86_REAL_MODE_SIZE_U >> PAGE_SHIFT) && page <= (linear + byteCount - 1) >> PAGE_SHIFT; ++page)
+        g_PageMap[page] = PAGE_MAP_UNKNOWN;
+}
+
 /* Flat/planar guest memory for the interpreter: A0000 goes through the VGA
  * engine (a read loads the latches), everything else is the directly-mapped
  * V86 address space. These are the host hooks v86interp.h requires.
@@ -1548,6 +1568,16 @@ INT InterpreterMemoryPageOk(UINT32 linear)
 static __attribute__((noinline)) BYTE InterpreterMemoryRead8Slow(UINT32 linear)
 { if (linear >= VIDEO_APERTURE_BASE && linear < VIDEO_MONO_BASE)
     return VddVideoPlanarRead(&g_Video, linear - VIDEO_APERTURE_BASE);
+
+  if (linear < X86_REAL_MODE_SIZE_U && g_PageMap[linear >> PAGE_SHIFT] == PAGE_MAP_HOOKED)
+  {
+      BYTE hookedValue = VDD_UNCLAIMED_READ_BYTE;
+
+      if (HostVddMemoryRead(linear, &hookedValue))
+          return hookedValue;                                          /* #11: a VDD answered */
+
+      return HostReadable((PCVOID)(ULONG_PTR)linear, 1) ? *(volatile BYTE *)linear : VDD_UNCLAIMED_READ_BYTE;   /* the page's unhooked part */
+  }
 
   if (!InterpreterMemoryPageOk(linear))
   {
@@ -1563,6 +1593,14 @@ static __attribute__((noinline)) VOID InterpreterMemoryWrite8Slow(UINT32 linear,
     VddVideoPlanarWrite(&g_Video, linear - VIDEO_APERTURE_BASE, value);
     return;
 }
+
+  if (linear < X86_REAL_MODE_SIZE_U && g_PageMap[linear >> PAGE_SHIFT] == PAGE_MAP_HOOKED)
+  {
+      if (!HostVddMemoryWrite(linear, value) && HostWritable((PVOID)(ULONG_PTR)linear, 1))
+          *(volatile BYTE *)linear = value;                            /* #11: the page's unhooked part */
+
+      return;
+  }
 
   if (!InterpreterMemoryPageOk(linear))
   {

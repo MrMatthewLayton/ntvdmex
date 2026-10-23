@@ -35,6 +35,7 @@
 #include "host_video.h"
 #include "host_window.h"
 #include "host_wow.h"
+#include "host_vddsvc.h"
 
 /* LOG_PATH now lives in log.h -- see the note there. */
 /* Both are written by the runner and READ by us, so they are cfg, not out. */
@@ -3111,6 +3112,16 @@ VOID StartupStartGuest(
      * in place before its first instruction.
      */
     VddLoadThirdParty();
+    {   /* #11: and the VDDs Windows lists in the registry, as NTVDM loads them -- here for the
+         * same two reasons: their claims are in place before the guest runs, and their log
+         * lines survive.
+         */
+        static CHAR registryLine[2048];
+        PSTR registryEnd = HostVddRegistryLoad(registryLine);
+
+        if (registryEnd != registryLine)
+            LogAppend(LOG_PATH, registryLine, registryEnd);
+    }
     StartupReportVectorWiring();
     /* [CAUTION]: AFTER THE **LAST** LogWrite. There are THREE of them in WinMain and every one
      * TRUNCATES. This probe was placed after the first, then after the second, and

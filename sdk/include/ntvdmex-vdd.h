@@ -55,6 +55,12 @@ extern "C"
 /* Bump ONLY when an existing member changes meaning. Appending does not. */
 #define NTVDMEX_VDD_ABI_VERSION     1u
 
+/* The SDK drop this header ships in: docs/sdk/vdd-sdk.md "SDK versions". The ABI above
+ * did not change in 2 -- claim_mem started being delivered, and the Microsoft-ABI side
+ * grew (sdk/include/ntvdmex-vddsvc.h).
+ */
+#define NTVDMEX_VDD_SDK_VERSION     2u
+
 #if defined(_WIN32)
 #  define NTVDMEX_VDD_EXPORT __declspec(dllexport)
 #else

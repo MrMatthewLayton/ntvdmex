@@ -18,6 +18,7 @@
 #include "host_bios.h"
 #include "host_dpmi.h"
 #include "host_wow.h"
+#include "host_vddsvc.h"
 
 /* Async-preemption experiment knob, also on the share so it can be changed between
  * runs without a rebuild. One digit: bits 0-1 = the FIXED_NTVDMSTATE pending bits to
@@ -120,7 +121,7 @@ static DWORD g_IoSiteLogged = 0;
 static const ntvdmex_vdd_api g_VddApi = {
     (UINT32)sizeof(ntvdmex_vdd_api), NTVDMEX_VDD_ABI_VERSION,
     (INT  (*)(ntvdmex_vdd_bus *, WORD, WORD, ntvdmex_in_fn, ntvdmex_out_fn, VOID *))VddClaimPorts,
-    (INT  (*)(ntvdmex_vdd_bus *, UINT32, UINT32, ntvdmex_rd_fn, ntvdmex_wr_fn, VOID *))VddClaimMemory,
+    (INT  (*)(ntvdmex_vdd_bus *, UINT32, UINT32, ntvdmex_rd_fn, ntvdmex_wr_fn, VOID *))HostVddClaimMemory,   /* #11: dispatched */
     (INT  (*)(ntvdmex_vdd_bus *, BYTE, ntvdmex_int_fn, VOID *))VddClaimInterrupt,
     (INT  (*)(ntvdmex_vdd_bus *, ntvdmex_frame_fn, VOID *))VddOnFrame,
     (VOID (*)(ntvdmex_vdd_bus *, BYTE))VddRaiseIrq,
@@ -1263,6 +1264,7 @@ VOID IsvBop(volatile BYTE *tib, DWORD subfunction, PSTR *logCursor)
                 if (g_IsvHooks[index].VddHandle == (HANDLE)g_IsvModules[ax - 1].Module)
                     g_IsvHooks[index].IsLive = 0;
 
+            HostVddModuleGone((HANDLE)g_IsvModules[ax - 1].Module);        /* #11: its memory and user hooks */
             FreeLibrary(g_IsvModules[ax - 1].Module);
             g_IsvModules[ax - 1].Module = NULL;
         }

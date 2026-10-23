@@ -16,15 +16,21 @@
 #ifndef NTVDMEX_SHIM_API_H
 #define NTVDMEX_SHIM_API_H
 
-#define SHIM_API_VERSION        3   /* Host + bin\wowshim\ must agree */
+#define SHIM_API_VERSION            4   /* Host + bin\wowshim\ must agree; 4 (#11): the rest of the VDD service API */
+
+/* VddMemory's operation (#11): VDDAllocMem, VDDFreeMem, VDDIncludeMem, VDDExcludeMem. */
+#define SHIM_VDD_MEMORY_ALLOC       0
+#define SHIM_VDD_MEMORY_FREE        1
+#define SHIM_VDD_MEMORY_INCLUDE     2
+#define SHIM_VDD_MEMORY_EXCLUDE     3
 
 /* Global16's operation: krnl386's own global-heap call the host makes for the shim. */
-#define SHIM_GLOBAL_ALLOC       0
-#define SHIM_GLOBAL_FREE        1
-#define SHIM_GLOBAL_LOCK        2
-#define SHIM_GLOBAL_UNLOCK      3
-#define SHIM_GLOBAL_SIZE        4
-#define SHIM_GLOBAL_HANDLE      5
-#define SHIM_GLOBAL_OPERATIONS  6
+#define SHIM_GLOBAL_ALLOC           0
+#define SHIM_GLOBAL_FREE            1
+#define SHIM_GLOBAL_LOCK            2
+#define SHIM_GLOBAL_UNLOCK          3
+#define SHIM_GLOBAL_SIZE            4
+#define SHIM_GLOBAL_HANDLE          5
+#define SHIM_GLOBAL_OPERATIONS      6
 
 #endif /* NTVDMEX_SHIM_API_H */
