@@ -254,6 +254,13 @@ const SET_DEF g_SetDefinitions[SET_COUNT] = {
 { "VideoCodec",        0,                 SK_UINT,       0,  0, 0xFFFFFFFFu, NULL },
 { "VideoQuality",      IDC_S_VIDEOQUALITY, SK_UINT,     75,  1, 100, NULL },
 { "VideoKeyFrames",    IDC_S_KEYFRAMES,   SK_UINT,      70,  0, 10000, NULL },
+/* #331: the display mode fullscreen switches to. 0 = the desktop's (no change, as always),
+ * 1 = the largest the display offers at the desktop's depth and refresh (the panel's own),
+ * else a size, width << 16 | height -- a SIZE, not a list index, so it survives the list
+ * changing. Its list is this display's modes, so the page fills that combo itself (no
+ * ControlId here). Read when fullscreen is entered. See src/host/fullscreen_mode.h.
+ */
+{ "FullscreenResolution", 0,              SK_UINT,       0,  0, 0xFFFFFFFFu, NULL },
 };
 
 const SET_STR_DEF g_SetStringDefinitions[SET_STR_COUNT] = {

@@ -198,66 +198,68 @@ IDD_PAGE_DISPLAY DIALOGEX 0, 0, 404, 228
 STYLE DS_SETFONT | DS_CONTROL | WS_CHILD
 FONT 8, "MS Shell Dlg", 400, 0, 0x1
 BEGIN
-    GROUPBOX        "Display", -1, 6, 4, 392, 51
-    LTEXT           "The window's size is a multiple of the program's own screen size.",
+    GROUPBOX        "Display", -1, 6, 4, 392, 59
+    LTEXT           "The window is a multiple of the program's screen. ALT+ENTER switches to fullscreen.",
                     -1, 14, 16, 376, 8
-    LTEXT           "ALT+ENTER switches between the window and fullscreen at any time.",
-                    -1, 14, 24, 376, 8
-    LTEXT           "&Renderer:", -1, 14, 38, 58, 8
-    COMBOBOX        IDC_S_RENDERER, 74, 36, 64, 80,
+    LTEXT           "&Renderer:", -1, 14, 30, 58, 8
+    COMBOBOX        IDC_S_RENDERER, 74, 28, 64, 80,
                     CBS_DROPDOWNLIST | CBS_HASSTRINGS | WS_VSCROLL | WS_TABSTOP | WS_GROUP
-    LTEXT           "&Window Size:", -1, 140, 38, 58, 8
-    COMBOBOX        IDC_S_WINSIZE, 200, 36, 64, 80,
+    LTEXT           "&Window Size:", -1, 140, 30, 58, 8
+    COMBOBOX        IDC_S_WINSIZE, 200, 28, 64, 80,
                     CBS_DROPDOWNLIST | CBS_HASSTRINGS | WS_VSCROLL | WS_TABSTOP
-    LTEXT           "Start F&ullscreen:", -1, 266, 38, 58, 8
-    COMBOBOX        IDC_S_AUTOFS, 326, 36, 64, 80,
+    LTEXT           "Start F&ullscreen:", -1, 266, 30, 58, 8
+    COMBOBOX        IDC_S_AUTOFS, 326, 28, 64, 80,
+                    CBS_DROPDOWNLIST | CBS_HASSTRINGS | WS_VSCROLL | WS_TABSTOP
+    /* #331: the display mode fullscreen switches to; this display's modes, filled at run time. */
+    LTEXT           "Fullscreen R&esolution:", -1, 14, 46, 80, 8
+    COMBOBOX        IDC_S_FSRES, 96, 44, 168, 140,
                     CBS_DROPDOWNLIST | CBS_HASSTRINGS | WS_VSCROLL | WS_TABSTOP
 
     /* s81 (#159): Aspect is a five-way setting (the View menu's list). */
-    GROUPBOX        "Image", -1, 6, 59, 392, 61
+    GROUPBOX        "Image", -1, 6, 67, 392, 61
     LTEXT           "How the program's picture is scaled, shaped, and colored on your screen.",
-                    -1, 14, 71, 376, 8
-    LTEXT           "&Scaler:", -1, 14, 87, 58, 8
-    COMBOBOX        IDC_S_SCALER, 74, 85, 64, 80,
+                    -1, 14, 79, 376, 8
+    LTEXT           "&Scaler:", -1, 14, 95, 58, 8
+    COMBOBOX        IDC_S_SCALER, 74, 93, 64, 80,
                     CBS_DROPDOWNLIST | CBS_HASSTRINGS | WS_VSCROLL | WS_TABSTOP | WS_GROUP
-    LTEXT           "F&iltering:", -1, 140, 87, 58, 8
-    COMBOBOX        IDC_S_FILTER, 200, 85, 64, 80,
+    LTEXT           "F&iltering:", -1, 140, 95, 58, 8
+    COMBOBOX        IDC_S_FILTER, 200, 93, 64, 80,
                     CBS_DROPDOWNLIST | CBS_HASSTRINGS | WS_VSCROLL | WS_TABSTOP
-    LTEXT           "&Aspect Ratio:", -1, 266, 87, 58, 8
-    COMBOBOX        IDC_S_ASPECT, 326, 85, 64, 80,
+    LTEXT           "&Aspect Ratio:", -1, 266, 95, 58, 8
+    COMBOBOX        IDC_S_ASPECT, 326, 93, 64, 80,
                     CBS_DROPDOWNLIST | CBS_HASSTRINGS | WS_VSCROLL | WS_TABSTOP
     /* #229: the colour filter. */
-    LTEXT           "&Color Filter:", -1, 14, 103, 58, 8
-    COMBOBOX        IDC_S_TINT, 74, 101, 64, 80,
+    LTEXT           "&Color Filter:", -1, 14, 111, 58, 8
+    COMBOBOX        IDC_S_TINT, 74, 109, 64, 80,
                     CBS_DROPDOWNLIST | CBS_HASSTRINGS | WS_VSCROLL | WS_TABSTOP
-    LTEXT           "Frame S&kip:", -1, 140, 103, 58, 8
-    COMBOBOX        IDC_S_FRAMESKIP, 200, 101, 64, 80,
+    LTEXT           "Frame S&kip:", -1, 140, 111, 58, 8
+    COMBOBOX        IDC_S_FRAMESKIP, 200, 109, 64, 80,
                     CBS_DROPDOWNLIST | CBS_HASSTRINGS | WS_VSCROLL | WS_TABSTOP
     /* #325: maximised / fullscreen -- whole pixels or fill. */
-    LTEXT           "Full Screen Fi&t:", -1, 266, 103, 58, 8
-    COMBOBOX        IDC_S_FIT, 326, 101, 64, 80,
+    LTEXT           "Full Screen Fi&t:", -1, 266, 111, 58, 8
+    COMBOBOX        IDC_S_FIT, 326, 109, 64, 80,
                     CBS_DROPDOWNLIST | CBS_HASSTRINGS | WS_VSCROLL | WS_TABSTOP
 
     /* #217: double-buffering and on-screen messages both default on. */
-    GROUPBOX        "Drawing", -1, 6, 124, 392, 40
+    GROUPBOX        "Drawing", -1, 6, 132, 392, 40
     CONTROL         "Force &VSync (Every Frame)", IDC_S_VSYNC, "Button",
-                    BS_AUTOCHECKBOX | WS_TABSTOP | WS_GROUP, 14, 136, 180, 10
+                    BS_AUTOCHECKBOX | WS_TABSTOP | WS_GROUP, 14, 144, 180, 10
     CONTROL         "Use &Double-Buffering (Reduces Flicker)", IDC_S_BUFFERED, "Button",
-                    BS_AUTOCHECKBOX | WS_TABSTOP, 202, 136, 188, 10
+                    BS_AUTOCHECKBOX | WS_TABSTOP, 202, 144, 188, 10
     CONTROL         "&Blink The Text Mode Cursor", IDC_S_BLINKCURSOR, "Button",
-                    BS_AUTOCHECKBOX | WS_TABSTOP, 14, 148, 180, 10
+                    BS_AUTOCHECKBOX | WS_TABSTOP, 14, 156, 180, 10
     CONTROL         "Show On-Screen &Messages", IDC_S_OSD, "Button",
-                    BS_AUTOCHECKBOX | WS_TABSTOP, 202, 148, 188, 10
+                    BS_AUTOCHECKBOX | WS_TABSTOP, 202, 156, 188, 10
 
     /* #321: any font installed on this PC, over the default character by character.
        The list is filled at run time from the installed fixed-pitch fonts; the preview
        is drawn from the tables a build for the selected font would produce. */
-    GROUPBOX        "Text Mode Font", -1, 6, 168, 392, 56
-    LTEXT           "&Font:", -1, 14, 180, 40, 8
-    COMBOBOX        IDC_S_TEXTFONT, 56, 178, 160, 140,
+    GROUPBOX        "Text Mode Font", -1, 6, 176, 392, 50
+    LTEXT           "&Font:", -1, 14, 188, 40, 8
+    COMBOBOX        IDC_S_TEXTFONT, 56, 186, 160, 140,
                     CBS_DROPDOWNLIST | CBS_HASSTRINGS | CBS_SORT | WS_VSCROLL | WS_TABSTOP | WS_GROUP
-    LTEXT           "", IDC_S_TEXTFONT_INFO, 222, 177, 168, 17
-    CONTROL         "", IDC_S_TEXTFONT_VIEW, "Static", SS_OWNERDRAW, 14, 196, 376, 24
+    LTEXT           "", IDC_S_TEXTFONT_INFO, 222, 185, 168, 17
+    CONTROL         "", IDC_S_TEXTFONT_VIEW, "Static", SS_OWNERDRAW, 14, 202, 376, 20
 END
 
 /* ── PAGE: AUDIO ────────────────────────────────────────────────────────────────

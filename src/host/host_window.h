@@ -15,6 +15,12 @@
 #define NTVDMEX_HOST_WINDOW_H
 
 #include "host_state.h"
+#include "fullscreen_mode.h"
+
+/* #331: this display's modes (EnumDisplaySettings) into `modes`, its current one into
+ * `desktop`. Returns how many; 0 and `desktop` zeroed if the current mode cannot be read.
+ */
+#define HOST_DISPLAY_MODES_MAX  512     /* Modes EnumDisplaySettings may list (all depths and rates) */
 
 extern HHOOK g_LowLevelKeyboard;
 
@@ -60,6 +66,9 @@ VOID HostApplyWindowSize(HWND window, DWORD index);
 VOID HostPresentHook(PVOID context);
 VOID TrayRemove(HWND window);
 VOID HostPanicRelease(VOID);
+INT HostDisplayModes(PFULLSCREEN_MODE modes, INT capacity, PFULLSCREEN_MODE desktop);
+/* #331: put the desktop's own mode back if fullscreen changed it. Safe from any exit path. */
+VOID HostFullscreenDisplayRestore(VOID);
 DWORD WINAPI CaptureWatchdogThread(LPVOID parameter);
 DWORD WINAPI UiThread(LPVOID argument);
 

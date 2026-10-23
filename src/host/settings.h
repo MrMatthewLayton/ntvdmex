@@ -96,6 +96,7 @@ typedef enum
     SET_FIT,                    /* #325: maximised/fullscreen -- whole pixels or fill */
     SET_RESTARTCAPTURE,         /* #155: Capture Video restarts the running program first */
     SET_VIDEOCODEC, SET_VIDEOQUALITY, SET_VIDEOKEYFRAMES,   /* #155: Settings > Capture's codec */
+    SET_FSRES,                  /* #331: fullscreen's display mode (fullscreen_mode.h) */
     SET_COUNT
 } SET_ID;
 
