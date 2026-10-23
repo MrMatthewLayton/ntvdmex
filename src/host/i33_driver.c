@@ -215,6 +215,12 @@ INT I33AlternateFind(const I33_ALTERNATE *alternates, WORD mask)
     return -1;
 }
 
+INT I33IsDriverFunction(WORD ax)
+{
+    return ax <= I33_FN_GET_INI_FILE_NAME || ax == I33_FN_COPYRIGHT || ax == I33_FN_VERSION_STRING
+           || ax == I33_FN_SWIFT_SUPPORT;
+}
+
 INT I33AlternateAny(const I33_ALTERNATE *alternates)
 {
     INT index;

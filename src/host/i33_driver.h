@@ -154,6 +154,8 @@
 #define I33_FN_SWITCH_SETTINGS              0x0033
 #define I33_FN_GET_INI_FILE_NAME            0x0034
 #define I33_FN_SWIFT_SUPPORT                0x53C1
+#define I33_FN_COPYRIGHT                    0x004D                          /* MS driver: ES:DI -> copyright string */
+#define I33_FN_VERSION_STRING               0x006D                          /* MS driver: ES:DI -> version string */
 #define I33_GC_PIXELS                       16                              /* One mask word: sixteen pixels */
 #define I33_GC_LEFT_BIT                     0x8000u                         /* Bit 15 is the leftmost pixel */
 #define I33_GC_CGA_PIXELS                   8 /* CGA 4-colour: eight 2-bit pixels a word */
@@ -353,6 +355,12 @@ INT I33AlternateSet(I33_ALTERNATE *alternates, WORD mask, WORD segment, UINT32 o
 INT I33AlternateFind(const I33_ALTERNATE *alternates, WORD mask);
 
 INT I33AlternateAny(const I33_ALTERNATE *alternates);
+
+/* #192: is AX one of the mouse driver's own functions? Anything else on INT 33h is not a
+ * mouse call -- Fusion issues INT 33h AX=D021h as a system call into its OWN protected-mode
+ * handler -- and belongs to a client that has hooked the vector.
+ */
+INT I33IsDriverFunction(WORD ax);
 
 /* WHO GETS THIS EVENT. ev = the event bits (0Ch layout: bit 5/6 are the MIDDLE button
  * there), main_mask = 0Ch's call mask or 0 when no 0Ch handler is installed. Returns

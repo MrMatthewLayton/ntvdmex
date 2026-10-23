@@ -8433,6 +8433,22 @@ INT DpmiServicePmIntBody(DOS_MACHINE *machine, volatile BYTE *tib, DWORD vector,
                         /* rc==0 with no handler means dispatch declined -> fall through */
                     }
 
+                    /* #192: A CLIENT'S OWN INT 33h HANDLER GETS WHAT IS NOT A MOUSE CALL. Fusion
+                     * hooks PM INT 33h and issues AX=D021h as its own system call; we serviced
+                     * every INT 33h as the mouse, so its handler never ran. Routing the whole
+                     * vector to a client handler would send every DOS/4GW game's mouse calls
+                     * through DOS/4GW's passthrough stub (s74 note); only a function our
+                     * driver does not have goes to the client.
+                     */
+                    if (vector == VECTOR_MOUSE && g_PmInt[vector].Client && !g_PmDispatch[vector]
+                        && !I33IsDriverFunction((WORD)ax))
+                    {
+                        INT status = DpmiDispatchToPmHandler(machine, tib, vector, steps);
+
+                        if (status != 0 || g_PmInt[vector].Selector)
+                            return status;
+                    }
+
                     if (vector == DPMI_BP_VEC)                        /* guest breakpoint hit */
                     {
                         {
