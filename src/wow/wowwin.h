@@ -222,6 +222,7 @@ extern DWORD g_WowWinCreated;
 extern DWORD g_WowWinPaintMs;
 extern INT g_WowWinIsDialogBounced;
 extern INT g_WowWinInDialogMessage;
+extern INT g_WowWinModalCall;
 extern HWND g_WowWinDialogWindow;
 extern UINT g_WowWinDialogMessage;
 extern UINT g_WowWinSetFocusCount;

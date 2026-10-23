@@ -6829,7 +6829,40 @@ INT WowUserCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
         WowNoteHex(note, noteCapacity, &noteLength, type, WOW_HEX_WORD_DIGITS);
         WowNotePut(note, noteCapacity, &noteLength, " -- ★ MODAL: the VDM stops until it is"
                                    " dismissed");
+        /* #318: AND THE PAINTS ALREADY QUEUED GO FIRST. WinHelp posts its own window's
+         * first paint and then calls MessageBox before its loop ever runs again, so
+         * the paint sat in our queue for as long as the box was up: its window
+         * showed the desktop through it (stock: its dark-blue client). Win16's
+         * MessageBox loop dispatches a task's pending paints; here they are sent
+         * through the nested run, each once, before the box opens.
+         */
+        if (g_WowUserSend16 && frame->IsCallbackAllowed)
+        {
+            WORD paintWindows[WOWUSER_MODAL_PAINTS_MAX];
+            INT paintCount = 0;
+            INT paintIndex;
+            WOWMSG pending;
+
+            while (paintCount < WOWUSER_MODAL_PAINTS_MAX && WowMsgTake(0, WM_PAINT16, WM_PAINT16, PM_REMOVE, &pending))
+                paintWindows[paintCount++] = pending.Window;
+
+            for (paintIndex = 0; paintIndex < paintCount; ++paintIndex)
+            {
+                WORD paintResult;
+
+                if (WowUserFindWindow(paintWindows[paintIndex])
+                    && !g_WowUserSend16(paintWindows[paintIndex], WM_PAINT16, 0, 0, &paintResult))
+                    WowMsgPost(paintWindows[paintIndex], WM_PAINT16, 0, 0, GetTickCount(), 0, 0);
+            }
+
+            if (paintCount) { WowNotePut(note, noteCapacity, &noteLength, " [queued paints sent first: 0x");
+                              WowNoteHex(note, noteCapacity, &noteLength, (DWORD)paintCount, WOW_HEX_BYTE_DIGITS);
+                              WowNotePut(note, noteCapacity, &noteLength, "]"); }
+        }
+
+        ++g_WowWinModalCall;            /* #318: paints are SENT while it waits */
         result = MessageBoxA(window ? window->Window32 : NULL, text, caption, (UINT)type);
+        --g_WowWinModalCall;
         WowNotePut(note, noteCapacity, &noteLength, "; answered 0x");
         WowNoteHex(note, noteCapacity, &noteLength, (DWORD)result, WOW_HEX_WORD_DIGITS);
         Wow32SetReturn(frame, (DWORD)(WORD)result);
