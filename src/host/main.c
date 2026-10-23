@@ -128,6 +128,7 @@
 #include "main.h"
 #include "host_timing.h"
 #include "host_install.h"
+#include "host_cdrom.h"
 
 /* #321: what the last font build did (Settings shows it) and the TextFont it was for. */
 SYSFONT_REPORT g_SysFontReport;
@@ -947,6 +948,7 @@ INT WINAPI WinMain(
      */
     InterlockedExchange(&g_WoundDown, 1);
     DosInt21FloppyShutdown();                  /* #240: the A: image's extracted copy */
+    HostCdromUnmount();                 /* #241: the guest is gone; so is its CD-ROM letter */
 
     g_CommandInfo.ExitCode = (ULONG)machine.ExitCode;
     /* Flush captured DOS output to the console + the log.

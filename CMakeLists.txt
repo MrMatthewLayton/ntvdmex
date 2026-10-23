@@ -130,6 +130,7 @@ add_executable(ntvdmhost
     src/host/host_video.c
     src/host/host_settings.c
     src/host/host_dos.c
+    src/host/host_cdrom.c
     src/host/host_bios.c
     src/host/host_mouse.c
     src/host/host_timing.c
@@ -160,6 +161,7 @@ add_executable(ntvdmhost
     src/dos/dos_disk.c
     src/dos/dos_err.c
     src/dos/dos_fatimg.c
+    src/dos/dos_iso9660.c
     src/wow/ne.c
     src/wow/wowsched.c
     src/vdd/vdd_bus.c

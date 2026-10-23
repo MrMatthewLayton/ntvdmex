@@ -11,6 +11,8 @@
  * Copyright (c) 2026 Matthew Layton
  */
 
+#include "host_cdrom.h"
+#include "dos_ctab.h"   /* INT 2Fh 1213h upper-cases through the country table */
 #include "host_bios.h"
 #include "host_ipx.h"
 #include "host_state.h"
@@ -1505,7 +1507,28 @@ INT V86BiosBop(volatile BYTE *tib, UINT bopNumber, PSTR *logCursor, PSTR base)
          * point that then refuses every call would be a driver that lies
          * about being installed.
          */
-        if (ax == MULTIPLEX_XMS_INSTALLATION_CHECK && g_XmsOn)                       /* XMS installation check */
+        if ((ax >> BYTE_SHIFT) == CDROM_MULTIPLEX_ID)                               /* #241: MSCDEX, AX=15xxh */
+        {
+            INT cdromResult = HostCdromInt2F(tib);
+            WORD *cdromFlags = (WORD *)((VDM_REG16(tib, VTIB_SS) << PARAGRAPH_SHIFT)
+                                + ((VDM_REG16(tib, VTIB_ESP) + X86_FRAME16_FLAGS) & WORD_MASK));
+
+            if (cdromResult == CDROM_DONE)
+                *cdromFlags &= (WORD)~EFLAGS_CF;
+            else if (cdromResult == CDROM_DONE_ERROR)
+                *cdromFlags |= EFLAGS_CF;
+        }
+        else if (ax == MULTIPLEX_DOS_UPPERCASE_CHARACTER)
+        {
+            /* The character is the WORD pushed before the INT, just above its IP/CS/FLAGS
+             * frame. See DosCtabMultiplexUppercaseAx for why it matters (Abort, Retry, Fail?).
+             */
+            WORD pushedCharacter = *(volatile WORD *)((VDM_REG16(tib, VTIB_SS) << PARAGRAPH_SHIFT)
+                                                      + ((VDM_REG16(tib, VTIB_ESP) + X86_IRET16_SIZE) & WORD_MASK));
+
+            VDM_SET16(tib, VTIB_EAX, DosCtabMultiplexUppercaseAx((WORD)ax, pushedCharacter));
+        }
+        else if (ax == MULTIPLEX_XMS_INSTALLATION_CHECK && g_XmsOn)                       /* XMS installation check */
         {
             VDM_SET16(tib, VTIB_EAX, (VDM_REG(tib, VTIB_EAX) & HIGH_BYTE_MASK) | MULTIPLEX_XMS_INSTALLED);  /* AL=80h installed */
         }

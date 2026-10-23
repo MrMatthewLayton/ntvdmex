@@ -28,8 +28,8 @@
  *
  * [CAUTION]: SOME OF THESE ARE STORED BUT NOT HONOURED. The CPU, Display, Audio, Drives pages
  * and parts of Input came from the menu scaffold, where they were IDM_STUB. Most are
- * live now; as of #136 (s92) the rows still stored only are Umb, A20, CdRomUsePhysical,
- * CdRomImage and SoundFontPath, and the startup report (STAGE2: settings) prints WHY for
+ * live now; the rows still stored only are Umb, A20 and SoundFontPath (CdRomUsePhysical
+ * and CdRomImage went live with #241), and the startup report (STAGE2: settings) prints WHY for
  * each. settings_apply() in main.c is the ONLY place a stored value reaches the
  * machine, so that function -- with SET_LIVE_IDS beside it -- is the honest list of
  * what actually works. Wiring one up means adding a line there, not adding storage.

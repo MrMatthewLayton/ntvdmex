@@ -232,7 +232,8 @@ const SET_DEF g_SetDefinitions[SET_COUNT] = {
  * greys that radio and the host treats the setting as "image"; a blank image path is an
  * EMPTY drive. See settings_drive_radios / settings_apply in main.c.
  * #136: FloppyUsePhysical is live (it decides whether FloppyAImage is what INT 13h opens);
- * CdRomUsePhysical is STORED ONLY until a CD-ROM is mounted into DOS (#240/#241).
+ * CdRomUsePhysical / CdRomImage: unticked + a path = an ISO image as the MSCDEX drive (#241,
+ * host_cdrom.c); ticked = the host's own CD drives, as always.
  */
 { "FloppyUsePhysical", IDC_S_FLOPPY_PHYS, SK_CHECK,      1,  0,   1, NULL },
 { "CdRomUsePhysical",  IDC_S_CD_PHYS,     SK_CHECK,      1,  0,   1, NULL },
