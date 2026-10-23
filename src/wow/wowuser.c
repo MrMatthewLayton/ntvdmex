@@ -9082,8 +9082,9 @@ INT WowUserCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
 
         if (portId < 0)
         {
-            WowNotePut(note, noteCapacity, &noteLength, portId == WOWUSER_COMM_ALREADY_OPEN ? "IE_OPEN (already open)"
-                                                : "IE_BADID (no such port here)");
+            WowNotePut(note, noteCapacity, &noteLength, portId == WOWUSER_IE_OPEN ? "IE_OPEN (already open)"
+                                                : portId == WOWUSER_IE_HARDWARE ? "IE_HARDWARE (no such port here)"
+                                                : "IE_BADID (not a device name)");
         }
         else
         {
