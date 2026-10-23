@@ -179,6 +179,7 @@ add_executable(ntvdmhost
     src/vdd/audio_dmsynth.c
     src/host/capture_avi.c
     src/host/capture_video.c
+    src/host/capture_scale.c
     src/vdd/vdd_video.c
     src/vdd/vdd_input.c
     src/vdd/vdd_speaker.c
