@@ -663,6 +663,9 @@
 #define WOWUSER_BITMAP_MAX_SIZE             0x10000
 #define WOWUSER_STRING_SIZE                 256
 #define WOWUSER_LONG_TEXT_SIZE              512
+
+/* #318: queued WM_PAINTs sent before a MessageBox opens, at most. */
+#define WOWUSER_MODAL_PAINTS_MAX            32
 #define WOWUSER_MAX_TEXT_TABS               64                          /* TabbedTextOut's tab stops */
 #define WOWUSER_KEY_STATE_SIZE              256                         /* Get/SetKeyboardState's table */
 #define WOWUSER_WNDCLASS16_WORDS            13                          /* GetClassInfo's WNDCLASS, in words */

@@ -127,6 +127,8 @@ HWND     g_WowWinSetFocusWindow;
  */
 LONGLONG g_WowWinPumpTicks = 0;
 DWORD    g_WowWinPumpCalls = 0;
+/* #318: depth of modal Win32 calls the guest is parked in (MessageBox) -- see WM_PAINT. */
+INT g_WowWinModalCall;
 /* #160: menus held back until the guest set them up, and the replay's re-entry flag. */
 static DWORD g_WowWinMenuDeferred = 0;
 static INT   g_WowWinIsReplaying = 0;
@@ -707,11 +709,16 @@ static LRESULT CALLBACK WowWinProc(HWND window, UINT message, WPARAM wParam, LPA
                 paintCursor = LogPut(paintCursor, ","); paintCursor = LogHex(paintCursor, (DWORD)paint.rcPaint.right);
                 paintCursor = LogPut(paintCursor, ","); paintCursor = LogHex(paintCursor, (DWORD)paint.rcPaint.bottom);
                 paintCursor = LogPut(paintCursor, paint.fErase ? " erase" : " noerase");
-                paintCursor = LogPut(paintCursor, g_WowWinSizeMove ? " SENT\r\n" : " posted\r\n");
+                paintCursor = LogPut(paintCursor, (g_WowWinSizeMove || g_WowWinModalCall) ? " SENT\r\n" : " posted\r\n");
                 LogAppend(LOG_PATH, paintLog, paintCursor);
             }
 
-            if (g_WowWinSizeMove)
+            /* #318: and inside a modal Win32 call the guest is parked in (MessageBox),
+             * whose own loop is the only one running: posted, WinHelp's paint waited
+             * for the box to close and its window showed the desktop through it.
+             * Win16's MessageBox dispatches paints as it waits.
+             */
+            if (g_WowWinSizeMove || g_WowWinModalCall)
                 WowWinSendOrPost(window16, WM_PAINT16, 0, 0, pointX, pointY);
             else
                 WowMsgPost(window16, WM_PAINT16, 0, 0, GetTickCount(), pointX, pointY);
