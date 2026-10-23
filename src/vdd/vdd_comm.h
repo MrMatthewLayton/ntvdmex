@@ -66,7 +66,14 @@
 #define COMM_COM4_BASE              0x02E8
 #define COMM_COM1_IRQ               4       /* COM3 shares it */
 #define COMM_COM2_IRQ               3       /* COM4 shares it */
-#define LPT_DEFAULT_BASE            0x0378  /* LPT1: the one parallel port fitted */
+
+/* #311: THE PARALLEL PORTS ARE STOCK'S. XP's NTVDM declares three (p_com34 on the test
+ * machine: INT 11h AX=C823, BDA 0040:0008 = 03BC 0378 0278), so LPT1 is the monochrome
+ * adapter's port and a program that prints to LPT1 by port writes 3BCh.
+ */
+#define LPT1_BASE                   0x03BC
+#define LPT2_BASE                   0x0378
+#define LPT3_BASE                   0x0278
 #define COMM_DEVICE_NAME            "comm"
 #define COMM_RECEIVE_RING_SIZE      256     /* Host input waiting for the guest */
 
@@ -137,7 +144,7 @@
  * 1. Bit 6 (ACK) is active low and pulses after each byte; we present it as
  * idle-high, which is what a polling driver reads between bytes.
  */
-#define LPT_MAX_PORTS               1
+#define LPT_MAX_PORTS               3       /* #311: LPT1-LPT3, as stock */
 
 #define LPT_STATUS_ERROR            0x08    /* Active low: 1 = no error */
 #define LPT_STATUS_SELECT           0x10    /* 1 = printer selected/online */
@@ -225,6 +232,8 @@ INT  VddCommReceive(_Inout_ PCOMM_STATE state, _In_ INT port, _In_ BYTE byte);
  */
 INT  VddCommIsFitted(_In_ PCCOMM_STATE state, _In_ INT port);
 INT  VddLptIsFitted(_In_ PCCOMM_STATE state, _In_ INT port);
+/* #311: the fitted printer whose base is `basePort`, or -1. */
+INT  VddLptIndexOfBase(_In_ PCCOMM_STATE state, _In_ WORD basePort);
 
 static inline NTVDD_DEVICE VddCommDevice(_In_ PCOMM_STATE state)
 { NTVDD_DEVICE device;
