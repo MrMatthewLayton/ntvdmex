@@ -605,6 +605,132 @@ INT main(VOID)
     VddSetBx(&registers,0x0101);
     VddBusDeliverInterrupt(&bus,0x10,&registers);   /* banked again */
 
+    /* T11c (#326): THE VESA 16-COLOUR PLANAR MODES 102h/104h/106h (and 6Ah) ---------- */
+    { WORD segment=0x3100;
+    PBYTE buffer=&g_GuestMemory[(segment<<4)];
+    UINT32 listOffset;
+    INT found=0;
+    INT index;
+      memset(&registers,0,sizeof registers);
+      VddSetAh(&registers,0x4F);
+      VddSetAl(&registers,0x00);
+      registers.Es=segment;
+      registers.Edi=0;
+      memset(buffer,0,512);
+      VddBusDeliverInterrupt(&bus,0x10,&registers);
+      listOffset=(UINT32)(buffer[14]|(buffer[15]<<8));
+
+      for (index=0; index<64; ++index)
+      { WORD mode=(WORD)(buffer[listOffset+index*2]|(buffer[listOffset+index*2+1]<<8));
+
+        if (mode==0xFFFF)
+            break;
+
+        if (mode==0x102||mode==0x104||mode==0x106)
+            ++found; }
+
+      CHECK(found==3, "vesa planar/4F00: 102h, 104h and 106h are in the mode list");
+
+      memset(&registers,0,sizeof registers);
+      VddSetAh(&registers,0x4F);
+      VddSetAl(&registers,0x01);
+      VddSetCx(&registers,0x104);
+      registers.Es=segment;
+      registers.Edi=0;
+      VddBusDeliverInterrupt(&bus,0x10,&registers);
+      CHECK(VddGetAx(&registers)==0x004F && (buffer[18]|(buffer[19]<<8))==1024 && (buffer[20]|(buffer[21]<<8))==768
+            && (buffer[16]|(buffer[17]<<8))==128 && buffer[24]==4 && buffer[25]==4 && buffer[27]==3,
+            "vesa planar/4F01 104h: 1024x768, 128 bytes a plane line, 4 planes, 4 bpp, memory model 3");
+      CHECK((buffer[0]|(buffer[1]<<8))==0x1B && (buffer[40]|(buffer[41]<<8)|(buffer[42]<<16)|(buffer[43]<<24))==0
+            && (buffer[4]|(buffer[5]<<8))==64 && (buffer[8]|(buffer[9]<<8))==0xA000,
+            "vesa planar/4F01 104h: banked only (no LFB, PhysBasePtr 0), 64 KB window at A000h");
+      CHECK(buffer[29]==(BYTE)(VIDEO_PLANE_STORE_SIZE/(128u*768u)-1u), "vesa planar/4F01 104h: image pages from one plane's store");
+      memset(&registers,0,sizeof registers);
+      VddSetAh(&registers,0x4F);
+      VddSetAl(&registers,0x01);
+      VddSetCx(&registers,0x6A);
+      registers.Es=segment;
+      registers.Edi=0;
+      VddBusDeliverInterrupt(&bus,0x10,&registers);
+      CHECK(VddGetAx(&registers)==0x004F && (buffer[18]|(buffer[19]<<8))==800 && buffer[27]==3, "vesa planar/4F01 6Ah: the same mode as 102h");
+
+      memset(&registers,0,sizeof registers);
+      VddSetAh(&registers,0x4F);
+      VddSetAl(&registers,0x02);
+      VddSetBx(&registers,0x4106);
+      VddBusDeliverInterrupt(&bus,0x10,&registers);
+      CHECK(VddGetAx(&registers)==0x014F, "vesa planar/4F02 4106h: no linear frame buffer -> fails");
+      memset(&registers,0,sizeof registers);
+      VddSetAh(&registers,0x4F);
+      VddSetAl(&registers,0x02);
+      VddSetBx(&registers,0x106);
+      VddBusDeliverInterrupt(&bus,0x10,&registers);
+      CHECK(VddGetAx(&registers)==0x004F && g_Video.IsVesa && g_Video.IsVesaPlanar && VddVideoIsPlanarActive(&g_Video)
+            && g_Video.VesaWidth==1280 && g_Video.VesaHeight==1024 && g_Video.VesaStride==160,
+            "vesa planar/4F02 106h: 1280x1024 planar, 160 bytes a plane line");
+      memset(&registers,0,sizeof registers);
+      VddSetAh(&registers,0x4F);
+      VddSetAl(&registers,0x03);
+      VddBusDeliverInterrupt(&bus,0x10,&registers);
+      CHECK(VddGetAx(&registers)==0x004F && VddGetBx(&registers)==0x106, "vesa planar/4F03: reports 106h");
+
+      memset(&registers,0,sizeof registers);
+      VddSetAh(&registers,0x4F);
+      VddSetAl(&registers,0x05);
+      VddSetDx(&registers,(WORD)(VIDEO_PLANE_STORE_SIZE/VIDEO_VESA_WINDOW));
+      VddBusDeliverInterrupt(&bus,0x10,&registers);
+      CHECK(VddGetAx(&registers)==0x024F && g_Video.VesaBank==0, "vesa planar/4F05: a bank past the plane store fails");
+      memset(&registers,0,sizeof registers);
+      VddSetAh(&registers,0x4F);
+      VddSetAl(&registers,0x05);
+      VddSetDx(&registers,2);
+      VddBusDeliverInterrupt(&bus,0x10,&registers);
+      CHECK(VddGetAx(&registers)==0x004F && g_Video.VesaBank==2, "vesa planar/4F05: bank 2");
+
+      /* Line 820 of 1280x1024 starts at 820 * 160 = 131200 bytes into each plane: bank 2
+       * (from 131072), window offset 128. Write mode 0, all planes, no set/reset: FFh is
+       * colour 15 for the eight pixels.
+       */
+      VddVideoPlanarWrite(&g_Video, 128, 0xFF);
+      CHECK(g_Video.Planes[0][2u*VIDEO_VESA_WINDOW+128]==0xFF && g_Video.Planes[3][2u*VIDEO_VESA_WINDOW+128]==0xFF
+            && g_Video.Planes[0][128]==0x00,
+            "vesa planar: an engine write lands in 4F05h's bank of every plane, not in bank 0");
+      CHECK(VddVideoPlanarRead(&g_Video, 128)==0xFF, "vesa planar: the engine reads it back through the same bank");
+      g_Video.IsDirty=1;
+      VddBusFrame(&bus);
+      CHECK(g_Video.Frame.Width==1280 && g_Video.Frame.Height==1024 && g_Video.Frame.BitsPerPixel==8, "vesa planar: frame 1280x1024x8");
+      CHECK(g_Video.FrameBuffer[820u*1280u]==15 && g_Video.FrameBuffer[820u*1280u+7]==15 && g_Video.FrameBuffer[820u*1280u+8]==0
+            && g_Video.FrameBuffer[0]==0,
+            "vesa planar: the renderer shows line 820's eight pixels in colour 15");
+      memset(&registers,0,sizeof registers);
+      VddSetAh(&registers,0x0D);
+      VddSetCx(&registers,3);
+      VddSetDx(&registers,820);
+      VddBusDeliverInterrupt(&bus,0x10,&registers);
+      CHECK(VddGetAl(&registers)==15, "vesa planar/AH=0Dh: reads the pixel past the first 64 KB");
+      memset(&registers,0,sizeof registers);
+      VddSetAh(&registers,0x4F);
+      VddSetAl(&registers,0x07);
+      VddBusDeliverInterrupt(&bus,0x10,&registers);
+      CHECK(VddGetAx(&registers)==0x034F, "vesa planar/4F07: not offered in a planar mode (AH=03)");
+
+      memset(&registers,0,sizeof registers);
+      VddSetAh(&registers,0x00);
+      VddSetAl(&registers,0x6A);
+      VddBusDeliverInterrupt(&bus,0x10,&registers);
+      CHECK(g_Video.IsVesaPlanar && g_Video.VesaMode==0x102 && g_Video.VesaWidth==800 && g_Video.VesaHeight==600 && g_Video.VesaStride==100,
+            "vesa planar/AH=00h AL=6Ah: 800x600x16, reported as 102h");
+      memset(&registers,0,sizeof registers);
+      VddSetAh(&registers,0x00);
+      VddSetAl(&registers,0x12);
+      VddBusDeliverInterrupt(&bus,0x10,&registers);
+      CHECK(!g_Video.IsVesaPlanar && !g_Video.IsVesa, "vesa planar: a standard mode set leaves it");
+      memset(&registers,0,sizeof registers);
+      VddSetAh(&registers,0x4F);
+      VddSetAl(&registers,0x02);
+      VddSetBx(&registers,0x0101);
+      VddBusDeliverInterrupt(&bus,0x10,&registers); }   /* back to 101h for what follows */
+
     /* T11b: 4F08 DAC width + 4F09 palette, VBE 2.0 section 4.11/section 4.12 ------------------- */
     { WORD segment=0x3200;
     PBYTE table=&g_GuestMemory[(segment<<4)];
