@@ -9383,6 +9383,22 @@ INT WowUserCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
             return 1;
         }
 
+        /* [CAUTION]: #319: THE SYSTEM KEYS HAVE HAD THEIR DEFAULT ALREADY. wowwin hands every
+         * real WM_SYSKEYDOWN / WM_SYSKEYUP / WM_SYSCHAR to the OS's default procedure as
+         * it arrives (that is what opens the menu) and posts a copy to the guest. The
+         * copy coming back here was a SECOND default for the same key: USER32 toggles
+         * its menu-key state on each Alt down it sees, so with two the Alt-up opened
+         * nothing -- Program Manager's menus were dead from the keyboard whenever a
+         * group window had the focus (plain windows are spared: Win16's DefWindowProc
+         * does not forward these to us). Answered 0, as the default had answered.
+         */
+        if (message16 == WM_SYSKEYDOWN || message16 == WM_SYSKEYUP || message16 == WM_SYSCHAR || message16 == WM_SYSDEADCHAR)
+        {
+            WowNotePut(note, noteCapacity, &noteLength, " -> a system key: defaulted on arrival (wowwin); 0");
+            Wow32SetReturn(frame, 0);
+            return 1;
+        }
+
         /* The OS's own MDI defaults, on the real windows -- the same argument as
          * using the real MDICLIENT rather than drawing one.
          */
