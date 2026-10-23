@@ -727,6 +727,18 @@ static int V86Step(V86_CPU *cpu)
     const volatile BYTE *codePointer = V86_CODE(codeLinear);              /* NULL = fetch through V86HostRead8 */
 
     g_V86InstructionPointer = ((UINT32)cpu->Segments[X86_SREG_CS] << WORD_SHIFT) | cpu->Ip;
+
+    /* [CAUTION]: AN INSTRUCTION THAT STARTS WITH TF SET IS THE REAL CPU'S (#364):
+     * Single-step is a trap AFTER that instruction, through IVT[1]. Lemmings' protection
+     * depends on it: its INT 3 handler sets TF in the IRET frame, and an INT 1 handler
+     * decrypts the next instruction before each one runs. This interpreter has no trap,
+     * and its flag mask used to drop TF altogether, so encrypted bytes ran as code and the
+     * guest slid into F000:0000. Declining hands the instruction to the CPU with TF still
+     * set, and the CPU traps exactly as the hardware does.
+     */
+    if (cpu->Flags & EFLAGS_TF_U)
+        return 0;
+
     int offset = 0;
     int segmentOverride = -1;
     int repeat = 0;
