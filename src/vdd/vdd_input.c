@@ -96,7 +96,31 @@
 #define INPUT_OUTPUT_PORT_POST                  0x03    /* Reset line high, A20 enabled */
 #define INPUT_PORT92_FAST_RESET                 0x01
 #define INPUT_PORT92_A20                        0x02
+
+/* #180: the keyboard's own commands (written to 60h with no 8042 command pending) and its
+ * replies. Measured with tests/probes/dos/p_kbd4.asm on 6.22/QEMU, dosbox-x and PCem: every
+ * command and every parameter is answered FAh, EEh echoes EEh, F2h answers FAh ABh 41h
+ * behind a translating 8042 (dosbox-x: 83h untranslated), each reply byte raises IRQ1, and
+ * a reply arrives even after ADh (the write re-enables the interface).
+ */
+#define INPUT_KEYBOARD_SET_LEDS                 0xED
+#define INPUT_KEYBOARD_ECHO                     0xEE
+#define INPUT_KEYBOARD_SCAN_CODE_SET            0xF0
+#define INPUT_KEYBOARD_IDENTIFY                 0xF2
 #define INPUT_KEYBOARD_SET_TYPEMATIC            0xF3
+#define INPUT_KEYBOARD_RESEND                   0xFE
+#define INPUT_KEYBOARD_RESET                    0xFF
+#define INPUT_KEYBOARD_REPLY_ACK                0xFA
+#define INPUT_KEYBOARD_REPLY_RESEND             0xFE
+#define INPUT_KEYBOARD_REPLY_SELF_TEST_OK       0xAA
+#define INPUT_KEYBOARD_ID_FIRST                 0xAB
+#define INPUT_KEYBOARD_ID_SECOND_RAW            0x83    /* The MF2 ID's second byte, untranslated */
+#define INPUT_KEYBOARD_ID_SECOND_TRANSLATED     0x41    /* ...and as a translating 8042 hands it on */
+#define INPUT_KEYBOARD_LED_BITS                 0x07
+#define INPUT_KEYBOARD_TYPEMATIC_DEFAULT        0x2B    /* 500 ms, 10.9 cps: the power-on default */
+#define INPUT_COMMAND_BYTE_TRANSLATE            0x40
+#define INPUT_LED_FLAGS_ACK                     0x10    /* BDA 0097 bit 4 */
+#define INPUT_LED_FLAGS_RESEND                  0x20    /* BDA 0097 bit 5 */
 
 /* INT 16h. */
 #define INPUT_INT16_VECTOR                      0x16
@@ -499,6 +523,14 @@ static INT InputScanCodeAvailable(PCINPUT_STATE state)
     if (state->ScanCodeHead == state->ScanCodeTail)
         return 0;
 
+    /* #180: ADh STOPS THE KEYBOARD SENDING THE NEXT BYTE -- it does not take back the one
+     * already in the output buffer. An INT 09h handler that brackets its own read with
+     * ADh ... in al,60h ... AEh must still read its key, so only a byte not yet presented
+     * (no IRQ1 raised for it) waits for AEh.
+     */
+    if ((state->ControllerCommandByte & INPUT_COMMAND_BYTE_KEYBOARD_DISABLED) && !state->IsScanCodeIrqUp)
+        return 0;
+
     if (state->TimeMicroseconds && state->TimeMicroseconds() < state->ScanCodeHoldUntil)
         return 0;
 
@@ -832,6 +864,16 @@ static INT InputBiosTranslate(PINPUT_STATE state, BYTE scanCode)
     BYTE shiftFlags;
     BYTE ascii = 0;
     WORD key;
+
+    /* #180: THE KEYBOARD'S REPLIES ARE NOT KEYS. The AT BIOS's INT 09h notes an ACK or a
+     * RESEND in 0040:0097 (bits 4 and 5) and stores nothing (IBM PC/AT TR, KB_INT).
+     */
+    if (scanCode == INPUT_KEYBOARD_REPLY_ACK || scanCode == INPUT_KEYBOARD_REPLY_RESEND)
+    {
+        InputSetBdaFlag(state, BIOS_BDA_KEYBOARD_LED_FLAGS,
+                        (scanCode == INPUT_KEYBOARD_REPLY_ACK) ? INPUT_LED_FLAGS_ACK : INPUT_LED_FLAGS_RESEND, TRUE);
+        return INPUT_ACTION_NONE;
+    }
 
     if (scanCode == INPUT_SCAN_PREFIX_E0)                                    /* prefix: the next code is extended */
     {
@@ -1287,6 +1329,19 @@ static VOID InputSystemControlPortOut(PVOID context, WORD port, BYTE width, UINT
     VddInputSetA20(state, (value & INPUT_PORT92_A20) ? 1 : 0);
 }
 
+/* #180: a byte the KEYBOARD sends in answer to a command. It goes out exactly like a
+ * scancode -- through the FIFO, so it waits its turn behind keys already typed and gets
+ * its own IRQ1 (one per byte, as on two of the three oracles).
+ */
+static VOID InputKeyboardReply(PINPUT_STATE state, BYTE reply)
+{
+    if (reply != INPUT_KEYBOARD_REPLY_RESEND)
+        state->LastKeyboardReply = reply;
+
+    state->KeyboardReplies++;
+    VddInputPushScanCode(state, reply);
+}
+
 /* IN 0x60 = keyboard data (pop one scancode; re-reads see the last byte).
  * IN 0x64 = 8042 status: bit0 (OBF) set while a scancode waits. Writes to
  * either (LED/8042 commands) are accepted and ignored.
@@ -1430,6 +1485,7 @@ static VOID InputKeyboardPortOut(PVOID context, WORD port, BYTE width, UINT32 va
 
         case INPUT_KBC_ENABLE_KEYBOARD:
             state->ControllerCommandByte &= (BYTE)~INPUT_COMMAND_BYTE_KEYBOARD_DISABLED;
+            VddInputPoll(state);                                     /* #180: what waited is sent now */
             break;
 
         case INPUT_KBC_DISABLE_AUX:
@@ -1461,6 +1517,7 @@ static VOID InputKeyboardPortOut(PVOID context, WORD port, BYTE width, UINT32 va
     {
         state->ControllerCommandByte = byteValue;
         state->ControllerCommand = 0;
+        VddInputPoll(state);                                         /* #180: bit 4 may have cleared */
         return;
     }
 
@@ -1498,15 +1555,81 @@ static VOID InputKeyboardPortOut(PVOID context, WORD port, BYTE width, UINT32 va
         return;
     }
 
+    /* #180: A BYTE FOR THE KEYBOARD. Writing it re-enables the keyboard interface (the reply
+     * arrived after ADh on all three oracles), and the keyboard answers through the output
+     * buffer, IRQ1 and all, exactly as it sends a scancode.
+     */
+    state->ControllerCommandByte &= (BYTE)~INPUT_COMMAND_BYTE_KEYBOARD_DISABLED;
+
     if (state->IsKeyboardRateExpected)                /* the byte after 0xF3 is the rate */
     {
         state->TypematicByte = byteValue;
         state->IsTypematicSet  = 1;
         state->IsKeyboardRateExpected    = 0;
+        InputKeyboardReply(state, INPUT_KEYBOARD_REPLY_ACK);
+        return;
     }
-    else if (byteValue == INPUT_KEYBOARD_SET_TYPEMATIC)
+
+    if (state->IsLedExpected)                          /* the byte after 0xED is the LEDs */
     {
+        state->LedState = (BYTE)(byteValue & INPUT_KEYBOARD_LED_BITS);
+        state->IsLedExpected = 0;
+        InputKeyboardReply(state, INPUT_KEYBOARD_REPLY_ACK);
+        return;
+    }
+
+    if (state->IsScanSetExpected)                      /* the byte after 0xF0 (set 1 is all we send) */
+    {
+        state->IsScanSetExpected = 0;
+        InputKeyboardReply(state, INPUT_KEYBOARD_REPLY_ACK);
+        return;
+    }
+
+    switch (byteValue)
+    {
+    case INPUT_KEYBOARD_ECHO:
+        InputKeyboardReply(state, INPUT_KEYBOARD_ECHO);
+        break;
+
+    case INPUT_KEYBOARD_IDENTIFY:
+        InputKeyboardReply(state, INPUT_KEYBOARD_REPLY_ACK);
+        InputKeyboardReply(state, INPUT_KEYBOARD_ID_FIRST);
+        InputKeyboardReply(state, (state->ControllerCommandByte & INPUT_COMMAND_BYTE_TRANSLATE)
+                                  ? INPUT_KEYBOARD_ID_SECOND_TRANSLATED : INPUT_KEYBOARD_ID_SECOND_RAW);
+        break;
+
+    case INPUT_KEYBOARD_SET_LEDS:
+        state->IsLedExpected = 1;
+        InputKeyboardReply(state, INPUT_KEYBOARD_REPLY_ACK);
+        break;
+
+    case INPUT_KEYBOARD_SET_TYPEMATIC:
         state->IsKeyboardRateExpected = 1;
+        InputKeyboardReply(state, INPUT_KEYBOARD_REPLY_ACK);
+        break;
+
+    case INPUT_KEYBOARD_SCAN_CODE_SET:
+        state->IsScanSetExpected = 1;
+        InputKeyboardReply(state, INPUT_KEYBOARD_REPLY_ACK);
+        break;
+
+    case INPUT_KEYBOARD_RESEND:
+        InputKeyboardReply(state, state->LastKeyboardReply);
+        break;
+
+    case INPUT_KEYBOARD_RESET:                         /* ACK, then the self test's 0xAA; defaults back */
+        state->LedState = 0;
+        state->TypematicByte = INPUT_KEYBOARD_TYPEMATIC_DEFAULT;
+        InputKeyboardReply(state, INPUT_KEYBOARD_REPLY_ACK);
+        InputKeyboardReply(state, INPUT_KEYBOARD_REPLY_SELF_TEST_OK);
+        break;
+
+    default:
+        /* F4h enable, F5h/F6h defaults, F7h-FDh (set-3 modes): ACK. A byte below EDh is
+         * not a command at all, and the keyboard asks for it again.
+         */
+        InputKeyboardReply(state, (byteValue >= INPUT_KEYBOARD_SET_LEDS) ? INPUT_KEYBOARD_REPLY_ACK : INPUT_KEYBOARD_REPLY_RESEND);
+        break;
     }
 }
 

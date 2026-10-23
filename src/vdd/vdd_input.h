@@ -133,6 +133,11 @@ typedef struct _INPUT_STATE
     BYTE  IsKeyboardRateExpected;  /* 0xF3 seen; the next byte is the rate/delay */
     BYTE  IsTypematicSet;    /* the guest set a rate at least once */
     BYTE  TypematicByte;   /* the last rate/delay byte it asked for */
+    BYTE  IsLedExpected;   /* #180: 0xED seen; the next byte is the LED state */
+    BYTE  IsScanSetExpected;   /* #180: 0xF0 seen; the next byte selects a scan-code set */
+    BYTE  LedState;        /* #180: the LEDs as the guest last set them (bits 0-2) */
+    BYTE  LastKeyboardReply;   /* #180: what FEh (resend) sends again */
+    UINT32 KeyboardReplies;    /* #180: reply bytes the keyboard put in the output buffer */
     BYTE  LastScanCode;          /* last byte handed out on IN 0x60 (re-read) */
     /* THE BYTE THE GUEST TOOK FIRST IS STILL THE BIOS'S TO TRANSLATE (Importance = 1):
      * The commonest INT 09h hook of the era reads port 0x60 ITSELF, looks at the
