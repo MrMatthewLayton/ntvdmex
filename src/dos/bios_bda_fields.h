@@ -26,6 +26,7 @@
 /* The equipment word's bits (INT 11h). */
 #define BIOS_EQUIPMENT_FLOPPY               0x0001
 #define BIOS_EQUIPMENT_FPU                  0x0002
+#define BIOS_EQUIPMENT_POINTING_DEVICE      0x0004      /* Bit 2: a PS/2 pointing device (#199) */
 #define BIOS_EQUIPMENT_VIDEO_80X25_COLOUR   0x0020
 #define BIOS_EQUIPMENT_SERIAL_MASK_U        0x0E00u     /* Bits 9-11: how many serial ports */
 #define BIOS_EQUIPMENT_SERIAL_SHIFT         9

@@ -112,7 +112,7 @@ VOID ComTransmitSink(PVOID context, INT port, BYTE byteValue)
  * base table that cost COMM.DRV a session -- the wrong half was just being
  * read out of a comment rather than out of memory.
  * So derive the serial count from the VDD that actually claimed the ports.
- * bit0 floppy present, bits4-5 video (10b = 80x25 colour), bits6-7 floppy
+ * bit0 floppy present, bit2 PS/2 mouse (#199), bits4-5 video (10b = 80x25 colour), bits6-7 floppy
  * count-1, bits9-11 serial ports, bits14-15 parallel ports, bit1 coprocessor
  * (CLEAR -- krnl386 reads bit 1 at start-up and its coprocessor answer
  * follows it, so the two modes must not disagree; sharing one function is now
@@ -127,7 +127,6 @@ static INT g_FpuPresent = 1;
 
 WORD BiosEquipmentWord(VOID)
 {
-    WORD equipment = BIOS_EQUIPMENT_VIDEO_80X25_COLOUR | BIOS_EQUIPMENT_FLOPPY;                      /* floppy, 80x25 colour */
     INT portCount = 0;
     INT printerCount = 0;
     INT index;
@@ -140,8 +139,6 @@ WORD BiosEquipmentWord(VOID)
         if (VddLptIsFitted(&g_Comm, index))
             ++printerCount;
 
-    equipment = (WORD)((equipment & ~BIOS_EQUIPMENT_SERIAL_MASK_U) | ((DWORD)(portCount & BIOS_EQUIPMENT_SERIAL_COUNT_MASK) << BIOS_EQUIPMENT_SERIAL_SHIFT));
-    equipment = (WORD)((equipment & ~BIOS_EQUIPMENT_PARALLEL_MASK_U) | ((DWORD)(printerCount & BIOS_EQUIPMENT_PARALLEL_COUNT_MASK) << BIOS_EQUIPMENT_PARALLEL_SHIFT));
     /* BIT 1 IS "A MATH COPROCESSOR IS INSTALLED", AND IT WAS ALWAYS CLEAR.
      * (session 57, GH #136) The guest runs 16-bit code on the REAL CPU, which
      * has had an FPU since the 486DX -- so answering "no coprocessor" was not
@@ -153,18 +150,13 @@ WORD BiosEquipmentWord(VOID)
      * makes it mean something. Unticking it now tells the guest what the host
      * used to tell it unconditionally, which is a real configuration -- a
      * program can be forced onto its emulator to compare the two.
-     */
-    if (g_FpuPresent)
-        equipment |= BIOS_EQUIPMENT_FPU;
-
-    /* Bit 12: game adapter installed. The CARD exists iff the JoystickType
+     *
+     * Bit 12: game adapter installed. The CARD exists iff the JoystickType
      * setting says so; whether a stick is plugged into it is the port's
      * business (an empty gameport still answers), not the equipment word's.
+     * Bit 2 (the PS/2 mouse) and the rest: BiosEquipmentCompose (bios_bda.h).
      */
-    if (g_Joystick.Type != JOYSTICK_TYPE_NONE)
-        equipment |= BIOS_EQUIPMENT_GAMEPORT;
-
-    return equipment;
+    return BiosEquipmentCompose(portCount, printerCount, g_FpuPresent, g_Joystick.Type != JOYSTICK_TYPE_NONE);
 }
 
 enum
