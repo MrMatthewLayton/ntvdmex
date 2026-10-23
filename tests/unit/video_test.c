@@ -148,6 +148,33 @@ static UINT32 VideoTestDacPackReference(BYTE red, BYTE green, BYTE blue)
     return 0xFF000000u | ((UINT32)(red<<2)<<16) | ((UINT32)(green<<2)<<8) | (UINT32)(blue<<2);
 }
 
+/* #185: one Attribute Controller register, the way a guest writes it: read 3DA to reset the
+ * flip-flop, then index (bit 5 set: video enabled) and data, both to 3C0.
+ */
+static VOID VideoTestWriteAttribute(VDD_BUS *bus, BYTE registerIndex, BYTE byteValue)
+{
+    UINT32 value = 0;
+
+    VddBusIo(bus, 0x3DA, 1, 1, &value);
+    value = (UINT32)(0x20 | registerIndex);
+    VddBusIo(bus, 0x3C0, 1, 0, &value);
+    value = byteValue;
+    VddBusIo(bus, 0x3C0, 1, 0, &value);
+}
+
+static VOID VideoTestWriteDacMask(VDD_BUS *bus, BYTE byteValue)
+{
+    UINT32 value = byteValue;
+
+    VddBusIo(bus, 0x3C6, 1, 0, &value);
+}
+
+/* #185: the colour a ROM 8x16 glyph pixel draws in, for a cell of `foreground` on 0. */
+static BYTE VideoTestGlyphPixel(BYTE character, INT glyphRow, INT glyphColumn, BYTE foreground)
+{
+    return (g_VgaFont8x16[character][glyphRow] & (0x80 >> glyphColumn)) ? foreground : 0;
+}
+
 INT main(VOID)
 {
     VideoTestFillFonts();
@@ -3966,6 +3993,142 @@ INT main(VOID)
         VddSetAh(&registers3, 0x00);
         VddSetAl(&registers3, 0x03);
         VddBusDeliverInterrupt(&bus, 0x10, &registers3);
+    }
+
+    /* #185: THE STORED REGISTERS THAT NOW CHANGE THE PICTURE. ------------------------
+     * The DAC Pixel Mask (3C6) and Colour Plane Enable (AR12) on the way to the DAC,
+     * Character Map Select (SR3) on the way to the glyph, and the text picture's smooth
+     * scroll: Horizontal Pixel Panning (AR13) and Preset Row Scan (CR08).
+     */
+    {
+        NTVDD_REGISTERS modeRegisters;
+        WORD fontSegment = 0x4100;
+        PBYTE solidGlyph = &g_GuestMemory[fontSegment << 4];
+        INT glyphRow;
+        INT glyphColumn;
+        INT mismatches;
+
+        memset(&modeRegisters, 0, sizeof modeRegisters);
+        VddSetAx(&modeRegisters, 0x0003);
+        VddBusDeliverInterrupt(&bus, 0x10, &modeRegisters);
+        memset(&modeRegisters, 0, sizeof modeRegisters);                       /* cursor out of the way */
+        VddSetAh(&modeRegisters, 0x02);
+        VddSetDx(&modeRegisters, (WORD)((24 << 8) | 79));
+        VddBusDeliverInterrupt(&bus, 0x10, &modeRegisters);
+
+        /* 3C6 ANDs the DAC address. */
+        VideoTestWriteDacMask(&bus, 0x00);
+        CHECK(g_Video.Palette[7] == g_Video.Dac[0] && g_Video.Palette[200] == g_Video.Dac[0],
+              "#185 3C6: a pixel mask of 00h sends every colour to DAC entry 0");
+        VideoTestWriteDacMask(&bus, 0xFF);
+        CHECK(g_Video.Palette[7] == g_Video.Dac[7] && g_Video.Palette[200] == g_Video.Dac[200],
+              "#185 3C6: FFh, the BIOS's value, is the identity again");
+
+        /* AR12 masks the 4-bit attribute pixel before the palette registers. */
+        VideoTestWriteAttribute(&bus, 0x12, 0x07);
+        CHECK(g_Video.Palette[15] == g_Video.Palette[7] && g_Video.Palette[9] == g_Video.Palette[1],
+              "#185 AR12: plane 3 disabled -> colour 15 is colour 7, 9 is 1");
+        VideoTestWriteAttribute(&bus, 0x12, 0x0F);
+        CHECK(g_Video.Palette[15] != g_Video.Palette[7], "#185 AR12: 0Fh enables all four planes again");
+
+        /* SR3: map A (attribute bit 3 set) from block 1, map B from block 0. */
+        memset(solidGlyph, 0xFF, 16);
+        memset(&modeRegisters, 0, sizeof modeRegisters);
+        VddSetAx(&modeRegisters, 0x1100);
+        VddSetBx(&modeRegisters, (WORD)((16 << 8) | 1));                        /* BH 16 rows, BL block 1 */
+        VddSetCx(&modeRegisters, 1);
+        VddSetDx(&modeRegisters, 'C');
+        modeRegisters.Es = fontSegment;
+        modeRegisters.Ebp = 0;
+        VddBusDeliverInterrupt(&bus, 0x10, &modeRegisters);
+        CHECK(g_Video.IsUserFontOn == 0 && (g_Video.FontBlocksLoaded & 0x02),
+              "#185 AH=11h BL=1: the load lands in block 1, not in block 0");
+        VideoTestTextCell(0, 0)[0] = 'C';
+        VideoTestTextCell(0, 0)[1] = 0x0F;
+        VideoTestTextCell(0, 1)[0] = 'C';
+        VideoTestTextCell(0, 1)[1] = 0x07;
+        g_Video.IsDirty = 1;
+        VddBusFrame(&bus);
+
+        for (mismatches = 0, glyphRow = 0; glyphRow < 16; ++glyphRow)
+            for (glyphColumn = 0; glyphColumn < 8; ++glyphColumn)
+                if (g_Video.FrameBuffer[glyphRow * TXW + glyphColumn] != VideoTestGlyphPixel('C', glyphRow, glyphColumn, 15))
+                    mismatches++;
+
+        CHECK(mismatches == 0, "#185 SR3=00h: block 1 is not shown -- 'C' is the ROM glyph");
+        VideoTestWriteSequencer(&bus, 0x03, 0x04);                             /* map A = 1, map B = 0 */
+        g_Video.IsDirty = 1;
+        VddBusFrame(&bus);
+
+        for (mismatches = 0, glyphRow = 0; glyphRow < 16; ++glyphRow)
+            for (glyphColumn = 0; glyphColumn < 8; ++glyphColumn)
+                if (g_Video.FrameBuffer[glyphRow * TXW + glyphColumn] != 15)
+                    mismatches++;
+
+        CHECK(mismatches == 0, "#185 SR3=04h: a cell with attribute bit 3 draws from block 1 (map A)");
+
+        for (mismatches = 0, glyphRow = 0; glyphRow < 16; ++glyphRow)
+            for (glyphColumn = 0; glyphColumn < 8; ++glyphColumn)
+                if (g_Video.FrameBuffer[glyphRow * TXW + 9 + glyphColumn] != VideoTestGlyphPixel('C', glyphRow, glyphColumn, 7))
+                    mismatches++;
+
+        CHECK(mismatches == 0, "#185 SR3=04h: a cell without it draws from block 0 (map B)");
+        VideoTestWriteSequencer(&bus, 0x03, 0x00);
+        VideoTestTextCell(0, 0)[1] = 0x07;
+
+        /* CR08: preset row scan, then byte panning. */
+        VideoTestWriteCrtc(&bus, 0x08, 0x03);
+        g_Video.IsDirty = 1;
+        VddBusFrame(&bus);
+
+        for (mismatches = 0, glyphColumn = 0; glyphColumn < 8; ++glyphColumn)
+            if (g_Video.FrameBuffer[glyphColumn] != VideoTestGlyphPixel('C', 3, glyphColumn, 7))
+                mismatches++;
+
+        CHECK(mismatches == 0, "#185 CR08=03h: the picture starts on scanline 3 of the first character row");
+        VideoTestWriteCrtc(&bus, 0x08, 0x20);
+        VideoTestTextCell(0, 1)[0] = 'D';
+        g_Video.IsDirty = 1;
+        VddBusFrame(&bus);
+
+        for (mismatches = 0, glyphColumn = 0; glyphColumn < 8; ++glyphColumn)
+            if (g_Video.FrameBuffer[glyphColumn] != VideoTestGlyphPixel('D', 0, glyphColumn, 7))
+                mismatches++;
+
+        CHECK(mismatches == 0, "#185 CR08=20h: byte panning 1 -- the first cell shown is column 1");
+        VideoTestWriteCrtc(&bus, 0x08, 0x00);
+
+        /* AR13 in a 9-dot mode: 0 shifts the picture left one dot. */
+        VideoTestWriteAttribute(&bus, 0x13, 0x00);
+        g_Video.IsDirty = 1;
+        VddBusFrame(&bus);
+
+        for (mismatches = 0, glyphColumn = 0; glyphColumn < 7; ++glyphColumn)
+            if (g_Video.FrameBuffer[glyphColumn] != VideoTestGlyphPixel('C', 0, glyphColumn + 1, 7))
+                mismatches++;
+
+        CHECK(mismatches == 0, "#185 AR13=00h in a 9-dot mode: the picture moves left one dot");
+        VideoTestWriteAttribute(&bus, 0x13, 0x08);
+        g_Video.IsDirty = 1;
+        VddBusFrame(&bus);
+
+        for (mismatches = 0, glyphColumn = 0; glyphColumn < 8; ++glyphColumn)
+            if (g_Video.FrameBuffer[glyphColumn] != VideoTestGlyphPixel('C', 0, glyphColumn, 7))
+                mismatches++;
+
+        CHECK(mismatches == 0, "#185 AR13=08h in a 9-dot mode: no shift");
+
+        /* 3C6 in a 256-colour mode masks the pixel itself. */
+        memset(&modeRegisters, 0, sizeof modeRegisters);
+        VddSetAx(&modeRegisters, 0x0013);
+        VddBusDeliverInterrupt(&bus, 0x10, &modeRegisters);
+        VideoTestWriteDacMask(&bus, 0x0F);
+        CHECK(g_Video.Palette[0x1F] == g_Video.Dac[0x0F] && g_Video.Palette[0xF3] == g_Video.Dac[0x03],
+              "#185 3C6=0Fh in mode 13h: pixel 1Fh shows DAC 0Fh, F3h shows 03h");
+        VideoTestWriteDacMask(&bus, 0xFF);
+        memset(&modeRegisters, 0, sizeof modeRegisters);
+        VddSetAx(&modeRegisters, 0x0003);
+        VddBusDeliverInterrupt(&bus, 0x10, &modeRegisters);
     }
 
     printf("\n%d checks, %d failed\n", g_Total, g_Failures);
