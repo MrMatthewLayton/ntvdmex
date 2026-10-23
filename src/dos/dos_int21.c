@@ -232,9 +232,11 @@
 #define DOS_INT21_DEVICE_INFO_PRN               0xA0C0
 #define DOS_INT21_NT_PREFIX_LENGTH              4                       /* "\\??\\" */
 #define DOS_INT21_NONE                          0x0000
+#define DOS_INT21_PARSE_SKIP_SEPARATOR          0x01                    /* AH=29h AL: skip ONE leading separator */
 #define DOS_INT21_PARSE_KEEP_DRIVE              0x02                    /* AH=29h AL: keep what the FCB already has */
 #define DOS_INT21_PARSE_KEEP_NAME               0x04
 #define DOS_INT21_PARSE_KEEP_EXTENSION          0x08
+#define DOS_INT21_FCB_DOTDOT_LENGTH             2                       /* ".." parsed as a name: two characters */
 
 /* INT 21h 4Eh/4Fh find-first/find-next.  GH #29:
  *
@@ -1096,7 +1098,7 @@ static INT DosFcbIsNameEnd(BYTE character)
         || character == ',';
 }
 
-static VOID DosFcbPutName(volatile BYTE *destination, PCSTR name)
+static INT DosFcbPutName(volatile BYTE *destination, PCSTR name)
 {
     INT source = 0;
     INT index;
@@ -1117,7 +1119,7 @@ static VOID DosFcbPutName(volatile BYTE *destination, PCSTR name)
             destination[1] = '.';
 
         if (name[1] == 0 || name[1] == '.')
-            return;
+            return (name[1] == '.') ? DOS_INT21_FCB_DOTDOT_LENGTH : 1;
     }
 
     /* `*` IS EXPANDED INTO `?`s, IT IS NOT STORED (Importance = 1):
@@ -1163,6 +1165,10 @@ static VOID DosFcbPutName(volatile BYTE *destination, PCSTR name)
 
         destination[index] = (BYTE)(name[source] >= 'a' && name[source] <= 'z' ? name[source] - ASCII_CASE_BIT : name[source]);
     }
+
+    while (!DosFcbIsNameEnd((BYTE)name[source]) && name[source] != '.') ++source;   /* an extension past 3 */
+
+    return source;
 }
 
 /* A DOS SEARCH MATCHES THE 8.3 NAME AGAINST AN 11-BYTE TEMPLATE. (s81 sweep) (Importance = 1):
@@ -4049,6 +4055,15 @@ INT DosInt21(PDOS_MACHINE machine)
             while (input[inputIndex] == ' ' || input[inputIndex] == ASCII_TAB)
                 ++inputIndex;
 
+            /* AL bit 0: ONE leading separator (RBIL: ": . ; , = +") is skipped, not a run of
+             * them -- 6.22 and DOSBox-X parse ",;ABC" to a blank name with SI past the comma
+             * only (p_fcb int21.29.sep). (s101)
+             */
+            if ((subfunction & DOS_INT21_PARSE_SKIP_SEPARATOR)
+                && (input[inputIndex] == ':' || input[inputIndex] == '.' || input[inputIndex] == ';'
+                    || input[inputIndex] == ',' || input[inputIndex] == '=' || input[inputIndex] == '+'))
+                ++inputIndex;
+
             destination[0] = 0;
 
             if (input[inputIndex] && input[inputIndex + 1] == ':')
@@ -4066,7 +4081,7 @@ INT DosInt21(PDOS_MACHINE machine)
 
             hasName = (index2 > inputIndex);
             hasExtension  = (input[index2] == '.');
-            DosFcbPutName(destination + 1, input + inputIndex);
+            inputIndex += DosFcbPutName(destination + 1, input + inputIndex);
 
             if (!hasName && (subfunction & DOS_INT21_PARSE_KEEP_NAME))
                 for (index = DOS_INT21_FCB_NAME; index <= DOS_INT21_FCB_BASE_LENGTH;  ++index)
@@ -4084,6 +4099,12 @@ INT DosInt21(PDOS_MACHINE machine)
                 destination[index] = 0;
 
             SETAX((R_AX & HIGH_BYTE_MASK) | (isWild ? 1 : 0));
+            /* SI COMES BACK PAST THE NAME, AT THE FIRST CHARACTER NOT PARSED (RBIL INT 21/29h). (s101)
+             * It used to stop after the blanks and the drive. XP's COMMAND.COM COPY parses the
+             * source's file name with AL=00h and goes on to its FCB search (11h) only when
+             * [SI] is the string's NUL -- so every `copy C:\DIR\FILE X` printed "File not
+             * found" without searching at all. tests/probes/dos/p_fcb.asm int21.29.si pins it.
+             */
             SET16(R_SI, (WORD)((R_SI & WORD_MASK) + inputIndex));
             OKCF();
             /* THE CALL COMMAND.COM'S DISPATCH TURNS ON. `ver ` runs and `ver` does
