@@ -1771,6 +1771,18 @@ static VOID V86DeliverKeyboardIrq(volatile BYTE * const tib)
         else if (cs == DOS_HDLR_SEG && ip >= DOS_HDLR_INT09_STUB_OFF && ip < DOS_HDLR_INT09_STUB_END)
             ++g_Irq1In09;
 
+        /* #180: A MASKED IRQ1 IS NOT DELIVERED. The PIC's mask register was never asked
+         * here (the async path asks VddPicCanDeliver), so a guest that masked IRQ1 to poll
+         * port 60h itself -- p_kbd4, and any driver waiting for a keyboard ACK -- had the
+         * BIOS's INT 09h take the byte first. Only the MASK is honoured: the in-service
+         * rule the async path also applies has never gated this path, and is left alone.
+         */
+        if (g_Pic.Master.Imr & (1u << PIC_IRQ_KEYBOARD))
+        {
+            ++g_Irq1Masked;
+            return;
+        }
+
         if (IfOrVif(flags2) && !(cs == DOS_HDLR_SEG &&
                               ((ip >= DOS_HDLR_INT08_STUB_OFF && ip < DOS_HDLR_INT08_STUB_END) || (ip >= DOS_HDLR_INT09_STUB_OFF && ip < DOS_HDLR_INT09_STUB_END))))
         {

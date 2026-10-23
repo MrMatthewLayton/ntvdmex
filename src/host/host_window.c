@@ -308,6 +308,7 @@ DWORD g_UiTimerPresents;
 /* Which of the three exits from the cooperative IRQ1 gate fires. See its call site. */
 DWORD g_Irq1Checks;
 DWORD g_Irq1NoIf;
+DWORD g_Irq1Masked;      /* #180: IRQ1 pending while the guest had it masked at the PIC */
 DWORD g_Irq1In08;
 DWORD g_Irq1In09;
 DWORD    g_Irq1AsyncRetry;
@@ -3441,6 +3442,7 @@ static LRESULT CALLBACK HostWindowProcedure(HWND window, UINT message, WPARAM wP
                 keyCursor = LogPut(keyCursor, " in_first="); keyCursor = LogHex(keyCursor, g_UiInputFirst);
                 keyCursor = LogPut(keyCursor, " || IRQ1GATE checks="); keyCursor = LogHex(keyCursor, g_Irq1Checks);
                 keyCursor = LogPut(keyCursor, " no_if=");   keyCursor = LogHex(keyCursor, g_Irq1NoIf);
+                keyCursor = LogPut(keyCursor, " masked=");  keyCursor = LogHex(keyCursor, g_Irq1Masked);
                 keyCursor = LogPut(keyCursor, " in_08h=");  keyCursor = LogHex(keyCursor, g_Irq1In08);
                 keyCursor = LogPut(keyCursor, " in_09h=");  keyCursor = LogHex(keyCursor, g_Irq1In09);
                 keyCursor = LogPut(keyCursor, " injected="); keyCursor = LogHex(keyCursor, g_Irq1Injected);
