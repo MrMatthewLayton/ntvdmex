@@ -413,9 +413,8 @@ VOID SettingsApply(HWND window, const NTVDMEX_SETTINGS *settings, INT live)
         }
         else
         {
-            {   static const WORD mpuBases[5] = { 0x300, 0x310, 0x320, 0x330, 0x340 };
-                g_SbConfig.Type = SB_BLASTER_TYPE_SB16;                         /* P follows the MPU's port (#235) */
-                g_SbConfig.MpuBase = mpuBases[settings->Values[SET_MPUADDR] <= ARRAYSIZE(mpuBases) - 1 ? settings->Values[SET_MPUADDR] : MPU_DEFAULT_BASE_CHOICE]; }
+            g_SbConfig.Type = SB_BLASTER_TYPE_SB16;                         /* P follows the MPU's port (#235) */
+            g_SbConfig.MpuBase = VddMpuBaseForChoice(settings->Values[SET_MPUADDR]);
 
             if (!g_SbConfig.Dma16Channel)
                 g_SbConfig.Dma16Channel = SB_DEFAULT_DMA16;

@@ -33,6 +33,7 @@
 
 #define MPU_DEFAULT_BASE            0x330
 #define MPU_DEFAULT_BASE_CHOICE     3       /* MPU_DEFAULT_BASE in the Audio page's list */
+#define MPU_BASE_CHOICES            5       /* The Audio page's list: 300h, 310h, 320h, 330h, 340h */
 
 /* status register bits, both ACTIVE LOW */
 #define MPU_STATUS_DRR              0x40    /* Clear => the port can accept a byte from the guest */
@@ -103,6 +104,13 @@ typedef struct _MPU_STATE
 
 INT  VddMpuInitialize(_In_ PVDD_BUS bus, _In_ PVOID context);
 VOID VddMpuReset(_In_ PVOID context);
+
+/* #342: the base port for the Audio page's choice (SET_MPUADDR). One table, because the
+ * Sound Blaster advertises this port as BLASTER's P and the MPU listens on it: two copies
+ * that drifted apart would send the guest's MIDI to a port nobody answers. A choice off
+ * the end of the list is the default, 330h.
+ */
+WORD VddMpuBaseForChoice(_In_ DWORD choice);
 
 /* #190: one raw MIDI byte into this instance's message assembler (running status,
  * realtime, sysex -- the same rules as the data port in UART mode), whatever mode the
