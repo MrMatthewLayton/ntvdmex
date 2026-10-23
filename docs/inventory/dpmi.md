@@ -53,13 +53,13 @@ not 1.0 (the first is closed by #247):
 | §2 Descriptors `0000h`–`000Fh` | 15 | 10 | 3 | — | 1 | 1 |
 | §3 DOS memory `0100h`–`0102h` | 3 | 3 | — | — | — | — |
 | §4 Interrupts, exceptions, virtual IF | 9 | 8 | 1 | — | — | — |
-| §5 Translation `0300h`–`0306h` | 7 | 4 | 3 | — | — | — |
+| §5 Translation `0300h`–`0306h` | 7 | 3 | 4 | — | — | — |
 | §6 Version and capabilities `0400h`/`0401h` | 2 | 1 | — | — | 1 | — |
 | §7 Memory `0500h`–`050Bh` | 6 | 3 | 1 | — | 2 | — |
 | §8 Paging, physical mapping, vendor, debug | 7 | 4 | 1 | — | 2 | — |
 | §9 DPMI 1.0 extras, and NTVDM's private pair | 5 | 2 | — | — | 3 | — |
 | §10 INT 21h from protected mode | 6 | 2 | 3 | — | — | 1 |
-| **Total** | **64** | **41** | **12** | **—** | **9** | **2** |
+| **Total** | **64** | **40** | **13** | **—** | **9** | **2** |
 
 ---
 
@@ -124,7 +124,7 @@ not 1.0 (the first is closed by #247):
 | `0303h` | allocate real-mode callback | **PART** | 16 slots (#248; was 4), `8015h` when full. ⚠ The callback's ENTRY contract is not the spec's: the host pre-pops the far return into the RMCS and hands the handler `DS:SI = 0017h:0` instead of the real-mode SS:SP — a spec-conforming handler pops twice. Never exercised: no shelf guest has invoked a callback in any recorded run |
 | `0304h` | free real-mode callback | **IMPL** (#248) | `CX:DX` must be exactly a live callback address, else `8024h` |
 | `0305h` | state save/restore addresses | **IMPL** | `:23319-23337`; both routines are register-preserving no-ops, buffer size 40h — nothing of ours needs saving across a raw switch |
-| `0306h` | raw mode-switch addresses | **IMPL** | `:23338-23353` |
+| `0306h` | raw mode-switch addresses | **PART** | the addresses are returned (`host_dpmi_int.c:6858`) and BOPs `58h`/`59h` planted at them (`host_startup.c:4241-4246`), but **nothing services either BOP**: a client that switches raw ends on "UNIMPLEMENTED BOP". Re-marked 2026-10-23 (#257, [dos-extenders.md](dos-extenders.md)); work in #268 |
 
 ## 6. Version and capabilities
 

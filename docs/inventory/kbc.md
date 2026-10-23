@@ -3,7 +3,7 @@
 **Spec:** IBM AT TechRef; Intel 8042 UPI datasheet; PS/2 TechRef for port `92h`.
 **▶ The hardware reference is [`../ref/kbc.md`](../ref/kbc.md)** — what the chip *does*.
 This file is the companion: what **we** do about it.
-**Our implementation:** `src/vdd/vdd_input.c` (`kbd_hw_in`/`kbd_hw_out`); the A20 flag
+**Our implementation:** `src/vdd/vdd_input.c` (`InputKeyboardPortIn`/`InputKeyboardPortOut`); the A20 flag
 in `src/host/main.c` (XMS).
 **Oracles:** MS-DOS 6.22 (QEMU), dosbox-x, PCem. Off-VM: `tests/unit/input_test.c`.
 **Marked:** 2026-09-23, **from the code**, with citations.
@@ -47,20 +47,20 @@ below. The tables in §1–§5 carry the **before → after** so the reasoning s
 
 | Port | Access | Register | Status | Evidence |
 |---|---|---|---|---|
-| `60h` | R | output buffer | **IMPL** | `kbd_hw_in`, `vdd_input.c:383` — pops, re-asserts the line, models the re-read hold |
-| `60h` | W | keyboard command / 8042 parameter | ⛔ **PART** | `kbd_hw_out`, `vdd_input.c:403` — logged; only `F3h`'s rate byte is kept |
-| `64h` | R | status register | ✅ **IMPL** | `vdd_input.c:435` — ~~`sc_avail ? 0x01 : 0x00`~~ |
-| `64h` | W | 8042 command | ✅ **IMPL** | `vdd_input.c:483` — ~~counted into `kbd_out_log` and dropped~~ |
-| `92h` | R/W | System Control Port A | ✅ **IMPL** | `syscon_in`/`syscon_out`, `vdd_input.c:402` |
+| `60h` | R | output buffer | **IMPL** | `InputKeyboardPortIn`, `vdd_input.c:1330` — pops, re-asserts the line, models the re-read hold |
+| `60h` | W | keyboard command / 8042 parameter | ⛔ **PART** | `InputKeyboardPortOut`, `vdd_input.c:1459` — logged; only `F3h`'s rate byte is kept |
+| `64h` | R | status register | ✅ **IMPL** | `InputKeyboardPortIn`, `vdd_input.c:1300` — ~~`sc_avail ? 0x01 : 0x00`~~ |
+| `64h` | W | 8042 command | ✅ **IMPL** | `InputKeyboardPortOut`, `vdd_input.c:1392` — ~~counted into `kbd_out_log` and dropped~~ |
+| `92h` | R/W | System Control Port A | ✅ **IMPL** | `InputSystemControlPortIn`/`Out`, `vdd_input.c:1268` |
 
 ## 2. The status register (`64h` read)
 
 | Bit | Name | Status | Evidence |
 |---|---|---|---|
-| 0 | OBF | **IMPL** | `vdd_input.c:380` |
+| 0 | OBF | **IMPL** | `vdd_input.c:1320` |
 | 1 | IBF | **N/A-by-luck** | always 0 — which *happens* to mean "ready", so the write path never blocks |
 | 2 | **SYS** | ✅ **IMPL** | set; a machine that has POSTed reads **1** |
-| 3 | A2 | ✅ **IMPL** | `kbc_last_was_cmd`, `vdd_input.c:483`; **starts SET** — see below |
+| 3 | A2 | ✅ **IMPL** | `IsLastWriteCommand`, `vdd_input.c:1390`; **starts SET** — see below |
 | 4 | INH | ✅ **IMPL** | set: the keyboard is not inhibited |
 | 5 | AUXB | **N/A** | no PS/2 aux path to fill it |
 | 6:7 | TIMEOUT / PARITY | **N/A** | error conditions a model has no way to produce |
@@ -78,12 +78,12 @@ commands are now answered.
 
 | Cmd | Status | What a guest loses |
 |---|---|---|
-| `AAh` self test | ✅ **IMPL** | ~~polls OBF for `55h` for ever~~ — `vdd_input.c:492` |
+| `AAh` self test | ✅ **IMPL** | ~~polls OBF for `55h` for ever~~ — `vdd_input.c:1404` |
 | `ABh` interface test | ✅ **IMPL** | returns `00h` |
 | `20h`/`60h` read/write command byte | ✅ **IMPL** | stored and read back |
 | `ADh`/`AEh` disable/enable keyboard | ⛔ **STORE** | sets the command byte's clock bits; **nothing consumes them** — our FIFO is host-driven |
 | `D0h` **read output port** | ✅ **IMPL** | ~~returned a stale scancode~~ |
-| `D1h` **write output port** | ✅ **IMPL** | the A20 gate, `vdd_input.c:523` |
+| `D1h` **write output port** | ✅ **IMPL** | the A20 gate, `vdd_input.c:1483` |
 | `D2h` write keyboard output buffer | ✅ **IMPL** *(#244)* | the next `60h` byte goes into the scancode FIFO as if typed, IRQ1 included (`kbd_hw_out`). A PS/2 / AMI-KBC command (the AT 8042 lacked it) — from documentation; `p_kbd3` injects through it, so its `int09.4f.*` rows also say which oracles have it. input_test T13(d) |
 | `FEh` pulse reset | ⚠ **COUNTED** | a VDD cannot reboot its own host; `kbc_reset_asked` |
 
@@ -117,14 +117,14 @@ back by all three.
 
 | Item | Status | Evidence |
 |---|---|---|
-| `F3h` typematic — the rate byte is captured | **IMPL** (as instrumentation) | `vdd_input.c:419` |
+| `F3h` typematic — the rate byte is captured | **IMPL** (as instrumentation) | `vdd_input.c:1501` |
 | **Any `FAh` ACK, ever** | ⛔ **MISS** | `kbd_hw_out` never enqueues a reply |
 | `EEh` echo, `F2h` ID, `FFh` reset | **MISS** | |
 | LED state | **MISS** | also missing from the BDA — `keyboard.md` |
 
 ⛔ **Nothing is ever acknowledged.** Every keyboard command is answered by the keyboard
 with `FAh`, and a driver that writes `EDh` and waits for it waits for ever. The comment
-at `vdd_input.c:398` is explicit that accept-and-ignore is a *deliberate* holding
+at `vdd_input.c:1365` is explicit that accept-and-ignore is a *deliberate* holding
 position — *"changing what the keyboard does on the strength of an untested guess is how
 the last two attempts at this went"* — which is the right instinct and is exactly what a
 probe against three oracles is for.
