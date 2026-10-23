@@ -625,6 +625,27 @@ static INT             g_FullscreenSaved;
  */
 static INT g_AutoFullscreenDone = 0;
 
+/* Undo everything the fullscreen entry changed. Separate because BOTH the normal exit
+ * and the "DirectDraw refused" path need it, and a chromeless window that is not
+ * fullscreen is a worse state than either end of the toggle.
+ */
+/* #331: FULLSCREEN AT ANOTHER DISPLAY MODE (Settings > Video > Fullscreen Resolution).
+ * The mode changes on the way in, BEFORE the window is sized to the screen -- so the
+ * borderless window, GetSystemMetrics and exclusive DirectDraw's GetDisplayMode all see the
+ * new size, and the whole-pixel fit is computed against it -- and changes back on the way
+ * out, BEFORE the window is put back, so the window is restored onto the desktop it left.
+ *
+ * [CAUTION]: CDS_FULLSCREEN, SO THE CHANGE IS TEMPORARY: it is never written to the registry, so
+ * a logoff or a reboot always finds the user's desktop, whatever happened to us. Every exit we
+ * control restores it explicitly as well: leaving fullscreen, WM_DESTROY and the panic path
+ * (HostPanicRelease), the fatal dump and the watchdog's TerminateProcess.
+ *
+ * [CAUTION]: THE REFRESH RATE NEVER CHANGES. The mode keeps the desktop's depth and frequency
+ * (fullscreen_mode.h); a refresh change is what put the test machine's monitor into
+ * standby (s83).
+ */
+static volatile LONG g_FullscreenModeChanged;
+
 /* Async-preemption probe driver (session 11, QIMODE_PATH bit 2). Raises IRQ 5 from a
  * thread that is NOT the exec thread -- exactly how the audio thread raises the Sound
  * Blaster's completion IRQ -- while the guest (qirq.com) spins in pure V86 code that
@@ -2546,6 +2567,7 @@ static VOID MenuRecentFill(VOID)
 VOID HostPanicRelease(VOID)
 {
     ClipCursor(NULL);
+    HostFullscreenDisplayRestore();                              /* #331: the user's display mode */
 
     if (g_LowLevelKeyboard)
     {
@@ -2691,10 +2713,103 @@ static VOID CursorIdleTick(HWND window)
     HostCursorRefresh(window);
 }
 
-/* Undo everything the fullscreen entry changed. Separate because BOTH the normal exit
- * and the "DirectDraw refused" path need it, and a chromeless window that is not
- * fullscreen is a worse state than either end of the toggle.
- */
+INT HostDisplayModes(PFULLSCREEN_MODE modes, INT capacity, PFULLSCREEN_MODE desktop)
+{
+    DEVMODEA mode;
+    INT count = 0;
+    DWORD index;
+
+    ZeroMemory(desktop, sizeof *desktop);
+    ZeroMemory(&mode, sizeof mode);
+    mode.dmSize = sizeof mode;
+
+    if (!EnumDisplaySettingsA(NULL, ENUM_CURRENT_SETTINGS, &mode))
+        return 0;
+
+    desktop->Width = mode.dmPelsWidth;
+    desktop->Height = mode.dmPelsHeight;
+    desktop->BitsPerPixel = mode.dmBitsPerPel;
+    desktop->Frequency = mode.dmDisplayFrequency;
+
+    for (index = 0; count < capacity; ++index)
+    {
+        ZeroMemory(&mode, sizeof mode);
+        mode.dmSize = sizeof mode;
+
+        if (!EnumDisplaySettingsA(NULL, index, &mode))
+            break;
+
+        modes[count].Width = mode.dmPelsWidth;
+        modes[count].Height = mode.dmPelsHeight;
+        modes[count].BitsPerPixel = mode.dmBitsPerPel;
+        modes[count].Frequency = mode.dmDisplayFrequency;
+        ++count;
+    }
+
+    return count;
+}
+
+/* Switch to the mode the setting asks for, if it asks for one. Logs what it did either way. */
+static VOID HostFullscreenDisplayEnter(VOID)
+{
+    static FULLSCREEN_MODE allModes[HOST_DISPLAY_MODES_MAX];
+    DWORD setting = g_Settings.Values[SET_FSRES];
+    FULLSCREEN_MODE desktop;
+    FULLSCREEN_MODE chosen;
+    DEVMODEA mode;
+    LONG result;
+    INT count;
+    CHAR lineBuffer[192];
+    CHAR *lineCursor = lineBuffer;
+
+    if (setting == FULLSCREEN_RESOLUTION_DESKTOP || g_FullscreenModeChanged)
+        return;
+
+    count = HostDisplayModes(allModes, HOST_DISPLAY_MODES_MAX, &desktop);
+    lineCursor = LogPut(lineCursor, "FULLSCREEN-MODE: setting=0x"); lineCursor = LogHex(lineCursor, setting);
+    lineCursor = LogPut(lineCursor, " desktop="); lineCursor = LogDecimal(lineCursor, desktop.Width);
+    lineCursor = LogPut(lineCursor, "x"); lineCursor = LogDecimal(lineCursor, desktop.Height);
+    lineCursor = LogPut(lineCursor, "@"); lineCursor = LogDecimal(lineCursor, desktop.Frequency);
+
+    if (!count || !FullscreenModeChoose(allModes, count, &desktop, setting, &chosen))
+    {
+        lineCursor = LogPut(lineCursor, " -> stays on the desktop's mode\r\n");
+        LogAppend(LOG_PATH, lineBuffer, lineCursor);
+        return;
+    }
+
+    ZeroMemory(&mode, sizeof mode);
+    mode.dmSize = sizeof mode;
+    mode.dmPelsWidth = chosen.Width;
+    mode.dmPelsHeight = chosen.Height;
+    mode.dmBitsPerPel = chosen.BitsPerPixel;
+    mode.dmDisplayFrequency = chosen.Frequency;
+    mode.dmFields = DM_PELSWIDTH | DM_PELSHEIGHT | DM_BITSPERPEL | DM_DISPLAYFREQUENCY;
+    result = ChangeDisplaySettingsA(&mode, CDS_FULLSCREEN);
+
+    if (result == DISP_CHANGE_SUCCESSFUL)
+        InterlockedExchange(&g_FullscreenModeChanged, 1);
+
+    lineCursor = LogPut(lineCursor, " -> "); lineCursor = LogDecimal(lineCursor, chosen.Width);
+    lineCursor = LogPut(lineCursor, "x"); lineCursor = LogDecimal(lineCursor, chosen.Height);
+    lineCursor = LogPut(lineCursor, result == DISP_CHANGE_SUCCESSFUL ? " (switched)" : " REFUSED, stays on the desktop's (");
+
+    if (result != DISP_CHANGE_SUCCESSFUL)
+    {
+        lineCursor = LogHex(lineCursor, (DWORD)result);
+        lineCursor = LogPut(lineCursor, ")");
+    }
+
+    lineCursor = LogPut(lineCursor, "\r\n");
+    LogAppend(LOG_PATH, lineBuffer, lineCursor);
+}
+
+VOID HostFullscreenDisplayRestore(VOID)
+{
+    if (InterlockedExchange(&g_FullscreenModeChanged, 0))
+        ChangeDisplaySettingsA(NULL, 0);                         /* back to the registry's mode */
+}
+
 static VOID HostFullscreenToggleRestore(HWND window)
 {
     if (g_Status) { ShowWindow(g_Status, SW_SHOW);
@@ -2759,6 +2874,7 @@ static VOID HostFullscreenToggle(HWND window)
         if (g_Status)
             ShowWindow(g_Status, SW_HIDE);
 
+        HostFullscreenDisplayEnter();                              /* #331: before the size is read */
         SetWindowPos(window, HWND_TOP, 0, 0,
                      GetSystemMetrics(SM_CXSCREEN), GetSystemMetrics(SM_CYSCREEN),
                      SWP_FRAMECHANGED | SWP_NOACTIVATE);
@@ -2768,6 +2884,7 @@ static VOID HostFullscreenToggle(HWND window)
             /* No DirectDraw, or it refused. Do not leave the user in a chromeless
              * window that is not fullscreen either -- put it all back.
              */
+            HostFullscreenDisplayRestore();                        /* #331 */
             HostFullscreenToggleRestore(window);
             return;
         }
@@ -2778,6 +2895,7 @@ static VOID HostFullscreenToggle(HWND window)
     else
     {
         PresentDdrawSetFullscreen(&g_PresentDdraw, FALSE);
+        HostFullscreenDisplayRestore();                            /* #331: before the window goes back */
         HostFullscreenToggleRestore(window);
     }
 

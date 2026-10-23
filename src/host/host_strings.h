@@ -161,14 +161,18 @@
 #define SETTINGS_TITLE_SHELL    "Choose the DOS prompt's COMMAND.COM"
 #define SETTINGS_FILTER_FLOPPY      "Floppy disk images (*.img;*.ima;*.flp)\0*.img;*.ima;*.flp\0" \
                                     "All files (*.*)\0*.*\0"
-#define SETTINGS_TITLE_FLOPPY       "Choose a floppy disk image"
-#define SETTINGS_FILTER_ISO         "ISO disk images (*.iso)\0*.iso\0All files (*.*)\0*.*\0"
-#define SETTINGS_TITLE_ISO          "Choose an ISO disk image"
-#define SETTINGS_FILTER_SOUNDFONT   "SoundFonts (*.sf2)\0*.sf2\0All files (*.*)\0*.*\0"
-#define SETTINGS_TITLE_SOUNDFONT    "Choose a SoundFont"
-#define SETTINGS_TITLE_CAPTURE      "Choose the folder for screenshots and recordings"
-#define SETTINGS_TEXT_UNCOMPRESSED  "Uncompressed (full frames)"
-#define SETTINGS_FOURCC_LOWER_CASE  0x20202020u     /* ORed in: A-Z become a-z, digits stay */
+#define SETTINGS_TITLE_FLOPPY           "Choose a floppy disk image"
+#define SETTINGS_FILTER_ISO             "ISO disk images (*.iso)\0*.iso\0All files (*.*)\0*.*\0"
+#define SETTINGS_TITLE_ISO              "Choose an ISO disk image"
+#define SETTINGS_FILTER_SOUNDFONT       "SoundFonts (*.sf2)\0*.sf2\0All files (*.*)\0*.*\0"
+#define SETTINGS_TITLE_SOUNDFONT        "Choose a SoundFont"
+#define SETTINGS_TITLE_CAPTURE          "Choose the folder for screenshots and recordings"
+#define SETTINGS_TEXT_UNCOMPRESSED      "Uncompressed (full frames)"
+#define SETTINGS_FSRES_DESKTOP_FORMAT   "Desktop (%lu x %lu)"   /* #331: fullscreen keeps the desktop's mode */
+#define SETTINGS_FSRES_NATIVE_FORMAT    "Native (%lu x %lu)"    /* #331: the largest at the desktop's refresh */
+#define SETTINGS_FSRES_MODE_FORMAT      "%lu x %lu"
+#define SETTINGS_FSRES_TEXT_SIZE        48
+#define SETTINGS_FOURCC_LOWER_CASE      0x20202020u             /* ORed in: A-Z become a-z, digits stay */
 #define SETTINGS_FONT_CODE_PAGE_FORMAT "This font draws code page %d, not 437: some line-drawing characters " \
                                     "will show as letters."
 #define SETTINGS_SOURCE_CONV_KB         "a program too big for it"  /* Why conventional memory was capped */

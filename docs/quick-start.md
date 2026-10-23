@@ -43,6 +43,13 @@ three then belong to the program (F11 is Doom's gamma).
 | **F11** | Fullscreen on/off. |
 | **Ctrl+F5** | Takes a screenshot (*Tools > Capture > Open Capture Folder* shows where). |
 
+Fullscreen normally keeps your desktop's resolution. If the desktop runs below your
+panel's own resolution, *Settings > Video > Fullscreen Resolution* can switch the display
+for as long as fullscreen lasts: **Native** picks the largest size the display offers, or
+pick one from the list. Only the size changes, never the refresh rate, and your desktop
+comes back when you leave fullscreen or close the program. On a 2560x1600 panel with a
+1680x1050 desktop, a 320x200 game goes from 5x with borders to 8x, edge to edge.
+
 ## The mouse
 
 A program that uses the mouse captures it when you click in the window, or when the

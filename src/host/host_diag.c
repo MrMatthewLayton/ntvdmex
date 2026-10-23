@@ -493,6 +493,7 @@ static VOID HostFatalDump(EXCEPTION_RECORD *record, CONTEXT *context)
     LogAppend(LOG_PATH, lineBuffer, cursor);
     SerialOut(lineBuffer, cursor);
     TrayRemove(g_Window);      /* the VEH exits without unwinding the UI thread */
+    HostFullscreenDisplayRestore();     /* #331: the user's display mode, before ExitProcess */
     HostRecordFinish();
     ExitProcess(FATAL_DUMP_EXIT_CODE);                                 /* clean exit; batch dumps the log */
 }
@@ -1181,6 +1182,7 @@ DWORD WINAPI DpmiWatchdog(LPVOID param)
      * stacking up" report, and it is the half that survives the process.
      */
     TrayRemove(g_Window);
+    HostFullscreenDisplayRestore();     /* #331: the user's display mode */
     /* TerminateProcess (forceful) -- ExitProcess hangs trying to unwind the PM engine
      * thread (un-terminable LDT context).
      */

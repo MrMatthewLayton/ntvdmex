@@ -148,6 +148,7 @@ static const BYTE g_SettingsLiveIds[] = {
     SET_FIT,                                     /* #325 */
     SET_RESTARTCAPTURE,                          /* #155: read by Capture Video */
     SET_VIDEOCODEC, SET_VIDEOQUALITY, SET_VIDEOKEYFRAMES,   /* #155: read when a recording starts */
+    SET_FSRES,                                   /* #331: read when fullscreen is entered */
 };
 
 static PCSTR const g_SettingsTabs[NTVDMEX_PAGE_COUNT] = {
@@ -176,6 +177,14 @@ static HHOOK g_SettingsHook;
  */
 static CAPTURE_VIDEO_CODEC g_SettingsCodecs[CAPTURE_VIDEO_CODECS_MAX];
 static INT g_SettingsCodecCount;
+
+/* #331: FULLSCREEN RESOLUTION -- item 0 is the desktop's mode, item 1 the largest
+ * (Native), item N >= 2 is g_SettingsFullscreenModes[N - 2]: this display's sizes at the
+ * desktop's depth and refresh (FullscreenModeList), largest first. The setting stores the
+ * SIZE, so a stored choice the display no longer offers shows as Desktop.
+ */
+static FULLSCREEN_MODE g_SettingsFullscreenModes[FULLSCREEN_MODES_MAX];
+static INT             g_SettingsFullscreenModeCount;
 
 VOID SettingsNoteOverride(INT settingId, PCSTR source, DWORD value)
 {
@@ -721,6 +730,68 @@ static VOID SettingsCodecFill(HWND page)
         SendMessageA(combo, CB_ADDSTRING, 0, (LPARAM)g_SettingsCodecs[index].Name);
 }
 
+static VOID SettingsFullscreenModeFill(HWND page)
+{
+    static FULLSCREEN_MODE allModes[HOST_DISPLAY_MODES_MAX];
+    HWND combo = GetDlgItem(page, IDC_S_FSRES);
+    FULLSCREEN_MODE desktop;
+    CHAR text[SETTINGS_FSRES_TEXT_SIZE];
+    INT count;
+    INT index;
+
+    if (!combo)
+        return;
+
+    count = HostDisplayModes(allModes, HOST_DISPLAY_MODES_MAX, &desktop);
+    g_SettingsFullscreenModeCount = FullscreenModeList(allModes, count, &desktop, g_SettingsFullscreenModes, FULLSCREEN_MODES_MAX);
+    SendMessageA(combo, CB_RESETCONTENT, 0, 0);
+    wsprintfA(text, SETTINGS_FSRES_DESKTOP_FORMAT, desktop.Width, desktop.Height);
+    SendMessageA(combo, CB_ADDSTRING, 0, (LPARAM)text);
+    wsprintfA(text, SETTINGS_FSRES_NATIVE_FORMAT,
+              g_SettingsFullscreenModeCount ? g_SettingsFullscreenModes[0].Width : desktop.Width,
+              g_SettingsFullscreenModeCount ? g_SettingsFullscreenModes[0].Height : desktop.Height);
+    SendMessageA(combo, CB_ADDSTRING, 0, (LPARAM)text);
+
+    for (index = 0; index < g_SettingsFullscreenModeCount; ++index)
+    {
+        wsprintfA(text, SETTINGS_FSRES_MODE_FORMAT, g_SettingsFullscreenModes[index].Width, g_SettingsFullscreenModes[index].Height);
+        SendMessageA(combo, CB_ADDSTRING, 0, (LPARAM)text);
+    }
+}
+
+static VOID SettingsFullscreenModeSelect(DWORD setting)
+{
+    HWND combo = SettingsControl(IDC_S_FSRES);
+    INT selection = 0;
+    INT index;
+
+    if (!combo)
+        return;
+
+    if (setting == FULLSCREEN_RESOLUTION_NATIVE)
+        selection = 1;
+    else
+        for (index = 0; index < g_SettingsFullscreenModeCount; ++index)
+            if (FULLSCREEN_RESOLUTION_PACK(g_SettingsFullscreenModes[index].Width, g_SettingsFullscreenModes[index].Height) == setting)
+                selection = index + 2;
+
+    SendMessageA(combo, CB_SETCURSEL, (WPARAM)selection, 0);
+}
+
+static DWORD SettingsFullscreenModeChosen(VOID)
+{
+    HWND combo = SettingsControl(IDC_S_FSRES);
+    LRESULT selection = combo ? SendMessageA(combo, CB_GETCURSEL, 0, 0) : CB_ERR;
+
+    if (selection == 1)
+        return FULLSCREEN_RESOLUTION_NATIVE;
+
+    if (selection < 2 || selection - 2 >= g_SettingsFullscreenModeCount)
+        return FULLSCREEN_RESOLUTION_DESKTOP;
+
+    return FULLSCREEN_RESOLUTION_PACK(g_SettingsFullscreenModes[selection - 2].Width, g_SettingsFullscreenModes[selection - 2].Height);
+}
+
 /* The chosen codec, or NULL for uncompressed. */
 static PCAPTURE_VIDEO_CODEC SettingsCodecChosen(VOID)
 {
@@ -1058,6 +1129,7 @@ static VOID SettingsToDialog(const NTVDMEX_SETTINGS *settings)
     SettingsShellRadios(settings->Strings[SET_STR_SHELL][0] != 0);
     SettingsTextFontSelect(settings->Strings[SET_STR_TEXTFONT]);                 /* #321 */
     SettingsCodecSelect(settings->Values[SET_VIDEOCODEC]);                         /* #155 */
+    SettingsFullscreenModeSelect(settings->Values[SET_FSRES]);                     /* #331 */
     SettingsFloppyRadios(settings->Values[SET_FLOPPYPHYS] != 0);                /* s84 */
     SettingsCdRadios(settings->Values[SET_CDPHYS] != 0);
     /* SAY WHICH VERSION PROGRAMS ACTUALLY SEE. (s80, user: "if I'm in Windows XP's
@@ -1180,6 +1252,10 @@ static VOID SettingsFromDialog(NTVDMEX_SETTINGS *settings)
         PCAPTURE_VIDEO_CODEC codec = SettingsCodecChosen();
         settings->Values[SET_VIDEOCODEC] = codec ? codec->Handler : 0;
     }
+
+    /* #331: likewise the fullscreen resolution. */
+    if (SettingsControl(IDC_S_FSRES))
+        settings->Values[SET_FSRES] = SettingsFullscreenModeChosen();
 }
 
 /* The Processor page says WHICH processor -- the user's own -- so fill the static
@@ -1263,6 +1339,7 @@ INT_PTR CALLBACK SettingsPageProcedure(HWND dialog, UINT message, WPARAM wParam,
 
         SettingsFillCpuInfo(dialog);            /* no-op on pages without the static */
         SettingsCodecFill(dialog);              /* #155: no-op on pages without it */
+        SettingsFullscreenModeFill(dialog);     /* #331: no-op on pages without it */
         return TRUE;
     }
 

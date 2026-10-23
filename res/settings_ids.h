@@ -161,4 +161,7 @@
 #define IDC_S_VIDEOQUALITY          344     /* Edit: quality, % */
 #define IDC_S_KEYFRAMES             345     /* Edit: a key frame every N frames */
 
+/* Video (#331): */
+#define IDC_S_FSRES                 346     /* Combo: fullscreen's display mode (filled at run time) */
+
 #endif
