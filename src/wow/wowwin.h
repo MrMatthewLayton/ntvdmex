@@ -95,6 +95,9 @@
 #define WOWWIN_REASON_MAX                       96
 #define WOWWIN_DROP_LOG_MAX                     200
 #define WOWWIN_PAINT_LOG_MAX                    600
+
+/* #319: WM_SYSCOMMAND menu requests logged per run. */
+#define WOWWIN_MENU_LOG_MAX                     32
 #define WOWWIN_MM_LOG_MAX                       12
 
 /* A Win16 DROPFILES block (krnl386 global memory): pFiles, pt, fNC, then the names. */

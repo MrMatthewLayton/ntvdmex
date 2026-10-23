@@ -150,6 +150,7 @@ static INT g_WowWinSendingCount;
  */
 static INT g_WowWinSizeMove;
 static UINT g_WowWinPaintsLogged;
+static UINT g_WowWinMenuLogged;
 
 static WOWWIN_HELD_CHAR g_WowWinHeldChars[WOWWIN_MAX_HELD_CHARS];
 static DWORD g_WowWinHeldCharSequence;
@@ -1268,6 +1269,23 @@ static LRESULT CALLBACK WowWinProc(HWND window, UINT message, WPARAM wParam, LPA
      * before; handled afterwards, they set the state the menu already has.
      */
     case WM_SYSCOMMAND:
+        /* #319: which window a keyboard/mouse menu request reaches, and whether it is
+         * the replay. Bounded.
+         */
+        if (window16 && g_WowWinMenuLogged < WOWWIN_MENU_LOG_MAX
+            && ((wParam & WOWWIN_SC_MASK) == SC_KEYMENU || (wParam & WOWWIN_SC_MASK) == SC_MOUSEMENU))
+        {
+            CHAR menuLog[WOWWIN_LOG_LINE_MAX];
+            CHAR *menuCursor = menuLog;
+            ++g_WowWinMenuLogged;
+            menuCursor = LogPut(menuCursor, "WOWWIN: WM_SYSCOMMAND h16=0x"); menuCursor = LogHex(menuCursor, window16);
+            menuCursor = LogPut(menuCursor, " sc=0x");        menuCursor = LogHex(menuCursor, (DWORD)wParam);
+            menuCursor = LogPut(menuCursor, " lp=0x");        menuCursor = LogHex(menuCursor, (DWORD)lParam);
+            menuCursor = LogPut(menuCursor, (GetWindowLongA(window, GWL_STYLE) & WS_CHILD) ? " CHILD" : " top");
+            menuCursor = LogPut(menuCursor, g_WowWinIsReplaying ? " replay\r\n" : "\r\n");
+            LogAppend(LOG_PATH, menuLog, menuCursor);
+        }
+
         if (window16 && !g_WowWinIsReplaying
             && ((wParam & WOWWIN_SC_MASK) == SC_KEYMENU || (wParam & WOWWIN_SC_MASK) == SC_MOUSEMENU)
             && GetMenu(window))
