@@ -1445,6 +1445,55 @@ static VOID DosNoteDriveDirectory(PCSTR fullPath)
     SetEnvironmentVariableA(variable, fullPath);
 }
 
+/* "X:relative" ON ANOTHER DRIVE, WHILE THE CURRENT DRIVE IS VIRTUAL. (s101 rig: with the
+ * image A: current, COPY C:\WINDOWS\WIN.INI ... found nothing.) Win32 reads `=X:` only for
+ * a drive that is not its own current one -- and while A: is the image, the process stands
+ * in the image's directory, which is ON C:. So "C:*" resolved there, not in C:'s DOS
+ * directory. Expanded here from `=X:` (DosNoteDriveDirectory keeps it), or X:'s root.
+ * Only while VirtualDrive is set: otherwise Win32 already gets it right.
+ */
+static VOID DosExpandOtherDriveRelative(PCDOS_MACHINE machine, PSTR path, INT capacity)
+{
+    CHAR variable[DOS_INT21_DRIVE_VARIABLE_SIZE];
+    CHAR expanded[MAX_PATH];
+    DWORD length;
+    INT drive;
+
+    if (machine->VirtualDrive < 0 || !path[0] || path[1] != ':' || path[2] == '\\')
+        return;
+
+    drive = (path[0] | ASCII_CASE_BIT) - 'a';
+
+    if (drive < 0 || drive >= DOS_DRIVE_LETTERS || drive == machine->VirtualDrive)
+        return;
+
+    variable[0] = '=';
+    variable[1] = (CHAR)('A' + drive);
+    variable[2] = ':';
+    variable[3] = 0;
+    length = GetEnvironmentVariableA(variable, expanded, sizeof expanded);
+
+    if (!length || length >= sizeof expanded)
+    {
+        expanded[0] = (CHAR)('A' + drive);
+        expanded[1] = ':';
+        expanded[2] = 0;
+        length = 2;
+    }
+
+    if (expanded[length - 1] != '\\' && length + 1 < sizeof expanded)
+    {
+        expanded[length++] = '\\';
+        expanded[length] = 0;
+    }
+
+    if (length + lstrlenA(path + 2) < (DWORD)capacity)
+    {
+        lstrcatA(expanded, path + 2);
+        lstrcpyA(path, expanded);
+    }
+}
+
 /* Is this host path inside the image's directory? Then it is opened for reading only. */
 static INT DosImageIsHostPath(PCSTR path)
 {
@@ -1612,6 +1661,7 @@ static VOID DosGuestPathRaw(
         destination[length++] = guestPath[index];
 
     destination[length] = 0;
+    DosExpandOtherDriveRelative(machine, destination, capacity);
     DosImageMapPath(destination, capacity);                       /* #240: A: as an image */
 }
 
@@ -3664,6 +3714,7 @@ INT DosInt21(PDOS_MACHINE machine)
                  * pattern takes DosGuestPath's prefix, then the image's mapping.
                  */
                 DosFcbSearchPattern(fcb[0], machine->VirtualDrive, allPattern, sizeof(allPattern));
+                DosExpandOtherDriveRelative(machine, allPattern, sizeof(allPattern));
                 DosImageMapPath(allPattern, sizeof(allPattern));
 
                 if (machine->PathPrepare)                         /* #241: the disc's directory laid out first */
