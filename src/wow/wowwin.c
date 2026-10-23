@@ -1097,6 +1097,36 @@ static LRESULT CALLBACK WowWinProc(HWND window, UINT message, WPARAM wParam, LPA
 
         break;
 
+    /* #288 (s100): WM_PARENTNOTIFY FOR A CLICK ON A CHILD, SENT, as Windows sends it
+     * before the child's own button message. Charmap moves its status-line help text
+     * from here (GetMessagePos -> WindowFromPoint -> GetDlgCtrlID); dropped, the text
+     * stayed on the font box's for good. The mouse packing is the same in both:
+     * wParam = the button message, lParam = the point in this window's client area.
+     *
+     * [CAUTION]: WM_CREATE / WM_DESTROY notifications are NOT relayed. Win16 packs
+     * them as lParam = MAKELONG(hwndChild16, id), and they arrive inside the
+     * CreateWindow / DestroyWindow, before the child has a 16-bit handle or after
+     * it has lost it.
+     */
+    case WM_PARENTNOTIFY:
+        if (window16)
+        {
+            switch (LOWORD(wParam))
+            {
+            case WM_LBUTTONDOWN:
+            case WM_MBUTTONDOWN:
+            case WM_RBUTTONDOWN:
+                WowWinSendOrPost(window16, (WORD)message, LOWORD(wParam), (DWORD)lParam, pointX, pointY);
+                ++g_WowWinMessages;
+                break;
+
+            default:
+                break;
+            }
+        }
+
+        break;
+
     case WM_GETMINMAXINFO:
         if (window16 && g_WowWinSend16Blob && lParam && g_WowWinSendingCount < WOWWIN_MAX_SENDING)
         {
