@@ -177,6 +177,48 @@ static VOID InterpTestPut32(UINT32 linear, UINT32 value)
     g_Memory[linear+3] = (BYTE)(value >> 24);
 }
 
+/* #364: TF IS KEPT, AND AN INSTRUCTION THAT STARTS WITH IT SET IS DECLINED.
+ * Lemmings' protection sets TF through an IRET frame and decrypts each instruction from
+ * its INT 1 handler. The interpreter dropped TF and ran the encrypted bytes as code.
+ */
+static VOID InterpTestTrapFlagBattery(VOID)
+{
+    printf("== #364: the trap flag ==\n");
+    /* POPF loads TF; the next instruction is the real CPU's. */
+    { V86_CPU cpu = InterpTestMakeCpu();
+    BYTE bytes[] = { 0x9D, 0x90 };
+      cpu.Segments[2] = 0x2000;
+      cpu.Registers[4] = 0x00FE;
+      g_Memory[0x200FE] = 0x02;
+      g_Memory[0x200FF] = 0x03;                         /* FLAGS 0302: TF | IF */
+      InterpTestLoad(&cpu, 0x1000, 0, bytes, sizeof bytes);
+      CHECK(InterpTestStepOnce(&cpu) && (cpu.Flags & 0x0100) && cpu.Ip == 1, "9D popf: TF loaded");
+      CHECK(InterpTestStepOnce(&cpu) == 0 && cpu.Ip == 1 && (cpu.Registers[4] & 0xFFFF) == 0x100,
+            "90 with TF set: declined, state untouched"); }
+    /* IRET loads TF from the frame -- Lemmings' INT 3 handler, 026D:0DFE. */
+    { V86_CPU cpu = InterpTestMakeCpu();
+    BYTE bytes[] = { 0xCF };
+      cpu.Segments[2] = 0x2000;
+      cpu.Registers[4] = 0x00FA;
+      g_Memory[0x200FA] = 0x10;                         /* IP 0010 */
+      g_Memory[0x200FB] = 0x00;
+      g_Memory[0x200FC] = 0x00;                         /* CS 1000 */
+      g_Memory[0x200FD] = 0x10;
+      g_Memory[0x200FE] = 0x02;                         /* FLAGS 0302: TF | IF */
+      g_Memory[0x200FF] = 0x03;
+      InterpTestLoad(&cpu, 0x1000, 0, bytes, sizeof bytes);
+      g_Memory[0x10010] = 0x90;
+      CHECK(InterpTestStepOnce(&cpu) && cpu.Ip == 0x10 && (cpu.Flags & 0x0100) && (cpu.Registers[4] & 0xFFFF) == 0x100,
+            "CF iret: TF loaded from the frame");
+      CHECK(InterpTestStepOnce(&cpu) == 0 && cpu.Ip == 0x10, "the instruction after it: declined"); }
+    /* A slice that STARTS with TF set (the CPU was single-stepping) runs nothing. */
+    { V86_CPU cpu = InterpTestMakeCpu();
+    BYTE bytes[] = { 0x9C };
+      cpu.Flags = 0x0302;
+      InterpTestLoad(&cpu, 0x1000, 0, bytes, sizeof bytes);
+      CHECK(InterpTestStepOnce(&cpu) == 0 && cpu.Ip == 0, "9C with TF set: declined"); }
+}
+
 static VOID InterpTestO32Battery(VOID)
 {
     printf("== #194: 0x66 stack/string/transfer forms, PM IRET ==\n");
@@ -1841,6 +1883,7 @@ INT main(VOID)
       CHECK(cpu.Ip == 0x12, "jcxz: taken when CX=0 although ECX!=0"); }
 
     InterpTestO32Battery();
+    InterpTestTrapFlagBattery();
     InterpTestO32Replay();
 
     printf("\n%d checks, %d failed\n", g_Total, g_Failures);

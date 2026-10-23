@@ -18,7 +18,7 @@
 #include "../ntvdmex_x86.h"
 
 #define V86_GUEST_LIMIT             0x110000u   /* 1MB + HMA: guest linear range */
-#define V86_FLAGS_MODELLED          0x0ED5u     /* CF PF AF ZF SF TF IF DF OF: the flags kept */
+#define V86_FLAGS_MODELLED          0x0FD5u     /* CF PF AF ZF SF TF IF DF OF: the flags kept (#364: TF was missing) */
 #define V86_LAHF_FLAGS              0xD5u       /* SF ZF AF PF CF: what LAHF/SAHF move */
 
 /* The x86 encoding facts both interpreters share -- ModRM fields, opcode extensions, sign
