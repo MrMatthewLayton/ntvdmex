@@ -16,6 +16,16 @@
 
 #include "host_state.h"
 
+/* PENDING TIMER TICKS, as a saturating COUNT rather than a flag. A boolean coalesces: every
+ * tick that falls while the guest has interrupts off -- and Skyroads spends most of its time
+ * in exactly that state, CLI'd around its 256-colour palette writes -- was silently thrown
+ * away, so the music's tempo wandered with whatever the guest happened to be doing. A real
+ * 8259 latches the request and delivers it the moment IF comes back. Saturating at 4 keeps
+ * that fidelity without letting a long CLI region accumulate a burst that would then flood
+ * the guest with back-to-back timer interrupts.
+ */
+#define IRQ0_PENDING_MAX    4
+
 extern LONGLONG g_Irq0TimePrevious;
 extern LONGLONG g_Irq0Start;
 extern DWORD g_Irq0AttemptsCount;

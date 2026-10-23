@@ -142,7 +142,12 @@
 enum
 {
     PENDING_INT_RETRIES_MAX = 0x10000
-};   /* event 3 ("interrupt pending, not entered"): retries before giving up */
+};
+
+enum
+{
+    PM_BIOS_TICKS_PER_PASS_MAX = IRQ0_PENDING_MAX
+};   /* #276: BIOS ticks one PM pass may run for an unhooked timer -- all g_Irq0Pending can hold */   /* event 3 ("interrupt pending, not entered"): retries before giving up */
 
 /* A #GP through an IDT gate is an unserviced INT nn the client issued, not an exception it asked for: reflect it as the interrupt, and patch the site so the next pass takes the BOP path. */
 static INT DpmiServiceIdtGateFault(
@@ -2104,14 +2109,32 @@ static VOID DpmiRunClient(
          */
         OplPumpTime();
 
-        if (InterlockedExchange(&g_Irq0Pending, 0))
-        {
-            NTVDD_REGISTERS trapRegisters;
-            RegistersLoad(&trapRegisters, tib);
-            HOST_LOCK();
-            VddBusDeliverInterrupt(&g_Bus, VECTOR_TIMER, &trapRegisters);   /* PitInt08 -> ++0040:006C */
-            HOST_UNLOCK();
-            g_PmIrq0Latch = 1;    /* #2b: latch a virtual IRQ0 for the PM hook */
+        /* #276: EVERY PENDING TICK, NOT ONE, WHILE NOTHING ELSE COUNTS THEM. The exchange
+         * takes all the IRQ0s raised since the last pass, and only one BIOS tick was run for
+         * them -- so when passes were sparse (a PM INT 15h AH=86h wait: 1 tick of 0040:006C
+         * where 3.6 were due, p_pm256) time stood still. A client that has NOT hooked the
+         * timer is served by nothing else, so it gets one BIOS tick per IRQ0, capped. A
+         * client that HAS hooked it keeps one, as before: its ticks are metered through
+         * g_PmTickOwed into its own handler, and its timing was tuned against that.
+         */
+        {   LONG ticksPending = InterlockedExchange(&g_Irq0Pending, 0);
+
+            if (ticksPending > 0)
+            {
+                LONG ticksToRun = g_PmInt[VECTOR_TIMER].Client ? 1
+                                : (ticksPending > PM_BIOS_TICKS_PER_PASS_MAX ? PM_BIOS_TICKS_PER_PASS_MAX : ticksPending);
+                NTVDD_REGISTERS trapRegisters;
+
+                while (ticksToRun-- > 0)
+                {
+                    RegistersLoad(&trapRegisters, tib);
+                    HOST_LOCK();
+                    VddBusDeliverInterrupt(&g_Bus, VECTOR_TIMER, &trapRegisters);   /* PitInt08 -> ++0040:006C */
+                    HOST_UNLOCK();
+                }
+
+                g_PmIrq0Latch = 1;    /* #2b: latch a virtual IRQ0 for the PM hook */
+            }
         }
 
         /* #2b async IRQ0 injection: when the client has hooked INT 08h in PM
