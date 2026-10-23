@@ -647,6 +647,8 @@ INT main(VOID)
             KBC_COMMAND(0xAD);
             KBD_SEND(0xEE);
             CHECK((KBC_STATUS() & 0x01) && KBD_READ() == 0xEE, "kbc: a reply arrives even after ADh");
+            KBC_COMMAND(0xAE);
+            CHECK((KBC_STATUS() & 0x01) == 0, "kbc: ...and AEh after it presents nothing more (p_kbd4 kbd.cmd.ee.while.disabled)");
 
             /* The BIOS INT 09h: an ACK is a flag in 0040:0097, never a key. */
             {   WORD key;
