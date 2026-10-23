@@ -201,6 +201,28 @@ INT main(VOID)
     }
     CHECK(VideoTestCellCharacter(0,0)=='H' && VideoTestCellCharacter(0,1)=='i' && g_Video.CursorColumn==2, "int10/0E: 'Hi' + cursor advance");
 
+    /* T1t: DOS console output expands TAB to the next multiple of 8 (s101: DIR /W). */
+    memset(&registers,0,sizeof registers);
+    VddSetAh(&registers,0x02);
+    VddSetDx(&registers,0x0100);
+    VddBusDeliverInterrupt(&bus,0x10,&registers);
+    VddVideoConsoleChar(&g_Video, 'A');
+    VddVideoConsoleChar(&g_Video, 9);
+    VddVideoConsoleChar(&g_Video, 'B');
+    CHECK(VideoTestCellCharacter(1,0)=='A' && VideoTestCellCharacter(1,1)==' ' && VideoTestCellCharacter(1,7)==' '
+          && VideoTestCellCharacter(1,8)=='B' && g_Video.CursorColumn==9, "console: TAB after column 1 -> column 8");
+    { INT pad;
+
+      for (pad = 0; pad < 6; ++pad)
+          VddVideoConsoleChar(&g_Video, 'x'); }
+
+    VddVideoConsoleChar(&g_Video, 9);
+    CHECK(g_Video.CursorColumn==16 && VideoTestCellCharacter(1,15)==' ', "console: TAB at column 15 -> one space, column 16");
+    VddVideoConsoleChar(&g_Video, 9);
+    CHECK(g_Video.CursorColumn==24, "console: TAB on a stop -> the next stop");
+    VddVideoPutChar(&g_Video, 9);
+    CHECK(g_Video.CursorColumn==25, "int29/teletype: TAB is one glyph, not expanded");
+
     /* T2: write char+attr + scroll + string ----------------------------- */
     memset(&registers,0,sizeof registers);
     VddSetAh(&registers,0x02);

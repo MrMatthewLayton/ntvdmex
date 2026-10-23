@@ -76,6 +76,7 @@ BYTE g_VgaFont8x16[VGA_FONT_CHARACTERS][VGA_FONT16_HEIGHT];
 #define VIDEO_CR_VERTICAL_TOTAL                 0x06
 #define VIDEO_CR_OVERFLOW                       0x07
 #define VIDEO_CR_MAX_SCAN                       0x09
+#define VIDEO_TAB_STOP                          8           /* DOS console output: TAB to the next multiple of 8 */
 #define VIDEO_CR_VERTICAL_DISPLAY_END           0x12
 #define VIDEO_CR_VERTICAL_BLANK_START           0x15
 #define VIDEO_CR_LINE_COMPARE                   0x18
@@ -8572,6 +8573,26 @@ static VOID VideoOnFrame(PVOID context)
 VOID VddVideoPutChar(PVIDEO_STATE state, BYTE character)
 {
     VideoTeletype(state, character);
+    state->IsDirty = 1;
+}
+
+/* DOS'S CONSOLE OUTPUT IS NOT THE BIOS TELETYPE. (s101) MS-DOS's character output moves
+ * a TAB to the next multiple of 8 columns with spaces; INT 10h AH=0Eh prints its glyph.
+ * DIR /W separates its columns with TABs, so every name came out behind a small circle.
+ * INT 29h stays the plain teletype (VddVideoPutChar): it is the driver below DOS.
+ */
+VOID VddVideoConsoleChar(PVIDEO_STATE state, BYTE character)
+{
+    if (character == ASCII_TAB)
+    {
+        do
+            VideoTeletype(state, ' ');
+
+        while (state->CursorColumn % VIDEO_TAB_STOP);
+    }
+    else
+        VideoTeletype(state, character);
+
     state->IsDirty = 1;
 }
 

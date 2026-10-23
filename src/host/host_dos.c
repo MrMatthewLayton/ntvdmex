@@ -2179,7 +2179,7 @@ VOID HostConsoleOut(PVOID context, BYTE ch)
 {
     (VOID)context;
     HOST_LOCK();
-    VddVideoPutChar(&g_Video, ch);
+    VddVideoConsoleChar(&g_Video, ch);
 
     if (g_Stdio != INVALID_HANDLE_VALUE)
     {
