@@ -48,6 +48,9 @@
  */
 #define WOWFOLD_KEEP                256u            /* full dumps kept per function id */
 
+/* #343: one WOWPERF line per 4096 WOW32 BOPs (the mask is the count minus one). */
+#define WOW_BOP_SAMPLE_MASK         0xFFFu
+
 /* AND A SECOND, MUCH HIGHER CAP ON THE VERDICT LINE ITSELF:
  * The dump fold took TERMINAL from 177 MB to 85 MB and left 900,374 verdict
  * lines, which are then the whole remaining volume. They are kept on purpose
@@ -7710,7 +7713,7 @@ static INT DpmiServiceWowBop(
      * thing it is measuring -- which is the exact trap it exists to
      * investigate.
      */
-    if ((++g_WowBops & 0x3FF) == 0)
+    if ((++g_WowBops & WOW_BOP_SAMPLE_MASK) == 0)
     {
         DWORD now = GetTickCount();
         LARGE_INTEGER qpcFrequency;
