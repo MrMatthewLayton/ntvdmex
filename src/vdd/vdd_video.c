@@ -5948,7 +5948,7 @@ static VOID VideoLoadModeDefinition(PVIDEO_STATE state, BYTE mode)
  * IBM's ROM fills them -- p_vid266 dumps slots 03h and 18h so the lead can see what
  * a naive `mode * 64` lookup finds there on the real ROM.
  */
-static const BYTE VideoParameterMode[VDD_VPARAM_N] = {
+static const BYTE g_VideoParameterMode[VDD_VPARAM_N] = {
     0, 0, 0, 0, 0x04, 0x05, 0x06, 0x07,  0, 0, 0, 0, 0, 0x0D, 0x0E, 0,
     0, 0, 0x10, 0, 0, 0, 0, 0x01,  0x03, 0x07, 0x11, 0x12, 0x13
 };
@@ -5962,7 +5962,7 @@ INT VddVideoParameterEntry(BYTE tableIndex, BYTE entry[VIDEO_PARAMETER_ENTRY_BYT
     for (index = 0; index < VIDEO_PARAMETER_ENTRY_BYTES; ++index)
         entry[index] = 0;
 
-    if (tableIndex >= VDD_VPARAM_N || !(mode = VideoParameterMode[tableIndex]))
+    if (tableIndex >= VDD_VPARAM_N || !(mode = g_VideoParameterMode[tableIndex]))
         return 0;
 
     for (definitionIndex = 0; definitionIndex < VGA_MODEDEF_COUNT; ++definitionIndex)

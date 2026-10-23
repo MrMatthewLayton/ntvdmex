@@ -30,15 +30,18 @@
 #include <stdint.h>
 #include "interp_xcpu.h"
 
-VOID ref_Initialize(PCBYTE image, INT isProtectedMode);  VOID new_Initialize(
-    PCBYTE image,
-    INT isProtectedMode);
-VOID ref_Poke(UINT32 linear, BYTE value);     VOID new_Poke(UINT32 linear, BYTE value);
-PCBYTE ref_Memory(VOID);               VOID new_Sync(PCBYTE image);
-INT  ref_Step(PINTERP_XCPU state, PUINT64 effects);       INT  new_Step(
-    PINTERP_XCPU state,
-    PUINT64 effects);
-VOID new_UndoBegin(VOID);  INT new_UndoRollback(VOID);  VOID new_UndoEnd(VOID);
+/* The two interpreters, one object each (interp_side.c, SIDE=Reference / SIDE=Candidate). */
+VOID ReferenceInitialize(PCBYTE image, INT isProtectedMode);
+VOID ReferencePoke(UINT32 linear, BYTE value);
+PCBYTE ReferenceMemory(VOID);
+INT ReferenceStep(PINTERP_XCPU state, PUINT64 effects);
+VOID CandidateInitialize(PCBYTE image, INT isProtectedMode);
+VOID CandidatePoke(UINT32 linear, BYTE value);
+VOID CandidateSync(PCBYTE image);
+INT CandidateStep(PINTERP_XCPU state, PUINT64 effects);
+VOID CandidateUndoBegin(VOID);
+INT CandidateUndoRollback(VOID);
+VOID CandidateUndoEnd(VOID);
 
 static BYTE g_Image[XMEM_SIZE];
 static UINT64 g_Random;
@@ -152,8 +155,8 @@ INT main(INT argc, PSTR *argv)
     for (index = 0; index < XMEM_SIZE; ++index)
         g_Image[index] = (BYTE)InterpSupersetRandom();
 
-    ref_Initialize(g_Image, isProtectedMode);
-    new_Initialize(g_Image, isProtectedMode);
+    ReferenceInitialize(g_Image, isProtectedMode);
+    CandidateInitialize(g_Image, isProtectedMode);
 
     for (program = 0; program < programCount; ++program)
     {
@@ -180,8 +183,8 @@ INT main(INT argc, PSTR *argv)
           for (offset = 0; offset < 64; ++offset)
           {
               BYTE byteValue = (BYTE)InterpSupersetRandom();
-              ref_Poke((linear + offset) % XMEM_SIZE, byteValue);
-              new_Poke((linear + offset) % XMEM_SIZE, byteValue);
+              ReferencePoke((linear + offset) % XMEM_SIZE, byteValue);
+              CandidatePoke((linear + offset) % XMEM_SIZE, byteValue);
           }
           }
 
@@ -193,14 +196,14 @@ INT main(INT argc, PSTR *argv)
             UINT64 newEffects = 0;
             INT isReferenceOk;
             INT isNewOk;
-            UINT key = InterpSupersetKeyOf(ref_Memory(), InterpSupersetLinearOf(&state, isProtectedMode));
-            new_UndoBegin();
-            isReferenceOk = ref_Step(&referenceState, &referenceEffects);
-            isNewOk = new_Step(&newState, &newEffects);
+            UINT key = InterpSupersetKeyOf(ReferenceMemory(), InterpSupersetLinearOf(&state, isProtectedMode));
+            CandidateUndoBegin();
+            isReferenceOk = ReferenceStep(&referenceState, &referenceEffects);
+            isNewOk = CandidateStep(&newState, &newEffects);
 
             if (isReferenceOk)
             {
-                new_UndoEnd();
+                CandidateUndoEnd();
 
                 if (!isNewOk || memcmp(&referenceState, &newState, sizeof referenceState) || referenceEffects != newEffects)
                 {
@@ -216,7 +219,7 @@ INT main(INT argc, PSTR *argv)
 
                         if (printedCount++ < 12)
                         {
-                            PCBYTE memory = ref_Memory();
+                            PCBYTE memory = ReferenceMemory();
                             UINT32 linear = InterpSupersetLinearOf(&state, isProtectedMode);
                             UINT32 offset;
                             printf("MISMATCH %s new_ok=%d fx %s  bytes:", keyText, isNewOk, referenceEffects == newEffects ? "same" : "DIFFER");
@@ -231,7 +234,7 @@ INT main(INT argc, PSTR *argv)
                         }
                     }
 
-                    new_Sync(ref_Memory());          /* realign memory, end this program */
+                    CandidateSync(ReferenceMemory());          /* realign memory, end this program */
                     break;
                 }
 
@@ -246,11 +249,11 @@ INT main(INT argc, PSTR *argv)
                 ++extraCount;
                 g_ExtraByKey[key & 0x1FFFF]++;
 
-                if (!new_UndoRollback())
-                    new_Sync(ref_Memory());
+                if (!CandidateUndoRollback())
+                    CandidateSync(ReferenceMemory());
             }
             else
-                new_UndoEnd();
+                CandidateUndoEnd();
 
             break;
         }

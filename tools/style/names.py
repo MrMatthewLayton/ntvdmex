@@ -5,6 +5,8 @@ changes a file.
     names.py [--summary] [FILE...]    every finding as FILE:LINE: RULE message;
                                       --summary prints only the count per rule
     names.py --strict [FILE...]       the same, and exit 1 if there is a finding
+    names.py --block=N1,N2 [FILE...]  the same, and exit 1 if there is a finding of those rules
+                                      (#344: the rules the tree is clean against block in CI)
 
 With no FILE: every C source and header git tracks under src/ and tests/ (sdk/ is the
 third-party interface and keeps its <stdint.h> types).
@@ -55,6 +57,7 @@ MIRRORS = {
     'src/vdm/ntvdm.h': "NTVDM's own interface structures",
     'src/vdd/audio_wave.c': "the waveIn/waveOut structures of mmsystem.h, declared by hand",
     'tests/probes/dos/isvtest/isvtest.c': "the VDD API's structures, as a third-party VDD sees them",
+    'src/vdd/audio_dmsynth.c': "COM objects in C: the first member is the interface's lpVtbl",
 }
 
 # Files that must use the C types: they define the Windows ones, or implement the C runtime's.
@@ -435,6 +438,10 @@ def tracked_files():
 def main(argv):
     summary = '--summary' in argv
     strict = '--strict' in argv
+    blocking = set()
+    for a in argv:
+        if a.startswith('--block='):
+            blocking.update(r for r in a[len('--block='):].split(',') if r)
     paths = [a for a in argv if not a.startswith('--')] or tracked_files()
     EXPORTED.update(exported_names())
     findings = Findings()
@@ -448,7 +455,10 @@ def main(argv):
     for rule in sorted(counts):
         print(f'names: {rule} {counts[rule]}', file=sys.stderr)
     print(f'names: {len(findings.items)} findings in {len(paths)} files', file=sys.stderr)
-    return 1 if strict and findings.items else 0
+    blocked = [f for f in findings.items if f[2] in blocking]
+    for path, line, rule, message in blocked:
+        print(f'names: BLOCKING {path}:{line}: {rule} {message}', file=sys.stderr)
+    return 1 if (strict and findings.items) or blocked else 0
 
 
 if __name__ == '__main__':
