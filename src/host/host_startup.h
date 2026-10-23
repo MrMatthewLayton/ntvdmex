@@ -35,8 +35,7 @@ VOID StartupBuildDos(
     DOS_IMAGE *image,
     CHAR *programPathBuffer,
     CHAR *args,
-    DOS_MACHINE *machine,
-    CHAR *report);
+    DOS_MACHINE *machine);
 VOID StartupLoadProgram(
     PSTR *cursorIo,
     DWORD *readCountIo,

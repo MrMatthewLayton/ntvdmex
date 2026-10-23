@@ -344,6 +344,16 @@
 
 #define OS_VERSION_NOT_NT_U         0x80000000u /* GetVersion: the high bit is set on Windows 9x */
 
+/* Build DOS's drive tables -- the DPBs and the CDS -- for the drive letters that exist (GetLogicalDrives),
+ * capped at what the reserved space holds, and the device chain from the NUL device.
+ *
+ * [CAUTION]: ITS LOG LINE HAS A BUFFER OF ITS OWN. (s101) It was written from the start of
+ * WinMain's report[], which still held the start-up lines not yet flushed -- so every log
+ * opened with this line written over them, and the lines lost were the ones a rig report
+ * needs (the CD-ROM mount, the settings summary).
+ */
+#define STARTUP_DRIVE_LINE_SIZE     1024
+
 /* The planted code fits its slots in the DOS-resident block (dos_layout.h). */
 typedef CHAR DOS_AUXPRN_FITS[(sizeof(g_DosAuxPrnCode) <= DOS_AUXPRN_LEN) ? 1 : -1];
 
@@ -612,13 +622,7 @@ static VOID StartupLoadVideoWatch(VOID)
       } }
 }
 
-/* Build DOS's drive tables -- the DPBs and the CDS -- for the drive letters that exist (GetLogicalDrives),
- * capped at what the reserved space holds, and the device chain from the NUL device.
- */
-static VOID StartupBuildDriveTables(
-    CHAR *report,
-    volatile BYTE * const sysVars,
-    DOS_MACHINE *machine)
+static VOID StartupBuildDriveTables(volatile BYTE * const sysVars, DOS_MACHINE *machine)
 {
     /* THE REAL CHAINS: DPB, CDS AND THE DEVICE HEADER. (GH #48) (Importance = 1):
      * Until now everything above +0x20 was deliberately zero, and that choice was
@@ -643,7 +647,8 @@ static VOID StartupBuildDriveTables(
         UINT count = 0;
         UINT slot[DOS_DPBCHAIN_MAX];
         UINT driveCount = 0;
-        PSTR scan = report;
+        CHAR line[STARTUP_DRIVE_LINE_SIZE];
+        PSTR scan = line;
         /* Which drive letters exist, capped at what the reserved space holds.
          * Counted FIRST, because each DPB's `next` pointer has to name the one
          * after it and the last must terminate -- and a chain that does not
@@ -928,7 +933,7 @@ static VOID StartupBuildDriveTables(
 
         scan = LogPut(scan, " (GH #48)\r\n");
         SetErrorMode(previousErrorMode);
-        LogAppend(LOG_PATH, report, scan); SerialOut(report, scan);
+        LogAppend(LOG_PATH, line, scan); SerialOut(line, scan);
     }
 }
 
@@ -4072,8 +4077,7 @@ VOID StartupBuildDos(
     DOS_IMAGE *image,
     CHAR *programPathBuffer,
     CHAR *args,
-    DOS_MACHINE *machine,
-    CHAR *report)
+    DOS_MACHINE *machine)
 {
     PSTR cursor = *cursorIo;
     volatile BYTE * handlerArea;
@@ -4544,7 +4548,7 @@ VOID StartupBuildDos(
     sysVars[DOS_SYSVARS_OFF + DOS_SYSVARS_LASTDRIVE] = DOS_LASTDRIVE;          /* LASTDRIVE */
     machine->SysvarsSegment = DOS_SYSVARS_SEG;
     machine->SysvarsOffset = DOS_SYSVARS_OFF;
-    StartupBuildDriveTables(report, sysVars, machine);
+    StartupBuildDriveTables(sysVars, machine);
     /* GH #128: and the WOW extension krnl386 reads before it does anything else. */
     DosWowPublish(handlerArea, (volatile BYTE *)(DOS_CTAB_SEG << PARAGRAPH_SHIFT), DOS_DRIVE_C);
     DosXmsInitialize(&g_Xms, XMS_POOL_KB, XmsHostAllocate, XmsHostFree, NULL);  /* M4: XMS pool */
