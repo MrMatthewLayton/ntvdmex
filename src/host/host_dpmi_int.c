@@ -7362,6 +7362,53 @@ static INT DpmiServiceInt15(
               VDM_REG(tib, VTIB_EFLAGS) &= ~EFLAGS_CF_U;
           }
       }
+      else if (int15Ah == BIOS_SYSTEM_EVENT_WAIT)
+      {
+          /* #276: THE EVENT WAIT, AS THE V86 ARM HAS IT SINCE #206. The flag byte is
+           * ES:(E)BX -- a selector here -- so the pacer's poster gets its linear
+           * address (our LDT bases are this process's own addresses). The BDA's
+           * 40:98 pointer is a real-mode segment:offset, which a selector is not, so
+           * only the count and the active flag go there. One countdown at a time.
+           */
+          UINT eventWaitAl = VDM_REG(tib, VTIB_EAX) & BYTE_MASK;
+
+          if (eventWaitAl == BIOS_EVENT_WAIT_CANCEL)
+          {
+              g_Int15EventEnd = 0;
+              *(volatile BYTE *)(ULONG_PTR)(BIOS_BDA_BASE + BIOS_BDA_WAIT_ACTIVE) = BIOS_BDA_WAIT_NONE;
+              VDM_REG(tib, VTIB_EFLAGS) &= ~EFLAGS_CF_U;
+          }
+          else if (g_Int15EventEnd || g_Int15WaitEnd)
+          {
+              VDM_SET16(tib, VTIB_EAX, (WORD)(eventWaitAl | (BIOS_SYSTEM_STATUS_BUSY << BYTE_SHIFT)));
+              VDM_REG(tib, VTIB_EFLAGS) |= EFLAGS_CF_U;
+              ++g_Int15Busy;
+          }
+          else
+          {
+              WORD  flagSelector = (WORD)VDM_REG16(tib, VTIB_ES);
+              DWORD flagOffset = DpmiSelectorIs32((WORD)VDM_REG16(tib, VTIB_CS))
+                               ? VDM_REG(tib, VTIB_EBX) : VDM_REG16(tib, VTIB_EBX);
+              DWORD flagLinear = DpmiSelectorBase(flagSelector) + flagOffset;
+              DWORD microseconds = (VDM_REG16(tib, VTIB_ECX) << WORD_SHIFT) | VDM_REG16(tib, VTIB_EDX);
+
+              if (!flagSelector || !HostWritable((PVOID)(ULONG_PTR)flagLinear, 1))
+              {
+                  VDM_SET16(tib, VTIB_EAX,
+                            (WORD)(eventWaitAl | (BIOS_SYSTEM_STATUS_UNSUPPORTED << BYTE_SHIFT)));
+                  VDM_REG(tib, VTIB_EFLAGS) |= EFLAGS_CF_U;      /* no flag to post to */
+              }
+              else
+              {
+                  g_Int15EventLinear = flagLinear;
+                  *(volatile DWORD *)(ULONG_PTR)(BIOS_BDA_BASE + BIOS_BDA_WAIT_COUNT) = microseconds;
+                  *(volatile BYTE  *)(ULONG_PTR)(BIOS_BDA_BASE + BIOS_BDA_WAIT_ACTIVE) = BIOS_BDA_WAIT_IN_PROGRESS;
+                  ++g_Int15Events;
+                  g_Int15EventEnd = Int15QpcAfterMicroseconds(microseconds ? microseconds : 1);
+                  VDM_REG(tib, VTIB_EFLAGS) &= ~EFLAGS_CF_U;
+              }
+          }
+      }
       else
       {
           VDM_SET16(tib, VTIB_EAX,

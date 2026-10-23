@@ -1153,7 +1153,12 @@ static VOID Int15EventPoll(VOID)            /* pacer thread */
         return;
 
     g_Int15EventEnd = 0;
-    *(volatile BYTE *)(ULONG_PTR)g_Int15EventLinear |= BIOS_EVENT_WAIT_POSTED;      /* the caller's flag: time is up */
+    /* #276: a PM client's flag may sit in memory it has freed since (0502h); a real-mode
+     * one is always in the low megabyte. Post only to a byte that is still there.
+     */
+    if (HostWritable((PVOID)(ULONG_PTR)g_Int15EventLinear, 1))
+        *(volatile BYTE *)(ULONG_PTR)g_Int15EventLinear |= BIOS_EVENT_WAIT_POSTED;      /* the caller's flag: time is up */
+
     *(volatile BYTE *)(ULONG_PTR)(BIOS_BDA_BASE + BIOS_BDA_WAIT_ACTIVE) = BIOS_BDA_WAIT_NONE;               /* 40:A0 wait no longer active */
     ++g_Int15Posted;
 }
