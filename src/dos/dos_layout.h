@@ -19,7 +19,13 @@
 #define DOS_HDLR_SEG                0x0050              /* INT 21h BOP handler segment (linear 0x0500) */
 
 /* The host's stubs in DOS_HDLR_SEG -- where WinMain plants each and points its vector. */
-#define DOS_HDLR_INT21_STUB_OFF     0x0000
+/* #317: NOT AT 0x00. 0050:0000 is the BIOS's print-screen status byte (IBM PC/AT TR,
+ * PRINT_SCREEN; RBIL MEMORY.LST 0050:0000), and programs disable Print Screen with
+ * `mov byte [0050:0000],1` -- which used to overwrite the first byte of every INT 21h.
+ * IVT[21h] is set from this, and everything else finds our INT 21h by its BOP number and
+ * the segment it executes in, never by this offset.
+ */
+#define DOS_HDLR_INT21_STUB_OFF     0x00E4
 #define DOS_HDLR_INT10_STUB_OFF     0x0020
 #define DOS_HDLR_INT16_STUB_OFF     0x0028
 #define DOS_HDLR_INT33_STUB_OFF     0x0030

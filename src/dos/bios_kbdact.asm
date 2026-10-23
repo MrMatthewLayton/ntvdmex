@@ -34,8 +34,8 @@
 ;   IVT[05h] points here. The IBM routine (PC/AT TR, PRINT_SCREEN) prints the text
 ;   screen through INT 17h (printer 0) and keeps its state in 0050:0000: 01h while
 ;   printing (a nested INT 05h returns at once), 00h when done, FFh if the printer
-;   reported an error (INT 17h AH & 29h). ⛔ Ours keeps that state HOST-side: 0050:0000
-;   is the first byte of our own INT 21h stub (main.c prtsc_bop). The loop runs here so every byte goes through
+;   reported an error (INT 17h AH & 29h). #317: ours keeps it there too (the INT 21h stub
+;   that used to occupy 0050:0000 moved). The loop runs here so every byte goes through
 ;   the guest's INT 17h -- hooked or not; the host's BOP supplies the next byte (from
 ;   our INT 10h's read of the screen) and judges INT 17h's AH. begin = p5+1, next =
 ;   p5+8, both BOP 09h; CF=1 from either means "done", and the host has put back every
