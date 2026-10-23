@@ -30,6 +30,7 @@ extern DWORD g_HmaState;
 extern DOS_EMS_STATE g_Ems;
 extern INT g_BehaveDos622;
 extern PCSTR g_FloppyImage;
+extern INT   g_FloppyPhysical;            /* #240: physical mode on a PC with the drive */
 extern HANDLE g_Stdio;
 
 PDOS_DISK_GEOMETRY DiskFor(UINT drive);

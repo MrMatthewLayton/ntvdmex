@@ -238,6 +238,9 @@ PCSTR g_FloppyImage = NULL;
  *   turned four sessions of hypotheses into one located bug.
  */
 HANDLE g_Stdio = INVALID_HANDLE_VALUE;
+
+/* #240: Settings > Drives > Floppy = the PHYSICAL drive, and this PC has one. */
+INT g_FloppyPhysical = 0;
 static struct
 {
     DWORD Eax;
@@ -361,6 +364,7 @@ static INT g_ConsoleInPending = -1;                /* scancode owed to the next 
 static CHAR g_TypeIn[TYPEIN_CAP];
 static INT g_TypeInHead;
 static INT g_TypeInTail;
+static const CHAR g_FloppyDevicePath[] = HOST_FLOPPY_A_DEVICE;
 
 /* THE COMPILER VARIABLES REACH THE GUEST, WITHOUT MOVING THE MEMORY MAP. (s73) (Importance = 1):
  * A DOS build tool is configured through its environment -- LIB and INCLUDE for the
@@ -1498,9 +1502,18 @@ INT DosTerminate(DOS_MACHINE *machine, PVOID tib, PSTR *logCursor, PSTR base)
     return 0;                        /* top-level program: the run is over */
 }
 
+/* What INT 13h drive 0 opens: the mounted image; else the harness's disk if it is there;
+ * else, in physical mode, the host's own drive (#240) -- \\.\A:, sector for sector.
+ */
 static PCSTR FloppyImagePath(VOID)
 {
-    return g_FloppyImage ? g_FloppyImage : FLOPPY_IMG_PATH;
+    if (g_FloppyImage)
+        return g_FloppyImage;
+
+    if (g_FloppyPhysical && GetFileAttributesA(FLOPPY_IMG_PATH) == INVALID_FILE_ATTRIBUTES)
+        return g_FloppyDevicePath;
+
+    return FLOPPY_IMG_PATH;
 }
 
 /* s84 (user): DOES THIS PC HAVE THE PHYSICAL DRIVE AT ALL?:
@@ -1539,6 +1552,7 @@ PDOS_DISK_GEOMETRY DiskFor(UINT drive)
     DWORD got = 0;
     DWORD size;
     UINT oldErrorMode;
+    INT isPhysical;
 
     if (drive != 0)
         return NULL;                             /* only A: is backed today */
@@ -1549,17 +1563,29 @@ PDOS_DISK_GEOMETRY DiskFor(UINT drive)
     if (g_DiskTried[0])
         return NULL;
 
-    g_DiskTried[0] = 1;
+    /* #240: a PHYSICAL drive is asked again next time -- a disk can be put in it -- while
+     * an image that would not open is given up on for the run, as before.
+     */
+    isPhysical = (FloppyImagePath() == g_FloppyDevicePath);
+    g_DiskTried[0] = !isPhysical;
     oldErrorMode = SetErrorMode(SEM_FAILCRITICALERRORS | SEM_NOOPENFILEERRORBOX);
     g_DiskHandle[0] = CreateFileA(FloppyImagePath(), GENERIC_READ | GENERIC_WRITE,
-                              FILE_SHARE_READ, NULL, OPEN_EXISTING,
+                              FILE_SHARE_READ | (isPhysical ? FILE_SHARE_WRITE : 0), NULL, OPEN_EXISTING,
                               FILE_ATTRIBUTE_NORMAL, NULL);
+
+    if (g_DiskHandle[0] == INVALID_HANDLE_VALUE && isPhysical)     /* a write-protected disk */
+        g_DiskHandle[0] = CreateFileA(FloppyImagePath(), GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE, NULL,
+                                      OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
+
     SetErrorMode(oldErrorMode);
 
     if (g_DiskHandle[0] == INVALID_HANDLE_VALUE)
         return NULL;
 
-    size = GetFileSize(g_DiskHandle[0], NULL);
+    /* A device has no file size; its BPB says how big it is (DosDiskGeometryFromBpb
+     * checks the size only as a ceiling).
+     */
+    size = isPhysical ? INVALID_FILE_SIZE : GetFileSize(g_DiskHandle[0], NULL);
 
     if (!ReadFile(g_DiskHandle[0], boot, DOS_SECTOR_SIZE, &got, NULL) || got != DOS_SECTOR_SIZE
         || !DosDiskGeometryFromBpb(boot, size, &g_DiskGeometry[0]))
@@ -1570,9 +1596,14 @@ PDOS_DISK_GEOMETRY DiskFor(UINT drive)
          */
         CHAR lineBuffer[160];
         CHAR *lineCursor = lineBuffer;
-        lineCursor = LogPut(lineCursor, "  INT13 image present but its BPB is not usable -- "
-                      "treating drive 0 as ABSENT (GH #44)\r\n");
-        LogAppend(LOG_PATH, lineBuffer, lineCursor); SerialOut(lineBuffer, lineCursor);
+
+        if (!isPhysical)                               /* an empty physical drive is asked every time: no log */
+        {
+            lineCursor = LogPut(lineCursor, "  INT13 image present but its BPB is not usable -- "
+                          "treating drive 0 as ABSENT (GH #44)\r\n");
+            LogAppend(LOG_PATH, lineBuffer, lineCursor); SerialOut(lineBuffer, lineCursor);
+        }
+
         CloseHandle(g_DiskHandle[0]);
         g_DiskHandle[0] = INVALID_HANDLE_VALUE;
         return NULL;
@@ -1611,6 +1642,7 @@ INT DiskIo(UINT drive, UINT32 lba, UINT count, BYTE *guest, INT write)
             return 0;
 
         FlushFileBuffers(g_DiskHandle[0]);
+        DosInt21FloppyChanged();                       /* #240: the DOS-level copy of A: is stale */
     }
     else
     {

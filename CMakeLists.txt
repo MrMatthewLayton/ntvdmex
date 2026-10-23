@@ -159,6 +159,7 @@ add_executable(ntvdmhost
     src/dos/dos_recovery.c
     src/dos/dos_disk.c
     src/dos/dos_err.c
+    src/dos/dos_fatimg.c
     src/wow/ne.c
     src/wow/wowsched.c
     src/vdd/vdd_bus.c
