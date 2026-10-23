@@ -3217,6 +3217,7 @@ VOID StartupConnectDosToHost(DOS_MACHINE *machine)
     machine->TicksContext = NULL;
     machine->PrinterOut  = DosPrnOut;                     /* #251: PRN/AUX when not in V86 */
     machine->AuxOut  = DosAuxOut;
+    machine->AuxIn   = DosAuxIn;                          /* #272: AUX input without the driver (PM) */
     machine->DeviceContext = NULL;
 }
 

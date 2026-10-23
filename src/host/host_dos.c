@@ -1231,6 +1231,30 @@ VOID DosAuxOut(PVOID context, BYTE character)
     HOST_UNLOCK();
 }
 
+/* #272: one byte of AUX input for a caller that cannot run DOS's driver code -- a DPMI
+ * client's INT 21h. INT 14h AH=02h on COM1 through the bus, the call the driver makes
+ * (p_auxprn); AH bit 7 (time-out) means nothing is waiting, and the answer is 0.
+ */
+INT DosAuxIn(PVOID context, PBYTE character)
+{
+    NTVDD_REGISTERS registers;
+
+    (VOID)context;
+    registers.Eax = BIOS_SERIAL_RECEIVE << BYTE_SHIFT;                                    /* INT 14h AH=02h, COM1 (DX=0) */
+    registers.Ebx = registers.Ecx = registers.Edx = registers.Esi = registers.Edi = registers.Ebp = 0;
+    registers.Ds = registers.Es = 0;
+    registers.CarryFlag = registers.ZeroFlag = 0;
+    HOST_LOCK();
+    VddBusDeliverInterrupt(&g_Bus, VECTOR_SERIAL, &registers);
+    HOST_UNLOCK();
+
+    if ((registers.Eax >> BYTE_SHIFT) & BIOS_SERIAL_TIMEOUT)
+        return 0;
+
+    *character = (BYTE)(registers.Eax & BYTE_MASK);
+    return 1;
+}
+
 /* A GUEST ASKED TO TERMINATE. FOUR DOORS, ONE ANSWER. (GH #134):
  * AH=4Ch, AH=00h, INT 20h and INT 27h all end a program, and this decides
  * whether that ends the RUN or merely returns a child to its parent.

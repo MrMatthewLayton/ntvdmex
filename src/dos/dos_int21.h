@@ -223,11 +223,15 @@
 #define DOS_INT53_SHELL_LOOP                    0x02    /* AX=5302h: the top of each pass of XP's shell loop */
 #define DOS_INT53_STARTUP                       0x05    /* AX=5305h: asked once at start-up */
 
+/* #272: one identity byte per device slot -- DOS_DEV_SLOTS (dos_fh.h); dos_int21.c checks they agree. */
+#define DOS_INT21_DEVICE_SLOTS                  32
+
 /* One saved handle table -- see DOS_MACHINE::HandleStack. */
 typedef struct _DOS_HANDLE_FRAME
 {
     HANDLE FileHandles[DOS_MAX_FILES];
     UINT32 StdOpen;
+    BYTE DeviceKind[DOS_INT21_DEVICE_SLOTS];
     BYTE JftKnown[DOS_PSP_JFT_HANDLES];
 } DOS_HANDLE_FRAME;
 
@@ -335,6 +339,7 @@ typedef struct _DOS_MACHINE
     WORD Trampoline;
     INT    (*PrinterOut)(PVOID context, BYTE character);   /* PRN byte -> LPT1; 0 = went nowhere */
     VOID   (*AuxOut)(PVOID context, BYTE character);   /* AUX byte -> COM1 */
+    INT    (*AuxIn)(PVOID context, PBYTE character);   /* #272: COM1 byte -> AUX; 0 = none waiting */
     PVOID DeviceContext;
     INT    (*ConsolePeek)(PVOID context); /* non-blocking status: 1 if a key is ready */
     /* AH=0Ah (buffered input) IS A BLOCKING SERVICE THAT SPANS MANY RETRIES, so the
@@ -382,6 +387,7 @@ typedef struct _DOS_MACHINE
      * before redirecting -- see DOS_DEV_SLOTS in dos_fh.h.
      */
     UINT32 StdOpen;
+    BYTE DeviceKind[DOS_INT21_DEVICE_SLOTS];    /* #272: which device each device slot is (dos_fh.h) */
     /* EACH PROGRAM HAS ITS OWN HANDLE TABLE ON DOS. OURS IS ONE TABLE. (s81) (Importance = 2):
      * fh[]/StdOpen are the machine's ONLY handle table, so a child that closed its
      * handle 1 closed the SHELL's stdout: Doom's SETUP does exactly that, and XP's

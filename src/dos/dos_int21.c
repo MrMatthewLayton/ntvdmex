@@ -306,6 +306,9 @@
  */
 #define DOS_LFN_FIND_SLOTS                      16
 
+/* #272: DOS_MACHINE's DeviceKind[] is sized in dos_int21.h, which cannot see dos_fh.h. */
+typedef CHAR DosDeviceSlotsAgree[(DOS_INT21_DEVICE_SLOTS == DOS_DEV_SLOTS) ? 1 : -1];
+
 /* #275: WHICH DRIVE AN OPEN FILE IS ON, for INT 24h's AL on a 3Fh/40h failure:
  * We keep no SFT, so the handle has to be asked. XP has no GetFinalPathNameByHandle;
  * NtQueryObject(ObjectNameInformation) gives the file object's NT name
@@ -1119,6 +1122,7 @@ VOID DosInt21Initialize(PDOS_MACHINE machine, WORD firstMcb)
     machine->LineOffset = 0;
     machine->TraceCount = 0;
     machine->StdOpen = DOS_INT21_STD_OPEN_ALL;                /* stdin/stdout/stderr/aux/prn all open */
+    DosDeviceReset(machine->DeviceKind);                      /* #272 */
     {
         INT index3;
 
@@ -1203,6 +1207,9 @@ VOID DosHandlesPush(PDOS_MACHINE machine)
 
     machine->HandleStack[machine->HandleDepth].StdOpen = machine->StdOpen;
 
+    for (index = 0; index < DOS_DEV_SLOTS; ++index)
+        machine->HandleStack[machine->HandleDepth].DeviceKind[index] = machine->DeviceKind[index];
+
     for (index = 0; index < DOS_PSP_JFT_HANDLES; ++index)
         machine->HandleStack[machine->HandleDepth].JftKnown[index] = machine->JftKnown[index];
 
@@ -1263,7 +1270,7 @@ static BYTE DosSftValue(PDOS_MACHINE machine, UINT handle)
     }
 
     if (handle < DOS_INT21_STD_OPEN_BITS && (machine->StdOpen & (1u << handle)))
-        return (BYTE)(handle == DOS_INT21_STDAUX_HANDLE ? DOS_PSP_JFT_AUX_ENTRY : handle == DOS_INT21_STDPRN_HANDLE ? DOS_PSP_JFT_PRN_ENTRY : DOS_PSP_JFT_STDIN_ENTRY);
+        return DosDeviceOf(machine->DeviceKind, handle);             /* #272: its own device, not its number's */
 
     return DOS_PSP_JFT_CLOSED;
 }
@@ -1447,6 +1454,9 @@ VOID DosJftExec(PDOS_MACHINE machine, WORD childPsp)
 
             if (handle < DOS_INT21_STD_OPEN_BITS)
                 machine->StdOpen |= (1u << handle);
+
+            if (handle < DOS_DEV_SLOTS)
+                machine->DeviceKind[handle] = value;                 /* #272: the device the JFT names */
         }
         else if (machine->SftHost[value])
         {
@@ -1507,6 +1517,9 @@ VOID DosHandlesPop(PDOS_MACHINE machine, INT isTsr)
         machine->FileHandles[index] = machine->HandleStack[depth].FileHandles[index];
 
     machine->StdOpen = machine->HandleStack[depth].StdOpen;
+
+    for (index = 0; index < DOS_DEV_SLOTS; ++index)
+        machine->DeviceKind[index] = machine->HandleStack[depth].DeviceKind[index];
 
     for (index = 0; index < DOS_PSP_JFT_HANDLES; ++index)
         machine->JftKnown[index] = machine->HandleStack[depth].JftKnown[index];
@@ -2236,18 +2249,23 @@ INT DosInt21(PDOS_MACHINE machine)
         /* #251: AN UNREDIRECTED 3 IS AUX AND 4 IS PRN, and they go to the BIOS
          * (INT 14h / INT 17h) like DOS's own drivers -- they used to be refused
          * with error 6 here, after AH=04h/05h had thrown their bytes away.
+         * #272: and so does ANY slot that IS one of them -- a duplicate of PRN, or
+         * handle 1 pointed at PRN with AH=46h. The slot's identity decides, not its number.
          */
-        else if ((handle == DOS_INT21_STDAUX_HANDLE || handle == DOS_INT21_STDPRN_HANDLE) && DosHandleIsDevice((PVOID const *)machine->FileHandles, machine->StdOpen, handle))
+        else if (DosHandleIsDevice((PVOID const *)machine->FileHandles, machine->StdOpen, handle)
+                 && DosDeviceOf(machine->DeviceKind, handle) != DOS_DEVICE_CON)
         {
+            INT isPrinter = (DosDeviceOf(machine->DeviceKind, handle) == DOS_DEVICE_PRN);
+
             if (AUXPRN_V86)
-                AUXPRN_TRAMP(handle == DOS_INT21_STDPRN_HANDLE ? DOS_AUXPRN_PRN_WRITE : DOS_AUXPRN_AUX_WRITE);
+                AUXPRN_TRAMP(isPrinter ? DOS_AUXPRN_PRN_WRITE : DOS_AUXPRN_AUX_WRITE);
             else
             {
                 DWORD index;
 
                 for (index = 0; index < count; ++index)
                 {
-                    if (handle == DOS_INT21_STDPRN_HANDLE)
+                    if (isPrinter)
                     {
                         if (machine->PrinterOut)
                             (VOID)machine->PrinterOut(machine->DeviceContext, (BYTE)buffer[index]);
@@ -2260,10 +2278,9 @@ INT DosInt21(PDOS_MACHINE machine)
                 OKCF();
             }
         }
-        /* [CAUTION]: ANY device slot, not just 1 and 2 -- after AH=45h the console can be
-         * sitting in slot 5. A duplicate loses which device it was, so a dup of
-         * AUX would print here; nothing does that, and the alternative is a
-         * per-slot identity byte we have no caller for.
+        /* [CAUTION]: ANY console slot, not just 1 and 2 -- after AH=45h the console can be
+         * sitting in slot 5. (#272: a duplicate of AUX or PRN no longer lands here; the
+         * slot keeps its identity -- see DosDeviceOf.)
          */
         else if (DosHandleIsDevice((PVOID const *)machine->FileHandles, machine->StdOpen, handle))
              {
@@ -2429,9 +2446,11 @@ INT DosInt21(PDOS_MACHINE machine)
             trace = LogPut(trace, " first="); trace = LogDump(trace, (PCBYTE)buffer, (read >= DOS_INT21_TRACE_FIRST_BYTES) ? DOS_INT21_TRACE_FIRST_BYTES : 0);
             trace = LogPut(trace, "\r\n");
         }
-        else if (handle == 0 && DosHandleIsDevice((PVOID const *)machine->FileHandles, machine->StdOpen, handle))
+        else if (DosHandleIsDevice((PVOID const *)machine->FileHandles, machine->StdOpen, handle)
+                 && DosDeviceOf(machine->DeviceKind, handle) == DOS_DEVICE_CON)
         {
             /* #251: STDIN IS THE KEYBOARD, AND DOS READS A LINE FROM IT:
+             * (#272: so does ANY console slot -- a duplicate of stdin is still CON.)
              * This answered 0 bytes -- end of file -- so any program reading its
              * input through handle 0 (C's gets/scanf/fgets do) saw an empty stream
              * and gave up. DOS's console read is cooked: it echoes, honours
@@ -2506,10 +2525,39 @@ INT DosInt21(PDOS_MACHINE machine)
             OKCF();
         readDone: ;
         }
-        else if (handle == DOS_INT21_STDAUX_HANDLE && AUXPRN_V86 && DosHandleIsDevice((PVOID const *)machine->FileHandles, machine->StdOpen, handle))
+        else if (DosHandleIsDevice((PVOID const *)machine->FileHandles, machine->StdOpen, handle)
+                 && DosDeviceOf(machine->DeviceKind, handle) == DOS_DEVICE_AUX && AUXPRN_V86)
              AUXPRN_TRAMP(DOS_AUXPRN_AUX_READ);       /* #251: AUX, through INT 14h */
+        else if (DosHandleIsDevice((PVOID const *)machine->FileHandles, machine->StdOpen, handle)
+                 && DosDeviceOf(machine->DeviceKind, handle) == DOS_DEVICE_AUX && machine->AuxIn)
+        {
+            /* #272: AUX FROM PROTECTED MODE (or any caller that cannot resume in the
+             * driver). The same contract as the driver's rd3 (p_auxprn, 6.22): byte by
+             * byte from COM1, stopping AFTER a CR or at CX. A PM caller cannot be left
+             * spinning in our INT 21h, so where the driver would wait for the next byte
+             * this returns what has arrived -- possibly 0 bytes.
+             */
+            volatile BYTE *bytes = (volatile BYTE *)buffer;
+            DWORD transferred = 0;
+
+            while (transferred < count)
+            {
+                BYTE character;
+
+                if (!machine->AuxIn(machine->DeviceContext, &character))
+                    break;
+
+                bytes[transferred++] = character;
+
+                if (character == ASCII_CR)
+                    break;
+            }
+
+            SETAX(transferred);
+            OKCF();
+        }
         else if (DosHandleIsDevice((PVOID const *)machine->FileHandles, machine->StdOpen, handle))
-             { /* PRN, a dup, or AUX in PM: EOF */
+             { /* PRN (output only), or AUX with no way to read it: EOF */
                  SETAX(0);
                  OKCF();
              }
@@ -3694,7 +3742,16 @@ INT DosInt21(PDOS_MACHINE machine)
             AUXPRN_TRAMP(function == DOS_FN_PRINTER_OUTPUT ? DOS_AUXPRN_PRN_OUTPUT : function == DOS_FN_AUX_OUTPUT ? DOS_AUXPRN_AUX_OUTPUT : DOS_AUXPRN_AUX_INPUT);
         else if (function == DOS_FN_AUX_INPUT)
         {
-            SETAX((R_AX & HIGH_BYTE_MASK) | ASCII_END_OF_FILE);
+            /* #272: from protected mode, the byte COM1 has waiting (INT 14h AH=02h, as
+             * the driver reads it). DOS would wait for one; a PM caller cannot be left
+             * spinning here, so with nothing waiting the answer stays ^Z, end of file.
+             */
+            BYTE character = ASCII_END_OF_FILE;
+
+            if (machine->AuxIn && !machine->AuxIn(machine->DeviceContext, &character))
+                character = ASCII_END_OF_FILE;
+
+            SETAX((R_AX & HIGH_BYTE_MASK) | character);
             OKCF();
         }
         else
@@ -3936,6 +3993,10 @@ INT DosInt21(PDOS_MACHINE machine)
                 else
                 {
                     machine->FileHandles[targetHandle] = newHandle;
+
+                    if (isSourceDevice)
+                        machine->DeviceKind[targetHandle] = DosDeviceOf(machine->DeviceKind, sourceHandle);   /* #272 */
+
                     SETAX(targetHandle);
                     OKCF();
                 }
@@ -3964,6 +4025,8 @@ INT DosInt21(PDOS_MACHINE machine)
 
                        if (!isSourceDevice)
                            DosHandleSetDevice(&machine->StdOpen, targetHandle, FALSE);
+                       else
+                           machine->DeviceKind[targetHandle] = DosDeviceOf(machine->DeviceKind, sourceHandle);   /* #272 */
 
                        OKCF(); }
             }
@@ -4899,8 +4962,10 @@ INT DosInt21(PDOS_MACHINE machine)
         {
             WORD deviceInfo = (handle < DOS_INT21_STD_HANDLES) ? DOS_INT21_DEVICE_INFO_CONSOLE : DOS_INT21_DEVICE_INFO_FILE;
 
-            if ((handle == DOS_INT21_STDAUX_HANDLE || handle == DOS_INT21_STDPRN_HANDLE) && DosHandleIsDevice((PVOID const *)machine->FileHandles, machine->StdOpen, handle))
-                deviceInfo = (handle == DOS_INT21_STDAUX_HANDLE) ? DOS_INT21_DEVICE_INFO_AUX : DOS_INT21_DEVICE_INFO_PRN;
+            if (DosHandleIsDevice((PVOID const *)machine->FileHandles, machine->StdOpen, handle))     /* #272: by identity */
+                deviceInfo = (DosDeviceOf(machine->DeviceKind, handle) == DOS_DEVICE_AUX) ? DOS_INT21_DEVICE_INFO_AUX
+                           : (DosDeviceOf(machine->DeviceKind, handle) == DOS_DEVICE_PRN) ? DOS_INT21_DEVICE_INFO_PRN
+                           : DOS_INT21_DEVICE_INFO_CONSOLE;
 
             SET16(R_DX, deviceInfo);
             SETAX(deviceInfo);

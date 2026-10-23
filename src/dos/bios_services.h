@@ -34,6 +34,8 @@
 /* INT 15h, system services (AH), and the AH it answers with. */
 #define BIOS_SYSTEM_KEYBOARD_INTERCEPT          0x4F
 #define BIOS_SERIAL_SEND                        0x01        /* INT 14h AH=01h */
+#define BIOS_SERIAL_RECEIVE                     0x02        /* INT 14h AH=02h (#272) */
+#define BIOS_SERIAL_TIMEOUT                     0x80        /* INT 14h AH bit 7: nothing came (#272) */
 #define BIOS_ROM_SEGMENT                        0xF000      /* The BIOS ROM: F000:0000 up */
 #define BIOS_SYSTEM_EVENT_WAIT                  0x83
 #define BIOS_SYSTEM_JOYSTICK                    0x84
