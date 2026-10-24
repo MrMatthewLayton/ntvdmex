@@ -26,7 +26,7 @@
 #include "host_cdrom.h"
 #include "cdrom_policy.h"           /* s101: which letters the image combos offer */
 #include "../dos/dos_sysvars.h"     /* DOS_CDS_FLAG_*: the floppy image's CDS entry */
-#define UITICK_CHOICES          5   /* The Settings combo's entries */
+#define UITICK_CHOICES      5   /* The Settings combo's entries */
 
 /* fsinteger.flag -- SNAP FULLSCREEN TO WHOLE PIXEL MULTIPLES. OFF BY DEFAULT (Importance = 1):
  * I added whole-multiple scaling to cure blurry fullscreen. It was never the cause
@@ -50,16 +50,17 @@
  * because "every pixel identical" is a legitimate taste, not because anyone must
  * choose.
  */
-#define FSINT_FLAG              CFG_("fsinteger.flag")
+#define FSINT_FLAG          CFG_("fsinteger.flag")
+
+#define FONT_PREVIEW_GREY   0xAA
 
 /* #321: THE TEXT-MODE FONT ROW:
- * The list is every fixed-pitch font installed on this PC plus "(Default)", which
- * stores as the empty string. Choosing one builds the tables it WOULD produce into a
- * private copy -- the machine is untouched until OK/Apply -- and the page shows that
- * copy: a line of text and a line of the DOS graphics characters, plus how many
+ * "Default" (stored as the empty string) or "Font File:" -- a TrueType, OpenType or .fon file
+ * the user supplies, loaded for this process alone (sysfont.h). Choosing one builds the
+ * tables it WOULD produce into a private copy -- the machine is untouched until OK/Apply --
+ * and the page shows that copy: one line of text, DOS graphics and Greek, plus how many
  * characters the font supplied and whether the default itself is degraded.
  */
-#define TEXTFONT_DEFAULT_ITEM   "(Default: Fixedsys and Terminal)"
 
 enum
 {
@@ -73,7 +74,7 @@ enum
 
 enum
 {
-    SETTINGS_COMBO_DROPPED_WIDTH = 130, SETTINGS_FONT_DROPPED_WIDTH = 240, SETTINGS_SLIDER_STEP = 10, SETTINGS_SLIDER_PAGE = 1,SETTINGS_ITEM_HEIGHT = 14, SETTINGS_ITEM_INSET = 3, LOGFONT_PITCH_MASK = 3
+    SETTINGS_COMBO_DROPPED_WIDTH = 130, SETTINGS_SLIDER_STEP = 10, SETTINGS_SLIDER_PAGE = 1,SETTINGS_ITEM_HEIGHT = 14, SETTINGS_ITEM_INSET = 3
 };   /* the Settings dialog */
 
 enum
@@ -83,8 +84,13 @@ enum
 
 enum
 {
-    FONT_PREVIEW_COLUMNS = 64, FONT_PREVIEW_ROWS = 2, FONT_PREVIEW_CELL_WIDTH = 8, FONT_PREVIEW_CELL_HEIGHT = 16, FONT_PREVIEW_WIDTH = 512, FONT_PREVIEW_HEIGHT = 32, FONT_PREVIEW_HIGH_FIRST = 0x80, FONT_PREVIEW_BOX_FIRST = 0xB0, FONT_PREVIEW_BOX_COUNT = 48, FONT_PREVIEW_GREEK_FIRST = 0xE0, FONT_PREVIEW_GREY = 0xAA
-};   /* the Settings font preview: two rows of 8x16 cells */
+    SETTINGS_FONT_DEFAULT = 0, SETTINGS_FONT_OWN = 1
+};   /* #321: the text-mode font radios: the default, or a font file */
+
+enum
+{
+    FONT_PREVIEW_COLUMNS = 64, FONT_PREVIEW_CELL_WIDTH = 8, FONT_PREVIEW_CELL_HEIGHT = 16, FONT_PREVIEW_WIDTH = 512, FONT_PREVIEW_HEIGHT = 16, FONT_PREVIEW_BOX_FIRST = 0xB0, FONT_PREVIEW_BOX_COUNT = 25, FONT_PREVIEW_GREEK_FIRST = 0xE0
+};   /* the Settings font preview: one row of 8x16 cells: text, DOS graphics, Greek */
 
 /* EnableThemeDialogTexture is what stops a page rendering as a grey slab on the
  * tab's themed background. It lives in uxtheme.dll (XP and later), so it is bound by
@@ -779,7 +785,7 @@ static VOID SettingsShellRadios(INT own)
 }
 
 /* One Open dialog for every path box: the shell, the floppy and ISO images, the
- * SoundFont. The box's current text is where it starts.
+ * SoundFont, the text-mode font. The box's current text is where it starts.
  */
 static VOID SettingsBrowse(HWND page, INT editId, PCSTR filter, PCSTR title)
 {
@@ -1030,89 +1036,72 @@ static VOID SettingsCdRadios(INT isPhysical)
                           IDC_S_CD_BROWSE, IDC_S_CD_LETTER, HostHasCdrom(), isPhysical);
 }
 
-static INT CALLBACK SettingsFontEnum(
-    const LOGFONTA *logFont,
-    const TEXTMETRICA *textMetric,
-    DWORD type,
-    LPARAM lParam)
+/* #321: the font radios; the path box and Browse only live under "Font File". */
+static VOID SettingsTextFontRadios(INT own)
 {
-    HWND control = (HWND)lParam;
+    HWND defaultFont = SettingsControl(IDC_S_TEXTFONT_DEFAULT);
+    HWND ownFont = SettingsControl(IDC_S_TEXTFONT_OWN);
+    HWND edit = SettingsControl(IDC_S_TEXTFONT);
+    HWND browse = SettingsControl(IDC_S_TEXTFONT_BROWSE);
 
-    (VOID)textMetric;
-    (VOID)type;
+    if (defaultFont)
+        SendMessageA(defaultFont, BM_SETCHECK, own ? BST_UNCHECKED : BST_CHECKED, 0);
 
-    if ((logFont->lfPitchAndFamily & LOGFONT_PITCH_MASK) != FIXED_PITCH || logFont->lfFaceName[0] == '@')
-        return 1;
+    if (ownFont)
+        SendMessageA(ownFont, BM_SETCHECK, own ? BST_CHECKED : BST_UNCHECKED, 0);
 
-    if (SendMessageA(control, CB_FINDSTRINGEXACT, (WPARAM)-1, (LPARAM)logFont->lfFaceName) == CB_ERR)
-        SendMessageA(control, CB_ADDSTRING, 0, (LPARAM)logFont->lfFaceName);
+    if (edit)
+        EnableWindow(edit, own);
 
-    return 1;
+    if (browse)
+        EnableWindow(browse, own);
 }
 
-static VOID SettingsTextFontFill(VOID)
-{
-    HWND control = SettingsControl(IDC_S_TEXTFONT);
-    HDC deviceContext;
-    LOGFONTA logFont;
-
-    if (!control)
-        return;
-
-    SendMessageA(control, CB_ADDSTRING, 0, (LPARAM)TEXTFONT_DEFAULT_ITEM);
-    ZeroMemory(&logFont, sizeof logFont);
-    logFont.lfCharSet = DEFAULT_CHARSET;
-    deviceContext = GetDC(NULL);
-
-    if (deviceContext) { EnumFontFamiliesExA(deviceContext, &logFont, (FONTENUMPROCA)SettingsFontEnum, (LPARAM)control, 0);
-              ReleaseDC(NULL, deviceContext); }
-
-    SendMessageA(control, CB_SETDROPPEDWIDTH, SETTINGS_FONT_DROPPED_WIDTH, 0);
-}
-
-/* The selected item as the stored string: "" for the default. */
+/* The stored string: "" under "Default", whatever the greyed box holds; else the box. */
 static VOID SettingsTextFontGet(PSTR out, INT cap)
 {
-    HWND control = SettingsControl(IDC_S_TEXTFONT);
-    LRESULT selector = control ? SendMessageA(control, CB_GETCURSEL, 0, 0) : CB_ERR;
-    CHAR text[NTVDMEX_PATH_MAX];
+    HWND defaultFont = SettingsControl(IDC_S_TEXTFONT_DEFAULT);
+    HWND edit = SettingsControl(IDC_S_TEXTFONT);
 
     out[0] = 0;
 
-    if (selector == CB_ERR)
+    if (!edit || (defaultFont && SendMessageA(defaultFont, BM_GETCHECK, 0, 0) == BST_CHECKED))
         return;
 
-    text[0] = 0;
-    SendMessageA(control, CB_GETLBTEXT, (WPARAM)selector, (LPARAM)text);
-
-    if (lstrcmpA(text, TEXTFONT_DEFAULT_ITEM))
-        lstrcpynA(out, text, cap);
+    GetWindowTextA(edit, out, cap);
 }
 
 static VOID SettingsTextFontPreview(VOID)
 {
-    CHAR face[NTVDMEX_PATH_MAX];
-    CHAR text[200];
+    CHAR setting[NTVDMEX_PATH_MAX];
+    CHAR text[300];
     HWND info = SettingsControl(IDC_S_TEXTFONT_INFO);
     HWND view = SettingsControl(IDC_S_TEXTFONT_VIEW);
+    PCSYSFONT_REPORT report = &g_TextFontPreviewReport;
 
-    SettingsTextFontGet(face, sizeof face);
-    SysFontBuildInto(face, &g_TextFontPreview, &g_TextFontPreviewReport);
+    SettingsTextFontGet(setting, sizeof setting);
+    SysFontBuildInto(setting, &g_TextFontPreview, &g_TextFontPreviewReport);
+    text[0] = 0;
 
-    if (!face[0])
+    if (report->IsUserFile && report->UserFace[0])
+        wsprintfA(text, SETTINGS_FONT_FACE_FORMAT, report->UserFace);
+
+    if (!setting[0])
         lstrcpyA(text, SETTINGS_FONT_DEFAULT_TEXT);
-    else if (g_TextFontPreviewReport.User == SYSFONT_USER_OK && g_TextFontPreviewReport.UserCodePage)
-        wsprintfA(text, SETTINGS_FONT_CODE_PAGE_FORMAT,
-                  g_TextFontPreviewReport.UserCodePage);
-    else if (g_TextFontPreviewReport.User == SYSFONT_USER_OK)
-        wsprintfA(text, SETTINGS_FONT_PARTIAL_FORMAT,
-                  g_TextFontPreviewReport.UserGlyphs[2]);
-    else if (g_TextFontPreviewReport.User == SYSFONT_USER_NOSIZE)
-        lstrcpyA(text, SETTINGS_FONT_NO_8_PIXEL);
+    else if (report->User == SYSFONT_USER_OK && report->UserCodePage)
+        wsprintfA(text + lstrlenA(text), SETTINGS_FONT_CODE_PAGE_FORMAT, report->UserCodePage);
+    else if (report->User == SYSFONT_USER_OK)
+        wsprintfA(text + lstrlenA(text), SETTINGS_FONT_PARTIAL_FORMAT, report->UserGlyphs[2]);
+    else if (report->User == SYSFONT_USER_NOSIZE)
+        lstrcatA(text, SETTINGS_FONT_NO_8_PIXEL);
+    else if (report->User == SYSFONT_USER_NOFILE)
+        lstrcatA(text, SETTINGS_FONT_NO_FILE);
+    else if (report->User == SYSFONT_USER_NOTFONT || report->IsUserFile)
+        lstrcatA(text, SETTINGS_FONT_NOT_FONT);
     else
-        lstrcpyA(text, SETTINGS_FONT_MISSING);
+        lstrcatA(text, SETTINGS_FONT_MISSING);
 
-    if (SysFontIsDefaultDegraded(&g_TextFontPreviewReport))
+    if (SysFontIsDefaultDegraded(report))
         lstrcatA(text, SETTINGS_FONT_437_MISSING);
 
     if (info)
@@ -1122,29 +1111,24 @@ static VOID SettingsTextFontPreview(VOID)
         InvalidateRect(view, NULL, TRUE);
 }
 
-static VOID SettingsTextFontSelect(PCSTR face)
+static VOID SettingsTextFontSelect(PCSTR setting)
 {
-    HWND control = SettingsControl(IDC_S_TEXTFONT);
-    LRESULT found;
+    HWND edit = SettingsControl(IDC_S_TEXTFONT);
 
-    if (!control)
-        return;
+    if (edit)
+        SetWindowTextA(edit, setting);
 
-    found = SendMessageA(control, CB_FINDSTRINGEXACT, (WPARAM)-1,
-                     (LPARAM)(face[0] ? face : TEXTFONT_DEFAULT_ITEM));
-
-    if (found == CB_ERR && face[0])              /* stored, but no longer installed: keep it */
-        found = SendMessageA(control, CB_ADDSTRING, 0, (LPARAM)face);
-
-    SendMessageA(control, CB_SETCURSEL, (WPARAM)(found == CB_ERR ? 0 : found), 0);
+    SettingsTextFontRadios(setting[0] != 0);
     SettingsTextFontPreview();
 }
 
-/* Two lines of 64 cells from the previewed 8x16 table, light grey on black, 1:1. */
+/* One line of 64 cells from the previewed 8x16 table, light grey on black, 1:1: the sample
+ * text, then box drawing and blocks from B0h, then Greek and maths from E0h.
+ */
 static VOID SettingsTextFontDraw(const DRAWITEMSTRUCT *drawItem)
 {
     static const CHAR text[] = SETTINGS_FONT_SAMPLE_TEXT;
-    BYTE row[FONT_PREVIEW_ROWS][FONT_PREVIEW_COLUMNS];
+    BYTE row[FONT_PREVIEW_COLUMNS];
     static BYTE pixels[FONT_PREVIEW_HEIGHT][FONT_PREVIEW_COLUMNS];
     struct
     {
@@ -1155,17 +1139,22 @@ static VOID SettingsTextFontDraw(const DRAWITEMSTRUCT *drawItem)
     INT pixelRow;
     INT left;
     INT top;
+    INT textLength = (INT)sizeof text - 1;
     RECT rect = drawItem->rcItem;
 
     for (index = 0; index < FONT_PREVIEW_COLUMNS; ++index)
     {
-        row[0][index] = (BYTE)(index < (INT)sizeof text - 1 ? text[index] : FONT_PREVIEW_HIGH_FIRST + (index - (INT)sizeof text + 1));
-        row[1][index] = (BYTE)(index < FONT_PREVIEW_BOX_COUNT ? FONT_PREVIEW_BOX_FIRST + index : FONT_PREVIEW_GREEK_FIRST + (index - FONT_PREVIEW_BOX_COUNT));
+        if (index < textLength)
+            row[index] = (BYTE)text[index];
+        else if (index < textLength + FONT_PREVIEW_BOX_COUNT)
+            row[index] = (BYTE)(FONT_PREVIEW_BOX_FIRST + (index - textLength));
+        else
+            row[index] = (BYTE)(FONT_PREVIEW_GREEK_FIRST + (index - textLength - FONT_PREVIEW_BOX_COUNT));
     }
 
     for (pixelRow = 0; pixelRow < FONT_PREVIEW_HEIGHT; ++pixelRow)
         for (index = 0; index < FONT_PREVIEW_COLUMNS; ++index)
-            pixels[pixelRow][index] = g_TextFontPreview.Table16[row[pixelRow / FONT_PREVIEW_CELL_HEIGHT][index]][pixelRow % FONT_PREVIEW_CELL_HEIGHT];
+            pixels[pixelRow][index] = g_TextFontPreview.Table16[row[index]][pixelRow];
 
     ZeroMemory(&bitmapInfo, sizeof bitmapInfo);
     bitmapInfo.Header.biSize = sizeof bitmapInfo.Header;
@@ -1371,7 +1360,7 @@ static VOID SettingsFromDialog(NTVDMEX_SETTINGS *settings)
         SettingsCopyString(settings->Strings[index], text, NTVDMEX_PATH_MAX);
     }
 
-    /* #321: a drop-list's text is its item; the default item stores as "". */
+    /* #321: "Default" means the empty string, whatever the greyed box holds. */
     SettingsTextFontGet(settings->Strings[SET_STR_TEXTFONT], NTVDMEX_PATH_MAX);
     /* #203: "Windows XP's own" means the empty string, whatever the greyed box holds. */
     {   HWND xpShell = SettingsControl(IDC_S_SHELL_XP);
@@ -1527,9 +1516,9 @@ INT_PTR CALLBACK SettingsPageProcedure(HWND dialog, UINT message, WPARAM wParam,
         return TRUE;
     }
 
-    if (message == WM_COMMAND && LOWORD(wParam) == IDC_S_TEXTFONT && HIWORD(wParam) == CBN_SELCHANGE)
+    if (message == WM_COMMAND && LOWORD(wParam) == IDC_S_TEXTFONT && HIWORD(wParam) == EN_KILLFOCUS)
     {
-        SettingsTextFontPreview();
+        SettingsTextFontPreview();                 /* #321: a typed path, once it is finished */
         return TRUE;
     }
 
@@ -1606,6 +1595,21 @@ INT_PTR CALLBACK SettingsPageProcedure(HWND dialog, UINT message, WPARAM wParam,
             if (HIWORD(wParam) == CBN_SELCHANGE)
                 SettingsCodecEnable();
 
+            return TRUE;
+
+        case IDC_S_TEXTFONT_DEFAULT:                 /* #321 */
+            SettingsTextFontRadios(SETTINGS_FONT_DEFAULT);
+            SettingsTextFontPreview();
+            return TRUE;
+
+        case IDC_S_TEXTFONT_OWN:
+            SettingsTextFontRadios(SETTINGS_FONT_OWN);
+            SettingsTextFontPreview();
+            return TRUE;
+
+        case IDC_S_TEXTFONT_BROWSE:
+            SettingsBrowse(dialog, IDC_S_TEXTFONT, SETTINGS_FILTER_TEXTFONT, SETTINGS_TITLE_TEXTFONT);
+            SettingsTextFontPreview();
             return TRUE;
 
         case IDC_S_SF_BROWSE:
@@ -1704,7 +1708,6 @@ INT_PTR CALLBACK SettingsDialogProcedure(HWND dialog, UINT message, WPARAM wPara
         }
 
         SettingsFillCombos();
-        SettingsTextFontFill();                 /* #321: the installed fonts */
         /* [CAUTION]: THE SAVED COPY, NOT THE LIVE ONE. This dialog edits the configuration
          * that persists; showing session overrides here would mean pressing OK
          * after changing an unrelated setting silently made every display

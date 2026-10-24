@@ -472,7 +472,96 @@ static INT SysFontUser(
     return count;
 }
 
-PCSTR SysFontBuildInto(PCSTR faceName, SYSFONT_TABLES *tables, SYSFONT_REPORT *report)
+INT SysFontIsPath(PCSTR setting)
+{
+    INT index;
+
+    for (index = 0; setting && setting[index]; ++index)
+        if (setting[index] == '\\' || setting[index] == '/' || setting[index] == ':')
+            return 1;
+
+    return 0;
+}
+
+/* #321: the TextFont setting as a face GDI can select. A path is a font FILE the user
+ * supplied: its face name is read from it (font_file.h) and it is loaded for this process
+ * alone (FR_PRIVATE -- nothing is installed in Windows). Anything else is the name of a font
+ * installed on this machine, as the setting held before the file choice existed. One file
+ * stays loaded: the tables keep the glyphs, not the font, so the previous file is released
+ * when another is chosen. Returns the face, or NULL with report->User saying why not.
+ */
+static PCSTR SysFontResolve(PCSTR setting, PSTR face, SYSFONT_REPORT *report)
+{
+    static CHAR loadedPath[MAX_PATH];
+    HANDLE file;
+    DWORD size;
+    DWORD read = 0;
+    BYTE *bytes;
+    INT kind;
+
+    if (!SysFontIsPath(setting))
+        return setting;
+
+    report->IsUserFile = 1;
+    file = CreateFileA(setting, GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING, 0, NULL);
+
+    if (file == INVALID_HANDLE_VALUE)
+    {
+        report->User = SYSFONT_USER_NOFILE;
+        return NULL;
+    }
+
+    size = GetFileSize(file, NULL);
+
+    if (size == INVALID_FILE_SIZE || !size || size > SYSFONT_USER_FILE_MAX_SIZE)
+    {
+        CloseHandle(file);
+        report->User = SYSFONT_USER_NOTFONT;
+        return NULL;
+    }
+
+    bytes = (BYTE *)HeapAlloc(GetProcessHeap(), 0, size);
+
+    if (!bytes)
+    {
+        CloseHandle(file);
+        report->User = SYSFONT_USER_NOFILE;
+        return NULL;
+    }
+
+    ReadFile(file, bytes, size, &read, NULL);
+    CloseHandle(file);
+    kind = read == size ? FontFileFaceName(bytes, size, face, FONT_FILE_FACE_CAPACITY) : FONT_FILE_NOT_FONT;
+    HeapFree(GetProcessHeap(), 0, bytes);
+
+    if (kind == FONT_FILE_NOT_FONT)
+    {
+        report->User = SYSFONT_USER_NOTFONT;
+        return NULL;
+    }
+
+    lstrcpynA(report->UserFace, face, sizeof report->UserFace);
+
+    if (lstrcmpiA(loadedPath, setting))
+    {
+        if (loadedPath[0])
+            RemoveFontResourceExA(loadedPath, FR_PRIVATE, NULL);
+
+        loadedPath[0] = 0;
+
+        if (!AddFontResourceExA(setting, FR_PRIVATE, NULL))
+        {
+            report->User = SYSFONT_USER_NOTFONT;
+            return NULL;
+        }
+
+        lstrcpynA(loadedPath, setting, sizeof loadedPath);
+    }
+
+    return face;
+}
+
+PCSTR SysFontBuildInto(PCSTR setting, SYSFONT_TABLES *tables, SYSFONT_REPORT *report)
 {
     PSTR summary = report->Line;
     /* static: ~8 KB each */
@@ -494,8 +583,11 @@ PCSTR SysFontBuildInto(PCSTR faceName, SYSFONT_TABLES *tables, SYSFONT_REPORT *r
     INT cropFixedsys = 0;
     PCSTR source8 = "GDI by name";
     PCSTR source12 = "GDI by name";
+    CHAR fileFace[FONT_FILE_FACE_CAPACITY];
+    PCSTR faceName;
     ZeroMemory(report, sizeof *report);
     ZeroMemory(tables, sizeof *tables);
+    faceName = setting && setting[0] ? SysFontResolve(setting, fileFace, report) : NULL;
 
     if (!dc)
     {
@@ -628,19 +720,34 @@ PCSTR SysFontBuildInto(PCSTR faceName, SYSFONT_TABLES *tables, SYSFONT_REPORT *r
               terminal8.IsOk ? "ok" : "MISSING", terminal8.Width, terminal8.Height, source8,
               terminal12.IsOk ? "ok" : "MISSING", terminal12.Width, terminal12.Height, source12);
 
-    if (faceName && faceName[0])
+    if (setting && setting[0])
     {
         static PCSTR const reasons[] = { "", "", "NOT INSTALLED -- default used",
-                                           "has no 8-pixel-wide size -- default used" };
+                                           "has no 8-pixel-wide size -- default used",
+                                           "could not be read -- default used",
+                                           "is not a TrueType, OpenType or .fon font -- default used" };
         INT length = lstrlenA(summary);
 
+        if (report->IsUserFile)
+        {
+            wsprintfA(summary + length, "; TextFont file \"%.120s\"%s", setting, faceName ? ", face" : "");
+            length = lstrlenA(summary);
+        }
+        else
+        {
+            lstrcpyA(summary + length, "; TextFont");
+            length = lstrlenA(summary);
+        }
+
         if (report->User == SYSFONT_USER_OK)
-            wsprintfA(summary + length, "; TextFont \"%.60s\" (%s): glyphs 8x8 %d, 8x14 %d, 8x16 %d of 253, "
+            wsprintfA(summary + length, " \"%.31s\" (%s): glyphs 8x8 %d, 8x14 %d, 8x16 %d of 253, "
                       "the rest default%s", faceName, report->IsUserTrueType ? "TrueType" : "raster",
                       report->UserGlyphs[0], report->UserGlyphs[1], report->UserGlyphs[2],
                       report->UserCodePage ? " -- an OEM font NOT in code page 437" : "");
+        else if (faceName)
+            wsprintfA(summary + length, " \"%.60s\" %s", faceName, reasons[report->User]);
         else
-            wsprintfA(summary + length, "; TextFont \"%.60s\" %s", faceName, reasons[report->User]);
+            wsprintfA(summary + length, " %s", reasons[report->User]);
     }
 
     return summary;
@@ -651,13 +758,13 @@ INT SysFontIsDefaultDegraded(const SYSFONT_REPORT *report)
     return report->IsDegraded;
 }
 
-PCSTR SysFontBuild(PCSTR faceName, SYSFONT_REPORT *report)
+PCSTR SysFontBuild(PCSTR setting, SYSFONT_REPORT *report)
 {
     static SYSFONT_TABLES stage;
     UINT character;
     UINT row;
 
-    SysFontBuildInto(faceName, &stage, report);
+    SysFontBuildInto(setting, &stage, report);
 
     for (character = 0; character < VGA_FONT_CHARACTERS; ++character)
     {

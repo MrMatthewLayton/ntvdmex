@@ -20,12 +20,16 @@
  * from one character cell to the next. A glyph taller than its cell loses rows that
  * are blank in every glyph of that font first.
  *
- * #321: THE USER MAY CHOOSE ANOTHER INSTALLED FONT:
- * NTVDMEX still ships none: the Settings page lists the fixed-pitch fonts installed on
- * this machine, and whatever the user picks (or installs themselves) is laid OVER the
- * default above, one character at a time. Each of the 256 codes is mapped through
- * Unicode, so a modern font supplies its own box drawing, Greek and symbols; a code the
- * font has no glyph for keeps the default glyph. An empty name is the default.
+ * #321: THE USER MAY SUPPLY A FONT FILE:
+ * NTVDMEX still ships none: Settings > Display > Text Mode Font takes a TrueType, OpenType
+ * or bitmap .fon FILE -- one the user holds a licence for -- which the host loads for itself
+ * alone (FR_PRIVATE, nothing installed in Windows; font_file.h reads the face name GDI
+ * selects it by). It is laid OVER the default above, one character at a time. Each of the
+ * 256 codes is mapped through Unicode, so a modern font supplies its own box drawing, Greek
+ * and symbols; a code the font has no glyph for keeps the default glyph. A setting that is
+ * not a path is an installed font's name (what the setting held before files): still
+ * honoured. An empty setting is the default; so is a file that cannot be used, and the log
+ * and the Settings page say why.
  *
  *
  *
@@ -41,6 +45,7 @@
 #include "../ntvdmex_x86.h"     /* defines only: X86_WORD_SIZE / DWORD_SIZE */
 #include "../ntvdmex_ascii.h"   /* defines only: ASCII_SPACE */
 #include "vga_font.h"
+#include "font_file.h"
 
 #define SYSFONT_MAX_HEIGHT              32
 #define SYSFONT_GLYPH                   0               /* SysFontFit: an ordinary character ... */
@@ -93,7 +98,8 @@
 #define SYSFONT_FNT2_ENTRY_SIZE         4               /* Width WORD, offset WORD */
 #define SYSFONT_FNT3_ENTRY_SIZE         6               /* Width WORD, offset DWORD */
 #define SYSFONT_FNT_ENTRY_OFFSET        2
-#define SYSFONT_LINE_SIZE               400
+#define SYSFONT_LINE_SIZE               600             /* The default's line, a 120-character path, the font's */
+#define SYSFONT_USER_FILE_MAX_SIZE      (32u << 20)     /* A font file larger than this is refused unread */
 #define SYSFONT_TABLE_COUNT             3               /* 8x8, 8x14, 8x16 */
 
 typedef struct _SYSFONT_FACE
@@ -121,7 +127,8 @@ typedef struct _SYSFONT_TABLES
  */
 enum
 {
-    SYSFONT_USER_NONE = 0, SYSFONT_USER_OK, SYSFONT_USER_MISSING, SYSFONT_USER_NOSIZE
+    SYSFONT_USER_NONE = 0, SYSFONT_USER_OK, SYSFONT_USER_MISSING, SYSFONT_USER_NOSIZE,
+    SYSFONT_USER_NOFILE, SYSFONT_USER_NOTFONT      /* a font FILE: unreadable / not a font */
 };
 typedef struct _SYSFONT_REPORT
 {
@@ -131,12 +138,20 @@ typedef struct _SYSFONT_REPORT
     INT  IsUserTrueType;           /* it is TrueType */
     INT  UserCodePage;             /* an OEM raster font's code page when not 437, else 0 */
     INT  IsDegraded;               /* the DEFAULT is not the code page 437 one */
+    INT  IsUserFile;               /* the setting is a font file, loaded privately */
+    CHAR UserFace[FONT_FILE_FACE_CAPACITY]; /* that file's face name */
 } SYSFONT_REPORT, *PSYSFONT_REPORT; typedef const SYSFONT_REPORT *PCSYSFONT_REPORT;
 
-/* Build all three tables into `t`: the default (above), then the chosen `face` over it
- * when one is given. Fills `r` and returns r->line, the STAGE1 log line.
+/* Is the TextFont setting a font FILE (a path) rather than an installed font's name? A face
+ * name never holds a drive colon or a path separator.
  */
-PCSTR SysFontBuildInto(PCSTR faceName, SYSFONT_TABLES *tables, SYSFONT_REPORT *report);
+INT SysFontIsPath(PCSTR setting);
+
+/* Build all three tables into `tables`: the default (above), then the TextFont `setting` over
+ * it when one is given -- a font file's path, or an installed font's name. Fills `report` and
+ * returns report->Line, the STAGE1 log line.
+ */
+PCSTR SysFontBuildInto(PCSTR setting, SYSFONT_TABLES *tables, SYSFONT_REPORT *report);
 
 /* The DEFAULT is degraded when a face is missing or a Terminal face had to come from
  * GDI by name: on a machine whose OEM code page is not 437 that draws accented letters
@@ -148,6 +163,6 @@ INT SysFontIsDefaultDegraded(const SYSFONT_REPORT *report);
 /* Build into the LIVE tables (g_VgaFont8x8/8x14/8x16). Staged first and copied in one
  * pass, so a frame drawn mid-build never mixes two fonts for long.
  */
-PCSTR SysFontBuild(PCSTR faceName, SYSFONT_REPORT *report);
+PCSTR SysFontBuild(PCSTR setting, SYSFONT_REPORT *report);
 
 #endif /* SYSFONT_H */

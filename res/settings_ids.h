@@ -109,7 +109,10 @@
 #define IDC_S_GUSDMA                274     /* Combo: #235 GUS DMA */
 #define IDC_S_MPUADDR               275     /* Combo: #235 MPU-401 base */
 #define IDC_S_AUTOFS                268     /* Combo: start fullscreen Always/Graphics/Never */
-#define IDC_S_TEXTFONT              276     /* Combo: #321 text-mode font (the stored string) */
+#define IDC_S_TEXTFONT              276     /* Edit: #321 text-mode font file (the stored string) */
+#define IDC_S_TEXTFONT_DEFAULT      295     /* Radio: #321 the default font */
+#define IDC_S_TEXTFONT_OWN          300     /* Radio: #321 a font file the user supplies */
+#define IDC_S_TEXTFONT_BROWSE       301     /* Button: #321 Browse... */
 #define IDC_S_TEXTFONT_INFO         277     /* Static: #321 what the chosen font supplies */
 #define IDC_S_TEXTFONT_VIEW         278     /* Static: #321 owner-drawn preview */
 #define IDC_S_FIT                   279     /* Combo: #325 maximised/fullscreen fit */
