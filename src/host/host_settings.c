@@ -24,6 +24,8 @@
 #include "host_timing.h"
 #include "capture_video.h"
 #include "host_cdrom.h"
+#include "cdrom_policy.h"           /* s101: which letters the image combos offer */
+#include "../dos/dos_sysvars.h"     /* DOS_CDS_FLAG_*: the floppy image's CDS entry */
 #define UITICK_CHOICES          5   /* The Settings combo's entries */
 
 /* fsinteger.flag -- SNAP FULLSCREEN TO WHOLE PIXEL MULTIPLES. OFF BY DEFAULT (Importance = 1):
@@ -151,6 +153,7 @@ static const BYTE g_SettingsLiveIds[] = {
     SET_VIDEOCODEC, SET_VIDEOQUALITY, SET_VIDEOKEYFRAMES,   /* #155: read when a recording starts */
     SET_FSRES,                                   /* #331: read when fullscreen is entered */
     SET_CDPHYS,                                  /* #241: the ISO-backed CD-ROM (live: HostCdromApply) */
+    SET_FLOPPYLETTER, SET_CDLETTER,              /* s101: each image's drive letter (live) */
 };
 
 static PCSTR const g_SettingsTabs[NTVDMEX_PAGE_COUNT] = {
@@ -355,15 +358,41 @@ VOID SettingsApply(HWND window, const NTVDMEX_SETTINGS *settings, INT live)
      * path means an EMPTY drive: NULL falls through to FLOPPY_IMG_PATH, which exists
      * only on the test machine (the harness's disk), so on a user's PC it is simply absent.
      */
-    g_FloppyImage     = ((!settings->Values[SET_FLOPPYPHYS] || !HostHasFloppy()) && settings->Strings[SET_STR_FLOPPYA][0])
-                     ? settings->Strings[SET_STR_FLOPPYA] : NULL;
-    /* #240: ...and the DOS level follows it. A: is the image when image mode is CHOSEN (a
-     * blank path is then an empty drive), or when it is forced on a PC with no floppy and
+    /* #240: ...and the DOS level follows it. The image is a drive when image mode is CHOSEN
+     * (a blank path is then an empty drive), or when it is forced on a PC with no floppy and
      * an image is named. A PC with no floppy and nothing named keeps its old A: answer.
+     * s101 (user): "always respect the drives that are set up in Windows" -- the image's
+     * LETTER is Settings' (FloppyImageLetter), one Windows is not using, so a real A: stays
+     * A:. INT 13h's drive 0 is the image only when that letter IS A: (a PC with no floppy
+     * drive, A: chosen); otherwise INT 13h keeps the real drive, or the harness's FLOPPY.IMG.
      */
     g_FloppyPhysical  = settings->Values[SET_FLOPPYPHYS] && HostHasFloppy();
-    DosInt21SetFloppyImage(!settings->Values[SET_FLOPPYPHYS] || (!g_FloppyPhysical && settings->Strings[SET_STR_FLOPPYA][0]),
-                           g_FloppyImage);
+    {
+        INT isFloppyImage = !settings->Values[SET_FLOPPYPHYS] || (!g_FloppyPhysical && settings->Strings[SET_STR_FLOPPYA][0]);
+        INT oldDrive = g_FloppyImageDrive;
+        DWORD cdLetter = settings->Values[SET_CDLETTER];
+        DWORD avoid = 0;
+
+        if (HostCdromDrive() >= 0)
+            avoid |= 1u << HostCdromDrive();
+        else if (!settings->Values[SET_CDPHYS] && cdLetter != DRIVE_LETTER_AUTOMATIC)
+            avoid |= 1u << (cdLetter - 1);                    /* the ISO's stored letter, not yet mounted */
+
+        g_FloppyImageDrive = isFloppyImage
+                           ? HostImageDriveLetter(settings->Values[SET_FLOPPYLETTER], avoid, "the floppy image") : -1;
+        g_FloppyImage      = (g_FloppyImageDrive == 0 && settings->Strings[SET_STR_FLOPPYA][0])
+                           ? settings->Strings[SET_STR_FLOPPYA] : NULL;
+        DosInt21SetFloppyImage(g_FloppyImageDrive >= 0, settings->Strings[SET_STR_FLOPPYA], g_FloppyImageDrive);
+
+        if (oldDrive != g_FloppyImageDrive)                    /* live: DOS's drive array follows */
+        {
+            if (oldDrive >= 0 && !(GetLogicalDrives() & (1u << oldDrive)))
+                HostDriveCdsWrite(oldDrive, 0);
+
+            if (g_FloppyImageDrive >= 0)
+                HostDriveCdsWrite(g_FloppyImageDrive, DOS_CDS_FLAG_PHYSICAL | DOS_CDS_FLAG_NETWORK);
+        }
+    }
     g_HostCursorMode   = (INT)settings->Values[SET_HOSTCURSOR];                   /* s84 */
     /* #136: read at start-up only -- see g_DosMemoryTop. */
     g_ConventionalKbWant   = BiosClampConventionalKb((UINT)settings->Values[SET_CONVKB]);
@@ -536,7 +565,7 @@ VOID SettingsApplyLive(HWND window)
 {
     SettingsApply(window, &g_Settings, SETTINGS_APPLY_LIVE);
     SettingsApplyTextFont();
-    HostCdromApply(g_Settings.Strings[SET_STR_CDROM], !g_Settings.Values[SET_CDPHYS]);    /* #241: live, as the floppy is */
+    HostCdromApply(g_Settings.Strings[SET_STR_CDROM], !g_Settings.Values[SET_CDPHYS], g_Settings.Values[SET_CDLETTER]);    /* #241: live, as the floppy is */
     SettingsApplyPresent(&g_PresentDdraw, &g_Settings);
     /* [CAUTION]: THE ASPECT CHANGES THE BASE SIZE, so it has to re-size too -- picking 16:9
      * while the window is 4:3-shaped and leaving it alone would show the lock as
@@ -571,6 +600,100 @@ static HWND SettingsControl(INT controlId)
     }
 
     return NULL;
+}
+
+/* s101 (user): "always respect the drives that are set up in Windows ... mounting a floppy
+ * should specify an available drive letter, and the same goes for CD/DVD-ROM ISOs." Each
+ * image's "As Drive" combo: Automatic, then the letters DriveLetterPolicyIsOffered allows
+ * (cdrom_policy.h), and the stored letter whatever it is now -- so OK never quietly loses
+ * it. An item's data is the stored form: 0 = automatic, 1..26 = A:..Z:.
+ */
+static VOID SettingsDriveLetterAdd(HWND combo, INT letter)
+{
+    CHAR text[] = SETTINGS_LETTER_TEXT;
+    LRESULT item;
+
+    text[0] = (CHAR)('A' + letter);
+    item = SendMessageA(combo, CB_ADDSTRING, 0, (LPARAM)text);
+
+    if (item >= 0)
+        SendMessageA(combo, CB_SETITEMDATA, (WPARAM)item, (LPARAM)(letter + 1));
+}
+
+static VOID SettingsDriveLetterFill(HWND page, INT controlId, INT isFloppy)
+{
+    HWND combo = GetDlgItem(page, controlId);
+    DWORD present;
+    DWORD own = 0;
+    DWORD avoid = 0;
+    LRESULT item;
+    INT letter;
+
+    if (!combo)
+        return;
+
+    present = GetLogicalDrives();
+
+    if (isFloppy && HostCdromDrive() >= 0)
+        avoid = 1u << HostCdromDrive();                      /* the ISO's mapping */
+
+    if (!isFloppy)
+    {
+        if (HostCdromDrive() >= 0)
+            own = 1u << HostCdromDrive();                    /* its own mapping is a Windows drive */
+
+        if (g_FloppyImageDrive >= 0)
+            avoid = 1u << g_FloppyImageDrive;
+    }
+
+    SendMessageA(combo, CB_RESETCONTENT, 0, 0);
+    item = SendMessageA(combo, CB_ADDSTRING, 0, (LPARAM)SETTINGS_LETTER_AUTOMATIC);
+
+    if (item >= 0)
+        SendMessageA(combo, CB_SETITEMDATA, (WPARAM)item, DRIVE_LETTER_AUTOMATIC);
+
+    for (letter = 0; letter < CDROM_POLICY_LETTERS; ++letter)
+        if (DriveLetterPolicyIsOffered(letter, present, own, avoid, isFloppy))
+            SettingsDriveLetterAdd(combo, letter);
+}
+
+static VOID SettingsDriveLetterSelect(INT controlId, DWORD stored)
+{
+    HWND combo = SettingsControl(controlId);
+    LRESULT count;
+    LRESULT item;
+
+    if (!combo)
+        return;
+
+    count = SendMessageA(combo, CB_GETCOUNT, 0, 0);
+
+    for (item = 0; item < count; ++item)
+        if ((DWORD)SendMessageA(combo, CB_GETITEMDATA, (WPARAM)item, 0) == stored)
+        {
+            SendMessageA(combo, CB_SETCURSEL, (WPARAM)item, 0);
+            return;
+        }
+
+    if (stored >= 1 && stored <= CDROM_POLICY_LETTERS)          /* in use now: still the user's choice */
+    {
+        SettingsDriveLetterAdd(combo, (INT)stored - 1);
+        SendMessageA(combo, CB_SETCURSEL, (WPARAM)count, 0);
+        return;
+    }
+
+    SendMessageA(combo, CB_SETCURSEL, 0, 0);
+}
+
+static DWORD SettingsDriveLetterChosen(INT controlId)
+{
+    HWND combo = SettingsControl(controlId);
+    LRESULT selection = combo ? SendMessageA(combo, CB_GETCURSEL, 0, 0) : CB_ERR;
+
+    if (selection < 0)
+        return DRIVE_LETTER_AUTOMATIC;
+
+    return (DWORD)SendMessageA(combo, CB_GETITEMDATA, (WPARAM)selection, 0);
 }
 
 /* #330 (user, 2026-10-10): A SLIDER MOVES IN WHOLE STEPS OF 10%. The trackbar holds the
@@ -863,6 +986,7 @@ static VOID SettingsDriveRadios(
     INT imageId,
     INT editId,
     INT browseId,
+    INT letterId,
     INT have,
     INT isPhysical)
 {
@@ -870,6 +994,7 @@ static VOID SettingsDriveRadios(
     HWND image = SettingsControl(imageId);
     HWND edit = SettingsControl(editId);
     HWND browse = SettingsControl(browseId);
+    HWND letter = SettingsControl(letterId);
 
     if (!have)
         isPhysical = 0;
@@ -888,18 +1013,21 @@ static VOID SettingsDriveRadios(
 
     if (browse)
         EnableWindow(browse, !isPhysical);
+
+    if (letter)
+        EnableWindow(letter, !isPhysical);
 }
 
 static VOID SettingsFloppyRadios(INT isPhysical)
 {
     SettingsDriveRadios(IDC_S_FLOPPY_PHYS, IDC_S_FLOPPY_IMG, IDC_S_FLOPPYA,
-                          IDC_S_FLOPPY_BROWSE, HostHasFloppy(), isPhysical);
+                          IDC_S_FLOPPY_BROWSE, IDC_S_FLOPPY_LETTER, HostHasFloppy(), isPhysical);
 }
 
 static VOID SettingsCdRadios(INT isPhysical)
 {
     SettingsDriveRadios(IDC_S_CD_PHYS, IDC_S_CD_IMG, IDC_S_CDROM,
-                          IDC_S_CD_BROWSE, HostHasCdrom(), isPhysical);
+                          IDC_S_CD_BROWSE, IDC_S_CD_LETTER, HostHasCdrom(), isPhysical);
 }
 
 static INT CALLBACK SettingsFontEnum(
@@ -1134,6 +1262,8 @@ static VOID SettingsToDialog(const NTVDMEX_SETTINGS *settings)
     SettingsTextFontSelect(settings->Strings[SET_STR_TEXTFONT]);                 /* #321 */
     SettingsCodecSelect(settings->Values[SET_VIDEOCODEC]);                         /* #155 */
     SettingsFullscreenModeSelect(settings->Values[SET_FSRES]);                     /* #331 */
+    SettingsDriveLetterSelect(IDC_S_FLOPPY_LETTER, settings->Values[SET_FLOPPYLETTER]);  /* s101 */
+    SettingsDriveLetterSelect(IDC_S_CD_LETTER, settings->Values[SET_CDLETTER]);
     SettingsFloppyRadios(settings->Values[SET_FLOPPYPHYS] != 0);                /* s84 */
     SettingsCdRadios(settings->Values[SET_CDPHYS] != 0);
     /* SAY WHICH VERSION PROGRAMS ACTUALLY SEE. (s80, user: "if I'm in Windows XP's
@@ -1260,6 +1390,13 @@ static VOID SettingsFromDialog(NTVDMEX_SETTINGS *settings)
     /* #331: likewise the fullscreen resolution. */
     if (SettingsControl(IDC_S_FSRES))
         settings->Values[SET_FSRES] = SettingsFullscreenModeChosen();
+
+    /* s101: and each image's drive letter. */
+    if (SettingsControl(IDC_S_FLOPPY_LETTER))
+        settings->Values[SET_FLOPPYLETTER] = SettingsDriveLetterChosen(IDC_S_FLOPPY_LETTER);
+
+    if (SettingsControl(IDC_S_CD_LETTER))
+        settings->Values[SET_CDLETTER] = SettingsDriveLetterChosen(IDC_S_CD_LETTER);
 }
 
 /* The Processor page says WHICH processor -- the user's own -- so fill the static
@@ -1344,6 +1481,8 @@ INT_PTR CALLBACK SettingsPageProcedure(HWND dialog, UINT message, WPARAM wParam,
         SettingsFillCpuInfo(dialog);            /* no-op on pages without the static */
         SettingsCodecFill(dialog);              /* #155: no-op on pages without it */
         SettingsFullscreenModeFill(dialog);     /* #331: no-op on pages without it */
+        SettingsDriveLetterFill(dialog, IDC_S_FLOPPY_LETTER, 1);   /* s101: no-op elsewhere */
+        SettingsDriveLetterFill(dialog, IDC_S_CD_LETTER, 0);
         return TRUE;
     }
 

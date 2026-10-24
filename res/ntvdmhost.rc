@@ -377,13 +377,14 @@ END
    s84 (user): the VDM already reaches the host's drives, so there is no drive C
    folder and no boot choice. Each removable drive is the PHYSICAL one or a mounted
    image; with no physical drive, main.c greys that radio and selects the image. A
-   blank image path is an empty drive. ⚠ Mounting: a floppy image reaches INT 13h
-   today; mounting it as DOS drive A:, and ISO images at all, are open issues. */
+   blank image path is an empty drive. #240/#241: both images are DOS drives, each at the
+   letter its "As Drive" combo names -- s101 (user): only letters Windows is not using, so
+   every Windows drive stays itself. */
 IDD_PAGE_DRIVES DIALOGEX 0, 0, 404, 228
 STYLE DS_SETFONT | DS_CONTROL | WS_CHILD
 FONT 8, "MS Shell Dlg", 400, 0, 0x1
 BEGIN
-    GROUPBOX        "Floppy Drive", -1, 6, 4, 392, 58
+    GROUPBOX        "Floppy Drive", -1, 6, 4, 392, 74
     LTEXT           "You can either use a physical floppy drive, or mount a floppy disk image.",
                     -1, 14, 16, 376, 8
     CONTROL         "Use The &Physical Floppy Drive", IDC_S_FLOPPY_PHYS, "Button",
@@ -392,16 +393,24 @@ BEGIN
                     BS_AUTORADIOBUTTON, 14, 44, 100, 10
     EDITTEXT        IDC_S_FLOPPYA, 116, 42, 218, 13, ES_AUTOHSCROLL | WS_TABSTOP | WS_GROUP
     PUSHBUTTON      "&Browse...", IDC_S_FLOPPY_BROWSE, 340, 42, 50, 14, WS_TABSTOP
+    /* s101 (user): the image's drive letter -- the letters Windows is not using, filled at
+       run time; greyed with the image path when the physical drive is chosen. */
+    LTEXT           "As &Drive:", -1, 116, 62, 40, 8
+    COMBOBOX        IDC_S_FLOPPY_LETTER, 158, 60, 110, 140,
+                    CBS_DROPDOWNLIST | CBS_HASSTRINGS | WS_VSCROLL | WS_TABSTOP
 
-    GROUPBOX        "CD-ROM Drive", -1, 6, 66, 392, 58
+    GROUPBOX        "CD-ROM Drive", -1, 6, 82, 392, 74
     LTEXT           "You can either use a physical CD-ROM drive, or mount an ISO disk image.",
-                    -1, 14, 78, 376, 8
+                    -1, 14, 94, 376, 8
     CONTROL         "Use The Physical &CD-ROM Drive", IDC_S_CD_PHYS, "Button",
-                    BS_AUTORADIOBUTTON | WS_TABSTOP | WS_GROUP, 14, 92, 200, 10
+                    BS_AUTORADIOBUTTON | WS_TABSTOP | WS_GROUP, 14, 108, 200, 10
     CONTROL         "Mount &ISO Disk Image:", IDC_S_CD_IMG, "Button",
-                    BS_AUTORADIOBUTTON, 14, 106, 100, 10
-    EDITTEXT        IDC_S_CDROM, 116, 104, 218, 13, ES_AUTOHSCROLL | WS_TABSTOP | WS_GROUP
-    PUSHBUTTON      "B&rowse...", IDC_S_CD_BROWSE, 340, 104, 50, 14, WS_TABSTOP
+                    BS_AUTORADIOBUTTON, 14, 122, 100, 10
+    EDITTEXT        IDC_S_CDROM, 116, 120, 218, 13, ES_AUTOHSCROLL | WS_TABSTOP | WS_GROUP
+    PUSHBUTTON      "B&rowse...", IDC_S_CD_BROWSE, 340, 120, 50, 14, WS_TABSTOP
+    LTEXT           "As Dri&ve:", -1, 116, 140, 40, 8
+    COMBOBOX        IDC_S_CD_LETTER, 158, 138, 110, 140,
+                    CBS_DROPDOWNLIST | CBS_HASSTRINGS | WS_VSCROLL | WS_TABSTOP
 END
 
 /* -- PAGE: CAPTURE ---------------------------------------------------------------

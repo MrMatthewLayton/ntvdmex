@@ -13,7 +13,8 @@
 #include "host_cdrom.h"
 #include <winioctl.h>
 #include "log.h"
-#include "main.h"   /* g_CdsSegment: a live mount adds its CDS entry */
+#include "main.h"       /* g_CdsSegment: a live mount adds its CDS entry */
+#include "host_dos.h"   /* g_FloppyImageDrive: the ISO never takes the floppy image's letter */
 #include "cdrom_policy.h"
 #include "../dos/dos_iso9660.h"
 
@@ -46,6 +47,7 @@ static PSTR       g_CdromDone[CDROM_DONE_MAX];    /* cache paths whose content i
 static INT        g_CdromDoneCount;
 static CRITICAL_SECTION g_CdromLock;
 static INT        g_CdromLockReady;
+static DWORD      g_CdromStoredLetter;            /* Settings' letter at the last mount (s101) */
 
 /* No C runtime in the host: the two string tests this file needs. */
 static INT CdromContains(PCSTR text, PCSTR part)
@@ -108,8 +110,11 @@ static VOID CdromRemoveStaleMappings(VOID)
     }
 }
 
-/* The letter for the ISO drive: CdromPolicyChooseLetter over the drives Windows has now. */
-static INT CdromChooseLetter(VOID)
+/* The letter an image takes (s101): DriveLetterPolicyChoose over the drives Windows has now.
+ * A stored letter Windows is using -- or `avoidMask`, the other image's -- is refused, said
+ * in the log, and the automatic one taken instead.
+ */
+INT HostImageDriveLetter(DWORD storedLetter, DWORD avoidMask, PCSTR what)
 {
     DWORD drives = GetLogicalDrives();
     DWORD remote = 0;
@@ -124,7 +129,41 @@ static INT CdromChooseLetter(VOID)
             remote |= 1u << letter;
     }
 
-    return CdromPolicyChooseLetter(drives, remote);
+    letter = DriveLetterPolicyChoose(storedLetter, drives, remote, avoidMask);
+
+    if (storedLetter != DRIVE_LETTER_AUTOMATIC && letter != (INT)storedLetter - 1)
+    {
+        CHAR lineBuffer[CDROM_LOG_LINE_SIZE];
+        PSTR lineCursor = lineBuffer;
+        CHAR chosen[] = "A:";
+        chosen[0] = (CHAR)('A' + storedLetter - 1);
+        lineCursor = LogPut(lineCursor, "  drives: ");
+        lineCursor = LogPut(lineCursor, what);
+        lineCursor = LogPut(lineCursor, " -- the chosen letter ");
+        lineCursor = LogPut(lineCursor, chosen);
+        lineCursor = LogPut(lineCursor, " is in use; the first free one is taken instead\r\n");
+        LogAppend(LOG_PATH, lineBuffer, lineCursor);
+    }
+
+    return letter;
+}
+
+/* One CDS entry (s101: shared with the floppy image's letter): `flags` as DosCdsBuild takes
+ * them -- 0 for a letter that has gone, PHYSICAL | NETWORK for an image drive (no DPB).
+ */
+VOID HostDriveCdsWrite(INT drive, UINT flags)
+{
+    BYTE cds[DOS_CDS_LEN];
+    volatile BYTE *cdsBytes = (volatile BYTE *)((DWORD)g_CdsSegment << PARAGRAPH_SHIFT);
+    UINT item;
+
+    if (!g_CdsSegment || drive < 0 || drive >= DOS_LASTDRIVE)
+        return;
+
+    DosCdsBuild(cds, (UINT)drive, flags, DOS_CTAB_SEG, DOS_DPBCHAIN_OFF);
+
+    for (item = 0; item < DOS_CDS_LEN; ++item)
+        cdsBytes[drive * DOS_CDS_LEN + item] = cds[item];
 }
 
 /* The copied-out list names files in the cache; a re-mount empties the cache, so it goes too. */
@@ -134,7 +173,7 @@ static VOID CdromForgetDone(VOID)
         HeapFree(GetProcessHeap(), 0, g_CdromDone[--g_CdromDoneCount]);
 }
 
-VOID HostCdromMount(PSTR *cursorIo, PCSTR imagePath, INT isImageMode)
+VOID HostCdromMount(PSTR *cursorIo, PCSTR imagePath, INT isImageMode, DWORD storedLetter)
 {
     PSTR cursor = *cursorIo;
     CHAR temporary[CDROM_PATH_SIZE];
@@ -152,7 +191,8 @@ VOID HostCdromMount(PSTR *cursorIo, PCSTR imagePath, INT isImageMode)
     g_CdromHasDisc = 0;                            /* a re-mount (HostCdromApply) starts empty */
     CdromForgetDone();
     CdromRemoveStaleMappings();
-    letter = CdromChooseLetter();
+    g_CdromStoredLetter = storedLetter;
+    letter = HostImageDriveLetter(storedLetter, (g_FloppyImageDrive >= 0) ? 1u << g_FloppyImageDrive : 0, "the ISO");
 
     if (letter < 0 || !GetTempPathA(sizeof temporary, temporary))
     {
@@ -287,17 +327,7 @@ VOID HostCdromLabel(PSTR out)
  */
 static VOID CdromCdsWrite(INT drive, INT isCdrom)
 {
-    BYTE cds[DOS_CDS_LEN];
-    volatile BYTE *cdsBytes = (volatile BYTE *)((DWORD)g_CdsSegment << PARAGRAPH_SHIFT);
-    UINT item;
-
-    if (!g_CdsSegment || drive < 0 || drive >= DOS_LASTDRIVE)
-        return;
-
-    DosCdsBuild(cds, (UINT)drive, isCdrom ? (DOS_CDS_FLAG_PHYSICAL | DOS_CDS_FLAG_NETWORK) : 0, DOS_CTAB_SEG, DOS_DPBCHAIN_OFF);
-
-    for (item = 0; item < DOS_CDS_LEN; ++item)
-        cdsBytes[drive * DOS_CDS_LEN + item] = cds[item];
+    HostDriveCdsWrite(drive, isCdrom ? (DOS_CDS_FLAG_PHYSICAL | DOS_CDS_FLAG_NETWORK) : 0);
 }
 
 /* SETTINGS > DRIVES > CD-ROM, LIVE (s101 rig report: the ISO chosen in the dialog never
@@ -307,14 +337,15 @@ static VOID CdromCdsWrite(INT drive, INT isCdrom)
  * layer is told its letter. A program with a file open on the old disc loses it, as it
  * would if the disc were ejected.
  */
-VOID HostCdromApply(PCSTR imagePath, INT isImageMode)
+VOID HostCdromApply(PCSTR imagePath, INT isImageMode, DWORD storedLetter)
 {
     CHAR lineBuffer[CDROM_LOG_LINE_SIZE];
     PSTR lineCursor = lineBuffer;
     INT oldDrive = HostCdromDrive();
     INT newDrive;
 
-    if (!CdromPolicyNeedsRemount(g_CdromMapped != 0, g_CdromImagePath, isImageMode, imagePath))
+    if (!CdromPolicyNeedsRemount(g_CdromMapped != 0, g_CdromImagePath, isImageMode, imagePath)
+        && !(isImageMode && storedLetter != g_CdromStoredLetter))     /* s101: or only its letter changed */
         return;
 
     if (!g_CdromLockReady)
@@ -336,7 +367,7 @@ VOID HostCdromApply(PCSTR imagePath, INT isImageMode)
     lineCursor = LogPut(lineCursor, "settings: CD-ROM changed --");
 
     if (isImageMode)
-        HostCdromMount(&lineCursor, imagePath, isImageMode);
+        HostCdromMount(&lineCursor, imagePath, isImageMode, storedLetter);
     else
         lineCursor = LogPut(lineCursor, " the PC's own CD drives\r\n");
 

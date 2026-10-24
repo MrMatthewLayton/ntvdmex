@@ -5,13 +5,18 @@ interface and the device-driver request headers it forwards); Ralf Brown's Inter
 (INT 2Fh `15xxh`). ⚠ **Not held in the repo** — [`../ref/SOURCES.md`](../ref/SOURCES.md).
 **Our implementation (#241, 2026-10-23):** **an ISO image as the MSCDEX drive.** With
 Settings > Drives > CD-ROM set to *Mount ISO Disk Image*, `src/host/host_cdrom.c` takes the
-first free letter after the machine's last drive (MSCDEX's rule), maps it onto a cache
+letter Settings names (*As Drive*, `CdRomImageLetter`; s101, user: only letters Windows is not
+using) or, on Automatic, the first free letter after the machine's last LOCAL drive (MSCDEX's
+rule; a mapped network drive at Z: would otherwise leave none), maps it onto a cache
 directory with `DefineDosDevice`, and answers INT 2Fh `15xxh` (the arm in
 `src/host/host_bios.c`, search `CDROM_MULTIPLEX_ID`). The image is read by
 `src/dos/dos_iso9660.c` (ECMA-119; tests/unit/iso9660_test.c). INT 21h reaches the files
 because every path is handed to the host first (`DOS_MACHINE::PathPrepare`), which copies the
 named file out of the image; write-class calls on the drive answer 5 (`dos_int21.c`, search
 `THE CD-ROM IS READ-ONLY`). A blank path is an empty drive: reported, every read not ready.
+⚠ **The letter is a Windows drive while NTVDMEX runs.** `DefineDosDevice` is how INT 21h reaches
+the files, so My Computer shows it too (as a fixed disk: the target is a directory). It goes when
+the host exits; there is no cheap way on XP to keep it out of Explorer.
 ⚠ **Image mode only.** With *Use The Physical CD-ROM Drive* (the default) INT 2Fh still
 passes every `15xxh` call through, as before. There is no CD-ROM device driver, no ATAPI
 device ([ide.md](ide.md)), and no Red Book audio path.

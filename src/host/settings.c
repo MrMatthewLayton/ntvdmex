@@ -262,6 +262,15 @@ const SET_DEF g_SetDefinitions[SET_COUNT] = {
  * ControlId here). Read when fullscreen is entered. See src/host/fullscreen_mode.h.
  */
 { "FullscreenResolution", 0,              SK_UINT,       0,  0, 0xFFFFFFFFu, NULL },
+/* s101 (user): "always respect the drives that are set up in Windows ... mounting a floppy
+ * should specify an available drive letter, and the same goes for CD/DVD-ROM ISOs." The
+ * letter each mounted image takes: 0 = automatic (the first free one), 1..26 = A:..Z:. A
+ * stored letter Windows is using when the image mounts falls back to automatic (logged).
+ * Their lists are the free letters, so the page fills those combos itself (no ControlId).
+ * See DriveLetterPolicyChoose (src/host/cdrom_policy.h).
+ */
+{ "FloppyImageLetter", 0,                 SK_UINT,       0,  0,  26, NULL },
+{ "CdRomImageLetter",  0,                 SK_UINT,       0,  0,  26, NULL },
 };
 
 const SET_STR_DEF g_SetStringDefinitions[SET_STR_COUNT] = {

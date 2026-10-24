@@ -179,11 +179,13 @@
 #define SETTINGS_TITLE_SOUNDFONT        "Choose a SoundFont"
 #define SETTINGS_TITLE_CAPTURE          "Choose the folder for screenshots and recordings"
 #define SETTINGS_TEXT_UNCOMPRESSED      "Uncompressed (full frames)"
-#define SETTINGS_FSRES_DESKTOP_FORMAT   "Desktop (%lu x %lu)"   /* #331: fullscreen keeps the desktop's mode */
-#define SETTINGS_FSRES_NATIVE_FORMAT    "Native (%lu x %lu)"    /* #331: the largest at the desktop's refresh */
+#define SETTINGS_FSRES_DESKTOP_FORMAT   "Desktop (%lu x %lu)"       /* #331: fullscreen keeps the desktop's mode */
+#define SETTINGS_FSRES_NATIVE_FORMAT    "Native (%lu x %lu)"        /* #331: the largest at the desktop's refresh */
 #define SETTINGS_FSRES_MODE_FORMAT      "%lu x %lu"
 #define SETTINGS_FSRES_TEXT_SIZE        48
-#define SETTINGS_FOURCC_LOWER_CASE      0x20202020u             /* ORed in: A-Z become a-z, digits stay */
+#define SETTINGS_LETTER_AUTOMATIC       "Automatic (first free)"    /* s101: an image's drive letter */
+#define SETTINGS_LETTER_TEXT            "A:"
+#define SETTINGS_FOURCC_LOWER_CASE      0x20202020u                 /* ORed in: A-Z become a-z, digits stay */
 #define SETTINGS_FONT_CODE_PAGE_FORMAT "This font draws code page %d, not 437: some line-drawing characters " \
                                     "will show as letters."
 #define SETTINGS_SOURCE_CONV_KB         "a program too big for it"  /* Why conventional memory was capped */

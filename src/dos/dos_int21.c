@@ -312,7 +312,8 @@
  */
 #define DOS_LFN_FIND_SLOTS                      16
 
-/* #240: DRIVE A: AS A DISK IMAGE, AT THE DOS LEVEL.
+/* #240: DRIVE A: AS A DISK IMAGE, AT THE DOS LEVEL. (s101: at Settings' letter -- see
+ * g_DosImageDrive; "A:" below means the image's letter, which is A: only when chosen.)
  * Settings > Drives can mount an image file as A:. INT 13h and INT 25h have read it since
  * #44; INT 21h, which serves files through Win32, used to send A:\SETUP.EXE to the host's
  * own A: instead. Here the image's files are read out of it (dos_fatimg.c) into a private
@@ -337,7 +338,7 @@
  * write marks the copy stale (DosInt21FloppyChanged), and the next A: path extracts a
  * fresh one into a new directory -- the old one may still hold the guest's open handles.
  */
-#define DOS_IMAGE_DRIVE                         0                       /* A: */
+#define DOS_IMAGE_DRIVE_DEFAULT                 0                       /* A:, until Settings picks a letter */
 #define DOS_IMAGE_PATH_SIZE                     MAX_PATH
 #define DOS_IMAGE_MAX_BYTES                     (32u * 1024u * 1024u)   /* Larger is no floppy, nor a FAT16 we serve */
 #define DOS_IMAGE_COPY_CHUNK                    0x10000u
@@ -470,6 +471,7 @@ static UINT g_DosLfnNext;
 static INT  g_DosImageIsCurrent = 0;                      /* #240: the current drive is the image A: */
 
 static INT   g_DosImageMode = 0;                         /* 1 = A: is an image (or an empty bay) */
+static INT g_DosImageDrive = DOS_IMAGE_DRIVE_DEFAULT;        /* s101: the letter the image is (0 = A:) */
 static CHAR  g_DosImageFile[DOS_IMAGE_PATH_SIZE];       /* The image; "" = no disk in the drive */
 static INT   g_DosImageState = DOS_IMAGE_STATE_UNTRIED;
 static UINT  g_DosImageGeneration = 0;                   /* Each extraction gets its own directory */
@@ -849,7 +851,7 @@ static INT DosImageExtractDirectory(
         if (!entry->Name[0] || !DosImageNameIsSafe(entry->Name)
             || !DosImageAppend(hostPath, sizeof(hostPath), hostDirectory, entry->Name))
         {
-            DosImageNote("  #240 A: image: skipped an entry Win32 cannot name: ", entry->Name);
+            DosImageNote("  #240 floppy image: skipped an entry Win32 cannot name: ", entry->Name);
             continue;
         }
 
@@ -919,7 +921,7 @@ static INT DosImageExtract(VOID)
 
     if (file == INVALID_HANDLE_VALUE)
     {
-        DosImageNote("  #240 A: image cannot be opened -- the drive reads as empty: ", g_DosImageFile);
+        DosImageNote("  #240 floppy image cannot be opened -- the drive reads as empty: ", g_DosImageFile);
         return 0;
     }
 
@@ -928,7 +930,7 @@ static INT DosImageExtract(VOID)
     if (size == INVALID_FILE_SIZE || size < FAT_IMAGE_SECTOR_SIZE || size > DOS_IMAGE_MAX_BYTES)
     {
         CloseHandle(file);
-        DosImageNote("  #240 A: image is not a floppy-sized file -- the drive reads as empty: ", g_DosImageFile);
+        DosImageNote("  #240 floppy image is not a floppy-sized file -- the drive reads as empty: ", g_DosImageFile);
         return 0;
     }
 
@@ -947,7 +949,7 @@ static INT DosImageExtract(VOID)
     if (!isOk || !FatImageMount(&image, data, size))
     {
         VirtualFree(data, 0, MEM_RELEASE);
-        DosImageNote("  #240 A: image has no FAT12/FAT16 filesystem we can read -- the drive reads as empty: ", g_DosImageFile);
+        DosImageNote("  #240 floppy image has no FAT12/FAT16 filesystem we can read -- the drive reads as empty: ", g_DosImageFile);
         return 0;
     }
 
@@ -972,7 +974,7 @@ static INT DosImageExtract(VOID)
     FatImageVolumeLabel(&image, g_DosImageLabel);           /* DIR's "Volume in drive A is ..." */
     VirtualFree(data, 0, MEM_RELEASE);
     g_DosImageState = DOS_IMAGE_STATE_READY;
-    DosImageNote("  #240 A: image mounted at the DOS level from ", g_DosImageFile);
+    DosImageNote("  #240 floppy image mounted at the DOS level from ", g_DosImageFile);
     return 1;
 }
 
@@ -1023,12 +1025,21 @@ static INT DosImageIsWriteCall(PCSTR hostPath)
     }
 }
 
-/* Point an "A:..." path into the image's directory (see the note above). */
+/* "X:\\" for the image's letter -- the drive DOS sees, never the host directory behind it. */
+static PCSTR DosImageRootText(VOID)
+{
+    static CHAR root[] = "A:\\";
+
+    root[0] = (CHAR)('A' + g_DosImageDrive);
+    return root;
+}
+
+/* Point an "X:..." path on the image's letter into the image's directory (see the note above). */
 static VOID DosImageMapPath(PSTR path, INT capacity)
 {
     CHAR hostPath[DOS_IMAGE_PATH_SIZE];
 
-    if (!g_DosImageMode || (path[0] | ASCII_CASE_BIT) != 'a' || path[1] != ':' || DosImageIsDeviceName(path + 2))
+    if (!g_DosImageMode || (path[0] | ASCII_CASE_BIT) != 'a' + g_DosImageDrive || path[1] != ':' || DosImageIsDeviceName(path + 2))
         return;
 
     g_DosImageTouched = 1;
@@ -1378,7 +1389,7 @@ static VOID DosFcbName(const volatile BYTE *fcb, PSTR out)
     }
     else if (g_DosImageIsCurrent)                         /* #240: the default drive is the image */
     {
-        out[length++] = 'A';
+        out[length++] = (CHAR)('A' + g_DosImageDrive);
         out[length++] = ':';
     }
 
@@ -1883,9 +1894,9 @@ static INT DosImageHandleIsImage(HANDLE file)
     return 0;
 }
 
-VOID DosInt21SetFloppyImage(INT isImageMode, PCSTR imagePath)
+VOID DosInt21SetFloppyImage(INT isImageMode, PCSTR imagePath, INT drive)
 {
-    INT isSame = (g_DosImageMode == (isImageMode ? 1 : 0));
+    INT isSame = (g_DosImageMode == (isImageMode ? 1 : 0)) && g_DosImageDrive == drive;
     INT index;
 
     for (index = 0; imagePath && imagePath[index] && isSame; ++index)
@@ -1896,6 +1907,7 @@ VOID DosInt21SetFloppyImage(INT isImageMode, PCSTR imagePath)
         return;                                             /* nothing changed: keep the copy */
 
     g_DosImageMode = isImageMode ? 1 : 0;
+    g_DosImageDrive = (drive >= 0 && drive < DOS_DRIVE_LETTERS) ? drive : DOS_IMAGE_DRIVE_DEFAULT;
     DosImageAppend(g_DosImageFile, sizeof(g_DosImageFile), imagePath ? imagePath : "", NULL);
     g_DosImageState = DOS_IMAGE_STATE_UNTRIED;              /* a new disk: read it on first use */
     g_DosImageCurrent[0] = 0;
@@ -2039,7 +2051,7 @@ static INT DosImageIsChdir(PDOS_MACHINE machine, DWORD segment, DWORD offset)
 
     DosGuestString(segment, offset, guestPath, sizeof(guestPath));
 
-    if ((guestPath[0] | ASCII_CASE_BIT) == 'a' && guestPath[1] == ':' && !guestPath[2])
+    if ((guestPath[0] | ASCII_CASE_BIT) == 'a' + g_DosImageDrive && guestPath[1] == ':' && !guestPath[2])
     {
         g_DosImageRefusal = DOS_ERR_PATH_NOT_FOUND;
         return 1;
@@ -2895,7 +2907,7 @@ INT DosInt21(PDOS_MACHINE machine)
     g_DosImageSubfunction = (BYTE)(R_AX & BYTE_MASK);
     g_DosImageAction = (function == DOS_FN_EXTENDED_OPEN) ? (WORD)(R_DX & WORD_MASK)
                      : (WORD)(R_BX & BYTE_MASK);          /* 7143h: BL */
-    g_DosImageIsCurrent = g_DosImageMode && machine->VirtualDrive == DOS_IMAGE_DRIVE;
+    g_DosImageIsCurrent = g_DosImageMode && machine->VirtualDrive == g_DosImageDrive;
 
     /* #241: THE CD-ROM IS READ-ONLY. A write-class call whose path lands on the ISO-backed
      * MSCDEX drive answers 5, access denied -- the answer MSCDEX's redirector gives -- before
@@ -3304,7 +3316,7 @@ INT DosInt21(PDOS_MACHINE machine)
 
             if (win32Error && DosErrFromWin32((unsigned long)win32Error, &dosError) && DosCritIsHardwareError(dosError))
             {
-                g_DosReadWriteDrive = isImageFile ? DOS_IMAGE_DRIVE : DosHandleDrive(machine->FileHandles[handle]);
+                g_DosReadWriteDrive = isImageFile ? g_DosImageDrive : DosHandleDrive(machine->FileHandles[handle]);
                 SETAX(dosError);
                 ERRCF();
                 trace = LogPut(trace, "  INT21 AH=40 h="); trace = LogHex(trace, handle);
@@ -3946,7 +3958,7 @@ INT DosInt21(PDOS_MACHINE machine)
                     volatile BYTE *extension;
                     INT isExtended = (fcb != (volatile BYTE *)((R_DS << PARAGRAPH_SHIFT) + (R_DX & WORD_MASK))) ? DOS_INT21_XFCB_HEADER : 0;
                     INT searchDrive = DosFcbSearchDrive(fcb[0], DosCurrentDrive(machine));
-                    INT isImageDrive = g_DosImageMode && searchDrive == DOS_IMAGE_DRIVE;
+                    INT isImageDrive = g_DosImageMode && searchDrive == g_DosImageDrive;
                     INT isLabel;
                     volume[0] = 0;
 
@@ -3997,7 +4009,7 @@ INT DosInt21(PDOS_MACHINE machine)
                         dta[DOS_INT21_XFCB_ATTRIBUTE] = DOS_INT21_ATTRIBUTE_VOLUME;
                     }
 
-                    extension[0] = isImageDrive ? DOS_IMAGE_DRIVE + 1 : DOS_INT21_FIND_DRIVE_C;   /* A: (#240) or C: */
+                    extension[0] = isImageDrive ? g_DosImageDrive + 1 : DOS_INT21_FIND_DRIVE_C;   /* A: (#240) or C: */
 
                     for (volumeIndex = 0; volumeIndex < DOS_FCB_NAME_SIZE; ++volumeIndex)
                     {
@@ -4157,8 +4169,8 @@ INT DosInt21(PDOS_MACHINE machine)
                     dta[DOS_INT21_XFCB_ATTRIBUTE] = (BYTE)(findData.dwFileAttributes & DOS_LFN_ATTRIBUTE_MASK);
                 }
 
-                extension[0] = (g_DosImageMode && DosFcbSearchDrive(fcb[0], DosCurrentDrive(machine)) == DOS_IMAGE_DRIVE)
-                             ? DOS_IMAGE_DRIVE + 1 : DOS_INT21_FIND_DRIVE_C;  /* A: (#240) or C: */
+                extension[0] = (g_DosImageMode && DosFcbSearchDrive(fcb[0], DosCurrentDrive(machine)) == g_DosImageDrive)
+                             ? g_DosImageDrive + 1 : DOS_INT21_FIND_DRIVE_C;  /* A: (#240) or C: */
                 DosFcbPutName(extension + 1, baseName);
                 extension[DOS_INT21_DIRENTRY_ATTRIBUTE] = (BYTE)(findData.dwFileAttributes & DOS_LFN_ATTRIBUTE_MASK);
 
@@ -4571,7 +4583,7 @@ INT DosInt21(PDOS_MACHINE machine)
                     rootPointer = root; }
 
         /* #240: the image drive's geometry is the image's; with no disk in it, no answer. */
-        if (g_DosImageMode && driveNumber == DOS_IMAGE_DRIVE + 1 && DosImageEnsure())
+        if (g_DosImageMode && driveNumber == g_DosImageDrive + 1 && DosImageEnsure())
         {
             isImageDisk = 1;
             sectorsPerCluster = g_DosImageSectorsPerCluster;
@@ -4579,7 +4591,7 @@ INT DosInt21(PDOS_MACHINE machine)
             totalClusters = g_DosImageClusters;
         }
 
-        if (isImageDisk || (!(g_DosImageMode && driveNumber == DOS_IMAGE_DRIVE + 1)
+        if (isImageDisk || (!(g_DosImageMode && driveNumber == g_DosImageDrive + 1)
                             && GetDiskFreeSpaceA(rootPointer, &sectorsPerCluster, &bytesPerSector, &freeClusters, &totalClusters)))
         {
             volatile BYTE *media = (volatile BYTE *)((DOS_CTAB_SEG << PARAGRAPH_SHIFT) + DOS_MEDIA_OFF);
@@ -5491,7 +5503,7 @@ INT DosInt21(PDOS_MACHINE machine)
             /* #240: in A: terms -- the host directory never reaches the guest -- and, like
              * 6.22's, without reading the disk, so an empty drive answers too.
              */
-            DosImageAppend(output, sizeof(output), "A:\\", g_DosImageResolved);
+            DosImageAppend(output, sizeof(output), DosImageRootText(), g_DosImageResolved);
             count = 1;
             g_DosImageRefusal = 0;
         }
@@ -5750,8 +5762,8 @@ INT DosInt21(PDOS_MACHINE machine)
         }
     }
     else if (function == DOS_FN_GET_CURRENT_DIRECTORY && g_DosImageMode
-             && ((R_DX & BYTE_MASK) == DOS_IMAGE_DRIVE + 1
-                 || (((R_DX & BYTE_MASK) == 0 || (R_DX & BYTE_MASK) == DOS_INT21_WOW_CURRENT_DRIVE) && DosCurrentDrive(machine) == DOS_IMAGE_DRIVE)))
+             && ((R_DX & BYTE_MASK) == g_DosImageDrive + 1
+                 || (((R_DX & BYTE_MASK) == 0 || (R_DX & BYTE_MASK) == DOS_INT21_WOW_CURRENT_DRIVE) && DosCurrentDrive(machine) == g_DosImageDrive)))
     {
         /* #240: A:'s current directory is the one kept beside the image (DosImageMapPath),
          * in the form DOS returns -- no drive, no leading backslash. Like DOS's, it is the
@@ -5786,7 +5798,7 @@ INT DosInt21(PDOS_MACHINE machine)
             DosImageAppend(g_DosImageCurrent, sizeof(g_DosImageCurrent), g_DosImageResolved, NULL);
             g_DosImageRefusal = 0;
             OKCF();
-            trace = LogPut(trace, "  INT21 AH=3B chdir A:\\"); trace = LogPut(trace, g_DosImageCurrent);
+            trace = LogPut(trace, "  INT21 AH=3B chdir "); trace = LogPut(trace, DosImageRootText()); trace = LogPut(trace, g_DosImageCurrent);
             trace = LogPut(trace, " (image) -> ok\r\n");
         }
         else
@@ -6008,7 +6020,7 @@ INT DosInt21(PDOS_MACHINE machine)
         /* #240: the image drive answers from its own FAT -- and an empty one as no drive,
          * because 36h has no error path of its own (a real empty bay would raise INT 24h).
          */
-        if (g_DosImageMode && driveNumber == DOS_IMAGE_DRIVE + 1)
+        if (g_DosImageMode && driveNumber == g_DosImageDrive + 1)
         {
             if (DosImageEnsure())
             {
@@ -6522,14 +6534,14 @@ INT DosInt21(PDOS_MACHINE machine)
          */
         BYTE driveNumber = (BYTE)(R_DX & BYTE_MASK);
 
-        if (g_DosImageMode && driveNumber == DOS_IMAGE_DRIVE)     /* #240: the image drive is ours */
+        if (g_DosImageMode && driveNumber == g_DosImageDrive)     /* #240: the image drive is ours */
         {
             CHAR currentDirectory[DOS_INT21_PATH_SIZE];
 
             if (machine->VirtualDrive < 0 && GetCurrentDirectoryA(sizeof(currentDirectory), currentDirectory))
                 DosNoteDriveDirectory(currentDirectory);
 
-            machine->VirtualDrive = DOS_IMAGE_DRIVE;
+            machine->VirtualDrive = g_DosImageDrive;
         }
         else if (driveNumber < DOS_DRIVE_LETTERS && (GetLogicalDrives() & (1u << driveNumber)))
         {
@@ -7179,7 +7191,7 @@ INT DosInt21(PDOS_MACHINE machine)
                      * 8.3 name; they ask that it exist, which the full form does not.
                      */
                     CHAR hostPath[DOS_IMAGE_PATH_SIZE];
-                    DosImageAppend(output, sizeof(output), "A:\\", g_DosImageResolved);
+                    DosImageAppend(output, sizeof(output), DosImageRootText(), g_DosImageResolved);
                     count = 1;
 
                     if (nameKind && (!DosImageAppend(hostPath, sizeof(hostPath), g_DosImageRoot, g_DosImageResolved)

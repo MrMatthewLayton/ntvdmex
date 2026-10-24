@@ -848,7 +848,8 @@ static VOID StartupBuildDriveTables(volatile BYTE * const sysVars, DOS_MACHINE *
 
                 if (have)
                     flags = DOS_CDS_FLAG_PHYSICAL;
-                else if (driveTypes[di2] == DRIVE_CDROM || driveTypes[di2] == DRIVE_REMOTE)
+                else if (driveTypes[di2] == DRIVE_CDROM || driveTypes[di2] == DRIVE_REMOTE
+                         || (INT)di2 == g_FloppyImageDrive)      /* s101: the floppy image's letter, no DPB */
                     flags = DOS_CDS_FLAG_PHYSICAL | DOS_CDS_FLAG_NETWORK;
 
                 DosCdsBuild(cds, di2, flags, DOS_CTAB_SEG,
@@ -5051,7 +5052,7 @@ INT StartupConfigure(PSTR *cursorIo, CHAR *report, INT *exitCodeOut)
     /* #241: an ISO image as the CD-ROM. Before the drive tables are built, so the letter
      * it takes is one of the drives they describe.
      */
-    HostCdromMount(&cursor, g_Settings.Strings[SET_STR_CDROM], !g_Settings.Values[SET_CDPHYS]);
+    HostCdromMount(&cursor, g_Settings.Strings[SET_STR_CDROM], !g_Settings.Values[SET_CDPHYS], g_Settings.Values[SET_CDLETTER]);
     /* Log only the LIVE settings -- the ones the SettingsApply* functions actually
      * push into the machine. The stored-but-not-yet-honoured ones would make this
      * line four times longer and every value in it would be a claim the run cannot

@@ -36,13 +36,15 @@ static const CHAR *FcbFindTestPattern(BYTE fcbDrive, INT virtualDrive)
     return pattern;
 }
 
-/* What the image resolver makes of an "A:..." search pattern, from A:'s current directory. */
+/* What the image resolver makes of an "X:..." search pattern (the image's letter), from
+ * the image's current directory.
+ */
 static const CHAR *FcbFindTestResolve(const CHAR *pattern, const CHAR *current)
 {
     static CHAR resolved[260];
 
-    if (pattern[0] != 'A' || pattern[1] != ':')
-        return "(not A:)";
+    if (!pattern[0] || pattern[1] != ':')
+        return "(no drive)";
 
     if (!FatImageResolvePath(current, pattern + 2, resolved, sizeof(resolved)))
         return "(unresolved)";
@@ -81,6 +83,15 @@ INT main(VOID)
           "CD DEMOS then DIR -> \"DEMOS\\*\" in the image");
     CHECK(strcmp(FcbFindTestResolve(FcbFindTestPattern(1, 2), "DEMOS"), "DEMOS\\*") == 0,
           "DIR A: from C: -> A:'s current directory, \"DEMOS\\*\"");
+
+    /* s101: THE IMAGE AT ANOTHER LETTER (F:, Settings' choice) -- the real A: stays A:. */
+    CHECK(strcmp(FcbFindTestPattern(0, 5), "F:*") == 0, "drive byte 0 on the image F: -> \"F:*\"");
+    CHECK(DosFcbSearchDrive(0, 5) == 5, "drive byte 0 on F: searches drive 5 (F:)");
+    CHECK(strcmp(FcbFindTestPattern(1, 5), "A:*") == 0, "drive byte 1 while on the image F: -> the real \"A:*\"");
+    CHECK(strcmp(FcbFindTestResolve(FcbFindTestPattern(0, 5), "DEMOS"), "DEMOS\\*") == 0,
+          "F:, CD DEMOS, DIR -> \"DEMOS\\*\" in the image");
+    CHECK(strcmp(FcbFindTestResolve(FcbFindTestPattern(6, 2), ""), "*") == 0,
+          "DIR F: from C: -> the image root's \"*\"");
 
     printf("\n%d checks, %d failed\n", g_Checks, g_Failures);
     return g_Failures ? 1 : 0;

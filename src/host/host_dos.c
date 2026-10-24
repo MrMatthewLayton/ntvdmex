@@ -241,6 +241,7 @@ HANDLE g_Stdio = INVALID_HANDLE_VALUE;
 
 /* #240: Settings > Drives > Floppy = the PHYSICAL drive, and this PC has one. */
 INT g_FloppyPhysical = 0;
+INT g_FloppyImageDrive = -1;
 static struct
 {
     DWORD Eax;
@@ -1676,7 +1677,9 @@ INT DiskIo(UINT drive, UINT32 lba, UINT count, BYTE *guest, INT write)
             return 0;
 
         FlushFileBuffers(g_DiskHandle[0]);
-        DosInt21FloppyChanged();                       /* #240: the DOS-level copy of A: is stale */
+
+        if (g_FloppyImageDrive == 0)                   /* only when INT 13h's drive 0 IS the image */
+            DosInt21FloppyChanged();                   /* #240: the DOS-level copy of A: is stale */
     }
     else
     {
