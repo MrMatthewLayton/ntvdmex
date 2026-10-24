@@ -197,4 +197,11 @@ VOID AuxBiosService(
 /* Does the BIOS have a handler to call with packets (enabled, handler installed)? */
 INT  AuxBiosIsActive(_In_ const AUX_BIOS *bios);
 
+/* Does a GUEST driver own the mouse -- its C207h handler enabled, or the device streaming
+ * to it through the 8042? Then the guest uses the mouse as surely as an INT 33h caller
+ * does (capture), and our INT 33h driver, which it replaced, must stay quiet (s101: QB
+ * after MOUSE.COM had both drivers feeding it, and lost its mouse).
+ */
+INT  AuxGuestOwnsMouse(_In_ const AUX_BIOS *bios, _In_ INT isStreaming);
+
 #endif

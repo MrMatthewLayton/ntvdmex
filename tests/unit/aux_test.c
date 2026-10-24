@@ -140,6 +140,35 @@ INT main(VOID)
     AuxBiosService(&device, &bios, AUX_BIOS_SET_HANDLER, 0, 0, 0, &result);
     CHECK(!AuxBiosIsActive(&bios), "C207h 0:0 removes the handler");
 
+    /* T8: MOUSE.COM 6.24A's init (from the binary, 0x353A), twice -- QB resets its INT 33h
+     * after a DOS Shell, and the driver re-runs the sequence (s101). Idempotent.
+     */
+    printf("== a guest driver's init, run twice ==\n");
+    AuxDeviceReset(&device);
+    memset(&bios, 0, sizeof bios);
+    CHECK(!AuxGuestOwnsMouse(&bios, 0), "power-on: no guest driver owns the mouse");
+    {
+        INT pass;
+
+        for (pass = 0; pass < 2; ++pass)
+        {
+            AuxBiosService(&device, &bios, AUX_BIOS_INITIALIZE, 3, 0, 0, &result);
+            AuxBiosService(&device, &bios, AUX_BIOS_RESET, 0, 0, 0, &result);
+            AuxBiosService(&device, &bios, AUX_BIOS_SET_RESOLUTION, 3, 0, 0, &result);
+            AuxBiosService(&device, &bios, AUX_BIOS_SET_HANDLER, 0, 0x471E, 0x0123, &result);
+            AuxBiosService(&device, &bios, AUX_BIOS_ENABLE, 1, 0, 0, &result);
+            AuxBiosService(&device, &bios, AUX_BIOS_EXTENDED, 1, 0, 0, &result);
+            AuxBiosService(&device, &bios, AUX_BIOS_SET_SAMPLE_RATE, 3, 0, 0, &result);
+            CHECK(result.Status == AUX_BIOS_OK && AuxBiosIsActive(&bios) && device.IsReporting
+                  && bios.HandlerSegment == 0x471E && AuxGuestOwnsMouse(&bios, 0),
+                  pass ? "the same init again: still enabled, same handler, owns the mouse"
+                       : "C205h C201h C203h C207h C200h C206h C202h: enabled, owns the mouse");
+        }
+    }
+    AuxBiosService(&device, &bios, AUX_BIOS_ENABLE, 0, 0, 0, &result);
+    CHECK(!AuxGuestOwnsMouse(&bios, 0), "C200h BH=0: disabled, no longer owns it");
+    CHECK(AuxGuestOwnsMouse(&bios, 1), "a driver streaming through the 8042 owns it too");
+
     printf("\n== %d checks, %d failed\n", g_Total, g_Failures);
     return g_Failures ? 1 : 0;
 }

@@ -351,7 +351,7 @@ static PSTR ReportDeliveryLatencies(PSTR cursor)
     cursor = LogPut(cursor, " pm=");    cursor = LogHex(cursor, g_MouseCallbackPm);
     cursor = LogPut(cursor, " active="); cursor = LogHex(cursor, (DWORD)g_MouseCallbackActive);
     cursor = LogPut(cursor, " raised="); cursor = LogHex(cursor, g_MouseEventRaised);
-    cursor = LogPut(cursor, " why[fly,none,nohdl,stub,if]=");
+    cursor = LogPut(cursor, " why[fly,none,nohdl,stub,if,clob,guestdrv]=");
     {
         INT reason;
 

@@ -3588,7 +3588,7 @@ static LRESULT CALLBACK HostWindowProcedure(HWND window, UINT message, WPARAM wP
 
             if (g_MouseI33SiteCount && (DWORD)(nowTicks - lastMouseDump) >= HOST_DUMP_INTERVAL_MS)
             {
-                CHAR mouseLine[768];
+                CHAR mouseLine[1024];                   /* s101: 751 used before the ps2_ fields */
                 CHAR *mouseCursor = mouseLine;
                 UINT index;
                 lastMouseDump = nowTicks;
@@ -3610,6 +3610,13 @@ static LRESULT CALLBACK HostWindowProcedure(HWND window, UINT message, WPARAM wP
                 mouseCursor = LogPut(mouseCursor, " autocap_want="); mouseCursor = LogHex(mouseCursor, (DWORD)g_MouseWantCapture);
                 mouseCursor = LogPut(mouseCursor, " fired="); mouseCursor = LogHex(mouseCursor, g_MouseAutoCaptureFired);
                 mouseCursor = LogPut(mouseCursor, " captured="); mouseCursor = LogHex(mouseCursor, (DWORD)g_Captured);
+                /* #199 (s101): a guest's own driver -- C2xxh calls, whether it owns the mouse
+                 * now, its handler calls and the packets queued at the 8042.
+                 */
+                mouseCursor = LogPut(mouseCursor, " ps2_bios="); mouseCursor = LogHex(mouseCursor, Ps2BiosCalls());
+                mouseCursor = LogPut(mouseCursor, " ps2_owns="); mouseCursor = LogHex(mouseCursor, (DWORD)Ps2GuestOwnsMouse());
+                mouseCursor = LogPut(mouseCursor, " ps2_calls="); mouseCursor = LogHex(mouseCursor, g_Ps2Calls);
+                mouseCursor = LogPut(mouseCursor, " ps2_packets="); mouseCursor = LogHex(mouseCursor, g_Ps2Packets);
                 /* THE s64 EVIDENCE, AND EACH FIELD ANSWERS ONE QUESTION (Importance = 1):
                  * edges  -- did the HOST see any button transitions at all? 0 with
                  *         a user who was clicking means the fault is above INT
@@ -3802,8 +3809,12 @@ static LRESULT CALLBACK HostWindowProcedure(HWND window, UINT message, WPARAM wP
                  * buffer every present, so this one may be drawn into the frame.
                  */
                 INT msText = (g_Video.ModeKind == VIDEO_KIND_TEXT && !g_Video.IsVesa);
+                /* s101: a guest driver (MOUSE.COM) draws its own pointer into video memory;
+                 * ours, frozen where the program last showed it to US, was a second one.
+                 */
+                INT isOurPointer = !Ps2GuestOwnsMouse();
 
-                if (g_MouseHidden == 0 && msText && g_Video.Frame.BitsPerPixel == VIDEO_BPP_INDEXED && g_Video.Frame.Pixels)
+                if (g_MouseHidden == 0 && isOurPointer && msText && g_Video.Frame.BitsPerPixel == VIDEO_BPP_INDEXED && g_Video.Frame.Pixels)
                 {
                     INT clientHeight = g_Video.CellHeight ? g_Video.CellHeight : VIDEO_CELL_HEIGHT;
                     VddVideoTextCursor(&g_Video, (INT)(g_MouseX / VIDEO_CELL_WIDTH), (INT)(g_MouseY / clientHeight),
@@ -3837,7 +3848,7 @@ static LRESULT CALLBACK HostWindowProcedure(HWND window, UINT message, WPARAM wP
                  *   measures whether the oracles' drivers write VRAM, so the gap is
                  *   recorded rather than assumed (docs/inventory/mouse.md, 09h).
                  */
-                if (g_MouseHidden == 0 && !msText && g_PresentDdraw.IsSnapshotValid && g_PresentDdraw.SnapshotBpp == VIDEO_BPP_INDEXED)
+                if (g_MouseHidden == 0 && isOurPointer && !msText && g_PresentDdraw.IsSnapshotValid && g_PresentDdraw.SnapshotBpp == VIDEO_BPP_INDEXED)
                     MouseDrawGraphicsCursor(g_PresentDdraw.Snapshot, g_PresentDdraw.SnapshotWidth, g_PresentDdraw.SnapshotHeight, g_PresentDdraw.SnapshotWidth);
 
                 HOST_UNLOCK();
