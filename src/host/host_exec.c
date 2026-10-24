@@ -2290,6 +2290,12 @@ VOID HostRunExecLoop(
 
             if (criticalAction)                                  /* ABORT: end the program, as 4Ch */
             {
+                if (g_ExecDepth == 0 && g_TopIsShell && DosShellAbortResume(machine, tib, &cursor))
+                {
+                    LogAppend(LOG_PATH, base, cursor); cursor = base;
+                    continue;                           /* the shell's own re-entry: a new prompt */
+                }
+
                 if (DosTerminate(machine, tib, &cursor, base))
                     continue;
 
