@@ -1502,6 +1502,40 @@ INT DosTerminate(DOS_MACHINE *machine, PVOID tib, PSTR *logCursor, PSTR base)
     return 0;                        /* top-level program: the run is over */
 }
 
+/* INT 24h ABORT WHILE THE PERMANENT SHELL ITSELF IS RUNNING. (s101 rig report: `DIR D:\`
+ * on an empty drive, A at "Abort, Retry, Fail?", and the whole session ended.)
+ * Abort terminates the current process; when that is the shell, which is its own parent,
+ * DOS resumes it at its own terminate address (DosPspSelfTerminateAddress) -- COMMAND.COM's
+ * re-entry -- and it prints a new prompt. The INT 21h call's frame is dropped, as DOS's
+ * exit unwinds it; AH=4Dh then reports 02h (ended by a critical-error abort).
+ * Returns 1 if the shell was resumed, 0 if this is not that case (the run ends, as before).
+ */
+INT DosShellAbortResume(DOS_MACHINE *machine, PVOID tibPointer, PSTR *logCursor)
+{
+    volatile BYTE *tib = (volatile BYTE *)tibPointer;
+    DWORD resume = DosPspSelfTerminateAddress(NULL, (WORD)machine->PspSegment);
+    volatile WORD *frame;
+
+    if (!resume)
+        return 0;
+
+    frame = (volatile WORD *)((VDM_REG16(tib, VTIB_SS) << PARAGRAPH_SHIFT) + (VDM_REG16(tib, VTIB_ESP) & WORD_MASK));
+    DosPspRestoreVectors(NULL, (WORD)machine->PspSegment);
+    VDM_REG(tib, VTIB_EFLAGS) = (VDM_REG(tib, VTIB_EFLAGS) & HIGH_WORD_MASK_U) | frame[X86_FRAME16_FLAGS_WORD];
+    VDM_SET16(tib, VTIB_ESP, (WORD)(VDM_REG16(tib, VTIB_ESP) + X86_IRET16_SIZE));
+    VDM_SET16(tib, VTIB_CS, (WORD)(resume >> WORD_SHIFT));
+    VDM_REG(tib, VTIB_EIP) = resume & WORD_MASK;
+    machine->ChildReturnCode = (WORD)(((WORD)DOS_TERM_CRITICAL_ABORT << BYTE_SHIFT) | (machine->ExitCode & BYTE_MASK));
+    machine->TermType = DOS_TERM_NORMAL;
+    machine->ExitCode = 0;
+    *logCursor = LogPut(*logCursor, "  INT24 ABORT on the permanent shell -> its terminate address 0x");
+    *logCursor = LogHex(*logCursor, resume >> WORD_SHIFT);
+    *logCursor = LogPut(*logCursor, ":0x");
+    *logCursor = LogHex(*logCursor, resume & WORD_MASK);
+    *logCursor = LogPut(*logCursor, " (a new prompt, not the end of the session)\r\n");
+    return 1;
+}
+
 /* What INT 13h drive 0 opens: the mounted image; else the harness's disk if it is there;
  * else, in physical mode, the host's own drive (#240) -- \\.\A:, sector for sector.
  */

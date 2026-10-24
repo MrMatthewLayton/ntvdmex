@@ -551,6 +551,18 @@ INT main(VOID)
         McbTestCheck(psp[DOS_PSP_COMMAND_TAIL_LENGTH] == 0 && psp[DOS_PSP_COMMAND_TAIL] == DOS_PSP_COMMAND_TAIL_END, "cmdtail: empty -> len 0, 0x0D");
         DosPspBuildCommandTail(tailMemory, MCB_TEST_PSP, (PCSTR)0);
         McbTestCheck(psp[DOS_PSP_COMMAND_TAIL_LENGTH] == 0 && psp[DOS_PSP_COMMAND_TAIL] == DOS_PSP_COMMAND_TAIL_END, "cmdtail: NULL -> len 0, 0x0D");
+
+        /* s101: a terminate by its own parent (the permanent shell) resumes at PSP:0Ah. */
+        psp[0x0A] = 0x34;
+        psp[0x0B] = 0x12;
+        psp[0x0C] = 0x78;
+        psp[0x0D] = 0x56;
+        psp[0x16] = 0x00;
+        psp[0x17] = 0x01;
+        McbTestCheck(DosPspSelfTerminateAddress(tailMemory, MCB_TEST_PSP) == 0x56781234, "selfterm: parent == self -> PSP:0Ah 5678:1234");
+        psp[0x16] = 0x00;
+        psp[0x17] = 0x02;
+        McbTestCheck(DosPspSelfTerminateAddress(tailMemory, MCB_TEST_PSP) == 0, "selfterm: another parent -> 0 (an ordinary exit)");
     }
 
     }
