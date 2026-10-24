@@ -1739,6 +1739,16 @@ VOID MouseCallbackTry(volatile BYTE *tib)
         return;
     }
 
+    /* A GUEST DRIVER HAS THE MOUSE (s101): MOUSE.COM replaced IVT[33h], and a program that
+     * had registered with us before (QB, before its DOS Shell) has registered with it since.
+     * Calling the old handler with OUR events fed it a second, contradicting mouse.
+     */
+    if (Ps2GuestOwnsMouse())
+    {
+        ++g_MouseCallbackWhy[MOUSE_CB_WHY_GUEST_DRIVER];
+        return;
+    }
+
     /* 18h's handlers count as handlers (#265): a guest with only those still gets calls. */
     if ((!g_MouseEventMask && !I33AlternateAny(g_MouseAlt)) || g_MouseEventQueueHead == g_MouseEventQueueTail)
     {
@@ -2131,12 +2141,31 @@ static VOID Ps2CallbackTry(volatile BYTE *tib)
     ++g_Ps2Calls;
 }
 
+INT Ps2GuestOwnsMouse(VOID)
+{
+    return AuxGuestOwnsMouse(&g_Ps2Bios, VddInputAuxIsStreaming(&g_Input));
+}
+
+DWORD Ps2BiosCalls(VOID)
+{
+    return g_Ps2Bios.Calls;
+}
+
 VOID Ps2MousePump(volatile BYTE *tib)
 {
     LONG deltaX;
     LONG deltaY;
     BYTE buttons;
     INT isStreaming;
+
+    /* A GUEST DRIVER USES THE MOUSE AS SURELY AS AN INT 33h CALLER (s101). Capture was only
+     * ever asked for by our INT 33h -- so once MOUSE.COM owned IVT[33h], nothing asked
+     * again: each child exit (its TSR exit, then the DOS Shell's) clears the wish
+     * (MouseChildExited), and QB, talking to MOUSE.COM, never re-raised it. Re-raised here
+     * while the guest driver is live, so auto-capture fires again, once per program.
+     */
+    if (!g_MouseWantCapture && Ps2GuestOwnsMouse())
+        InterlockedExchange(&g_MouseWantCapture, 1);
 
     if (AuxBiosIsActive(&g_Ps2Bios))
     {

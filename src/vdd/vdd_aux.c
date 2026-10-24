@@ -423,3 +423,8 @@ INT AuxBiosIsActive(const AUX_BIOS *bios)
 {
     return bios->IsEnabled && (bios->HandlerSegment || bios->HandlerOffset);
 }
+
+INT AuxGuestOwnsMouse(const AUX_BIOS *bios, INT isStreaming)
+{
+    return AuxBiosIsActive(bios) || isStreaming;
+}

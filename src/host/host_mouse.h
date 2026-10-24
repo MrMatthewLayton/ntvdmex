@@ -80,6 +80,8 @@ VOID MouseCallbackReturn(volatile BYTE *tib);
  * IRQ12). Neither set up: the motion is discarded, and INT 33h is served as before.
  */
 VOID Ps2MousePump(volatile BYTE *tib);
+INT Ps2GuestOwnsMouse(VOID);      /* a guest driver has the PS/2 mouse: ours stands down (s101) */
+DWORD Ps2BiosCalls(VOID);         /* INT 15h C2xxh calls, for the log */
 
 /* INT 15h AX=C2xxh from V86: runs the service, sets BH/BL/CL/DL as it answers, and
  * returns the status for AH (CF = status != 0).
