@@ -52,7 +52,8 @@
  * So when Settings > Audio > MIDI picks an EXTERNAL synth (MT-32 / SoundFont, routed
  * by name in midi_route.h), the host sets `SysExSink` and each COMPLETE message,
  * F0 .. F7 inclusive, goes to it whole. NULL = swallowed exactly as before, byte for
- * byte -- the default path does not change.
+ * byte -- the default path does not change. The hosted synths (the built-in GS one and our
+ * SoundFont one) get SysEx the same way: their GM / GS resets.
  *
  * [CAUTION]: A message longer than MPU_SYSEX_MAX is dropped and counted, never truncated: a cut
  * DT1 has a wrong checksum and an MT-32 rejects it anyway, and a cut bulk dump that

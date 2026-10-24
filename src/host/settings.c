@@ -154,6 +154,8 @@ const SET_DEF g_SetDefinitions[SET_COUNT] = {
 /* #136: which host midiOut device the MPU-401 (and the GUS's MIDI UART) play through --
  * MIDI_ROUTE_* in src/vdd/midi_route.h. Host GM = device 0, as always; MT-32 / SoundFont
  * = a host DRIVER found by name (Munt, BASSMIDI...), which also gets SysEx. Start-up only.
+ * SoundFont with a SoundFontPath set = our own SF2 synth in OUR mixer (audio_sf2.h); the
+ * driver found by name is then only its fallback.
  * #155: Built-in GS (the default) = Windows' GS synth hosted in OUR mixer, so MIDI music is
  * recorded and follows the master volume; "Windows MIDI" is the old Host GM, unchanged.
  */

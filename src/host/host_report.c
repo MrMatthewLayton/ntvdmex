@@ -28,6 +28,7 @@
 #include "main.h"
 #include "host_audio.h"
 #include "audio_dmsynth.h"
+#include "audio_sf2.h"
 #include "host_bios.h"
 #include "host_diag.h"
 #include "host_dos.h"
@@ -1345,6 +1346,55 @@ static PSTR ReportDeviceIrqRetriesAndSoundBlocks(
         cursor = LogPut(cursor, " renders=");     cursor = LogDecimal(cursor, synthStats->RenderCalls);
         cursor = LogPut(cursor, " render_ms=");   cursor = LogDecimal(cursor, (UINT)(synthStats->RenderTicks * 1000 / frequency.QuadPart));
         cursor = LogPut(cursor, " worst_us=");    cursor = LogDecimal(cursor, (UINT)(synthStats->RenderTicksWorst * 1000000 / frequency.QuadPart));
+        cursor = LogPut(cursor, "\r\n");
+    }
+
+    /* The SoundFont synth (audio_sf2.h): whether the font loaded, what is in it, what playing
+     * it cost, and the step that failed if it did not.
+     */
+    if (g_MidiSoundFont)
+    {
+        static const PCSTR stateNames[] = { "idle (no MIDI played)", "starting", "ready", "FAILED" };
+        PCAUDIO_SF2_STATS fontStats = AudioSf2Stats();
+        LARGE_INTEGER frequency;
+        QueryPerformanceFrequency(&frequency);
+        cursor = LogPut(cursor, "STAGE2: midi soundfont: ");
+        cursor = LogPut(cursor, stateNames[fontStats->State & 3]);
+
+        if (fontStats->FailedStep)
+        {
+            cursor = LogPut(cursor, " at ");
+            cursor = LogPut(cursor, fontStats->FailedStep);
+
+            if (fontStats->FailedDetail)
+            {
+                cursor = LogPut(cursor, " (");
+                cursor = LogPut(cursor, fontStats->FailedDetail);
+                cursor = LogPut(cursor, ")");
+            }
+
+            cursor = LogPut(cursor, " error=");
+            cursor = LogDecimal(cursor, fontStats->FailedError);
+            cursor = LogPut(cursor, " -> MIDI to midiOut");
+        }
+
+        cursor = LogPut(cursor, " file=\"");    cursor = LogPut(cursor, AudioSf2Path());
+        cursor = LogPut(cursor, "\" bytes=");   cursor = LogDecimal(cursor, fontStats->FileBytes);
+        cursor = LogPut(cursor, " presets=");     cursor = LogDecimal(cursor, fontStats->Presets);
+        cursor = LogPut(cursor, " instruments="); cursor = LogDecimal(cursor, fontStats->Instruments);
+        cursor = LogPut(cursor, " samples=");     cursor = LogDecimal(cursor, fontStats->Samples);
+        cursor = LogPut(cursor, " start_ms=");    cursor = LogDecimal(cursor, fontStats->StartMs);
+        cursor = LogPut(cursor, " warm_ms=");     cursor = LogDecimal(cursor, fontStats->WarmMs);
+        cursor = LogPut(cursor, " msgs=");        cursor = LogDecimal(cursor, fontStats->Messages);
+        cursor = LogPut(cursor, " sysex=");       cursor = LogDecimal(cursor, fontStats->SysEx);
+        cursor = LogPut(cursor, " dropped=");     cursor = LogDecimal(cursor, fontStats->Dropped);
+        cursor = LogPut(cursor, " notes=");       cursor = LogDecimal(cursor, fontStats->NotesOn);
+        cursor = LogPut(cursor, " notes_silent=");cursor = LogDecimal(cursor, fontStats->NotesSilent);
+        cursor = LogPut(cursor, " voices_peak="); cursor = LogDecimal(cursor, fontStats->VoicesPeak);
+        cursor = LogPut(cursor, " stolen=");      cursor = LogDecimal(cursor, fontStats->VoicesStolen);
+        cursor = LogPut(cursor, " renders=");     cursor = LogDecimal(cursor, fontStats->RenderCalls);
+        cursor = LogPut(cursor, " render_ms=");   cursor = LogDecimal(cursor, (UINT)(fontStats->RenderTicks * 1000 / frequency.QuadPart));
+        cursor = LogPut(cursor, " worst_us=");    cursor = LogDecimal(cursor, (UINT)(fontStats->RenderTicksWorst * 1000000 / frequency.QuadPart));
         cursor = LogPut(cursor, "\r\n");
     }
 

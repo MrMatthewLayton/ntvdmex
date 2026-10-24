@@ -19,6 +19,7 @@
 #include "main.h"
 #include "host_audio.h"
 #include "audio_dmsynth.h"
+#include "audio_sf2.h"
 #include "capture_video.h"
 #include "host_bios.h"
 #include "host_diag.h"
@@ -3336,6 +3337,19 @@ PSTR StartupStartServices(PSTR cursor)
         }
     }
 
+    /* SOUNDFONT WITH A FILE -- our own SF2 synth, started when a guest enters MPU UART mode.
+     * MidiChoice stays SoundFont, so midiOut still opens what MIDI = SoundFont always found
+     * (a SoundFont driver by name, else device 0): that is where MIDI goes if the font will
+     * not load. With no file, nothing here changes: the driver search alone, as before.
+     */
+    if (g_Wave.MidiChoice == MIDI_ROUTE_SF2 && g_Settings.Strings[SET_STR_SOUNDFONT][0])
+    {
+        g_MidiSoundFont = TRUE;
+        AudioSf2Prepare(SettingsOutputHz(&g_Settings), g_Settings.Strings[SET_STR_SOUNDFONT]);
+        g_Mpu.SysExSink = HostMidiSysEx;
+        g_GusMidi.SysExSink = HostMidiSysEx;
+    }
+
     AudioWaveStart(&g_Wave, SettingsOutputHz(&g_Settings), HostAudioFill, NULL);
 
     /* #155 (user, s97): A HOST NEVER STARTS RECORDING ON ITS OWN. The one exception is the
@@ -3350,7 +3364,7 @@ PSTR StartupStartServices(PSTR cursor)
      */
     if (g_Wave.MidiChoice != MIDI_ROUTE_GM)
     {
-        CHAR midiLine[200];
+        CHAR midiLine[640];             /* the device line, and a SoundFontPath of up to MAX_PATH */
         CHAR *midiCursor = LogPut(midiLine, "STAGE2: MIDI = ");
         midiCursor = LogPut(midiCursor, g_Wave.MidiChoice == MIDI_ROUTE_MT32 ? "MT-32" : "SoundFont");
 
@@ -3376,8 +3390,15 @@ PSTR StartupStartServices(PSTR cursor)
             midiCursor = LogPut(midiCursor, g_Wave.MidiDevice < 0 ? ", would not open)" : ")");
         }
 
-        if (g_Wave.MidiChoice == MIDI_ROUTE_SF2)
-            midiCursor = LogPut(midiCursor, "; SoundFontPath is not passed on -- the driver keeps its own list");
+        if (g_MidiSoundFont)
+        {
+            midiCursor = LogPut(midiCursor, "; SoundFontPath \"");
+            midiCursor = LogPut(midiCursor, AudioSf2Path());
+            midiCursor = LogPut(midiCursor, "\" plays through our SF2 synth in our mixer (loaded at MPU UART mode)"
+                                            " -- that device is only its fallback");
+        }
+        else if (g_Wave.MidiChoice == MIDI_ROUTE_SF2)
+            midiCursor = LogPut(midiCursor, "; no SoundFontPath -- the driver keeps its own list");
 
         midiCursor = LogPut(midiCursor, " (#136)\r\n"); LogAppend(LOG_PATH, midiLine, midiCursor);
     }
