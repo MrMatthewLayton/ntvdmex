@@ -122,7 +122,10 @@ what is in it. They use **preset tables that already know the ROM's addresses**:
   copyright) or a SoundFont rebuilt to that layout. The hook is already there: point `rom` at
   the words and set `rom_words`. It is read-only and addressed from word 0.
 - **The `SoundFontPath` setting (`SET_STR_SOUNDFONT`) fits the *other* path better:** the
-  host's MIDI synth for the MPU-401 (the `Midi` combo's `SoundFont` choice). Using the EMU8000
+  host's MIDI synth for the MPU-401 (the `Midi` combo's `SoundFont` choice). **That path now
+  exists, without the chip:** a software SF2 synth of our own (`src/vdd/sf2_synth.c`, see
+  `docs/inventory/mpu401.md` section 5) plays the file in the mixer. What follows is why the
+  EMU8000 itself was not used for it. Using the EMU8000
   as that synth would take four pieces: (1) a RIFF/SF2 parser, meaning the `sdta/smpl` 16-bit
   sample chunk plus `pdta`'s `phdr/pbag/pgen/inst/ibag/igen/shdr`; (2) the samples copied into
   a private sound-memory region; (3) a MIDI-to-voice allocator that turns note-on, CC and
