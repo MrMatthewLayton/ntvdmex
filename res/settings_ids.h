@@ -164,4 +164,8 @@
 /* Video (#331): */
 #define IDC_S_FSRES                 346     /* Combo: fullscreen's display mode (filled at run time) */
 
+/* Drives (s101): */
+#define IDC_S_FLOPPY_LETTER         347     /* Combo: the floppy image's drive letter (filled at run time) */
+#define IDC_S_CD_LETTER             348     /* Combo: the ISO's drive letter (filled at run time) */
+
 #endif

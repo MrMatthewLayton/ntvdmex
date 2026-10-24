@@ -228,9 +228,18 @@ the 82077AA ([fdc.md](fdc.md)); the FDC's head never moves.
 | INT 13h drives the FDC chip (DMA channel 2, the head position) | **PART** | the image is read directly; the chip's state never changes, which is why `p_fdc dumpreg` and `p_dma dma.status.idle` differ from the oracles | — |
 | INT 13h on the PHYSICAL drive (Settings > Drives > Floppy = physical, the PC has one) | **IMPL** (#240) | `FloppyImagePath()` (`host_dos.c`) opens `\\.\A:` when no `cfg\FLOPPY.IMG` is present -- the harness's disk still wins; an empty drive is asked again on the next call | **rig owed** (needs a machine with a floppy drive) |
 
-### The image as DOS drive A: (#240)
+### The image as a DOS drive (#240)
 
-With Settings > Drives > Floppy = **image**, A: at the INT 21h level is the image's FAT12/FAT16
+**s101 (user): the image takes the letter Settings names** -- *As Drive* beside the image path,
+listing only letters Windows is not using (`FloppyImageLetter`: 0 = automatic, the first free;
+`DriveLetterPolicyChoose` in `src/host/cdrom_policy.h`). Every Windows drive stays itself: a real
+A: stays the real A:. A stored letter Windows is using when the image mounts falls back to
+automatic, and the log says so. INT 13h drive 0 is the image only when its letter IS A: (a PC with
+no floppy drive, A: chosen); otherwise INT 13h keeps the real drive, or the harness's
+`cfg\FLOPPY.IMG`. The letter's CDS entry is a redirector's (no DPB), written at start-up and on a
+live change. Below, "A:" means the image's letter.
+
+With Settings > Drives > Floppy = **image**, the image's letter at the INT 21h level is the image's FAT12/FAT16
 filesystem (`src/dos/dos_fatimg.c`, read-only, off-VM tested by `tests/unit/fatimg_test.c`;
 `dos_int21.c` "DRIVE A: AS A DISK IMAGE"). The files are read into a private directory and
 every A: path is pointed into it; A: is a virtual current drive with its own directory.

@@ -542,12 +542,14 @@ BYTE DosInt21CurrentDrive(_In_ PCDOS_MACHINE machine);
 
 INT DosInt21(_Inout_ PDOS_MACHINE machine);
 
-/* #240: drive A: as a disk image at the DOS level (dos_int21.c, "DRIVE A: AS A DISK IMAGE").
- * `isImageMode` 1 = A: is the image `imagePath` (NULL or "" = the drive is empty); 0 = A:
- * is the host's own. Safe to call again with the same values (the copy is kept) or new
- * ones (the next A: path reads the new disk).
+/* #240: a floppy disk image as a DOS drive (dos_int21.c, "DRIVE A: AS A DISK IMAGE").
+ * `isImageMode` 1 = drive `drive` (0 = A:) is the image `imagePath` (NULL or "" = the
+ * drive is empty); 0 = no image drive. s101 (user): the letter is Settings' choice, a
+ * letter Windows is not using, so every Windows drive -- a real A: included -- stays
+ * itself. Safe to call again with the same values (the copy is kept) or new ones (the
+ * next path on the drive reads the new disk).
  */
-VOID DosInt21SetFloppyImage(_In_ INT isImageMode, _In_opt_ PCSTR imagePath);
+VOID DosInt21SetFloppyImage(_In_ INT isImageMode, _In_opt_ PCSTR imagePath, _In_ INT drive);
 
 /* #240: INT 13h wrote the image -- the DOS-level copy is stale. */
 VOID DosInt21FloppyChanged(VOID);

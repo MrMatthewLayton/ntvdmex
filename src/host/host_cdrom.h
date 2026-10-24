@@ -69,13 +69,23 @@
 #define CDROM_DONE                      1
 #define CDROM_DONE_ERROR                2
 
-/* Mount the image the settings name, if the CD-ROM setting is "image". Logs what it did. */
-VOID HostCdromMount(PSTR *cursorIo, PCSTR imagePath, INT isImageMode);
+/* Mount the image the settings name, if the CD-ROM setting is "image", at Settings' letter
+ * (`storedLetter`: 0 = automatic, 1..26 = A:..Z:; one Windows uses falls back). Logs what it did.
+ */
+VOID HostCdromMount(PSTR *cursorIo, PCSTR imagePath, INT isImageMode, DWORD storedLetter);
+
+/* s101: the letter a mounted image takes (cdrom_policy.h DriveLetterPolicyChoose over the
+ * drives Windows has now), -1 when none is free. A stored letter that is taken is logged.
+ */
+INT HostImageDriveLetter(DWORD storedLetter, DWORD avoidMask, PCSTR what);
+
+/* s101: write DOS's CDS entry for `drive` (DosCdsBuild flags; 0 = the letter is gone). */
+VOID HostDriveCdsWrite(INT drive, UINT flags);
 
 /* Settings > Drives > CD-ROM changed while running: re-mount if the drive it names differs
  * from the one mounted (cdrom_policy.h), update the CDS entry and the DOS layer, log it.
  */
-VOID HostCdromApply(PCSTR imagePath, INT isImageMode);
+VOID HostCdromApply(PCSTR imagePath, INT isImageMode, DWORD storedLetter);
 
 /* Undo the drive mapping and remove the cache. Safe to call more than once, from any path. */
 VOID HostCdromUnmount(VOID);

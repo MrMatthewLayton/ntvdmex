@@ -97,6 +97,8 @@ typedef enum
     SET_RESTARTCAPTURE,         /* #155: Capture Video restarts the running program first */
     SET_VIDEOCODEC, SET_VIDEOQUALITY, SET_VIDEOKEYFRAMES,   /* #155: Settings > Capture's codec */
     SET_FSRES,                  /* #331: fullscreen's display mode (fullscreen_mode.h) */
+    SET_FLOPPYLETTER,           /* s101: the floppy image's drive letter (0 = automatic, 1..26 = A:..Z:) */
+    SET_CDLETTER,               /* s101: the ISO's drive letter, likewise */
     SET_COUNT
 } SET_ID;
 

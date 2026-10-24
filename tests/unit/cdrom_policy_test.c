@@ -48,10 +48,32 @@ static VOID CdromPolicyTestRemount(VOID)
     CHECK(CdromPolicyNeedsRemount(1, "C:\\CD.IS", 1, "C:\\CD.ISO"), "a prefix is not the same path");
 }
 
+static VOID CdromPolicyTestImageLetter(VOID)
+{
+    printf("image drive letter (s101)\n");
+    /* The test machine: A: floppy, C:, D: DVD, Z: network. */
+    CHECK(DriveLetterPolicyChoose(0, 0x0200000D, 0x02000000, 0) == 4, "automatic -> E:");
+    CHECK(DriveLetterPolicyChoose(6, 0x0200000D, 0x02000000, 0) == 5, "stored F: (free) -> F:");
+    CHECK(DriveLetterPolicyChoose(4, 0x0200000D, 0x02000000, 0) == 4, "stored D: (the DVD) -> refused, automatic E:");
+    CHECK(DriveLetterPolicyChoose(1, 0x0200000D, 0x02000000, 0) == 4, "stored A: on a PC with A: -> refused, automatic E:");
+    CHECK(DriveLetterPolicyChoose(1, 0x0200000C, 0x02000000, 0) == 0, "stored A: on a PC with no floppy -> A:");
+    CHECK(DriveLetterPolicyChoose(0, 0x0200000D, 0x02000000, 0x00000010) == 5, "automatic, the other image holds E: -> F:");
+    CHECK(DriveLetterPolicyChoose(5, 0x0200000D, 0x02000000, 0x00000010) == 5, "stored E:, held by the other image -> automatic F:");
+    CHECK(DriveLetterPolicyChoose(27, 0x0000000D, 0, 0) == 4, "a stored value past Z: -> automatic");
+    CHECK(DriveLetterPolicyIsOffered(4, 0x0200000D, 0, 0, 0), "offered: E: (free)");
+    CHECK(!DriveLetterPolicyIsOffered(3, 0x0200000D, 0, 0, 0), "not offered: D: (the DVD)");
+    CHECK(!DriveLetterPolicyIsOffered(25, 0x0200000D, 0, 0, 1), "not offered: Z: (the NAS)");
+    CHECK(DriveLetterPolicyIsOffered(4, 0x0200001D, 0x00000010, 0, 0), "offered: E:, the ISO's own mapping");
+    CHECK(!DriveLetterPolicyIsOffered(4, 0x0200000D, 0, 0x00000010, 1), "not offered to the floppy: E:, the ISO's");
+    CHECK(!DriveLetterPolicyIsOffered(1, 0x0200000D, 0, 0, 0), "not offered to the ISO: B:");
+    CHECK(DriveLetterPolicyIsOffered(1, 0x0200000D, 0, 0, 1), "offered to the floppy: B: (free)");
+}
+
 int main(VOID)
 {
     CdromPolicyTestRemount();
     CdromPolicyTestLetter();
+    CdromPolicyTestImageLetter();
     printf("%d checks, %d failed\n", g_Checks, g_Failures);
     return g_Failures ? 1 : 0;
 }
