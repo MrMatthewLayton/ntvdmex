@@ -162,6 +162,7 @@ add_executable(ntvdmhost
     src/dos/dos_err.c
     src/dos/dos_fatimg.c
     src/dos/dos_iso9660.c
+    src/dos/dos_alias.c
     src/wow/ne.c
     src/wow/wowsched.c
     src/vdd/vdd_bus.c
