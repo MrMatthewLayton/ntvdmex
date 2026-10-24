@@ -176,6 +176,13 @@
 #define SF2_PAN_CENTRE                      0.5                     /* Gen 17: each side's share at pan 0 */
 #define SF2_STEAL_HELD_PENALTY              4.0f /* Above any amplitude: steal released voices first */
 
+/* FLOAT -> INT16 WITHOUT THE x87 CONTROL WORD. A C cast truncates, which on x87 means two
+ * FLDCW around every FISTP. Adding 1.5 x 2^23 instead puts the value, rounded to nearest, in
+ * the low bits of an IEEE single whose exponent is fixed for any |value| < 2^22.
+ */
+#define SF2_ROUNDING_MAGIC                  12582912.0f             /* 1.5 x 2^23 */
+#define SF2_ROUNDING_MAGIC_BITS             0x4B400000              /* Its bit pattern */
+
 #define SF2_DOUBLE_EXPONENT_SHIFT           52
 #define SF2_DOUBLE_EXPONENT_MASK            0x7FFull
 #define SF2_DOUBLE_EXPONENT_BIAS            1023
@@ -186,6 +193,12 @@
 #define SF2_SINE_TERMS                      10
 
 #define SF2_EXP_SERIES_TERMS                (sizeof(g_Sf2ExpSeries) / sizeof(g_Sf2ExpSeries[0]))
+
+typedef union _SF2_FLOAT_BITS
+{
+    FLOAT Value;
+    INT32 Bits;
+} SF2_FLOAT_BITS;
 
 /* Generator kinds, section 8.1.1. */
 enum
@@ -2231,6 +2244,7 @@ BOOL Sf2SynthRender(PSF2_SYNTH synth, PINT16 output, DWORD frames)
         /* Saturate: a loud chord clips at full scale, never wraps to the other rail. */
         for (sampleIndex = 0; sampleIndex < chunk * SF2_SYNTH_STEREO; ++sampleIndex)
         {
+            SF2_FLOAT_BITS rounded;
             FLOAT value = synth->Mix[sampleIndex];
 
             if (value > INT16_MAX_VALUE)
@@ -2238,7 +2252,8 @@ BOOL Sf2SynthRender(PSF2_SYNTH synth, PINT16 output, DWORD frames)
             else if (value < INT16_MIN_VALUE)
                 value = INT16_MIN_VALUE;
 
-            output[done * SF2_SYNTH_STEREO + sampleIndex] = (INT16)value;
+            rounded.Value = value + SF2_ROUNDING_MAGIC;
+            output[done * SF2_SYNTH_STEREO + sampleIndex] = (INT16)(rounded.Bits - SF2_ROUNDING_MAGIC_BITS);
         }
 
         done += chunk;

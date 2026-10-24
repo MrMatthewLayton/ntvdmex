@@ -67,6 +67,21 @@ static VOID AudioSf2Queue(BYTE kind, const BYTE *payload, DWORD length)
     g_AudioSf2QueueLength += AUDIO_SF2_QUEUE_HEADER + length;
 }
 
+/* How many messages a queue holds. */
+static DWORD AudioSf2QueueCount(const BYTE *queue, DWORD queueLength)
+{
+    DWORD offset = 0;
+    DWORD count = 0;
+
+    while (offset < queueLength)
+    {
+        offset += AUDIO_SF2_QUEUE_HEADER + (queue[offset + 1] | (queue[offset + 2] << 8));
+        ++count;
+    }
+
+    return count;
+}
+
 /* Audio thread: hand a drained queue to the synth, in arrival order. */
 static VOID AudioSf2Play(const BYTE *queue, DWORD queueLength)
 {
@@ -209,7 +224,7 @@ static DWORD WINAPI AudioSf2StartThread(LPVOID parameter)
     {
         AudioSf2Close();
         EnterCriticalSection(&g_AudioSf2Lock);
-        g_AudioSf2Stats.Dropped += g_AudioSf2Stats.Messages + g_AudioSf2Stats.SysEx;    /* nowhere to send them */
+        g_AudioSf2Stats.Dropped += AudioSf2QueueCount(g_AudioSf2Queue, g_AudioSf2QueueLength);   /* nowhere to send them */
         g_AudioSf2QueueLength = 0;
         InterlockedExchange(&g_AudioSf2State, AUDIO_SF2_FAILED);
         g_AudioSf2Stats.State = AUDIO_SF2_FAILED;
