@@ -15,6 +15,7 @@
 #include <commctrl.h>
 #include "host_state.h"
 #include "audio_dmsynth.h"
+#include "audio_sf2.h"
 #include "host_audio.h"
 #include "capture_video.h"
 #include "log.h"
@@ -5052,6 +5053,7 @@ static LRESULT CALLBACK HostWindowProcedure(HWND window, UINT message, WPARAM wP
         HostRecordFinish();       /* before the device stops feeding it */
         AudioWaveStop(&g_Wave);
         AudioDmSynthStop();       /* #155: after the fill has stopped calling Render */
+        AudioSf2Stop();
         /* [CAUTION]: AND THE OTHER SPEAKER, WHICH IS NOT OURS TO LEAVE RUNNING. Beep.sys
          * keeps sounding after the process that started it exits -- the note
          * under the cursor would outlive the host and only a reboot would clear

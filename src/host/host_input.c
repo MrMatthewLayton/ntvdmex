@@ -549,6 +549,9 @@ LRESULT CALLBACK LowLevelKeyboardProcedure(INT code, WPARAM wParam, LPARAM lPara
  *   [INFO]: #136 (s92): ConventionalKB (g_DosMemoryTop, start-up only), Midi (AudioWaveMidiOpen,
  *                   start-up only), SeamlessMouse (CaptureAllowed) are live; so are
  *                   HostCursorMode and FloppyUsePhysical, which were read here since s84.
+ *   SoundFontPath IS NOW LIVE: with Midi=SoundFont, our own SF2 synth plays that file
+ *                   in our mixer (audio_sf2.h); with no file, Midi=SoundFont still finds
+ *                   a host SoundFont DRIVER by name (midi_route.h).
  *   STILL STORED ONLY, each for a reason the startup report prints (SettingsDeadWhy):
  *     Umb          -- there are no upper memory blocks to link (XMS 10h = B1h, AH=5803h
  *                     refused). Providing them is an arena in C000-EFFF, not a switch.
@@ -557,8 +560,6 @@ LRESULT CALLBACK LowLevelKeyboardProcedure(INT code, WPARAM wParam, LPARAM lPara
  *                     without remapping views on every gate toggle (dos_xms.h). The
  *                     gate FLAG already follows the guest; locking it would change the
  *                     default, which today honours a guest's disable.
- *     SoundFontPath -- there is no SF2 synth in this host; Midi=SoundFont routes to a
- *                     host SoundFont DRIVER, which keeps its own list (midi_route.h).
  *   (FloppyAImage IS live: it is what INT 13h opens. JoystickType and
  *   JoystickGamepad ARE live as of session 62: the gameport VDD and the winmm
  *   poll thread consume them.)

@@ -111,6 +111,7 @@ extern NTVDD_DEVICE g_JoystickDevice;
 extern AUDIO_STATE g_Audio;
 extern AUDIO_WAVE g_Wave;
 extern BOOL g_MidiBuiltIn;
+extern BOOL g_MidiSoundFont;
 extern PRESENT_DDRAW g_PresentDdraw;
 extern DOS_XMS_STATE g_Xms;
 extern volatile LONG g_Irq0Pending;

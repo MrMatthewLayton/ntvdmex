@@ -6,13 +6,12 @@
  * existed nothing read it: the MPU-401 always opened midiOut device 0 -- on XP, the
  * Microsoft GS Wavetable synth. That stays the default, exactly.
  *
- * THIS HOST HAS NO SYNTH OF ITS OWN, SO A CHOICE IS A HOST DEVICE, BY NAME (Importance = 1):
- * There is no MT-32 emulator and no SoundFont player in NTVDMEX, and writing either is
- * not what this row is for. What a period PC owner did -- and what XP users still do --
- * is install one as a Windows MIDI DRIVER: Munt's "MT-32 Synth Emulator", a BASSMIDI
- * or VirtualMIDISynth SoundFont driver, a real MT-32 on a USB MIDI cable. Each shows up
- * as a midiOut device with a recognisable name, so the choice is honoured by FINDING
- * that device:
+ * A CHOICE WITHOUT A SYNTH OF OUR OWN IS A HOST DEVICE, BY NAME (Importance = 1):
+ * There is no MT-32 emulator in NTVDMEX. What a period PC owner did -- and what XP users
+ * still do -- is install one as a Windows MIDI DRIVER: Munt's "MT-32 Synth Emulator", a
+ * BASSMIDI or VirtualMIDISynth SoundFont driver, a real MT-32 on a USB MIDI cable. Each
+ * shows up as a midiOut device with a recognisable name, so the choice is honoured by
+ * FINDING that device:
  *     Host GM    device 0, without looking (the old behaviour, byte for byte)
  *     MT-32      the first device whose name contains MT-32 / MT32 / MUNT
  *     SoundFont  the first whose name contains SOUNDFONT / BASSMIDI / VIRTUALMIDISYNTH /
@@ -23,9 +22,10 @@
  * An external synth also gets SysEx (vdd_mpu.h): an MT-32 without its timbre uploads
  * is the wrong instrument.
  *
- * [CAUTION]: SoundFontPath is NOT passed to the SoundFont driver: those drivers keep their own
- * SF2 list in their own configuration and offer no API to hand them one. The path row
- * stays stored-only, and the log says so.
+ * SOUNDFONT WITH A FILE IS OURS: with a SoundFontPath set, MIDI = SoundFont plays that file
+ * through our own SF2 synth in our mixer (audio_sf2.h); the device found here is then only
+ * where MIDI goes if the file will not load. The path is never handed to a driver: those
+ * drivers keep their own SF2 list in their own configuration and offer no API to take one.
  *
  * Pure C, no <windows.h>: the device NAMES are injected, so the choice is checked off-VM
  * by tests/unit/midiroute_test.c.

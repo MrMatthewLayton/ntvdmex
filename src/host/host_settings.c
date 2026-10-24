@@ -236,17 +236,13 @@ static PCSTR SettingsDeadWhy(INT settingId)
     }
 }
 
+/* Every string row is live now (SoundFontPath went live with our SF2 synth, audio_sf2.h);
+ * a row added without a reader would say so here.
+ */
 static PCSTR SettingsDeadWhyText(INT index)
 {
-    switch (index)
-    {
-    case SET_STR_SOUNDFONT:
-        return "no SoundFont synth in NTVDMEX; MIDI=SoundFont uses a "
-                                   "host SF2 driver, which keeps its own list";
-
-    default:
-        return "not used";
-    }
+    (VOID)index;
+    return "not used";
 }
 
 VOID SettingsLogSources(VOID)
@@ -295,7 +291,7 @@ VOID SettingsLogSources(VOID)
             cursor = LogPut(cursor, " OVERRIDDEN by "); cursor = LogPut(cursor, g_ShellOverride);
         }
 
-        if (index == SET_STR_FLOPPYA || index == SET_STR_CDROM || index == SET_STR_SHELL || index == SET_STR_TEXTFONT || index == SET_STR_CAPTURE)   /* #241: CdRomImage is live */
+        if (index == SET_STR_FLOPPYA || index == SET_STR_CDROM || index == SET_STR_SHELL || index == SET_STR_TEXTFONT || index == SET_STR_CAPTURE || index == SET_STR_SOUNDFONT)   /* #241: CdRomImage is live */
             cursor = LogPut(cursor, "\r\n");
         else { cursor = LogPut(cursor, " (stored only -- "); cursor = LogPut(cursor, SettingsDeadWhyText(index));
                cursor = LogPut(cursor, ", GH #136)\r\n"); }

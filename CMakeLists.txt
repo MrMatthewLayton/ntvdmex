@@ -185,6 +185,7 @@ add_executable(ntvdmhost
     src/vdd/vdd_audio.c
     src/vdd/audio_wave.c
     src/vdd/audio_dmsynth.c
+    src/vdd/audio_sf2.c
     src/vdd/sf2_font.c
     src/vdd/sf2_synth.c
     src/host/capture_avi.c

@@ -191,6 +191,8 @@ typedef struct _SF2_SYNTH_STATS
     DWORD Resets;                   /* GM / GS / XG reset messages */
 } SF2_SYNTH_STATS, *PSF2_SYNTH_STATS;
 
+typedef const SF2_SYNTH_STATS *PCSF2_SYNTH_STATS;
+
 typedef struct _SF2_SYNTH
 {
     PCSF2_FONT Font;
