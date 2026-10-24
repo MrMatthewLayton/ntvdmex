@@ -22,9 +22,12 @@
 #include "dos_version.h"    /* #28: which services the configured version has */
 #include "dos_fatimg.h"     /* #240: drive A: as a disk image */
 #include "dos_fcbfind.h"    /* #240: the drive an FCB search lists */
+#include "dos_alias.h"      /* s101: 8.3 aliases for names the volume gives none */
 
 /* Characters, drives, paths. */
 #define DOS_INT21_PATH_SIZE                     300
+#define DOS_ALIAS_CACHE_TABLES                  4                       /* Directories whose aliases are kept */
+#define DOS_ALIAS_FIND_SLOTS                    16 /* Open searches whose directory is remembered */
 #define DOS_INT21_DRIVE_ROOT_SIZE               3                       /* "A:" */
 #define DOS_INT21_DRIVE_VARIABLE_SIZE           5                       /* "=A:", the drive's current directory */
 #define DOS_INT21_DRIVE_PREFIX_ROOM             3                       /* "A:" + NUL */
@@ -484,6 +487,20 @@ static DWORD g_DosImageClusters = 0;
 static DWORD g_DosImageFreeClusters = 0;
 static BYTE  g_DosImageMedia = 0;
 static CHAR  g_DosImageLabel[FAT_IMAGE_NAME_SIZE];       /* The image's volume label; "" = none */
+
+/* SHORT NAMES FOR NAMES THE VOLUME GIVES NONE. (s101 rig report: DIR on a NAS share at Z:
+ * listed "Files", "Movies", "Music" -- and left "Documentaries", "Television" and "Movie
+ * Featurettes" out, because the share gives no 8.3 alias and the long names are not 8.3.)
+ * Such an entry now gets the alias Windows would have made (dos_alias.c), assigned per
+ * directory from one enumeration and kept in a small cache, so the name DIR shows is the
+ * name CD, TYPE and COPY resolve. Entries with a short name, and 8.3 long names, never
+ * change. The LFN API (71xxh) still answers with the real long names.
+ */
+static DOS_ALIAS_TABLE g_DosAliasTables[DOS_ALIAS_CACHE_TABLES];
+static INT g_DosAliasNextTable;
+static HANDLE g_DosAliasFindHandles[DOS_ALIAS_FIND_SLOTS];
+static CHAR g_DosAliasFindDirectories[DOS_ALIAS_FIND_SLOTS][DOS_ALIAS_DIRECTORY_SIZE];
+static INT g_DosAliasNextFind;
 
 VOID DosInt21SetProtectedMode(INT isOn)
 {
@@ -1042,6 +1059,312 @@ static VOID DosImageMapPath(PSTR path, INT capacity)
     DosImageAppend(path, capacity, hostPath, NULL);
 }
 
+/* `directory` (with its trailing '\'), enumerated once into a table -- the cached one,
+ * unless `isRebuild` asks for a fresh listing.
+ */
+static PCDOS_ALIAS_TABLE DosAliasTableFor(PCSTR directory, INT isRebuild)
+{
+    CHAR pattern[DOS_ALIAS_DIRECTORY_SIZE + 2];
+    PDOS_ALIAS_TABLE table = NULL;
+    WIN32_FIND_DATAA findData;
+    HANDLE find;
+    INT index;
+
+    for (index = 0; index < DOS_ALIAS_CACHE_TABLES; ++index)
+        if (g_DosAliasTables[index].Directory[0] && DosAliasTableIsFor(&g_DosAliasTables[index], directory))
+            table = &g_DosAliasTables[index];
+
+    if (table && !isRebuild)
+        return table;
+
+    if (!table)
+    {
+        table = &g_DosAliasTables[g_DosAliasNextTable];
+        g_DosAliasNextTable = (g_DosAliasNextTable + 1) % DOS_ALIAS_CACHE_TABLES;
+    }
+
+    DosAliasTableBegin(table, directory);
+
+    if (lstrlenA(directory) + 2 <= (INT)sizeof(pattern))
+    {
+        lstrcpyA(pattern, directory);
+        lstrcatA(pattern, "*");
+        find = FindFirstFileA(pattern, &findData);
+
+        if (find != INVALID_HANDLE_VALUE)
+        {
+            do
+                DosAliasTableNote(table, findData.cFileName, findData.cAlternateFileName);
+
+            while (FindNextFileA(find, &findData));
+
+            FindClose(find);
+        }
+    }
+
+    DosAliasTableFinish(table);
+    return table;
+}
+
+/* The directory a search pattern lists, as a full path with its trailing '\' (the table key). */
+static INT DosAliasDirectoryOf(PCSTR pattern, PSTR directory)
+{
+    CHAR part[DOS_INT21_PATH_SIZE];
+    DWORD length;
+    INT cut = 0;
+    INT index;
+
+    for (index = 0; pattern[index]; ++index)
+        if (pattern[index] == '\\' || pattern[index] == '/' || pattern[index] == ':')
+            cut = index + 1;
+
+    if (cut >= (INT)sizeof(part))
+        return 0;
+
+    for (index = 0; index < cut; ++index)
+        part[index] = pattern[index];
+
+    part[cut] = 0;
+
+    if (!cut)
+        lstrcpyA(part, ".");
+
+    length = GetFullPathNameA(part, DOS_ALIAS_DIRECTORY_SIZE - 1, directory, NULL);
+
+    if (!length || length >= DOS_ALIAS_DIRECTORY_SIZE - 1)
+        return 0;
+
+    if (directory[length - 1] != '\\')
+    {
+        directory[length++] = '\\';
+        directory[length] = 0;
+    }
+
+    return 1;
+}
+
+/* An entry the volume gave no 8.3 name, and whose long name is not one: its alias goes
+ * where Win32 would have put the short name, so every DOS find path after this sees it.
+ * `isListed` -- this search already rebuilt the directory's table once.
+ */
+static VOID DosAliasFill(WIN32_FIND_DATAA *findData, PCSTR directory, PINT isListed)
+{
+    PCSTR alias;
+
+    if (!directory || !directory[0] || findData->cAlternateFileName[0] || DosAliasIsShortName(findData->cFileName)
+        || (findData->cFileName[0] == '.' && (!findData->cFileName[1] || (findData->cFileName[1] == '.' && !findData->cFileName[2]))))
+        return;
+
+    alias = DosAliasTableAliasOf(DosAliasTableFor(directory, !*isListed), findData->cFileName);
+
+    if (!alias && *isListed)
+        alias = DosAliasTableAliasOf(DosAliasTableFor(directory, 1), findData->cFileName);    /* created since */
+
+    *isListed = 1;
+
+    if (alias)
+        lstrcpynA(findData->cAlternateFileName, alias, sizeof(findData->cAlternateFileName));
+}
+
+static VOID DosAliasRememberFind(HANDLE find, PCSTR directory)
+{
+    g_DosAliasFindHandles[g_DosAliasNextFind] = find;
+    lstrcpynA(g_DosAliasFindDirectories[g_DosAliasNextFind], directory, DOS_ALIAS_DIRECTORY_SIZE);
+    g_DosAliasNextFind = (g_DosAliasNextFind + 1) % DOS_ALIAS_FIND_SLOTS;
+}
+
+static PCSTR DosAliasFindDirectory(HANDLE find)
+{
+    INT index;
+
+    for (index = 0; index < DOS_ALIAS_FIND_SLOTS; ++index)
+        if (g_DosAliasFindHandles[index] == find)
+            return g_DosAliasFindDirectories[index];
+
+    return NULL;
+}
+
+/* Where a full path's first component starts: after "X:\", or after "\\server\share\". */
+static INT DosAliasRootLength(PCSTR path)
+{
+    INT separators = 0;
+    INT index;
+
+    if (path[0] && path[1] == ':')
+        return (path[2] == '\\') ? DOS_INT21_DRIVE_ROOT_SIZE : DOS_INT21_DRIVE_ROOT_SIZE - 1;
+
+    if (path[0] != '\\' || path[1] != '\\')
+        return 0;
+
+    for (index = 2; path[index]; ++index)
+        if (path[index] == '\\' && ++separators == 2)
+            return index + 1;
+
+    return index;
+}
+
+/* A guest path that names an entry by its alias, mapped to the long name before Win32
+ * sees it. Untouched unless a component looks like an alias ('~' and a digit), names
+ * nothing as it stands, and is one of its directory's aliases -- so a real file called
+ * DOCUME~1, and every ordinary path, go through exactly as before.
+ */
+static VOID DosAliasResolvePath(PSTR path, INT capacity)
+{
+    CHAR fullPath[DOS_INT21_PATH_SIZE];
+    CHAR output[DOS_INT21_PATH_SIZE];
+    DWORD length;
+    INT position;
+    INT outputLength;
+    INT isChanged = 0;
+
+    if (!DosAliasLooksLikeAlias(path, lstrlenA(path)))
+        return;
+
+    length = GetFullPathNameA(path, sizeof(fullPath), fullPath, NULL);
+
+    if (!length || length >= sizeof(fullPath))
+        return;
+
+    position = DosAliasRootLength(fullPath);
+    lstrcpynA(output, fullPath, position + 1);
+    outputLength = position;
+
+    while (fullPath[position])
+    {
+        INT start = position;
+        INT componentLength;
+        PCSTR longName = NULL;
+
+        while (fullPath[position] && fullPath[position] != '\\')
+            ++position;
+
+        componentLength = position - start;
+
+        if (DosAliasLooksLikeAlias(fullPath + start, componentLength))
+        {
+            CHAR candidate[DOS_INT21_PATH_SIZE];
+
+            if (outputLength + componentLength >= (INT)sizeof(candidate))
+                return;
+
+            lstrcpyA(candidate, output);
+            lstrcpynA(candidate + outputLength, fullPath + start, componentLength + 1);
+
+            if (GetFileAttributesA(candidate) == INVALID_FILE_ATTRIBUTES && outputLength < DOS_ALIAS_DIRECTORY_SIZE)
+            {
+                longName = DosAliasTableLongOf(DosAliasTableFor(output, 0), fullPath + start, componentLength);
+
+                if (!longName)
+                    longName = DosAliasTableLongOf(DosAliasTableFor(output, 1), fullPath + start, componentLength);
+            }
+        }
+
+        if (longName)
+        {
+            if (outputLength + lstrlenA(longName) >= (INT)sizeof(output))
+                return;
+
+            lstrcpyA(output + outputLength, longName);
+            outputLength += lstrlenA(longName);
+            isChanged = 1;
+        }
+        else
+        {
+            if (outputLength + componentLength >= (INT)sizeof(output))
+                return;
+
+            lstrcpynA(output + outputLength, fullPath + start, componentLength + 1);
+            outputLength += componentLength;
+        }
+
+        if (fullPath[position] == '\\')
+        {
+            if (outputLength + 1 >= (INT)sizeof(output))
+                return;
+
+            output[outputLength++] = '\\';
+            output[outputLength] = 0;
+            ++position;
+        }
+    }
+
+    if (isChanged && outputLength < capacity)
+        lstrcpyA(path, output);
+}
+
+/* A host path as DOS shows it: each component that is neither 8.3 nor shortened by the
+ * volume is replaced by its alias (AH=47h, 7160h CL=1). Each directory is looked up by
+ * the path's own -- real -- prefix, never by the aliases already written out.
+ */
+static VOID DosAliasShortenPath(PSTR path, INT capacity)
+{
+    CHAR output[DOS_INT21_PATH_SIZE];
+    CHAR prefix[DOS_INT21_PATH_SIZE];
+    INT position = DosAliasRootLength(path);
+    INT outputLength = position;
+    INT isChanged = 0;
+
+    if (position >= (INT)sizeof(output))
+        return;
+
+    lstrcpynA(output, path, position + 1);
+
+    while (path[position])
+    {
+        INT start = position;
+        INT componentLength;
+        PCSTR alias = NULL;
+        CHAR component[MAX_PATH];
+
+        while (path[position] && path[position] != '\\')
+            ++position;
+
+        componentLength = position - start;
+
+        if (componentLength >= (INT)sizeof(component) || start >= (INT)sizeof(prefix))
+            return;
+
+        lstrcpynA(component, path + start, componentLength + 1);
+
+        if (!DosAliasIsShortName(component) && component[0] != '.' && start < DOS_ALIAS_DIRECTORY_SIZE)
+        {
+            lstrcpynA(prefix, path, start + 1);
+            alias = DosAliasTableAliasOf(DosAliasTableFor(prefix, 0), component);
+        }
+
+        if (alias)
+        {
+            if (outputLength + lstrlenA(alias) >= (INT)sizeof(output))
+                return;
+
+            lstrcpyA(output + outputLength, alias);
+            outputLength += lstrlenA(alias);
+            isChanged = 1;
+        }
+        else
+        {
+            if (outputLength + componentLength >= (INT)sizeof(output))
+                return;
+
+            lstrcpyA(output + outputLength, component);
+            outputLength += componentLength;
+        }
+
+        if (path[position] == '\\')
+        {
+            if (outputLength + 1 >= (INT)sizeof(output))
+                return;
+
+            output[outputLength++] = '\\';
+            output[outputLength] = 0;
+            ++position;
+        }
+    }
+
+    if (isChanged && outputLength < capacity)
+        lstrcpyA(path, output);
+}
+
 /* Build "D:NAME.EXT" from an FCB's drive/name/extension fields. `out` holds DOS_INT21_PATH_SIZE. */
 static VOID DosFcbName(const volatile BYTE *fcb, PSTR out)
 {
@@ -1072,6 +1395,7 @@ static VOID DosFcbName(const volatile BYTE *fcb, PSTR out)
 
     out[length] = 0;
     DosImageMapPath(out, DOS_INT21_PATH_SIZE);                     /* #240 */
+    DosAliasResolvePath(out, DOS_INT21_PATH_SIZE);                 /* s101: DOCUME~1 -> Documentaries */
 }
 
 /* A DOS FILENAME ENDS AT A TERMINATOR, NOT ONLY AT A NUL:
@@ -1179,8 +1503,8 @@ static INT DosFcbPutName(volatile BYTE *destination, PCSTR name)
  * Real NTVDM matches the SHORT name (NTVDMH~1.EXE), which is the only name DOS has.
  * - So enumerate the directory with `*` and decide each entry DOS's way: its 8.3 name
  *   (the short alias, or the long name when that is already a legal 8.3 name -- and
- *   no name at all otherwise: such a file is invisible to DOS, as it is on NTVDM),
- *   laid out as 11 bytes, matched position by position, `?` matching anything.
+ *   where the volume gives neither, the alias DosAliasFill put in cAlternateFileName,
+ *   s101), laid out as 11 bytes, matched position by position, `?` matching anything.
  */
 static INT DosShortNameOf(const WIN32_FIND_DATAA *findData, BYTE out[DOS_FCB_NAME_SIZE])
 {
@@ -1288,6 +1612,8 @@ static HANDLE DosFindFirst(
     PINT isNoDirectory)
 {
     HANDLE find = FindFirstFileA(directoryPattern, findData);
+    CHAR directory[DOS_ALIAS_DIRECTORY_SIZE];
+    INT isListed = 0;
 
     *isNoDirectory = 0;
     g_DosFindWin32Error = 0;
@@ -1299,13 +1625,23 @@ static HANDLE DosFindFirst(
         return find;
     }
 
+    if (!DosAliasDirectoryOf(directoryPattern, directory))
+        directory[0] = 0;
+
+    DosAliasFill(findData, directory, &isListed);              /* s101: an alias where the volume gave no 8.3 name */
+
     while (!DosFindMatches(findData, nameTemplate, mask))
+    {
         if (!FindNextFileA(find, findData))
         {
             FindClose(find);
             return INVALID_HANDLE_VALUE;
         }
 
+        DosAliasFill(findData, directory, &isListed);
+    }
+
+    DosAliasRememberFind(find, directory);
     return find;
 }
 
@@ -1377,10 +1713,15 @@ static INT DosFindNext(
     WORD mask,
     WIN32_FIND_DATAA *findData)
 {
+    PCSTR directory = DosAliasFindDirectory(find);
+    INT isListed = 1;
+
     do
     {
         if (!FindNextFileA(find, findData))
             return 0;
+
+        DosAliasFill(findData, directory, &isListed);              /* s101 */
     } while (!DosFindMatches(findData, nameTemplate, mask));
 
     return 1;
@@ -1669,6 +2010,7 @@ static VOID DosGuestPathRaw(
     destination[length] = 0;
     DosExpandOtherDriveRelative(machine, destination, capacity);
     DosImageMapPath(destination, capacity);                       /* #240: A: as an image */
+    DosAliasResolvePath(destination, capacity);                   /* s101: DOCUME~1 -> Documentaries */
 }
 
 /* The guest's path as Win32 will see it -- and, #241, handed to the host first, so a
@@ -5547,6 +5889,8 @@ INT DosInt21(PDOS_MACHINE machine)
                 if (shortLength && shortLength < sizeof shortPath)
                     lstrcpynA(currentDirectory, shortPath, sizeof currentDirectory);
 
+                DosAliasShortenPath(currentDirectory, sizeof currentDirectory);     /* s101: the volume gave none */
+
                 for (charIndex = 0; currentDirectory[charIndex]; ++charIndex)
                     if (currentDirectory[charIndex] >= 'a' && currentDirectory[charIndex] <= 'z')
                         currentDirectory[charIndex] = (CHAR)(currentDirectory[charIndex] - ASCII_CASE_BIT);
@@ -6851,7 +7195,12 @@ INT DosInt21(PDOS_MACHINE machine)
                     count = 1;
                 }
                 else if (nameKind == 1)
+                {
                     count = GetShortPathNameA(fullPath, output, sizeof(output));
+
+                    if (count && count < sizeof(output))
+                        DosAliasShortenPath(output, sizeof(output));                /* s101: the volume gave none */
+                }
                 else
                     count = GetLongPathNameA(fullPath, output, sizeof(output));
 
