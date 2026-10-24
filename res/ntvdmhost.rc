@@ -251,15 +251,18 @@ BEGIN
     CONTROL         "Show On-Screen &Messages", IDC_S_OSD, "Button",
                     BS_AUTOCHECKBOX | WS_TABSTOP, 202, 156, 188, 10
 
-    /* #321: any font installed on this PC, over the default character by character.
-       The list is filled at run time from the installed fixed-pitch fonts; the preview
-       is drawn from the tables a build for the selected font would produce. */
+    /* #321: the default, or a font FILE the user supplies (loaded for NTVDMEX alone), over
+       the default character by character. The preview is drawn from the tables a build
+       for the chosen file would produce. */
     GROUPBOX        "Text Mode Font", -1, 6, 176, 392, 50
-    LTEXT           "&Font:", -1, 14, 188, 40, 8
-    COMBOBOX        IDC_S_TEXTFONT, 56, 186, 160, 140,
-                    CBS_DROPDOWNLIST | CBS_HASSTRINGS | CBS_SORT | WS_VSCROLL | WS_TABSTOP | WS_GROUP
-    LTEXT           "", IDC_S_TEXTFONT_INFO, 222, 185, 168, 17
-    CONTROL         "", IDC_S_TEXTFONT_VIEW, "Static", SS_OWNERDRAW, 14, 202, 376, 20
+    CONTROL         "De&fault", IDC_S_TEXTFONT_DEFAULT, "Button",
+                    BS_AUTORADIOBUTTON | WS_TABSTOP | WS_GROUP, 14, 189, 40, 10
+    CONTROL         "Font Fi&le:", IDC_S_TEXTFONT_OWN, "Button",
+                    BS_AUTORADIOBUTTON, 58, 189, 46, 10
+    EDITTEXT        IDC_S_TEXTFONT, 106, 187, 228, 13, ES_AUTOHSCROLL | WS_TABSTOP | WS_GROUP
+    PUSHBUTTON      "Br&owse...", IDC_S_TEXTFONT_BROWSE, 340, 186, 50, 14, WS_TABSTOP
+    LTEXT           "", IDC_S_TEXTFONT_INFO, 14, 202, 376, 8
+    CONTROL         "", IDC_S_TEXTFONT_VIEW, "Static", SS_OWNERDRAW, 14, 211, 376, 12
 END
 
 /* ── PAGE: AUDIO ────────────────────────────────────────────────────────────────

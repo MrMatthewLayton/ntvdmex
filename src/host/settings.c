@@ -282,8 +282,10 @@ const SET_STR_DEF g_SetStringDefinitions[SET_STR_COUNT] = {
  */
 { "DosPrompt",    IDC_S_SHELL,     "" },
 /* #321: the text-mode font. Empty = the default (Fixedsys + code page 437 Terminal, see
- * src/host/sysfont.h); otherwise the name of any font installed on this machine, laid
- * over the default character by character. NTVDMEX ships no font. Live.
+ * src/host/sysfont.h); otherwise the path of a TrueType, OpenType or .fon file the user
+ * supplies, loaded for NTVDMEX alone and laid over the default character by character. A
+ * value that is not a path is an installed font's name (what this row held before files).
+ * NTVDMEX ships no font. Live.
  */
 { "TextFont",     IDC_S_TEXTFONT,  "" },
 /* #155: where screenshots and recordings go. Empty = the debug\out folder, as before. Live. */

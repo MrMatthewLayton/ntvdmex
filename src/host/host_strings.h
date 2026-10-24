@@ -177,6 +177,8 @@
 #define SETTINGS_TITLE_ISO              "Choose an ISO disk image"
 #define SETTINGS_FILTER_SOUNDFONT       "SoundFonts (*.sf2)\0*.sf2\0All files (*.*)\0*.*\0"
 #define SETTINGS_TITLE_SOUNDFONT        "Choose a SoundFont"
+#define SETTINGS_FILTER_TEXTFONT        "Fonts (*.ttf;*.otf;*.ttc;*.fon)\0*.ttf;*.otf;*.ttc;*.fon\0All files (*.*)\0*.*\0"
+#define SETTINGS_TITLE_TEXTFONT         "Choose a font file for text mode"
 #define SETTINGS_TITLE_CAPTURE          "Choose the folder for screenshots and recordings"
 #define SETTINGS_TEXT_UNCOMPRESSED      "Uncompressed (full frames)"
 #define SETTINGS_FSRES_DESKTOP_FORMAT   "Desktop (%lu x %lu)"       /* #331: fullscreen keeps the desktop's mode */
@@ -200,6 +202,9 @@
 #define SETTINGS_FONT_PARTIAL_FORMAT    "%d of 253 characters come from this font; the rest from the default."
 #define SETTINGS_FONT_NO_8_PIXEL        "This font has no 8-pixel-wide size, so the default is used."
 #define SETTINGS_FONT_MISSING           "This font is not installed on this computer, so the default is used."
+#define SETTINGS_FONT_NO_FILE           "This font file could not be opened, so the default is used."
+#define SETTINGS_FONT_NOT_FONT          "This is not a TrueType, OpenType or .fon font Windows can use, so the default is used."
+#define SETTINGS_FONT_FACE_FORMAT       "%s: " /* A font file's face name, before what it supplies */
 #define SETTINGS_FONT_437_MISSING       " Warning: a code page 437 font file is missing; line drawing may be wrong."
 #define SETTINGS_FONT_SAMPLE_TEXT       "Hello, DOS!  0123456789  "
 
