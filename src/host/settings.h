@@ -99,6 +99,7 @@ typedef enum
     SET_FSRES,                  /* #331: fullscreen's display mode (fullscreen_mode.h) */
     SET_FLOPPYLETTER,           /* s101: the floppy image's drive letter (0 = automatic, 1..26 = A:..Z:) */
     SET_CDLETTER,               /* s101: the ISO's drive letter, likewise */
+    SET_CPUDIE,                 /* #417: keep the host on one CPU die (CPU_DIE_MODE) */
     SET_COUNT
 } SET_ID;
 

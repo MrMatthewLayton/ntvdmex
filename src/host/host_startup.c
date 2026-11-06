@@ -246,6 +246,9 @@
 /* cpuaff.txt = 1 -> pin the guest to a core of its own (see CpuAffinityApply). */
 #define CPUAFF_PATH                 CFG_("cpuaff.txt")
 
+/* cpudie.txt = 0 Auto, 1 Off: overrides SET_CPUDIE, for interleaved A/Bs on the test machine. */
+#define CPUDIE_PATH                 CFG_("cpudie.txt")
+
 #define DOSVER_PATH                 CFG_(KNOB_FILE_DOSVER)
 
 /* INT 21h AH=53h's private AL sub-functions. A knob because the measured values are
@@ -3753,6 +3756,25 @@ VOID StartupLoadTuningKnobs(VOID)
           if (bytesRead && (text[0] == '0' || text[0] == '1'))
               g_CpuAffinityOn = (text[0] == '1');
       } }
+
+    /* #417: every thread after this inherits it, so before the first CreateThread. */
+    g_CpuDieMode = g_Settings.Values[SET_CPUDIE];
+
+    { HANDLE cpuDieFile = CreateFileA(CPUDIE_PATH, GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE,
+                          NULL, OPEN_EXISTING, 0, NULL);
+
+      if (cpuDieFile != INVALID_HANDLE_VALUE)
+      {
+          CHAR text[8];
+          DWORD bytesRead = 0;
+          ReadFile(cpuDieFile, text, sizeof text, &bytesRead, NULL);
+          CloseHandle(cpuDieFile);
+
+          if (bytesRead && (text[0] == '0' || text[0] == '1'))
+              g_CpuDieMode = (DWORD)(text[0] - '0');
+      } }
+
+    CpuDieApply();
 }
 
 /* Put the machine on the bus: the host lock; the PIC and the PIT with its clock hooks; CMOS, FDC, IDE and video; the system font; the keyboard; the serial ports, declared in the BIOS data area, which is then initialised; NetBIOS, the speaker, the gameport, DMA, OPL, Sound Blaster, MPU-401, GUS and AWE32; the WOW callbacks; then the mixer, which also drives the SB's DMA. */

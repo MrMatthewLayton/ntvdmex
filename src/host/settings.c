@@ -273,6 +273,8 @@ const SET_DEF g_SetDefinitions[SET_COUNT] = {
  */
 { "FloppyImageLetter", 0,                 SK_UINT,       0,  0,  26, NULL },
 { "CdRomImageLetter",  0,                 SK_UINT,       0,  0,  26, NULL },
+/* #417: Auto keeps the host on one die of a CPU made of several (cpu_die.h). */
+{ "CpuDie",            IDC_S_CPUDIE,      SK_COMBO,      0,  0,   1, "Auto|Off" },
 };
 
 const SET_STR_DEF g_SetStringDefinitions[SET_STR_COUNT] = {
