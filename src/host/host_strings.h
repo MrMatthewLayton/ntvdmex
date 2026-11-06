@@ -44,6 +44,7 @@
 #define HOST_EXPORT_NT_QUERY_INFORMATION_PROCESS "NtQueryInformationProcess"
 #define HOST_EXPORT_TIME_SET_EVENT              "timeSetEvent"
 #define HOST_EXPORT_TIME_BEGIN_PERIOD           "timeBeginPeriod"
+#define HOST_EXPORT_GET_LOGICAL_PROCESSOR_INFORMATION "GetLogicalProcessorInformation"
 #define HOST_EXPORT_JOY_GET_POS_EX              "joyGetPosEx"
 #define HOST_EXPORT_ENABLE_THEME_DIALOG_TEXTURE "EnableThemeDialogTexture"
 #define HOST_EXPORT_SHIM_INIT                   "NtvdmexShimInit"   /* Each WOW shim DLL's entry */

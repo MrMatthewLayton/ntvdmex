@@ -89,8 +89,11 @@ extern volatile DWORD g_RetraceAl;
 extern volatile DWORD g_RetracePending;
 extern volatile DWORD g_RetraceIdles;
 extern volatile DWORD g_RetraceCx;
+extern DWORD g_CpuDieMode;
+extern DWORD g_CpuDieMask;
 
 UINT64 HostTimeMicroseconds(VOID);
+VOID CpuDieApply(VOID);
 
 VOID HostPitResyncCheck(VOID);
 VOID HostPitSync(VOID);

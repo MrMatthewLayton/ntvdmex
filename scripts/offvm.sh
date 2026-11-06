@@ -42,7 +42,7 @@ INCS=(-I "$ROOT/src/dos" -I "$ROOT/src/vdd" -I "$ROOT/src" -I "$ROOT/src/host" -
 # ⚠ AND THE CODE THAT USED TO LIVE IN HEADERS (#335). A header split into declarations and a
 #   .c leaves a test that included it for the code with only the declarations, so these
 #   sources -- portable, no Win32 beyond the shared types -- are linked in on the retry.
-LIBSRC=("$ROOT/src/dos/dos_recovery.c" "$ROOT/src/host/cpuspeed.c" "$ROOT/src/wow/ne.c" "$ROOT/src/host/install.c" "$ROOT/src/host/dpmi_svc.c"
+LIBSRC=("$ROOT/src/dos/dos_recovery.c" "$ROOT/src/host/cpuspeed.c" "$ROOT/src/host/tsc_clock.c" "$ROOT/src/host/cpu_die.c" "$ROOT/src/wow/ne.c" "$ROOT/src/host/install.c" "$ROOT/src/host/dpmi_svc.c"
         "$ROOT/src/dos/dos_disk.c" "$ROOT/src/dos/dos_err.c" "$ROOT/src/dos/dos_fatimg.c" "$ROOT/src/dos/dos_iso9660.c" "$ROOT/src/dos/dos_alias.c" "$ROOT/src/host/x86len.c" "$ROOT/src/host/dpmi_rmcs.c"
         "$ROOT/src/host/i33_driver.c" "$ROOT/src/host/pif.c" "$ROOT/src/host/capture_avi.c" "$ROOT/src/host/capture_scale.c")
 VDDSRC=()

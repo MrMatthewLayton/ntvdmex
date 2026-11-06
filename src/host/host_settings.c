@@ -160,6 +160,7 @@ static const BYTE g_SettingsLiveIds[] = {
     SET_FSRES,                                   /* #331: read when fullscreen is entered */
     SET_CDPHYS,                                  /* #241: the ISO-backed CD-ROM (live: HostCdromApply) */
     SET_FLOPPYLETTER, SET_CDLETTER,              /* s101: each image's drive letter (live) */
+    SET_CPUDIE,                                  /* #417: read at startup */
 };
 
 static PCSTR const g_SettingsTabs[NTVDMEX_PAGE_COUNT] = {
@@ -479,9 +480,10 @@ VOID SettingsApply(HWND window, const NTVDMEX_SETTINGS *settings, INT live)
     /* [CAUTION]: THROTTLE GRANULARITY AND CORE-AFFINITY ARE NO LONGER SETTINGS (session 60).
      * Granularity defaults to AUTO (g_CpuSpeedGranularityMs = 0), which is the behaviour
      * that made a slow speed smooth, so it needs no control; cpugran.txt still
-     * overrides it for the test machine. Affinity defaults OFF and stays a file knob
-     * (cpuaff.txt) because measured it broke the guest's timer -- exposed for a
-     * future re-test, not for a user to find.
+     * overrides it for the test machine. The guest-versus-host split stays a file
+     * knob (cpuaff.txt) because measured it broke the guest's timer -- exposed for a
+     * future re-test, not for a user to find. Keeping the whole host on one die is a
+     * different thing and a setting (#417): SET_CPUDIE, read by CpuDieApply at startup.
      */
     /* The cursor is the one setting with a VISIBLE side effect, so it goes through
      * the same helper the menu item and Ctrl+F8 use rather than poking the flag.

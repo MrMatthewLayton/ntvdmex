@@ -338,6 +338,7 @@ static PSTR ReportCpuSpeedGovernor(PSTR cursor)
     cursor = LogPut(cursor, " periods="); cursor = LogHex(cursor, g_CpuSpeedPeriods);
     cursor = LogPut(cursor, " aff="); cursor = LogHex(cursor, (DWORD)g_CpuAffinityOn);
     cursor = LogPut(cursor, " ncpu="); cursor = LogHex(cursor, g_CpuAffinityCpuCount);
+    cursor = LogPut(cursor, " die_mask="); cursor = LogHex(cursor, g_CpuDieMask);
     return cursor;
 }
 

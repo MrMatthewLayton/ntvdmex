@@ -116,6 +116,7 @@
 #define IDC_S_TEXTFONT_INFO         277     /* Static: #321 what the chosen font supplies */
 #define IDC_S_TEXTFONT_VIEW         278     /* Static: #321 owner-drawn preview */
 #define IDC_S_FIT                   279     /* Combo: #325 maximised/fullscreen fit */
+#define IDC_S_CPUDIE                302     /* Combo: #417 Auto / Off */
 
 /* Audio: */
 #define IDC_S_VOLUME                280

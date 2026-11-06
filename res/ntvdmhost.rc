@@ -174,19 +174,22 @@ BEGIN
     CONTROL         "&A20 Line Always Enabled", IDC_S_A20, "Button",
                     BS_AUTOCHECKBOX | WS_TABSTOP, 240, 108, 150, 10
 
-    GROUPBOX        "Timing (Advanced)", -1, 6, 127, 392, 93
+    GROUPBOX        "Timing (Advanced)", -1, 6, 127, 392, 98
     LTEXT           "How the host paces the program's clock and its own redraw. Modifying these "
                     "settings is not recommended without good reason.",
                     -1, 14, 139, 376, 16
     CONTROL         "&Pace the Programmable Interval Timer (PIT) from a dedicated thread",
                     IDC_S_PITPACE, "Button", BS_AUTOCHECKBOX | WS_TABSTOP | WS_GROUP,
-                    14, 159, 376, 10
+                    14, 155, 376, 10
     LTEXT           "How the host redraws the window. Auto redraws when the program finishes a "
                     "frame, waits for the vertical retrace, or at the display's refresh rate. "
                     "Alternatively, you can redraw at fixed, timed intervals.",
-                    -1, 14, 173, 376, 24
-    LTEXT           "&Screen Redraw Update:", -1, 14, 203, 200, 8
-    COMBOBOX        IDC_S_UITICK, 240, 201, 150, 90,
+                    -1, 14, 167, 376, 24
+    LTEXT           "&Screen Redraw Update:", -1, 14, 194, 200, 8
+    COMBOBOX        IDC_S_UITICK, 240, 192, 150, 90,
+                    CBS_DROPDOWNLIST | WS_VSCROLL | WS_TABSTOP
+    LTEXT           "Keep on One CPU &Die (from the next program):", -1, 14, 209, 200, 8
+    COMBOBOX        IDC_S_CPUDIE, 240, 207, 150, 50,
                     CBS_DROPDOWNLIST | WS_VSCROLL | WS_TABSTOP
 END
 

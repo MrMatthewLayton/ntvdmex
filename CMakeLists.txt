@@ -144,6 +144,8 @@ add_executable(ntvdmhost
     src/host/install.c
     src/host/dpmi_svc.c
     src/host/cpuspeed.c
+    src/host/tsc_clock.c
+    src/host/cpu_die.c
     src/host/pcspeaker.c
     src/host/settings.c
     src/host/sysfont.c
