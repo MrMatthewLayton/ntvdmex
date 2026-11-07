@@ -144,6 +144,7 @@ static DWORD  g_ModeYFanoutBytes = 0;   /* changed bytes fanned out, whole run *
  * of the scratch: a true lower bound on the guest's multi-plane stores (a store of the
  * value already there is still invisible -- that is the defect itself).
  */
+DWORD g_ModeYMapRetries;     /* ModeYMapWindow: tries the window was taken */
 static BYTE   g_ModeYShadow[MODEY_WIN];
 static DWORD  g_ModeYFanoutNew = 0;
 static DWORD  g_ModeYTimelineFanoutCount[YTL_SECS];
@@ -349,6 +350,31 @@ VOID ModeYRemapFlushReport(VOID)
     LogAppend(LOG_PATH, g_RemapReport, g_RemapReportCursor);
     SerialOut(g_RemapReport, g_RemapReportCursor);
     g_RemapReportCursor = g_RemapReport;
+}
+
+/* #358: THE WINDOW IS BRIEFLY A HOLE, AND HOLES GET TAKEN. A remap unmaps A0000 and maps the next
+ * section, ~19,000 times a second in Mario. Between the two, a mapping with no address hint made by
+ * any other thread takes the lowest hole, which is this one. All three stopped Mario runs in runs/s105/pr1
+ * logged failed=1 to 4, and then a guest store with no page behind it (event 2). Such a mapping is
+ * short-lived, a surface lock for one, so waiting for it costs a stall where failing cost the program.
+ */
+#define MODEY_MAP_TRIES     2000u
+
+static BOOL ModeYMapWindow(HANDLE section)
+{
+    UINT attempt;
+
+    for (attempt = 0; attempt < MODEY_MAP_TRIES; attempt++)
+    {
+        if (MapViewOfFileEx(section, FILE_MAP_ALL_ACCESS | FILE_MAP_EXECUTE,
+                            0, 0, MODEY_WIN, (LPVOID)(ULONG_PTR)VIDEO_APERTURE_BASE))
+            return TRUE;
+
+        ++g_ModeYMapRetries;
+        Sleep(attempt ? 1 : 0);
+    }
+
+    return FALSE;
 }
 
 static VOID ModeYRemapLog(PCSTR what, DWORD error)
@@ -1030,8 +1056,7 @@ static VOID ModeYRemapSelectBody(PVOID context, INT mask)
                 g_ModeYShadow[index] = source[index];
     }
 
-    if (!MapViewOfFileEx(g_ModeYSeconds[want], FILE_MAP_ALL_ACCESS | FILE_MAP_EXECUTE,
-                         0, 0, MODEY_WIN, (LPVOID)(ULONG_PTR)VIDEO_APERTURE_BASE))
+    if (!ModeYMapWindow(g_ModeYSeconds[want]))
     {
         ++g_ModeYFail;
         /* Never leave the window unmapped: put SOMETHING back or the guest's next
@@ -1155,8 +1180,7 @@ VOID ModeYRemapReadMap(PVOID context, INT plane)
         return;
     }
 
-    if (!MapViewOfFileEx(g_ModeYSeconds[plane], FILE_MAP_ALL_ACCESS | FILE_MAP_EXECUTE,
-                         0, 0, MODEY_WIN, (LPVOID)(ULONG_PTR)VIDEO_APERTURE_BASE))
+    if (!ModeYMapWindow(g_ModeYSeconds[plane]))
     {
         ++g_ModeYFail;
         MapViewOfFileEx(g_ModeYSeconds[g_ModeYCurrent < 0 ? MODEY_VIEW_LINEAR : g_ModeYCurrent], FILE_MAP_ALL_ACCESS | FILE_MAP_EXECUTE,

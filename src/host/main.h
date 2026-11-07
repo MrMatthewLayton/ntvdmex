@@ -65,6 +65,7 @@ extern NTVDMEX_SETTINGS g_SettingsDisk;
 extern INT g_DspVersionForced;
 extern UINT g_ConventionalKbWant;
 extern INT g_NoA000;
+extern DWORD g_ModeYMapRetries;
 extern DWORD g_ModeYSelectorCalls;
 extern DWORD g_ModeYSelectorSame;
 extern DWORD g_ModeYSelectorZero;
