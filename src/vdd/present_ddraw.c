@@ -16,6 +16,7 @@
 #include "present_ddraw.h"
 #include <windows.h>
 #include <ddraw.h>
+#include "present_sharp.h"
 #include "present_scale.h"
 
 /* Timing the blit near the vertical blank (PresentWaitVerticalBlank). */
@@ -64,11 +65,10 @@
 #define PRESENT_DIRECT_DRAW                     ((LPDIRECTDRAW7)presenter->DirectDraw)
 #define PRESENT_SURFACE(p)                      ((LPDIRECTDRAWSURFACE7)(p))
 
-/* #418: SHARP IS WORKED OUT IN SYSTEM MEMORY, AWAY FROM THE SURFACE. Measured on Skyroads, DirectDraw,
- * Stretch and Fill (runs/s104/aff/sk): HALFTONE into the back buffer's DC took the guest from 179
- * to 90 of 180 PIT ticks at worst, and 65 ms lock holds against 8-26 for Nearest. Both bitmaps are
- * DIB sections on a screen-less DC, so neither the scale nor its reads touch the device, and the
- * DirectDraw path does this before GetDC: the surface's DC only sees one unscaled copy.
+/* #418: SHARP IS WORKED OUT IN SYSTEM MEMORY, BY US. HALFTONE averaged 67 ms a frame at 1920x1080 on
+ * the Q9650 even between system-memory bitmaps (runs/s105/sk3), so present_sharp.c does the remainder,
+ * and GDI's HALFTONE is left for a picture smaller than the source. Both bitmaps are DIB sections
+ * on a screen-less DC, and the DirectDraw path draws them before GetDC.
  */
 #define PRESENT_SHARP_BITS_PER_PIXEL            32
 
@@ -90,6 +90,7 @@ typedef struct
     HDC     Dc;
     HBITMAP Bitmap;
     HBITMAP Previous;
+    PVOID   Bits;
     INT     Width;
     INT     Height;
 } PRESENT_MEMORY_BITMAP;
@@ -471,7 +472,6 @@ static const BYTE *PresentSnapshotDib(
 static BOOL PresentMemoryBitmapFit(PRESENT_MEMORY_BITMAP *memory, INT width, INT height)
 {
     BITMAPINFO info;
-    PVOID bits;
 
     if (!memory->Dc)
         memory->Dc = CreateCompatibleDC(NULL);
@@ -496,7 +496,7 @@ static BOOL PresentMemoryBitmapFit(PRESENT_MEMORY_BITMAP *memory, INT width, INT
     info.bmiHeader.biPlanes = 1;
     info.bmiHeader.biBitCount = PRESENT_SHARP_BITS_PER_PIXEL;
     info.bmiHeader.biCompression = BI_RGB;
-    memory->Bitmap = CreateDIBSection(memory->Dc, &info, DIB_RGB_COLORS, &bits, NULL, 0);
+    memory->Bitmap = CreateDIBSection(memory->Dc, &info, DIB_RGB_COLORS, &memory->Bits, NULL, 0);
 
     if (!memory->Bitmap)
     {
@@ -551,6 +551,15 @@ static BOOL PresentSharpRender(
 
     SetStretchBltMode(g_SharpWhole.Dc, COLORONCOLOR);
     StretchDIBits(g_SharpWhole.Dc, 0, 0, wholeWidth, wholeHeight, 0, 0, sourceWidth, sourceHeight, pixels, (BITMAPINFO *)dib, DIB_RGB_COLORS, SRCCOPY);
+
+    if (PresentSharpCanScale((UINT)wholeWidth, (UINT)wholeHeight, (UINT)destinationWidth, (UINT)destinationHeight))
+    {
+        GdiFlush();
+        PresentSharpScale((const DWORD *)g_SharpWhole.Bits, (UINT)wholeWidth, (UINT)wholeHeight,
+                          (DWORD *)g_SharpFinal.Bits, (UINT)destinationWidth, (UINT)destinationHeight);
+        return TRUE;
+    }
+
     SetStretchBltMode(g_SharpFinal.Dc, HALFTONE);
     SetBrushOrgEx(g_SharpFinal.Dc, 0, 0, NULL);
     return StretchBlt(g_SharpFinal.Dc, 0, 0, destinationWidth, destinationHeight, g_SharpWhole.Dc, 0, 0, wholeWidth, wholeHeight, SRCCOPY);
