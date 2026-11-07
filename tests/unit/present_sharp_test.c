@@ -57,32 +57,65 @@ static VOID TestChannelsDoNotBleed(VOID)
     CHECK(out[1] == 0x007F7F7F, "blending keeps the channels apart");
 }
 
-/* The rig's picture: 200 guest rows at a whole 5x. Only a guest row's edge can show a blend. */
+/* The rig's picture: 200 guest rows at a whole 5x, to 1080. Only a guest row's edge can blend. */
 static VOID TestMostRowsAreCopies(VOID)
 {
     enum
     {
-        WIDTH = 4, SOURCE_ROWS = 1000, DESTINATION_ROWS = 1080
+        WIDTH = 4, SOURCE_ROWS = 200, DESTINATION_ROWS = 1080
     };
     DWORD *source = (DWORD *)malloc(WIDTH * SOURCE_ROWS * sizeof(DWORD));
     DWORD *out = (DWORD *)malloc(WIDTH * DESTINATION_ROWS * sizeof(DWORD));
     INT row;
     INT column;
     INT blended = 0;
+    INT shortestRun = DESTINATION_ROWS;
+    INT run = 0;
 
     for (row = 0; row < SOURCE_ROWS; row++)
         for (column = 0; column < WIDTH; column++)
-            source[row * WIDTH + column] = (DWORD)((row / 5) & 1 ? 0x00FFFFFF : 0);
+            source[row * WIDTH + column] = (DWORD)(row & 1 ? 0x00FFFFFF : 0);
 
     PresentSharpScale(source, WIDTH, SOURCE_ROWS, out, WIDTH, DESTINATION_ROWS);
 
     for (row = 0; row < DESTINATION_ROWS; row++)
+    {
         if (out[row * WIDTH] != 0 && out[row * WIDTH] != 0x00FFFFFF)
+        {
             blended++;
 
-    CHECK(blended > 0 && blended <= 199, "1000 to 1080: blended rows only at the 199 guest row edges");
+            if (run && run < shortestRun)
+                shortestRun = run;
+
+            run = 0;
+        }
+        else
+            run++;
+    }
+
+    CHECK(blended > 0 && blended <= 199, "200 to 1080: blended rows only at the 199 guest row edges");
+    CHECK(shortestRun >= 4, "200 to 1080: every guest row keeps at least 4 solid rows of 5.4");
     free(source);
     free(out);
+}
+
+/* The Mario case: 640x400 to 1920x1080, whole 3x and 2x. */
+static VOID TestWholeScales(VOID)
+{
+    CHECK(PresentSharpWholeScale(640, 1920) == 3, "640 to 1920 is 3x");
+    CHECK(PresentSharpWholeScale(400, 1080) == 2, "400 to 1080 is 2x");
+    CHECK(PresentSharpWholeScale(640, 320) == 1, "never below 1x");
+}
+
+/* Tables are cached by size, so a second size must not reuse the first. */
+static VOID TestSizeChange(VOID)
+{
+    static const DWORD source[2] = { 0x00000000, 0x00FF0000 };
+    DWORD out[4];
+
+    PresentSharpScale(source, 2, 1, out, 3, 1);
+    PresentSharpScale(source, 2, 1, out, 4, 1);
+    CHECK(out[1] == 0x00000000 && out[2] == 0x00FF0000, "2 to 4 after 2 to 3: whole 2x");
 }
 
 static VOID TestLastPixelStaysInside(VOID)
@@ -117,6 +150,8 @@ INT main(VOID)
     TestBoundaryIsWeightedByArea();
     TestChannelsDoNotBleed();
     TestMostRowsAreCopies();
+    TestWholeScales();
+    TestSizeChange();
     TestLastPixelStaysInside();
     TestLimits();
 

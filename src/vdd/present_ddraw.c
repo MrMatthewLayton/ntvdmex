@@ -65,12 +65,15 @@
 #define PRESENT_DIRECT_DRAW                     ((LPDIRECTDRAW7)presenter->DirectDraw)
 #define PRESENT_SURFACE(p)                      ((LPDIRECTDRAWSURFACE7)(p))
 
-/* #418: SHARP IS WORKED OUT IN SYSTEM MEMORY, BY US. HALFTONE averaged 67 ms a frame at 1920x1080 on
- * the Q9650 even between system-memory bitmaps (runs/s105/sk3), so present_sharp.c does the remainder,
- * and GDI's HALFTONE is left for a picture smaller than the source. Both bitmaps are DIB sections
- * on a screen-less DC, and the DirectDraw path draws them before GetDC.
+/* #418: SHARP IS WORKED OUT IN SYSTEM MEMORY, BY US: present_sharp.h says why. GDI's HALFTONE is left
+ * for a picture smaller than the source. The final bitmap is a DIB section on a screen-less DC, and
+ * the DirectDraw path draws it before touching the surface, then copies it in by Lock when the
+ * formats match: GDI's copy was most of a 19 ms present (Mario, play3).
  */
 #define PRESENT_SHARP_BITS_PER_PIXEL            32
+#define PRESENT_SHARP_RED_MASK                  0x00FF0000u
+#define PRESENT_SHARP_BLUE_MASK                 0x000000FFu
+#define PRESENT_DIB_ROW_ALIGN                   4u      /* A DIB's rows are DWORD aligned */
 
 typedef HRESULT (WINAPI *PFN_DIRECT_DRAW_CREATE_EX)(GUID *, LPVOID *, REFIID, IUnknown *);
 
@@ -136,8 +139,7 @@ static const GUID g_PresentIidDirectDraw7 =
 static UINT32 *g_PresentEffect;
 static UINT32 *g_PresentEffectScratch;
 
-static PRESENT_MEMORY_BITMAP g_SharpWhole;      /* The largest whole multiple, point-sampled */
-static PRESENT_MEMORY_BITMAP g_SharpFinal;      /* That, smoothed to the destination size */
+static PRESENT_MEMORY_BITMAP g_SharpFinal;      /* The picture at the destination size */
 static BOOL g_IsSharpRendered;                  /* g_SharpFinal is this frame, drawn ahead of the blit */
 
 static INT PresentEffectBuffersReady(VOID)
@@ -531,38 +533,77 @@ static BOOL PresentSharpRender(
     INT sourceWidth,
     INT sourceHeight)
 {
-    INT scaleX = destinationWidth / sourceWidth;
-    INT scaleY = destinationHeight / sourceHeight;
-    INT wholeWidth;
-    INT wholeHeight;
+    static DWORD expanded[NTVDD_FRAME_MAX_WIDTH * NTVDD_FRAME_MAX_HEIGHT];
+    const DWORD *source = (const DWORD *)pixels;
 
-    if (scaleX < 1)
-        scaleX = 1;
-
-    if (scaleY < 1)
-        scaleY = 1;
-
-    wholeWidth = sourceWidth * scaleX;
-    wholeHeight = sourceHeight * scaleY;
-
-    if (!PresentMemoryBitmapFit(&g_SharpWhole, wholeWidth, wholeHeight)
-        || !PresentMemoryBitmapFit(&g_SharpFinal, destinationWidth, destinationHeight))
+    if (!PresentMemoryBitmapFit(&g_SharpFinal, destinationWidth, destinationHeight))
         return FALSE;
 
-    SetStretchBltMode(g_SharpWhole.Dc, COLORONCOLOR);
-    StretchDIBits(g_SharpWhole.Dc, 0, 0, wholeWidth, wholeHeight, 0, 0, sourceWidth, sourceHeight, pixels, (BITMAPINFO *)dib, DIB_RGB_COLORS, SRCCOPY);
-
-    if (PresentSharpCanScale((UINT)wholeWidth, (UINT)wholeHeight, (UINT)destinationWidth, (UINT)destinationHeight))
+    if (!PresentSharpCanScale((UINT)sourceWidth, (UINT)sourceHeight, (UINT)destinationWidth, (UINT)destinationHeight))
     {
-        GdiFlush();
-        PresentSharpScale((const DWORD *)g_SharpWhole.Bits, (UINT)wholeWidth, (UINT)wholeHeight,
-                          (DWORD *)g_SharpFinal.Bits, (UINT)destinationWidth, (UINT)destinationHeight);
-        return TRUE;
+        SetStretchBltMode(g_SharpFinal.Dc, HALFTONE);
+        SetBrushOrgEx(g_SharpFinal.Dc, 0, 0, NULL);
+        return StretchDIBits(g_SharpFinal.Dc, 0, 0, destinationWidth, destinationHeight, 0, 0, sourceWidth, sourceHeight, pixels, (BITMAPINFO *)dib,
+                             DIB_RGB_COLORS, SRCCOPY) > 0;
     }
 
-    SetStretchBltMode(g_SharpFinal.Dc, HALFTONE);
-    SetBrushOrgEx(g_SharpFinal.Dc, 0, 0, NULL);
-    return StretchBlt(g_SharpFinal.Dc, 0, 0, destinationWidth, destinationHeight, g_SharpWhole.Dc, 0, 0, wholeWidth, wholeHeight, SRCCOPY);
+    if (dib->Header.biBitCount == PRESENT_BPP_INDEXED)
+    {
+        const DWORD *colours = (const DWORD *)dib->Colors;       /* RGBQUAD is BGRA, as a 32bpp pixel is */
+        UINT stride = ((UINT)sourceWidth + PRESENT_DIB_ROW_ALIGN - 1u) & ~(PRESENT_DIB_ROW_ALIGN - 1u);
+        INT row;
+        INT column;
+
+        for (row = 0; row < sourceHeight; row++)
+        {
+            const BYTE *line = pixels + (size_t)row * stride;
+            DWORD *out = expanded + (size_t)row * sourceWidth;
+
+            for (column = 0; column < sourceWidth; column++)
+                out[column] = colours[line[column]];
+        }
+
+        source = expanded;
+    }
+
+    PresentSharpScale(source, (UINT)sourceWidth, (UINT)sourceHeight, (DWORD *)g_SharpFinal.Bits, (UINT)destinationWidth, (UINT)destinationHeight);
+    return TRUE;
+}
+
+/* Copy the rendered picture straight into a 32bpp surface of the same channel order. FALSE if it
+ * is not one, or will not lock; then the GDI copy in PresentBlitPicture does it.
+ */
+static BOOL PresentSharpCopyToSurface(
+    LPDIRECTDRAWSURFACE7 surface,
+    INT destinationX,
+    INT destinationY)
+{
+    DDSURFACEDESC2 description;
+    INT row;
+
+    ZeroMemory(&description, sizeof description);
+    description.dwSize = sizeof description;
+
+    if (FAILED(IDirectDrawSurface7_Lock(surface, NULL, &description, DDLOCK_WAIT | DDLOCK_WRITEONLY | DDLOCK_SURFACEMEMORYPTR, NULL)))
+        return FALSE;
+
+    if (description.ddpfPixelFormat.dwRGBBitCount != PRESENT_SHARP_BITS_PER_PIXEL
+        || description.ddpfPixelFormat.dwRBitMask != PRESENT_SHARP_RED_MASK
+        || description.ddpfPixelFormat.dwBBitMask != PRESENT_SHARP_BLUE_MASK)
+    {
+        IDirectDrawSurface7_Unlock(surface, NULL);
+        return FALSE;
+    }
+
+    for (row = 0; row < g_SharpFinal.Height; row++)
+    {
+        CopyMemory((BYTE *)description.lpSurface + (size_t)(destinationY + row) * description.lPitch + (size_t)destinationX * sizeof(DWORD),
+                   (const DWORD *)g_SharpFinal.Bits + (size_t)row * g_SharpFinal.Width,
+                   (size_t)g_SharpFinal.Width * sizeof(DWORD));
+    }
+
+    IDirectDrawSurface7_Unlock(surface, NULL);
+    return TRUE;
 }
 
 /* #325: DRAW THE PICTURE WITH THE CHOSEN FILTER. A whole multiple of the source is
@@ -1156,7 +1197,12 @@ static VOID PresentFullscreen(PPRESENT_DDRAW presenter)
         g_IsSharpRendered = PresentBlitIsSharp(fitWidth, fitHeight, sourceWidth, sourceHeight, presenter->Filter)
             && PresentSharpRender(fitWidth, fitHeight, pixels, &dib, sourceWidth, sourceHeight);
 
-        if (SUCCEEDED(IDirectDrawSurface7_GetDC(back, &dc)))
+        if (g_IsSharpRendered && PresentSharpCopyToSurface(back, fitX, fitY))
+        {
+            g_IsSharpRendered = FALSE;
+            isDone = 1;
+        }
+        else if (SUCCEEDED(IDirectDrawSurface7_GetDC(back, &dc)))
         {
             isDone = PresentBlitPicture(dc, fitX, fitY, fitWidth, fitHeight, pixels, &dib, sourceWidth, sourceHeight, presenter->Filter);   /* #325 */
             IDirectDrawSurface7_ReleaseDC(back, dc);
