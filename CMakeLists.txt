@@ -199,6 +199,7 @@ add_executable(ntvdmhost
     src/vdd/vdd_speaker.c
     src/vdd/vdd_joy.c
     src/vdd/present_ddraw.c
+    src/vdd/present_sharp.c
     src/runtime.c
     res/ntvdmhost.rc)
 # The .rc names MAINICON.ico but CMake does not scan .rc includes, so a new icon alone
@@ -249,6 +250,7 @@ if(EXISTS "${CMAKE_SOURCE_DIR}/tools/present_demo/present_demo.c")
 add_executable(present_demo WIN32
     tools/present_demo/present_demo.c
     src/vdd/present_ddraw.c
+    src/vdd/present_sharp.c
     src/vdd/present_scale.c
     src/runtime.c)
 target_include_directories(present_demo PRIVATE src/vdd)

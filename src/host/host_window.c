@@ -417,6 +417,7 @@ const INT g_SettingsPages[NTVDMEX_PAGE_COUNT] = {
 };
 static DWORD  g_SpeakerRealHz;   /* sampled under the lock, applied outside it */
 static volatile LONG g_UiPresentPending;                /* one WM_APP_PRESENT in flight */
+static HANDLE g_UiPresentEvent;                         /* UiPresentPostThread's wake, set once g_Window is */
 static int      g_UiForced;                              /* this body run was raised by the hook; stays int: INT here moves the compiled code */
 static DWORD    g_UiInputFirst;                         /* input served ahead of a queued present */
 /* The menu bar while FULLSCREEN has it detached. There used to be a second
@@ -1186,18 +1187,33 @@ static HMENU BuildMenu(VOID)
     return menuBar;
 }
 
-/* Runs on the GUEST thread inside status_in, under the device lock: post and leave.
+/* #418: A POST CAN BLOCK, SO THE GUEST NEVER MAKES ONE. PostMessageA from the guest thread, under the
+ * device lock, was the host's worst lock hold to the microsecond: 62,537 us of a 62,541 us hold with
+ * Sharp, 29,378 of 29,380 with Nearest (runs/s105/sk3, a timer around the call). Why the call waits
+ * was not measured. SetEvent does not wait, so this thread makes the post.
+ */
+static DWORD WINAPI UiPresentPostThread(LPVOID argument)
+{
+    (VOID)argument;
+
+    while (WaitForSingleObject(g_UiPresentEvent, INFINITE) == WAIT_OBJECT_0)
+        PostMessageA(g_Window, WM_APP_PRESENT, 0, 0);
+
+    return 0;
+}
+
+/* Runs on the GUEST thread inside status_in, under the device lock: signal and leave.
  * One in flight at a time so a fast poller cannot flood the queue.
  */
 VOID HostPresentHook(PVOID context)
 {
     (VOID)context;
 
-    if (g_UiTickMinimumMs != UITICK_AUTO || !g_Window)
+    if (g_UiTickMinimumMs != UITICK_AUTO || !g_UiPresentEvent)
         return;
 
     if (InterlockedCompareExchange(&g_UiPresentPending, 1, 0) == 0)
-        PostMessageA(g_Window, WM_APP_PRESENT, 0, 0);
+        SetEvent(g_UiPresentEvent);
 }
 
 static VOID TrayAdd(HINSTANCE instance, HWND window)
@@ -5121,6 +5137,11 @@ DWORD WINAPI UiThread(LPVOID argument)
 
     if (!g_Window)
         return 1;
+
+    {   HANDLE presentEvent = CreateEventA(NULL, FALSE, FALSE, NULL);
+
+        if (presentEvent && CreateThread(NULL, 0, UiPresentPostThread, NULL, 0, NULL))
+            g_UiPresentEvent = presentEvent; }
 
     {   RAWINPUTDEVICE rawInputDevice;              /* generic desktop / mouse */
         rawInputDevice.usUsagePage = HID_USAGE_PAGE_GENERIC_DESKTOP;
