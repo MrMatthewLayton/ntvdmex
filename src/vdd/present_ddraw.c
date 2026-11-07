@@ -64,6 +64,14 @@
 #define PRESENT_DIRECT_DRAW                     ((LPDIRECTDRAW7)presenter->DirectDraw)
 #define PRESENT_SURFACE(p)                      ((LPDIRECTDRAWSURFACE7)(p))
 
+/* #418: SHARP IS WORKED OUT IN SYSTEM MEMORY, AWAY FROM THE SURFACE. Measured on Skyroads, DirectDraw,
+ * Stretch and Fill (runs/s104/aff/sk): HALFTONE into the back buffer's DC took the guest from 179
+ * to 90 of 180 PIT ticks at worst, and 65 ms lock holds against 8-26 for Nearest. Both bitmaps are
+ * DIB sections on a screen-less DC, so neither the scale nor its reads touch the device, and the
+ * DirectDraw path does this before GetDC: the surface's DC only sees one unscaled copy.
+ */
+#define PRESENT_SHARP_BITS_PER_PIXEL            32
+
 typedef HRESULT (WINAPI *PFN_DIRECT_DRAW_CREATE_EX)(GUID *, LPVOID *, REFIID, IUnknown *);
 
 /* The snapshot as a DIB that StretchDIBits can take: 8bpp + palette, or 32bpp when
@@ -76,6 +84,15 @@ typedef struct _PRESENT_SNAPSHOT_DIB
     BITMAPINFOHEADER Header;
     RGBQUAD Colors[NTVDD_PALETTE_ENTRIES];
 } PRESENT_SNAPSHOT_DIB, *PPRESENT_SNAPSHOT_DIB;
+
+typedef struct
+{
+    HDC     Dc;
+    HBITMAP Bitmap;
+    HBITMAP Previous;
+    INT     Width;
+    INT     Height;
+} PRESENT_MEMORY_BITMAP;
 
 /* windowed AND (by default) fullscreen: GDI StretchDIBits:
  * THIS PATH IS SHARP AND THE DIRECTDRAW ONE IS NOT. (s64) (Importance = 3):
@@ -117,6 +134,10 @@ static const GUID g_PresentIidDirectDraw7 =
  */
 static UINT32 *g_PresentEffect;
 static UINT32 *g_PresentEffectScratch;
+
+static PRESENT_MEMORY_BITMAP g_SharpWhole;      /* The largest whole multiple, point-sampled */
+static PRESENT_MEMORY_BITMAP g_SharpFinal;      /* That, smoothed to the destination size */
+static BOOL g_IsSharpRendered;                  /* g_SharpFinal is this frame, drawn ahead of the blit */
 
 static INT PresentEffectBuffersReady(VOID)
 {
@@ -447,6 +468,94 @@ static const BYTE *PresentSnapshotDib(
     return pixels;
 }
 
+static BOOL PresentMemoryBitmapFit(PRESENT_MEMORY_BITMAP *memory, INT width, INT height)
+{
+    BITMAPINFO info;
+    PVOID bits;
+
+    if (!memory->Dc)
+        memory->Dc = CreateCompatibleDC(NULL);
+
+    if (!memory->Dc)
+        return FALSE;
+
+    if (memory->Bitmap && memory->Width == width && memory->Height == height)
+        return TRUE;
+
+    if (memory->Bitmap)
+    {
+        SelectObject(memory->Dc, memory->Previous);
+        DeleteObject(memory->Bitmap);
+        memory->Bitmap = NULL;
+    }
+
+    ZeroMemory(&info, sizeof info);
+    info.bmiHeader.biSize = sizeof info.bmiHeader;
+    info.bmiHeader.biWidth = width;
+    info.bmiHeader.biHeight = -height;
+    info.bmiHeader.biPlanes = 1;
+    info.bmiHeader.biBitCount = PRESENT_SHARP_BITS_PER_PIXEL;
+    info.bmiHeader.biCompression = BI_RGB;
+    memory->Bitmap = CreateDIBSection(memory->Dc, &info, DIB_RGB_COLORS, &bits, NULL, 0);
+
+    if (!memory->Bitmap)
+    {
+        memory->Width = memory->Height = 0;
+        return FALSE;
+    }
+
+    memory->Previous = (HBITMAP)SelectObject(memory->Dc, memory->Bitmap);
+    memory->Width = width;
+    memory->Height = height;
+    return TRUE;
+}
+
+static BOOL PresentBlitIsSharp(
+    INT destinationWidth,
+    INT destinationHeight,
+    INT sourceWidth,
+    INT sourceHeight,
+    INT filter)
+{
+    return filter == PRESENT_FILTER_SHARP
+        && sourceWidth >= 1
+        && sourceHeight >= 1
+        && (destinationWidth % sourceWidth != 0 || destinationHeight % sourceHeight != 0);
+}
+
+static BOOL PresentSharpRender(
+    INT destinationWidth,
+    INT destinationHeight,
+    const BYTE *pixels,
+    PPRESENT_SNAPSHOT_DIB dib,
+    INT sourceWidth,
+    INT sourceHeight)
+{
+    INT scaleX = destinationWidth / sourceWidth;
+    INT scaleY = destinationHeight / sourceHeight;
+    INT wholeWidth;
+    INT wholeHeight;
+
+    if (scaleX < 1)
+        scaleX = 1;
+
+    if (scaleY < 1)
+        scaleY = 1;
+
+    wholeWidth = sourceWidth * scaleX;
+    wholeHeight = sourceHeight * scaleY;
+
+    if (!PresentMemoryBitmapFit(&g_SharpWhole, wholeWidth, wholeHeight)
+        || !PresentMemoryBitmapFit(&g_SharpFinal, destinationWidth, destinationHeight))
+        return FALSE;
+
+    SetStretchBltMode(g_SharpWhole.Dc, COLORONCOLOR);
+    StretchDIBits(g_SharpWhole.Dc, 0, 0, wholeWidth, wholeHeight, 0, 0, sourceWidth, sourceHeight, pixels, (BITMAPINFO *)dib, DIB_RGB_COLORS, SRCCOPY);
+    SetStretchBltMode(g_SharpFinal.Dc, HALFTONE);
+    SetBrushOrgEx(g_SharpFinal.Dc, 0, 0, NULL);
+    return StretchBlt(g_SharpFinal.Dc, 0, 0, destinationWidth, destinationHeight, g_SharpWhole.Dc, 0, 0, wholeWidth, wholeHeight, SRCCOPY);
+}
+
 /* #325: DRAW THE PICTURE WITH THE CHOSEN FILTER. A whole multiple of the source is
  * always point-sampled (every filter agrees there, and it is the default case: a
  * Native window, or a Whole-pixels fit). Otherwise Nearest point-samples -- uneven
@@ -467,79 +576,33 @@ static INT PresentBlitPicture(
     INT sourceHeight,
     INT filter)
 {
-    static HDC scratchDc;
-    static HBITMAP scratchBitmap;
-    static HBITMAP scratchOld;
-    static INT scratchWidth;
-    static INT scratchHeight;
-    INT scaleX;
-    INT scaleY;
-    INT integerWidth;
-    INT integerHeight;
+    BOOL isSharpRendered = g_IsSharpRendered;
+
+    g_IsSharpRendered = FALSE;
 
     if (sourceWidth < 1 || sourceHeight < 1)
         return 0;
 
-    if ((destinationWidth % sourceWidth == 0 && destinationHeight % sourceHeight == 0) || filter == PRESENT_FILTER_NEAREST)
+    if (PresentBlitIsSharp(destinationWidth, destinationHeight, sourceWidth, sourceHeight, filter))
     {
-        SetStretchBltMode(dc, COLORONCOLOR);
-        return StretchDIBits(dc, destinationX, destinationY, destinationWidth, destinationHeight, 0, 0, sourceWidth, sourceHeight, pixels, (BITMAPINFO *)dib,
-                             DIB_RGB_COLORS, SRCCOPY) > 0;
+        if (!isSharpRendered && !PresentSharpRender(destinationWidth, destinationHeight, pixels, dib, sourceWidth, sourceHeight))
+            return 0;
+
+        return BitBlt(dc, destinationX, destinationY, destinationWidth, destinationHeight, g_SharpFinal.Dc, 0, 0, SRCCOPY);
     }
 
-    if (filter == PRESENT_FILTER_BILINEAR)
+    if (filter == PRESENT_FILTER_BILINEAR && (destinationWidth % sourceWidth != 0 || destinationHeight % sourceHeight != 0))
     {
         SetStretchBltMode(dc, HALFTONE);
         SetBrushOrgEx(dc, 0, 0, NULL);
-        return StretchDIBits(dc, destinationX, destinationY, destinationWidth, destinationHeight, 0, 0, sourceWidth, sourceHeight, pixels, (BITMAPINFO *)dib,
-                             DIB_RGB_COLORS, SRCCOPY) > 0;
     }
-
-    scaleX = destinationWidth / sourceWidth;
-    scaleY = destinationHeight / sourceHeight;
-
-    if (scaleX < 1)
-        scaleX = 1;
-
-    if (scaleY < 1)
-        scaleY = 1;
-
-    integerWidth = sourceWidth * scaleX;
-    integerHeight = sourceHeight * scaleY;
-
-    if (!scratchDc)
-        scratchDc = CreateCompatibleDC(dc);
-
-    if (!scratchDc)
-        return 0;
-
-    if (!scratchBitmap || scratchWidth != integerWidth || scratchHeight != integerHeight)
+    else
     {
-        if (scratchBitmap)
-        {
-            SelectObject(scratchDc, scratchOld);
-            DeleteObject(scratchBitmap);
-            scratchBitmap = NULL;
-        }
-
-        scratchBitmap = CreateCompatibleBitmap(dc, integerWidth, integerHeight);
-
-        if (!scratchBitmap)
-        {
-            scratchWidth = scratchHeight = 0;
-            return 0;
-        }
-
-        scratchOld = (HBITMAP)SelectObject(scratchDc, scratchBitmap);
-        scratchWidth = integerWidth;
-        scratchHeight = integerHeight;
+        SetStretchBltMode(dc, COLORONCOLOR);
     }
 
-    SetStretchBltMode(scratchDc, COLORONCOLOR);
-    StretchDIBits(scratchDc, 0, 0, integerWidth, integerHeight, 0, 0, sourceWidth, sourceHeight, pixels, (BITMAPINFO *)dib, DIB_RGB_COLORS, SRCCOPY);
-    SetStretchBltMode(dc, HALFTONE);
-    SetBrushOrgEx(dc, 0, 0, NULL);
-    return StretchBlt(dc, destinationX, destinationY, destinationWidth, destinationHeight, scratchDc, 0, 0, integerWidth, integerHeight, SRCCOPY);
+    return StretchDIBits(dc, destinationX, destinationY, destinationWidth, destinationHeight, 0, 0, sourceWidth, sourceHeight, pixels, (BITMAPINFO *)dib,
+                         DIB_RGB_COLORS, SRCCOPY) > 0;
 }
 
 static VOID PresentGdi(PPRESENT_DDRAW presenter)
@@ -1067,6 +1130,10 @@ static VOID PresentFullscreen(PPRESENT_DDRAW presenter)
         && presenter->SnapshotHeight > 0)
     {
         HDC dc;
+        PRESENT_SNAPSHOT_DIB dib;
+        INT sourceWidth;
+        INT sourceHeight;
+        const BYTE *pixels = PresentSnapshotDib(presenter, &dib, &sourceWidth, &sourceHeight, fitWidth, fitHeight);
 
         if (fitX || fitY)                        /* letterboxed -> clear the bars */
         {
@@ -1077,12 +1144,11 @@ static VOID PresentFullscreen(PPRESENT_DDRAW presenter)
             IDirectDrawSurface7_Blt(back, NULL, NULL, NULL, DDBLT_COLORFILL | DDBLT_WAIT, &bltFx);
         }
 
+        g_IsSharpRendered = PresentBlitIsSharp(fitWidth, fitHeight, sourceWidth, sourceHeight, presenter->Filter)
+            && PresentSharpRender(fitWidth, fitHeight, pixels, &dib, sourceWidth, sourceHeight);
+
         if (SUCCEEDED(IDirectDrawSurface7_GetDC(back, &dc)))
         {
-            PRESENT_SNAPSHOT_DIB dib;
-            INT sourceWidth;
-            INT sourceHeight;
-            const BYTE *pixels = PresentSnapshotDib(presenter, &dib, &sourceWidth, &sourceHeight, fitWidth, fitHeight);
             isDone = PresentBlitPicture(dc, fitX, fitY, fitWidth, fitHeight, pixels, &dib, sourceWidth, sourceHeight, presenter->Filter);   /* #325 */
             IDirectDrawSurface7_ReleaseDC(back, dc);
         }
