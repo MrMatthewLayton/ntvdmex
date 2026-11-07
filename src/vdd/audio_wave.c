@@ -362,6 +362,12 @@ static DWORD WINAPI AudioWaveDirectSoundThread(LPVOID parameter)
             continue;
         }
 
+        /* [CAUTION]: A RING FILLED TO THE PLAY CURSOR READS AS EMPTY. With the write position on
+         * the cursor, `ahead` is 0 whether the ring is full or dry, and treating it as dry wrote
+         * over ~70 ms of unplayed audio. drain_hist showed it: thousands at 1-2 buffers, nothing at
+         * 3-5, then 153-229 at all 6 (runs/s105/play2, Q9650, X-Fi). One chunk stays free, so it
+         * cannot be.
+         */
         ahead = (wave->DirectSoundWritePosition + wave->DirectSoundBytes - playCursor) % wave->DirectSoundBytes;   /* queued, not played */
         space = wave->DirectSoundBytes - ahead;
 
@@ -375,7 +381,7 @@ static DWORD WINAPI AudioWaveDirectSoundThread(LPVOID parameter)
 
             wave->DrainHistogram[handedBack <= AUDIO_WAVE_BUFFERS ? handedBack : AUDIO_WAVE_BUFFERS]++; }
 
-        while (space >= chunk)
+        while (space > chunk)
         {
             PVOID part1;
             PVOID part2;
