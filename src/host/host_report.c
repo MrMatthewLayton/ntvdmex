@@ -2202,6 +2202,7 @@ static PSTR ReportModeY(PSTR cursor)
     cursor = LogPut(cursor, " swaps="); cursor = LogHex(cursor, g_ModeYSwaps);
     cursor = LogPut(cursor, " fanouts="); cursor = LogHex(cursor, g_ModeYFanouts);
     cursor = LogPut(cursor, " failed="); cursor = LogHex(cursor, g_ModeYFail);
+    cursor = LogPut(cursor, " map_retries="); cursor = LogHex(cursor, g_ModeYMapRetries);
     /* - ARE THE PLANES COLLAPSED, OR DOES THE RENDER COLLAPSE THEM? The oracle says
      * 62% of the status bar's four-pixel groups hold one value where the reference
      * holds four. That can only come from the four PLANES agreeing, or from the
