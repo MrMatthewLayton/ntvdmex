@@ -66,13 +66,11 @@
 #define PRESENT_SURFACE(p)                      ((LPDIRECTDRAWSURFACE7)(p))
 
 /* #418: SHARP IS WORKED OUT IN SYSTEM MEMORY, BY US: present_sharp.h says why. GDI's HALFTONE is left
- * for a picture smaller than the source. The final bitmap is a DIB section on a screen-less DC, and
- * the DirectDraw path draws it before touching the surface, then copies it in by Lock when the
- * formats match: GDI's copy was most of a 19 ms present (Mario, play3).
+ * for a picture smaller than the source. The final bitmap is a DIB section on a screen-less DC.
+ * That is the GDI window's path; exclusive DirectDraw uses the card, PresentSharpOnCard, and this
+ * only when the card cannot.
  */
 #define PRESENT_SHARP_BITS_PER_PIXEL            32
-#define PRESENT_SHARP_RED_MASK                  0x00FF0000u
-#define PRESENT_SHARP_BLUE_MASK                 0x000000FFu
 #define PRESENT_DIB_ROW_ALIGN                   4u      /* A DIB's rows are DWORD aligned */
 
 typedef HRESULT (WINAPI *PFN_DIRECT_DRAW_CREATE_EX)(GUID *, LPVOID *, REFIID, IUnknown *);
@@ -567,42 +565,6 @@ static BOOL PresentSharpRender(
     }
 
     PresentSharpScale(source, (UINT)sourceWidth, (UINT)sourceHeight, (DWORD *)g_SharpFinal.Bits, (UINT)destinationWidth, (UINT)destinationHeight);
-    return TRUE;
-}
-
-/* Copy the rendered picture straight into a 32bpp surface of the same channel order. FALSE if it
- * is not one, or will not lock; then the GDI copy in PresentBlitPicture does it.
- */
-static BOOL PresentSharpCopyToSurface(
-    LPDIRECTDRAWSURFACE7 surface,
-    INT destinationX,
-    INT destinationY)
-{
-    DDSURFACEDESC2 description;
-    INT row;
-
-    ZeroMemory(&description, sizeof description);
-    description.dwSize = sizeof description;
-
-    if (FAILED(IDirectDrawSurface7_Lock(surface, NULL, &description, DDLOCK_WAIT | DDLOCK_WRITEONLY | DDLOCK_SURFACEMEMORYPTR, NULL)))
-        return FALSE;
-
-    if (description.ddpfPixelFormat.dwRGBBitCount != PRESENT_SHARP_BITS_PER_PIXEL
-        || description.ddpfPixelFormat.dwRBitMask != PRESENT_SHARP_RED_MASK
-        || description.ddpfPixelFormat.dwBBitMask != PRESENT_SHARP_BLUE_MASK)
-    {
-        IDirectDrawSurface7_Unlock(surface, NULL);
-        return FALSE;
-    }
-
-    for (row = 0; row < g_SharpFinal.Height; row++)
-    {
-        CopyMemory((BYTE *)description.lpSurface + (size_t)(destinationY + row) * description.lPitch + (size_t)destinationX * sizeof(DWORD),
-                   (const DWORD *)g_SharpFinal.Bits + (size_t)row * g_SharpFinal.Width,
-                   (size_t)g_SharpFinal.Width * sizeof(DWORD));
-    }
-
-    IDirectDrawSurface7_Unlock(surface, NULL);
     return TRUE;
 }
 
@@ -1135,6 +1097,46 @@ static LPDIRECTDRAWSURFACE7 PresentFullscreenStageSurface(
     return PRESENT_SURFACE(staging);
 }
 
+/* #418: SHARP ON THE CARD. Even at ~10 ms a frame the CPU version cost what Nearest did not: the user's
+ * Doom, jerky with dropped samples on Sharp, was butter smooth with flawless audio on Nearest, whose
+ * present is ~1 ms (runs/s105/pr1). So the driver does both steps: StretchDIBits draws the whole
+ * multiple into an offscreen surface, as Nearest draws the back buffer, and a stretching Blt, which
+ * the driver filters (#223), adds the remainder. FALSE sends the caller to the CPU version.
+ */
+static BOOL PresentSharpOnCard(
+    PPRESENT_DDRAW presenter,
+    LPDIRECTDRAWSURFACE7 back,
+    const RECT *destination,
+    const BYTE *pixels,
+    PPRESENT_SNAPSHOT_DIB dib,
+    INT sourceWidth,
+    INT sourceHeight)
+{
+    INT destinationWidth = destination->right - destination->left;
+    INT destinationHeight = destination->bottom - destination->top;
+    LPDIRECTDRAWSURFACE7 whole;
+    RECT source;
+    HDC dc;
+    BOOL isDrawn;
+
+    if (!PresentSharpCanScale((UINT)sourceWidth, (UINT)sourceHeight, (UINT)destinationWidth, (UINT)destinationHeight))
+        return FALSE;
+
+    source.left = 0;
+    source.top = 0;
+    source.right = sourceWidth * (INT)PresentSharpWholeScale((UINT)sourceWidth, (UINT)destinationWidth);
+    source.bottom = sourceHeight * (INT)PresentSharpWholeScale((UINT)sourceHeight, (UINT)destinationHeight);
+    whole = PresentFullscreenStageSurface(presenter, source.right, source.bottom);
+
+    if (!whole || FAILED(IDirectDrawSurface7_GetDC(whole, &dc)))
+        return FALSE;
+
+    SetStretchBltMode(dc, COLORONCOLOR);
+    isDrawn = StretchDIBits(dc, 0, 0, source.right, source.bottom, 0, 0, sourceWidth, sourceHeight, pixels, (BITMAPINFO *)dib, DIB_RGB_COLORS, SRCCOPY) > 0;
+    IDirectDrawSurface7_ReleaseDC(whole, dc);
+    return isDrawn && SUCCEEDED(IDirectDrawSurface7_Blt(back, (LPRECT)destination, whole, &source, DDBLT_WAIT, NULL));
+}
+
 static VOID PresentFullscreen(PPRESENT_DDRAW presenter)
 {
     LPDIRECTDRAWSURFACE7 back = PRESENT_SURFACE(presenter->Back);
@@ -1184,6 +1186,8 @@ static VOID PresentFullscreen(PPRESENT_DDRAW presenter)
         INT sourceWidth;
         INT sourceHeight;
         const BYTE *pixels = PresentSnapshotDib(presenter, &dib, &sourceWidth, &sourceHeight, fitWidth, fitHeight);
+        BOOL isSharp;
+        RECT sharpDestination;
 
         if (fitX || fitY)                        /* letterboxed -> clear the bars */
         {
@@ -1194,15 +1198,22 @@ static VOID PresentFullscreen(PPRESENT_DDRAW presenter)
             IDirectDrawSurface7_Blt(back, NULL, NULL, NULL, DDBLT_COLORFILL | DDBLT_WAIT, &bltFx);
         }
 
-        g_IsSharpRendered = PresentBlitIsSharp(fitWidth, fitHeight, sourceWidth, sourceHeight, presenter->Filter)
-            && PresentSharpRender(fitWidth, fitHeight, pixels, &dib, sourceWidth, sourceHeight);
+        isSharp = PresentBlitIsSharp(fitWidth, fitHeight, sourceWidth, sourceHeight, presenter->Filter);
+        sharpDestination.left = fitX;
+        sharpDestination.top = fitY;
+        sharpDestination.right = fitX + fitWidth;
+        sharpDestination.bottom = fitY + fitHeight;
 
-        if (g_IsSharpRendered && PresentSharpCopyToSurface(back, fitX, fitY))
+        if (isSharp && PresentSharpOnCard(presenter, back, &sharpDestination, pixels, &dib, sourceWidth, sourceHeight))
         {
-            g_IsSharpRendered = FALSE;
             isDone = 1;
         }
-        else if (SUCCEEDED(IDirectDrawSurface7_GetDC(back, &dc)))
+        else
+        {
+            g_IsSharpRendered = isSharp && PresentSharpRender(fitWidth, fitHeight, pixels, &dib, sourceWidth, sourceHeight);
+        }
+
+        if (!isDone && SUCCEEDED(IDirectDrawSurface7_GetDC(back, &dc)))
         {
             isDone = PresentBlitPicture(dc, fitX, fitY, fitWidth, fitHeight, pixels, &dib, sourceWidth, sourceHeight, presenter->Filter);   /* #325 */
             IDirectDrawSurface7_ReleaseDC(back, dc);
