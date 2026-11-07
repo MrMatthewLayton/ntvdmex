@@ -7,6 +7,7 @@
  */
 
 #include "present_sharp.h"
+#include <string.h>
 
 #define PRESENT_SHARP_RED_BLUE      0x00FF00FFu
 #define PRESENT_SHARP_GREEN         0x0000FF00u
@@ -22,22 +23,28 @@ typedef struct
 static PRESENT_SHARP_STEP g_SharpColumns[PRESENT_SHARP_AXIS_MAX];
 static PRESENT_SHARP_STEP g_SharpRows[PRESENT_SHARP_AXIS_MAX];
 static DWORD g_SharpRowBlend[PRESENT_SHARP_AXIS_MAX];
+static UINT g_SharpColumnsSource;
+static UINT g_SharpColumnsDestination;
+static UINT g_SharpRowsSource;
+static UINT g_SharpRowsDestination;
 
 static VOID PresentSharpBuildAxis(PRESENT_SHARP_STEP *steps, UINT sourceSize, UINT destinationSize)
 {
+    UINT scale = PresentSharpWholeScale(sourceSize, destinationSize);
+    UINT wholeSize = sourceSize * scale;
     UINT position;
 
     for (position = 0; position < destinationSize; position++)
     {
-        UINT start = position * sourceSize;
-        UINT end = start + sourceSize;
-        UINT index = start / destinationSize;
-        UINT boundary = (index + 1) * destinationSize;
+        UINT start = position * wholeSize;
+        UINT end = start + wholeSize;
+        UINT index = (start / destinationSize) / scale;
+        UINT boundary = (index + 1) * scale * destinationSize;
 
         steps[position].Index = (WORD)index;
         steps[position].Weight = end <= boundary
             ? 0
-            : (WORD)(((end - boundary) * PRESENT_SHARP_WEIGHT_ONE) / sourceSize);
+            : (WORD)(((end - boundary) * PRESENT_SHARP_WEIGHT_ONE) / wholeSize);
     }
 }
 
@@ -49,6 +56,13 @@ static DWORD PresentSharpBlend(DWORD first, DWORD second, UINT weight)
 
     return ((redBlue >> PRESENT_SHARP_WEIGHT_SHIFT) & PRESENT_SHARP_RED_BLUE)
         | ((green >> PRESENT_SHARP_WEIGHT_SHIFT) & PRESENT_SHARP_GREEN);
+}
+
+UINT PresentSharpWholeScale(UINT sourceSize, UINT destinationSize)
+{
+    UINT scale = destinationSize / sourceSize;
+
+    return scale ? scale : 1;
 }
 
 BOOL PresentSharpCanScale(
@@ -75,8 +89,19 @@ VOID PresentSharpScale(
 {
     UINT row;
 
-    PresentSharpBuildAxis(g_SharpColumns, sourceWidth, destinationWidth);
-    PresentSharpBuildAxis(g_SharpRows, sourceHeight, destinationHeight);
+    if (g_SharpColumnsSource != sourceWidth || g_SharpColumnsDestination != destinationWidth)
+    {
+        PresentSharpBuildAxis(g_SharpColumns, sourceWidth, destinationWidth);
+        g_SharpColumnsSource = sourceWidth;
+        g_SharpColumnsDestination = destinationWidth;
+    }
+
+    if (g_SharpRowsSource != sourceHeight || g_SharpRowsDestination != destinationHeight)
+    {
+        PresentSharpBuildAxis(g_SharpRows, sourceHeight, destinationHeight);
+        g_SharpRowsSource = sourceHeight;
+        g_SharpRowsDestination = destinationHeight;
+    }
 
     for (row = 0; row < destinationHeight; row++)
     {
@@ -84,6 +109,14 @@ VOID PresentSharpScale(
         UINT weight = g_SharpRows[row].Weight;
         DWORD *out = destination + row * destinationWidth;
         UINT column;
+
+        if (row
+            && g_SharpRows[row].Index == g_SharpRows[row - 1].Index
+            && g_SharpRows[row].Weight == g_SharpRows[row - 1].Weight)
+        {
+            memcpy(out, out - destinationWidth, destinationWidth * sizeof(DWORD));
+            continue;
+        }
 
         if (weight)
         {
