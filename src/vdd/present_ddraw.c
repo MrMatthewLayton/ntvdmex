@@ -1102,6 +1102,11 @@ static LPDIRECTDRAWSURFACE7 PresentFullscreenStageSurface(
  * present is ~1 ms (runs/s105/pr1). So the driver does both steps: StretchDIBits draws the whole
  * multiple into an offscreen surface, as Nearest draws the back buffer, and a stretching Blt, which
  * the driver filters (#223), adds the remainder. FALSE sends the caller to the CPU version.
+ *
+ * #227: AND BILINEAR UNDER A SCALER EFFECT, with isWholeFirst FALSE: the effect's output goes to the
+ * surface as it is and the driver's filtered Blt does the whole stretch, as Bilinear does with no
+ * effect. GDI's HALFTONE did it before, and the user found Bilinear with Scanlines or CRT slow and
+ * jerky where Nearest with them, and Bilinear alone, were fast.
  */
 static BOOL PresentSharpOnCard(
     PPRESENT_DDRAW presenter,
@@ -1110,7 +1115,8 @@ static BOOL PresentSharpOnCard(
     const BYTE *pixels,
     PPRESENT_SNAPSHOT_DIB dib,
     INT sourceWidth,
-    INT sourceHeight)
+    INT sourceHeight,
+    BOOL isWholeFirst)
 {
     INT destinationWidth = destination->right - destination->left;
     INT destinationHeight = destination->bottom - destination->top;
@@ -1124,8 +1130,8 @@ static BOOL PresentSharpOnCard(
 
     source.left = 0;
     source.top = 0;
-    source.right = sourceWidth * (INT)PresentSharpWholeScale((UINT)sourceWidth, (UINT)destinationWidth);
-    source.bottom = sourceHeight * (INT)PresentSharpWholeScale((UINT)sourceHeight, (UINT)destinationHeight);
+    source.right = isWholeFirst ? sourceWidth * (INT)PresentSharpWholeScale((UINT)sourceWidth, (UINT)destinationWidth) : sourceWidth;
+    source.bottom = isWholeFirst ? sourceHeight * (INT)PresentSharpWholeScale((UINT)sourceHeight, (UINT)destinationHeight) : sourceHeight;
     whole = PresentFullscreenStageSurface(presenter, source.right, source.bottom);
 
     if (!whole || FAILED(IDirectDrawSurface7_GetDC(whole, &dc)))
@@ -1204,7 +1210,13 @@ static VOID PresentFullscreen(PPRESENT_DDRAW presenter)
         sharpDestination.right = fitX + fitWidth;
         sharpDestination.bottom = fitY + fitHeight;
 
-        if (isSharp && PresentSharpOnCard(presenter, back, &sharpDestination, pixels, &dib, sourceWidth, sourceHeight))
+        if (isSharp && PresentSharpOnCard(presenter, back, &sharpDestination, pixels, &dib, sourceWidth, sourceHeight, TRUE))
+        {
+            isDone = 1;
+        }
+        else if (presenter->Filter == PRESENT_FILTER_BILINEAR
+                 && (fitWidth % sourceWidth != 0 || fitHeight % sourceHeight != 0)
+                 && PresentSharpOnCard(presenter, back, &sharpDestination, pixels, &dib, sourceWidth, sourceHeight, FALSE))
         {
             isDone = 1;
         }
