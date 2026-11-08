@@ -1030,6 +1030,12 @@ VOID Irq0PmUnclaim(VOID)
  * clock (QPF 2,992,520 kHz on the Q9650, runs/s104/tsc) and shares every fault of one, so the
  * reference is the kernel's interrupt time, in shared memory: no system call, and it ticks at the
  * 1 ms the host's timeBeginPeriod asks for. The slew in tsc_clock.c smooths that tick.
+ *
+ * [CAUTION]: BUT ONLY WHEN THE HOST IS NOT ON ONE DIE. Each thread has its own clock, and the video
+ * latch compares times from the guest thread and the UI thread. Anchored to a 1 ms tick, the two
+ * disagreed by enough to latch Mario's coarse scroll a frame before its fine scroll: a capture on
+ * the Q9650 stepped -2 -2 -10 +6 pixels, over and over (runs/s105/cap). On one die the TSC behind
+ * QPC is one counter, measured 9 us apart across its two cores (runs/s104/tsc), so QPC is used.
  */
 static UINT64 HostInterruptTimeMicroseconds(VOID)
 {
@@ -1060,7 +1066,7 @@ static UINT64 HostTimeReferenceMicroseconds(VOID)
         QueryPerformanceCounter(&base);
     }
 
-    if (frequency.QuadPart >= HOST_CLOCK_QPC_TSC_HZ)
+    if (frequency.QuadPart >= HOST_CLOCK_QPC_TSC_HZ && !g_CpuDieMask)
         return HostInterruptTimeMicroseconds();
 
     QueryPerformanceCounter(&now);
