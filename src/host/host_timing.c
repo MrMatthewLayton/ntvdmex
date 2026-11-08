@@ -1056,6 +1056,7 @@ static UINT64 HostTimeReferenceMicroseconds(VOID)
 {
     static LARGE_INTEGER frequency;
     static LARGE_INTEGER base;
+    static UINT64 baseMicroseconds;
     LARGE_INTEGER now;
 
     if (!frequency.QuadPart)
@@ -1064,13 +1065,18 @@ static UINT64 HostTimeReferenceMicroseconds(VOID)
             return HostInterruptTimeMicroseconds();
 
         QueryPerformanceCounter(&base);
+        baseMicroseconds = HostInterruptTimeMicroseconds();
     }
 
     if (frequency.QuadPart >= HOST_CLOCK_QPC_TSC_HZ && !g_CpuDieMask)
         return HostInterruptTimeMicroseconds();
 
+    /* From the interrupt time at the same instant, so the one switch, when the die is chosen, moves
+     * the reference by at most a tick. From 0 it fell back by the uptime, and the never-backwards
+     * clamp froze every thread's clock (vbl_edges 0-2, runs/s105/lt1).
+     */
     QueryPerformanceCounter(&now);
-    return (UINT64)(((now.QuadPart - base.QuadPart) * MICROSECONDS_PER_SECOND) / frequency.QuadPart);
+    return baseMicroseconds + (UINT64)(((now.QuadPart - base.QuadPart) * MICROSECONDS_PER_SECOND) / frequency.QuadPart);
 }
 
 UINT64 HostTimeMicroseconds(VOID)
