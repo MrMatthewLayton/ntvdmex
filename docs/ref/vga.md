@@ -200,8 +200,22 @@ disappear from the bus.
 | SR0 | Reset | 0 = synchronous reset (active low), 1 = asynchronous reset (active low) |
 | SR1 | Clocking Mode | see below |
 | SR2 | Map Mask | 3:0 — enable writes to planes 3..0 |
-| SR3 | Character Map Select | selects font maps A and B out of eight |
+| SR3 | Character Map Select | selects font maps A and B out of eight -- see below |
 | SR4 | Memory Mode | see below |
+
+### SR3 — Character Map Select
+
+Source: the IBM VGA Technical Reference (PS/2 Hardware Interface Technical Reference,
+Sequencer, "Character Map Select Register"); added for #185. A reference value, not a
+measurement.
+
+| Bits | Meaning |
+|---|---|
+| 5, 3, 2 | Map A: the font block (0-7) for a character whose attribute bit 3 is **1** |
+| 4, 1, 0 | Map B: the font block (0-7) for a character whose attribute bit 3 is **0** |
+
+With map A = map B (power-on `00h`) attribute bit 3 selects nothing and is only colour;
+with them different, the screen can show 512 distinct characters.
 
 ### SR1 — Clocking Mode
 

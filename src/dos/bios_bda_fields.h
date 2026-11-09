@@ -26,12 +26,15 @@
 /* The equipment word's bits (INT 11h). */
 #define BIOS_EQUIPMENT_FLOPPY               0x0001
 #define BIOS_EQUIPMENT_FPU                  0x0002
+#define BIOS_EQUIPMENT_POINTING_DEVICE      0x0004      /* Bit 2: a PS/2 pointing device (#199) */
 #define BIOS_EQUIPMENT_VIDEO_80X25_COLOUR   0x0020
 #define BIOS_EQUIPMENT_SERIAL_MASK_U        0x0E00u     /* Bits 9-11: how many serial ports */
 #define BIOS_EQUIPMENT_SERIAL_SHIFT         9
 #define BIOS_EQUIPMENT_SERIAL_COUNT_MASK    7
 #define BIOS_EQUIPMENT_GAMEPORT             0x1000
-#define BIOS_EQUIPMENT_ONE_PARALLEL         0x4000      /* Bits 14-15 = 1 */
+#define BIOS_EQUIPMENT_PARALLEL_MASK_U      0xC000u     /* Bits 14-15: how many parallel ports */
+#define BIOS_EQUIPMENT_PARALLEL_SHIFT       14
+#define BIOS_EQUIPMENT_PARALLEL_COUNT_MASK  3
 #define BIOS_BDA_MEMORY_KB                  0x13        /* WORD: base memory in KB, = INT 12h */
 #define BIOS_BDA_SHIFT_FLAGS                0x17        /* Shift/ctrl/alt + lock state (INT 16h AH=02) */
 #define BIOS_BDA_SHIFT_FLAGS2               0x18        /* Extended shift flags (INT 16h AH=12) */
@@ -40,6 +43,18 @@
 #define BIOS_BDA_KEYBOARD_TAIL              0x1C
 #define BIOS_BDA_KEYBOARD_BUFFER            0x1E        /* 16 entries, 2 bytes each -- POST's bounds */
 #define BIOS_BDA_KEYBOARD_BUFFER_END        0x3E        /* One past the last entry -- POST's bounds */
+
+/* #178: the diskette service's own state (IBM PC/AT Technical Reference, DSKETTE). */
+#define BIOS_BDA_DISKETTE_RECALIBRATE       0x3E        /* Bit per drive: recalibrated; bit 7: the IRQ6 flag */
+#define BIOS_BDA_DISKETTE_MOTOR_STATUS      0x3F        /* Bits 0-3: motor on per drive; bit 7: a write */
+#define BIOS_BDA_DISKETTE_MOTOR_COUNT       0x40        /* Ticks until the motors go off */
+#define BIOS_BDA_DISKETTE_STATUS            0x41        /* The last operation's status (INT 13h AH) */
+#define BIOS_BDA_DISKETTE_RESULT            0x42        /* The controller's 7 result bytes: ST0 ST1 ST2 C H R N */
+#define BIOS_BDA_DISKETTE_RESULT_BYTES      7
+#define BIOS_DISKETTE_MOTOR_BITS            0x0F
+#define BIOS_DISKETTE_MOTOR_WRITE           0x80
+#define BIOS_DISKETTE_RECALIBRATE_IRQ       0x80
+#define BIOS_DISKETTE_MOTOR_WAIT            37          /* ~2 s of ticks: the AT BIOS's MOTOR_WAIT (25h) */
 #define BIOS_BDA_VIDEO_MODE                 0x49
 #define BIOS_BDA_VIDEO_COLUMNS              0x4A
 #define BIOS_BDA_VIDEO_COLUMNS_HIGH         0x4B
@@ -70,6 +85,7 @@
 #define BIOS_BDA_EGA_SWITCHES               0x88
 #define BIOS_BDA_VGA_FLAGS                  0x89
 #define BIOS_BDA_KEYBOARD_FLAGS3            0x96
+#define BIOS_BDA_KEYBOARD_LED_FLAGS         0x97        /* Bits 0-2 LEDs, 4 ACK seen, 5 RESEND seen (IBM PC/AT TR) */
 #define BIOS_BDA_WAIT_FLAG_POINTER          0x98        /* INT 15h AH=83h: the flag's far pointer */
 #define BIOS_BDA_WAIT_FLAG_SEGMENT          0x9A
 #define BIOS_BDA_WAIT_COUNT                 0x9C        /* DWORD: microseconds left */

@@ -118,7 +118,7 @@ DpmiEnterProtectedMode:
     lss  esp, cs:[g_gsp]            /* guest SS:ESP */
     jmp  fword ptr cs:[g_gip]       /* far jmp to guest CS:EIP */
 
-    /* --- interrupt-pending: report event 3 and return without entering --- */
+    /* --- interrupt-pending: report event 3 (DPMI_ENTER_EVENT_PENDING, dpmi.h) and return without entering --- */
 2:  mov  word ptr [ebx + 0x5A8], 3
     mov  word ptr [ebx + 0x5AC], 0
     mov  word ptr [ebx + 0x5B0], 0

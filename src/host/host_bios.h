@@ -31,7 +31,7 @@ VOID ComTransmitSink(PVOID context, INT port, BYTE byteValue);
 WORD BiosEquipmentWord(VOID);
 VOID BiosBdaRefreshEquipment(VOID);
 VOID SerialInitialize(VOID);
-INT LptSpoolPut(BYTE character);
+INT LptSpoolPut(INT port, BYTE character);
 VOID LptTransmitSink(PVOID context, INT port, BYTE byteValue);
 INT KeyboardActionEntry(INT keyboardAction);
 INT Int15Hooked(VOID);

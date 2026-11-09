@@ -26,14 +26,25 @@
 #define HOST_MODULE_NETAPI32                    "netapi32.dll"
 #define HOST_MODULE_WINMM                       "winmm.dll"
 #define HOST_MODULE_UXTHEME                     "uxtheme.dll"
+#define HOST_MODULE_WS2_32                      "ws2_32.dll"        /* #315: IPX, loaded on first 7A00h */
 #define HOST_EXPORT_ADD_VECTORED_EXCEPTION_HANDLER "AddVectoredExceptionHandler"
 #define HOST_EXPORT_ATTACH_CONSOLE              "AttachConsole"
 #define HOST_EXPORT_REGISTER_RAW_INPUT_DEVICES  "RegisterRawInputDevices"
 #define HOST_EXPORT_GET_RAW_INPUT_DATA          "GetRawInputData"
 #define HOST_EXPORT_NETBIOS                     "Netbios"
+#define HOST_EXPORT_WSA_STARTUP                 "WSAStartup"
+#define HOST_EXPORT_SOCKET                      "socket"
+#define HOST_EXPORT_BIND                        "bind"
+#define HOST_EXPORT_CLOSE_SOCKET                "closesocket"
+#define HOST_EXPORT_SEND_TO                     "sendto"
+#define HOST_EXPORT_RECEIVE_FROM                "recvfrom"
+#define HOST_EXPORT_IOCTL_SOCKET                "ioctlsocket"
+#define HOST_EXPORT_SET_SOCKET_OPTION           "setsockopt"
+#define HOST_EXPORT_GET_SOCKET_NAME             "getsockname"
 #define HOST_EXPORT_NT_QUERY_INFORMATION_PROCESS "NtQueryInformationProcess"
 #define HOST_EXPORT_TIME_SET_EVENT              "timeSetEvent"
 #define HOST_EXPORT_TIME_BEGIN_PERIOD           "timeBeginPeriod"
+#define HOST_EXPORT_GET_LOGICAL_PROCESSOR_INFORMATION "GetLogicalProcessorInformation"
 #define HOST_EXPORT_JOY_GET_POS_EX              "joyGetPosEx"
 #define HOST_EXPORT_ENABLE_THEME_DIALOG_TEXTURE "EnableThemeDialogTexture"
 #define HOST_EXPORT_SHIM_INIT                   "NtvdmexShimInit"   /* Each WOW shim DLL's entry */
@@ -67,6 +78,7 @@
 #define HOST_PROGRAM_NONE                       "(none)"            /* The status strip before a program */
 #define HOST_STOCK_NTVDM_NAME                   "ntvdm.exe"         /* Windows' own VDM, looked for by process name */
 #define HOST_FLOPPY_A_ROOT                      "A:\\"
+#define HOST_FLOPPY_A_DEVICE                    "\\\\.\\A:"         /* #240: the drive itself, for INT 13h */
 #define HOST_FLOPPY_B_ROOT                      "B:\\"
 #define HOST_SHIM_SUBDIRECTORY                  "bin\\wowshim\\"
 #define HOST_SCREENSHOT_EXTENSION               ".bmp"              /* #155: <program>-<time>.bmp */
@@ -161,14 +173,22 @@
 #define SETTINGS_TITLE_SHELL    "Choose the DOS prompt's COMMAND.COM"
 #define SETTINGS_FILTER_FLOPPY      "Floppy disk images (*.img;*.ima;*.flp)\0*.img;*.ima;*.flp\0" \
                                     "All files (*.*)\0*.*\0"
-#define SETTINGS_TITLE_FLOPPY       "Choose a floppy disk image"
-#define SETTINGS_FILTER_ISO         "ISO disk images (*.iso)\0*.iso\0All files (*.*)\0*.*\0"
-#define SETTINGS_TITLE_ISO          "Choose an ISO disk image"
-#define SETTINGS_FILTER_SOUNDFONT   "SoundFonts (*.sf2)\0*.sf2\0All files (*.*)\0*.*\0"
-#define SETTINGS_TITLE_SOUNDFONT    "Choose a SoundFont"
-#define SETTINGS_TITLE_CAPTURE      "Choose the folder for screenshots and recordings"
-#define SETTINGS_TEXT_UNCOMPRESSED  "Uncompressed (full frames)"
-#define SETTINGS_FOURCC_LOWER_CASE  0x20202020u     /* ORed in: A-Z become a-z, digits stay */
+#define SETTINGS_TITLE_FLOPPY           "Choose a floppy disk image"
+#define SETTINGS_FILTER_ISO             "ISO disk images (*.iso)\0*.iso\0All files (*.*)\0*.*\0"
+#define SETTINGS_TITLE_ISO              "Choose an ISO disk image"
+#define SETTINGS_FILTER_SOUNDFONT       "SoundFonts (*.sf2)\0*.sf2\0All files (*.*)\0*.*\0"
+#define SETTINGS_TITLE_SOUNDFONT        "Choose a SoundFont"
+#define SETTINGS_FILTER_TEXTFONT        "Fonts (*.ttf;*.otf;*.ttc;*.fon)\0*.ttf;*.otf;*.ttc;*.fon\0All files (*.*)\0*.*\0"
+#define SETTINGS_TITLE_TEXTFONT         "Choose a font file for text mode"
+#define SETTINGS_TITLE_CAPTURE          "Choose the folder for screenshots and recordings"
+#define SETTINGS_TEXT_UNCOMPRESSED      "Uncompressed (full frames)"
+#define SETTINGS_FSRES_DESKTOP_FORMAT   "Desktop (%lu x %lu)"       /* #331: fullscreen keeps the desktop's mode */
+#define SETTINGS_FSRES_NATIVE_FORMAT    "Native (%lu x %lu)"        /* #331: the largest at the desktop's refresh */
+#define SETTINGS_FSRES_MODE_FORMAT      "%lu x %lu"
+#define SETTINGS_FSRES_TEXT_SIZE        48
+#define SETTINGS_LETTER_AUTOMATIC       "Automatic (first free)"    /* s101: an image's drive letter */
+#define SETTINGS_LETTER_TEXT            "A:"
+#define SETTINGS_FOURCC_LOWER_CASE      0x20202020u                 /* ORed in: A-Z become a-z, digits stay */
 #define SETTINGS_FONT_CODE_PAGE_FORMAT "This font draws code page %d, not 437: some line-drawing characters " \
                                     "will show as letters."
 #define SETTINGS_SOURCE_CONV_KB         "a program too big for it"  /* Why conventional memory was capped */
@@ -183,6 +203,9 @@
 #define SETTINGS_FONT_PARTIAL_FORMAT    "%d of 253 characters come from this font; the rest from the default."
 #define SETTINGS_FONT_NO_8_PIXEL        "This font has no 8-pixel-wide size, so the default is used."
 #define SETTINGS_FONT_MISSING           "This font is not installed on this computer, so the default is used."
+#define SETTINGS_FONT_NO_FILE           "This font file could not be opened, so the default is used."
+#define SETTINGS_FONT_NOT_FONT          "This is not a TrueType, OpenType or .fon font Windows can use, so the default is used."
+#define SETTINGS_FONT_FACE_FORMAT       "%s: " /* A font file's face name, before what it supplies */
 #define SETTINGS_FONT_437_MISSING       " Warning: a code page 437 font file is missing; line drawing may be wrong."
 #define SETTINGS_FONT_SAMPLE_TEXT       "Hello, DOS!  0123456789  "
 

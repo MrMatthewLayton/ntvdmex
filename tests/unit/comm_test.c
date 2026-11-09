@@ -61,6 +61,8 @@ static INT g_IrqCounts[16];
 static BYTE g_PrinterBytes[CAP];
 static INT     g_PrinterCount;
 
+static INT g_PrinterPort = -1;
+
 static VOID CommTestSink(PVOID context, INT port, BYTE byteValue)
 {
     (VOID)context;
@@ -81,7 +83,7 @@ static VOID CommTestIrqSink(PVOID context, BYTE irq)
 static VOID CommTestPrinterSink(PVOID context, INT port, BYTE byteValue)
 {
     (VOID)context;
-    (VOID)port;
+    g_PrinterPort = port;
 
     if (g_PrinterCount < CAP)
         g_PrinterBytes[g_PrinterCount++] = byteValue;
@@ -131,6 +133,8 @@ INT main(VOID)
     g_Comm.Ports[3].IsFitted = 1;   /* COM4 */
     g_Comm.Printers[0].BasePort = 0x378;
     g_Comm.Printers[0].IsFitted = 1;
+    g_Comm.Printers[1].BasePort = 0x3BC;          /* #311: a second printer */
+    g_Comm.Printers[1].IsFitted = 1;
     g_Comm.Sink = CommTestSink;
     g_Comm.SinkContext = 0;
     g_Comm.PrinterSink = CommTestPrinterSink;
@@ -485,6 +489,14 @@ INT main(VOID)
     wr8(0x378, 'Q');
     wr8(0x37A, LPT_CONTROL_STROBE);
     CHECK(g_PrinterCount == 2 && g_PrinterBytes[1] == 'Q', "the next latch+strobe prints the next byte");
+    CHECK(g_PrinterPort == 0, "...and the sink is told it came from printer 0");
+
+    /* #311: more than one printer, each at its own base. */
+    wr8(0x3BC, 'R');
+    wr8(0x3BE, LPT_CONTROL_STROBE);
+    CHECK(g_PrinterCount == 3 && g_PrinterBytes[2] == 'R' && g_PrinterPort == 1, "a second printer at 3BCh prints, as printer 1");
+    CHECK(VddLptIndexOfBase(&g_Comm, 0x3BC) == 1 && VddLptIndexOfBase(&g_Comm, 0x378) == 0, "LPT base -> slot");
+    CHECK(VddLptIndexOfBase(&g_Comm, 0x278) == -1 && VddLptIndexOfBase(&g_Comm, 0) == -1, "an unfitted base, or 0, is no printer");
 
     /* [CAUTION]: In a dialect scripts/offvm.sh parses. This line used to read "N/M checks
      * passed", which the runner does not know -- so the whole battery ran on

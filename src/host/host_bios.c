@@ -11,7 +11,10 @@
  * Copyright (c) 2026 Matthew Layton
  */
 
+#include "host_cdrom.h"
+#include "dos_ctab.h"   /* INT 2Fh 1213h upper-cases through the country table */
 #include "host_bios.h"
+#include "host_ipx.h"
 #include "host_state.h"
 #include "log.h"
 #include "bios_kbdact.h"
@@ -37,9 +40,10 @@ static HANDLE g_Serial = INVALID_HANDLE_VALUE;
  * status check, and no file existed. Same list bites CON, PRN, AUX, NUL and
  * COM1-9. The name below is deliberately not on it.
  */
-static HANDLE g_Lpt = INVALID_HANDLE_VALUE;
-static INT    g_LptFailed = 0;      /* opened once and could not: stop retrying */
-#define LPT_SPOOL_PATH  OUT_("PRINTOUT.TXT")
+/* #311: one spool per printer. LPT1 keeps the name it always had. */
+static HANDLE g_Lpt[LPT_MAX_PORTS] = { INVALID_HANDLE_VALUE, INVALID_HANDLE_VALUE, INVALID_HANDLE_VALUE };
+static INT    g_LptFailed[LPT_MAX_PORTS];      /* opened once and could not: stop retrying */
+static PCSTR const g_LptSpoolNames[LPT_MAX_PORTS] = { "PRINTOUT.TXT", "PRINTOUT2.TXT", "PRINTOUT3.TXT" };
 
 /* GH #9: WHAT THE GUEST'S COM PORTS TRANSMIT INTO:
  * The same spool shape as LPT1 above, and for the same reason: a file is a
@@ -108,7 +112,7 @@ VOID ComTransmitSink(PVOID context, INT port, BYTE byteValue)
  * base table that cost COMM.DRV a session -- the wrong half was just being
  * read out of a comment rather than out of memory.
  * So derive the serial count from the VDD that actually claimed the ports.
- * bit0 floppy present, bits4-5 video (10b = 80x25 colour), bits6-7 floppy
+ * bit0 floppy present, bit2 PS/2 mouse (#199), bits4-5 video (10b = 80x25 colour), bits6-7 floppy
  * count-1, bits9-11 serial ports, bits14-15 parallel ports, bit1 coprocessor
  * (CLEAR -- krnl386 reads bit 1 at start-up and its coprocessor answer
  * follows it, so the two modes must not disagree; sharing one function is now
@@ -123,15 +127,18 @@ static INT g_FpuPresent = 1;
 
 WORD BiosEquipmentWord(VOID)
 {
-    WORD equipment = BIOS_EQUIPMENT_ONE_PARALLEL | BIOS_EQUIPMENT_VIDEO_80X25_COLOUR | BIOS_EQUIPMENT_FLOPPY;                      /* floppy, 80x25 colour, 1 parallel */
     INT portCount = 0;
+    INT printerCount = 0;
     INT index;
 
     for (index = 0; index < COMM_MAX_PORTS; ++index)
         if (VddCommIsFitted(&g_Comm, index))
             ++portCount;
 
-    equipment = (WORD)((equipment & ~BIOS_EQUIPMENT_SERIAL_MASK_U) | ((DWORD)(portCount & BIOS_EQUIPMENT_SERIAL_COUNT_MASK) << BIOS_EQUIPMENT_SERIAL_SHIFT));
+    for (index = 0; index < LPT_MAX_PORTS; ++index)                          /* #311: stock counts three */
+        if (VddLptIsFitted(&g_Comm, index))
+            ++printerCount;
+
     /* BIT 1 IS "A MATH COPROCESSOR IS INSTALLED", AND IT WAS ALWAYS CLEAR.
      * (session 57, GH #136) The guest runs 16-bit code on the REAL CPU, which
      * has had an FPU since the 486DX -- so answering "no coprocessor" was not
@@ -143,18 +150,13 @@ WORD BiosEquipmentWord(VOID)
      * makes it mean something. Unticking it now tells the guest what the host
      * used to tell it unconditionally, which is a real configuration -- a
      * program can be forced onto its emulator to compare the two.
-     */
-    if (g_FpuPresent)
-        equipment |= BIOS_EQUIPMENT_FPU;
-
-    /* Bit 12: game adapter installed. The CARD exists iff the JoystickType
+     *
+     * Bit 12: game adapter installed. The CARD exists iff the JoystickType
      * setting says so; whether a stick is plugged into it is the port's
      * business (an empty gameport still answers), not the equipment word's.
+     * Bit 2 (the PS/2 mouse) and the rest: BiosEquipmentCompose (bios_bda.h).
      */
-    if (g_Joystick.Type != JOYSTICK_TYPE_NONE)
-        equipment |= BIOS_EQUIPMENT_GAMEPORT;
-
-    return equipment;
+    return BiosEquipmentCompose(portCount, printerCount, g_FpuPresent, g_Joystick.Type != JOYSTICK_TYPE_NONE);
 }
 
 enum
@@ -246,30 +248,32 @@ VOID SerialOut(PCSTR buffer, PCSTR end)
     }
 }
 
-/* One printer, reachable two ways. INT 17h and the 0x378 data/strobe registers
- * are the SAME LPT1 -- a guest may use either, and some use both in one run --
- * so they must share the spool rather than open it twice. Returns 0 if the byte
- * went nowhere, which is what lets INT 17h report an I/O error instead of the
- * ready status that once made the whole feature look like it worked.
+/* One printer, reachable two ways. INT 17h and the data/strobe registers are the SAME
+ * printer -- a guest may use either, and some use both in one run -- so they must share
+ * the spool rather than open it twice. #311: there are three, LPT1-LPT3 (`port` 0-2).
+ * Returns 0 if the byte went nowhere, which is what lets INT 17h report an I/O error
+ * instead of the ready status that once made the whole feature look like it worked.
  */
-INT LptSpoolPut(BYTE character)
+INT LptSpoolPut(INT port, BYTE character)
 {
     DWORD bytesWritten = 0;
 
-    if (g_LptFailed)
+    if (port < 0 || port >= LPT_MAX_PORTS || g_LptFailed[port])
         return 0;
 
-    if (g_Lpt == INVALID_HANDLE_VALUE)
+    if (g_Lpt[port] == INVALID_HANDLE_VALUE)
     {
-        g_Lpt = CreateFileA(LPT_SPOOL_PATH, GENERIC_WRITE, FILE_SHARE_READ, NULL,
-                            CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
+        g_Lpt[port] = CreateFileA(OUT_(g_LptSpoolNames[port]), GENERIC_WRITE, FILE_SHARE_READ, NULL,
+                                  CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
 
-        if (g_Lpt == INVALID_HANDLE_VALUE)
+        if (g_Lpt[port] == INVALID_HANDLE_VALUE)
         {
             CHAR lineBuffer[128];
             CHAR *lineCursor = lineBuffer;
-            g_LptFailed = 1;
-            lineCursor = LogPut(lineCursor, "  LPT1 spool OPEN FAILED err=0x");
+            g_LptFailed[port] = 1;
+            lineCursor = LogPut(lineCursor, "  LPT spool OPEN FAILED port=");
+            lineCursor = LogHex(lineCursor, (DWORD)port);
+            lineCursor = LogPut(lineCursor, " err=0x");
             lineCursor = LogHex(lineCursor, GetLastError());
             lineCursor = LogPut(lineCursor, " -> reporting I/O error, not ready\r\n");
             LogAppend(LOG_PATH, lineBuffer, lineCursor); SerialOut(lineBuffer, lineCursor);
@@ -277,16 +281,15 @@ INT LptSpoolPut(BYTE character)
         }
     }
 
-    WriteFile(g_Lpt, &character, 1, &bytesWritten, NULL);
-    FlushFileBuffers(g_Lpt);          /* the run may be killed, not exited */
+    WriteFile(g_Lpt[port], &character, 1, &bytesWritten, NULL);
+    FlushFileBuffers(g_Lpt[port]);          /* the run may be killed, not exited */
     return 1;
 }
 
 VOID LptTransmitSink(PVOID context, INT port, BYTE byteValue)
 {
     (VOID)context;
-    (VOID)port;
-    LptSpoolPut(byteValue);
+    LptSpoolPut(port, byteValue);
 }
 
 /* #254: which bios_kbdact.asm entry a KB_ACT_* runs, or -1 for none.
@@ -363,15 +366,11 @@ enum
  * hand back the first byte. next: judge INT 17h's AH, hand back the next byte. At the
  * end the cursor goes back, every saved register is restored, CF=1.
  *
- * [WARNING]: THE STATUS BYTE IS NOT AT 0050:0000 HERE, AND CANNOT BE WITHOUT A LAYOUT CHANGE.
- * 0050:0000 is DOS_HDLR_SEG:0000 -- the first byte of OUR INT 21h stub (`C4 C4 20 CF`,
- * IVT[21h] = 0050:0000). Writing the IBM status values there (01h busy, 00h done) would
- * turn every INT 21h into garbage the moment someone pressed Print Screen. So the
- * status lives in g_PrintScreenStatus (same values, same meaning) and the guest reads C4h
- * at 0050:0000. [CAUTION] The converse hazard predates this: a program that DISABLES print
- * screen the classic way, `mov byte [0050:0000],1`, overwrites our INT 21h stub. Moving
- * the stub off 0050:0000 is its own change (IVT[21h], the PM INT 21h paths, WOW) --
- * filed in the #274 report, not done in passing.
+ * #317: THE STATUS BYTE IS AT 0050:0000, AS THE IBM ROUTINE KEEPS IT. Our INT 21h stub
+ * used to sit there; it moved to DOS_HDLR_INT21_STUB_OFF. So the byte means what software
+ * expects: 01h while printing (a nested INT 05h returns at once), 00h done, FFh error --
+ * and a program that disables Print Screen the classic way, `mov byte [0050:0000],1`,
+ * now does exactly that. g_PrintScreenStatus mirrors it for the run report.
  */
 static BIOS_PRINT_SCREEN_JOB g_PrintScreen;
 static DWORD      g_PrintScreenSaved[PRINT_SCREEN_SAVED_REGISTERS];
@@ -410,9 +409,10 @@ static VOID PrintScreenBop(volatile BYTE *tib, INT begin)
     {
         NTVDD_REGISTERS registers;
 
-        if (g_PrintScreen.IsActive)
+        if (g_PrintScreen.IsActive
+            || *(volatile BYTE *)(ULONG_PTR)BIOS_PRINT_SCREEN_STATUS_LINEAR == BIOS_PRINT_SCREEN_STATUS_BUSY)
         {
-            VDM_REG(tib, VTIB_EFLAGS) |= EFLAGS_CF_U;
+            VDM_REG(tib, VTIB_EFLAGS) |= EFLAGS_CF_U;                /* printing, or disabled by a program */
             return;
         }
 
@@ -420,6 +420,7 @@ static VOID PrintScreenBop(volatile BYTE *tib, INT begin)
             g_PrintScreenSaved[index] = VDM_REG(tib, savedRegisters[index]);
 
         g_PrintScreenStatus = BIOS_PRINT_SCREEN_STATUS_BUSY;
+        *(volatile BYTE *)(ULONG_PTR)BIOS_PRINT_SCREEN_STATUS_LINEAR = BIOS_PRINT_SCREEN_STATUS_BUSY;
         ZeroMemory(&registers, sizeof registers);
         registers.Eax = VIDEO_FUNCTION_GET_MODE << BYTE_SHIFT;
         PrintScreenInt10(&registers);               /* AH = columns, BH = page */
@@ -460,6 +461,7 @@ static VOID PrintScreenBop(volatile BYTE *tib, INT begin)
         registers.Edx = g_PrintScreen.Cursor;
         PrintScreenInt10(&registers); }
     g_PrintScreenStatus = (status == BIOS_PRINT_SCREEN_STEP_ERROR) ? BIOS_PRINT_SCREEN_STATUS_ERROR : BIOS_PRINT_SCREEN_STATUS_OK;
+    *(volatile BYTE *)(ULONG_PTR)BIOS_PRINT_SCREEN_STATUS_LINEAR = g_PrintScreenStatus;
 
     if (status == BIOS_PRINT_SCREEN_STEP_ERROR)
         ++g_PrintScreenErrors;
@@ -658,7 +660,78 @@ VOID RegistersStore(NTVDD_REGISTERS *registers, volatile BYTE *tib)
  * (serviced, still WAITING -- EIP left on the BOP so it re-executes: INT 16h AH=00h
  * with no key, INT 15h AH=86h mid-countdown).
  */
-#define V86BOP_RET(v)               do { *logCursor = cursor; return (v); } while (0)
+/* #178: WHAT THE DISKETTE SERVICE LEAVES BEHIND. INT 13h reads the image directly, but
+ * the IBM BIOS it stands in for (PC/AT Technical Reference, DSKETTE; docs/ref/fdc.md 10)
+ * drives the 82077AA and keeps a record in 0040:003E-0048 that software reads back --
+ * and the head it moved is where the chip's own commands find it afterwards.
+ * C/H/R and `count` are what was asked for; `isOk` whether every sector moved.
+ */
+static VOID BiosDisketteRecord(
+    UINT drive,
+    PDOS_DISK_GEOMETRY geometry,
+    UINT cylinder,
+    UINT head,
+    UINT sector,
+    UINT count,
+    BYTE status,
+    INT isWrite,
+    INT isOk)
+{
+    volatile BYTE *bda = (volatile BYTE *)(ULONG_PTR)BIOS_BDA_BASE;
+    DWORD perCylinder = (DWORD)geometry->Heads * geometry->SectorsPerTrack;
+
+    if (drive >= FDC_DRIVES || !perCylinder)
+        return;
+
+    if (isOk && count > 1)                                  /* where the LAST sector was */
+    {
+        DWORD lastLba = ((DWORD)cylinder * perCylinder) + ((DWORD)head * geometry->SectorsPerTrack) + (sector - 1) + (count - 1);
+        cylinder = (UINT)(lastLba / perCylinder);
+        head = (UINT)((lastLba / geometry->SectorsPerTrack) % geometry->Heads);
+        sector = (UINT)(lastLba % geometry->SectorsPerTrack) + 1;
+    }
+
+    if (cylinder < geometry->Cylinders)
+        VddFdcSetCylinder(&g_Fdc, (BYTE)drive, (BYTE)cylinder);    /* the head stays where it read */
+
+    bda[BIOS_BDA_DISKETTE_RECALIBRATE] = (BYTE)((bda[BIOS_BDA_DISKETTE_RECALIBRATE] | (1u << drive)) & ~BIOS_DISKETTE_RECALIBRATE_IRQ);
+    bda[BIOS_BDA_DISKETTE_MOTOR_STATUS] = (BYTE)((bda[BIOS_BDA_DISKETTE_MOTOR_STATUS] & BIOS_DISKETTE_MOTOR_BITS & ~BIOS_DISKETTE_MOTOR_WRITE)
+                                                 | (1u << drive) | (isWrite ? BIOS_DISKETTE_MOTOR_WRITE : 0));
+    bda[BIOS_BDA_DISKETTE_MOTOR_COUNT] = BIOS_DISKETTE_MOTOR_WAIT;
+    bda[BIOS_BDA_DISKETTE_STATUS] = status;
+
+    /* The seven result bytes the chip would have handed back: the BIOS reads with MT set
+     * and EOT = the last sector, so a good read ends one sector on (side 1 after side 0's
+     * last, the next cylinder after side 1's); a failed one names the sector it wanted.
+     */
+    if (isOk)
+    {
+        if (sector < geometry->SectorsPerTrack)
+            ++sector;
+        else if (head == 0 && geometry->Heads > 1)
+        {
+            head = 1;
+            sector = 1;
+        }
+        else
+        {
+            ++cylinder;
+            head = 0;
+            sector = 1;
+        }
+    }
+
+    {   volatile BYTE *result = bda + BIOS_BDA_DISKETTE_RESULT;           /* ST0 ST1 ST2 C H R N */
+        *result++ = (BYTE)((isOk ? FDC_ST0_NORMAL : FDC_ST0_ABNORMAL) | (head << FDC_HEAD_SHIFT) | drive);
+        *result++ = (BYTE)(isOk ? 0 : FDC_ST1_NO_DATA);
+        *result++ = FDC_ST2_CLEAR;
+        *result++ = (BYTE)cylinder;
+        *result++ = (BYTE)head;
+        *result++ = (BYTE)sector;
+        *result = FDC_SIZE_CODE_512; }
+}
+
+#define V86BOP_RET(v)   do { *logCursor = cursor; return (v); } while (0)
 INT V86BiosBop(volatile BYTE *tib, UINT bopNumber, PSTR *logCursor, PSTR base)
 {
     PSTR cursor = *logCursor;
@@ -1014,6 +1087,16 @@ INT V86BiosBop(volatile BYTE *tib, UINT bopNumber, PSTR *logCursor, PSTR base)
                     BCF_SET();
                 }
             }
+            else if (int15Ah == BIOS_SYSTEM_POINTING_DEVICE)           /* PS/2 mouse BIOS (#199) */
+            {
+                BYTE pointingStatus = Ps2BiosService(tib);
+                BSETAX((WORD)((pointingStatus << BYTE_SHIFT) | (VDM_REG(tib, VTIB_EAX) & BYTE_MASK)));
+
+                if (pointingStatus)
+                    BCF_SET();
+                else
+                    BCF_CLR();
+            }
             else if (int15Ah == BIOS_SYSTEM_GET_EBDA)           /* EBDA segment (#253) */
             {
                 /* ES = the EBDA, CF=0, AX untouched -- as SeaBIOS answers it
@@ -1118,25 +1201,29 @@ INT V86BiosBop(volatile BYTE *tib, UINT bopNumber, PSTR *logCursor, PSTR base)
              * Every DX was LPT1. A BIOS finds printer DX's port in 0040:0008+2*DX
              * and, if there is none (or DX > 2), returns AT ONCE with every register
              * as passed -- p_int17: 6.22/SeaBIOS, DOSBox-X and PCem's AMI agree on
-             * LPT3 and DX=3. Only our one fitted port (378h) is backed, so a guest
+             * LPT3 and DX=3. A table entry that names a fitted port is backed; a guest
              * that moved a base elsewhere in the table gets "absent" too.
+             * #311: we now fit stock XP's THREE (3BCh, 378h, 278h), so DX=2 is present
+             * here where the emulator oracles (one or two ports) say absent -- the same
+             * call as #245 made for COM3/COM4: stock defines "ntvdm superset".
              * - An unknown AH also leaves AX as passed (SeaBIOS, DOSBox-X). PCem's AMI
              *   answers the status for it instead -- disputed, recorded in
              *   oracle-rules.json; "ready" for a call that does nothing was neither.
              */
             WORD base17 = (int17Dx < BIOS_BDA_LPT_PORTS) ? *(volatile WORD *)(ULONG_PTR)(BIOS_BDA_BASE + BIOS_BDA_LPT_BASES + X86_WORD_SIZE * int17Dx) : 0;
+            INT printer17 = VddLptIndexOfBase(&g_Comm, base17);       /* #311: whichever fitted port the table names */
 
-            if (base17 != LPT_DEFAULT_BASE || !VddLptIsFitted(&g_Comm, 0))
+            if (printer17 < 0)
             {
                 /* absent printer: nothing, registers as passed */
             }
             else if (int17Ah == BIOS_PRINTER_PRINT)           /* print AL */
             {
                 BYTE character = (BYTE)(VDM_REG(tib, VTIB_EAX) & BYTE_MASK);
-                /* Shared with the 0x378 port model -- see LptSpoolPut.
+                /* Shared with the port model -- see LptSpoolPut.
                  * One printer, two ways in.
                  */
-                if (LptSpoolPut(character))
+                if (LptSpoolPut(printer17, character))
                 {
                     BSETAX((WORD)((BIOS_PRINTER_READY << BYTE_SHIFT) | (VDM_REG(tib, VTIB_EAX) & BYTE_MASK)));
                 }
@@ -1157,7 +1244,7 @@ INT V86BiosBop(volatile BYTE *tib, UINT bopNumber, PSTR *logCursor, PSTR base)
             }
             else if (int17Ah == BIOS_PRINTER_INITIALIZE || int17Ah == BIOS_PRINTER_GET_STATUS)    /* init / status */
             {
-                BSETAX((WORD)((g_LptFailed ? (BIOS_PRINTER_FAILED << BYTE_SHIFT) : (BIOS_PRINTER_READY << BYTE_SHIFT))
+                BSETAX((WORD)((g_LptFailed[printer17] ? (BIOS_PRINTER_FAILED << BYTE_SHIFT) : (BIOS_PRINTER_READY << BYTE_SHIFT))
                               | (VDM_REG(tib, VTIB_EAX) & BYTE_MASK)));
                 BCF_CLR();
             }
@@ -1177,6 +1264,13 @@ INT V86BiosBop(volatile BYTE *tib, UINT bopNumber, PSTR *logCursor, PSTR base)
                 BSETAX(0);
                 g_DiskStatus = 0;
                 BCF_CLR();
+
+                if (int13Dl < FDC_DRIVES)                       /* #178: every drive needs recalibrating again */
+                {
+                    volatile BYTE *bda = (volatile BYTE *)(ULONG_PTR)BIOS_BDA_BASE;
+                    bda[BIOS_BDA_DISKETTE_RECALIBRATE] = 0;
+                    bda[BIOS_BDA_DISKETTE_STATUS] = 0;
+                }
             }
             else if (int13Ah == BIOS_DISK_GET_STATUS)
             {
@@ -1234,12 +1328,15 @@ INT V86BiosBop(volatile BYTE *tib, UINT bopNumber, PSTR *logCursor, PSTR base)
                     BSETAX(BIOS_DISK_STATUS_SECTOR_NOT_FOUND << BYTE_SHIFT);
                     g_DiskStatus = BIOS_DISK_STATUS_SECTOR_NOT_FOUND;  /* sector not found */
                     BCF_SET();
+                    BiosDisketteRecord(int13Dl, int13Geometry, cylinder, head, sector, sectorCount,
+                                       (BYTE)g_DiskStatus, int13Ah == BIOS_DISK_WRITE, FALSE);     /* #178 */
                 }
                 else if (int13Ah == BIOS_DISK_VERIFY)        /* verify: bounds only */
                 {
                     BSETAX((WORD)sectorCount);
                     g_DiskStatus = 0;
                     BCF_CLR();
+                    BiosDisketteRecord(int13Dl, int13Geometry, cylinder, head, sector, sectorCount, 0, FALSE, TRUE);
                 }
                 else
                 {
@@ -1260,6 +1357,9 @@ INT V86BiosBop(volatile BYTE *tib, UINT bopNumber, PSTR *logCursor, PSTR base)
                         g_DiskStatus = BIOS_DISK_STATUS_SECTOR_NOT_FOUND;
                         BCF_SET();
                     }
+
+                    BiosDisketteRecord(int13Dl, int13Geometry, cylinder, head, sector, sectorCount,
+                                       (BYTE)g_DiskStatus, int13Ah == BIOS_DISK_WRITE, isOk);      /* #178 */
                 }
             }
             else
@@ -1399,7 +1499,28 @@ INT V86BiosBop(volatile BYTE *tib, UINT bopNumber, PSTR *logCursor, PSTR base)
          * point that then refuses every call would be a driver that lies
          * about being installed.
          */
-        if (ax == MULTIPLEX_XMS_INSTALLATION_CHECK && g_XmsOn)                       /* XMS installation check */
+        if ((ax >> BYTE_SHIFT) == CDROM_MULTIPLEX_ID)                               /* #241: MSCDEX, AX=15xxh */
+        {
+            INT cdromResult = HostCdromInt2F(tib);
+            WORD *cdromFlags = (WORD *)((VDM_REG16(tib, VTIB_SS) << PARAGRAPH_SHIFT)
+                                + ((VDM_REG16(tib, VTIB_ESP) + X86_FRAME16_FLAGS) & WORD_MASK));
+
+            if (cdromResult == CDROM_DONE)
+                *cdromFlags &= (WORD)~EFLAGS_CF;
+            else if (cdromResult == CDROM_DONE_ERROR)
+                *cdromFlags |= EFLAGS_CF;
+        }
+        else if (ax == MULTIPLEX_DOS_UPPERCASE_CHARACTER)
+        {
+            /* The character is the WORD pushed before the INT, just above its IP/CS/FLAGS
+             * frame. See DosCtabMultiplexUppercaseAx for why it matters (Abort, Retry, Fail?).
+             */
+            WORD pushedCharacter = *(volatile WORD *)((VDM_REG16(tib, VTIB_SS) << PARAGRAPH_SHIFT)
+                                                      + ((VDM_REG16(tib, VTIB_ESP) + X86_IRET16_SIZE) & WORD_MASK));
+
+            VDM_SET16(tib, VTIB_EAX, DosCtabMultiplexUppercaseAx((WORD)ax, pushedCharacter));
+        }
+        else if (ax == MULTIPLEX_XMS_INSTALLATION_CHECK && g_XmsOn)                       /* XMS installation check */
         {
             VDM_SET16(tib, VTIB_EAX, (VDM_REG(tib, VTIB_EAX) & HIGH_BYTE_MASK) | MULTIPLEX_XMS_INSTALLED);  /* AL=80h installed */
         }
@@ -1407,6 +1528,15 @@ INT V86BiosBop(volatile BYTE *tib, UINT bopNumber, PSTR *logCursor, PSTR base)
         {
             VDM_SET16(tib, VTIB_ES, DOS_HDLR_SEG);
             VDM_SET16(tib, VTIB_EBX, XMS_ENTRY_OFF);
+        }
+        /* #315: IPX. Answered only where the host HAS IPX (Winsock AF_IPX, i.e. NWLink);
+         * otherwise not at all -- AL stays 00h, "not installed", as stock without NWLink.
+         */
+        else if (ax == MULTIPLEX_IPX_INSTALLATION_CHECK && HostIpxInstallCheck())
+        {
+            VDM_SET16(tib, VTIB_EAX, (VDM_REG(tib, VTIB_EAX) & HIGH_BYTE_MASK) | MULTIPLEX_IPX_INSTALLED);
+            VDM_SET16(tib, VTIB_ES, DOS_HDLR_SEG);
+            VDM_SET16(tib, VTIB_EDI, IPX_ENTRY_OFF);
         }
         else if (ax == MULTIPLEX_DPMI_INSTALLATION_CHECK)                             /* DPMI installation check (SPIKE) */
         {
@@ -1511,6 +1641,17 @@ INT V86BiosBop(volatile BYTE *tib, UINT bopNumber, PSTR *logCursor, PSTR base)
          *      g_WowVendorSelector for what happens when that is refused.
          */
         VDM_REG(tib, VTIB_EIP) += VDM_BOP_LENGTH;                        /* -> the IRET (CF) */
+        V86BOP_RET(V86BOP_DONE);
+    }
+
+    /* #315: the IPX far-call entry -- only at the address 7A00h handed out (the s78 rule:
+     * 7Ah is a number a guest's own BOP may use too).
+     */
+    if (bopNumber == DOS_BOP_IPX_ENTRY && VDM_REG16(tib, VTIB_CS) == DOS_HDLR_SEG
+        && VDM_REG16(tib, VTIB_EIP) == IPX_ENTRY_OFF)
+    {
+        HostIpxEntry(tib);
+        VDM_REG(tib, VTIB_EIP) += VDM_BOP_LENGTH;                        /* -> the RETF */
         V86BOP_RET(V86BOP_DONE);
     }
 

@@ -148,6 +148,33 @@ static UINT32 VideoTestDacPackReference(BYTE red, BYTE green, BYTE blue)
     return 0xFF000000u | ((UINT32)(red<<2)<<16) | ((UINT32)(green<<2)<<8) | (UINT32)(blue<<2);
 }
 
+/* #185: one Attribute Controller register, the way a guest writes it: read 3DA to reset the
+ * flip-flop, then index (bit 5 set: video enabled) and data, both to 3C0.
+ */
+static VOID VideoTestWriteAttribute(VDD_BUS *bus, BYTE registerIndex, BYTE byteValue)
+{
+    UINT32 value = 0;
+
+    VddBusIo(bus, 0x3DA, 1, 1, &value);
+    value = (UINT32)(0x20 | registerIndex);
+    VddBusIo(bus, 0x3C0, 1, 0, &value);
+    value = byteValue;
+    VddBusIo(bus, 0x3C0, 1, 0, &value);
+}
+
+static VOID VideoTestWriteDacMask(VDD_BUS *bus, BYTE byteValue)
+{
+    UINT32 value = byteValue;
+
+    VddBusIo(bus, 0x3C6, 1, 0, &value);
+}
+
+/* #185: the colour a ROM 8x16 glyph pixel draws in, for a cell of `foreground` on 0. */
+static BYTE VideoTestGlyphPixel(BYTE character, INT glyphRow, INT glyphColumn, BYTE foreground)
+{
+    return (g_VgaFont8x16[character][glyphRow] & (0x80 >> glyphColumn)) ? foreground : 0;
+}
+
 INT main(VOID)
 {
     VideoTestFillFonts();
@@ -200,6 +227,28 @@ INT main(VOID)
         }
     }
     CHECK(VideoTestCellCharacter(0,0)=='H' && VideoTestCellCharacter(0,1)=='i' && g_Video.CursorColumn==2, "int10/0E: 'Hi' + cursor advance");
+
+    /* T1t: DOS console output expands TAB to the next multiple of 8 (s101: DIR /W). */
+    memset(&registers,0,sizeof registers);
+    VddSetAh(&registers,0x02);
+    VddSetDx(&registers,0x0100);
+    VddBusDeliverInterrupt(&bus,0x10,&registers);
+    VddVideoConsoleChar(&g_Video, 'A');
+    VddVideoConsoleChar(&g_Video, 9);
+    VddVideoConsoleChar(&g_Video, 'B');
+    CHECK(VideoTestCellCharacter(1,0)=='A' && VideoTestCellCharacter(1,1)==' ' && VideoTestCellCharacter(1,7)==' '
+          && VideoTestCellCharacter(1,8)=='B' && g_Video.CursorColumn==9, "console: TAB after column 1 -> column 8");
+    { INT pad;
+
+      for (pad = 0; pad < 6; ++pad)
+          VddVideoConsoleChar(&g_Video, 'x'); }
+
+    VddVideoConsoleChar(&g_Video, 9);
+    CHECK(g_Video.CursorColumn==16 && VideoTestCellCharacter(1,15)==' ', "console: TAB at column 15 -> one space, column 16");
+    VddVideoConsoleChar(&g_Video, 9);
+    CHECK(g_Video.CursorColumn==24, "console: TAB on a stop -> the next stop");
+    VddVideoPutChar(&g_Video, 9);
+    CHECK(g_Video.CursorColumn==25, "int29/teletype: TAB is one glyph, not expanded");
 
     /* T2: write char+attr + scroll + string ----------------------------- */
     memset(&registers,0,sizeof registers);
@@ -604,6 +653,132 @@ INT main(VOID)
     VddSetAl(&registers,0x02);
     VddSetBx(&registers,0x0101);
     VddBusDeliverInterrupt(&bus,0x10,&registers);   /* banked again */
+
+    /* T11c (#326): THE VESA 16-COLOUR PLANAR MODES 102h/104h/106h (and 6Ah) ---------- */
+    { WORD segment=0x3100;
+    PBYTE buffer=&g_GuestMemory[(segment<<4)];
+    UINT32 listOffset;
+    INT found=0;
+    INT index;
+      memset(&registers,0,sizeof registers);
+      VddSetAh(&registers,0x4F);
+      VddSetAl(&registers,0x00);
+      registers.Es=segment;
+      registers.Edi=0;
+      memset(buffer,0,512);
+      VddBusDeliverInterrupt(&bus,0x10,&registers);
+      listOffset=(UINT32)(buffer[14]|(buffer[15]<<8));
+
+      for (index=0; index<64; ++index)
+      { WORD mode=(WORD)(buffer[listOffset+index*2]|(buffer[listOffset+index*2+1]<<8));
+
+        if (mode==0xFFFF)
+            break;
+
+        if (mode==0x102||mode==0x104||mode==0x106)
+            ++found; }
+
+      CHECK(found==3, "vesa planar/4F00: 102h, 104h and 106h are in the mode list");
+
+      memset(&registers,0,sizeof registers);
+      VddSetAh(&registers,0x4F);
+      VddSetAl(&registers,0x01);
+      VddSetCx(&registers,0x104);
+      registers.Es=segment;
+      registers.Edi=0;
+      VddBusDeliverInterrupt(&bus,0x10,&registers);
+      CHECK(VddGetAx(&registers)==0x004F && (buffer[18]|(buffer[19]<<8))==1024 && (buffer[20]|(buffer[21]<<8))==768
+            && (buffer[16]|(buffer[17]<<8))==128 && buffer[24]==4 && buffer[25]==4 && buffer[27]==3,
+            "vesa planar/4F01 104h: 1024x768, 128 bytes a plane line, 4 planes, 4 bpp, memory model 3");
+      CHECK((buffer[0]|(buffer[1]<<8))==0x1B && (buffer[40]|(buffer[41]<<8)|(buffer[42]<<16)|(buffer[43]<<24))==0
+            && (buffer[4]|(buffer[5]<<8))==64 && (buffer[8]|(buffer[9]<<8))==0xA000,
+            "vesa planar/4F01 104h: banked only (no LFB, PhysBasePtr 0), 64 KB window at A000h");
+      CHECK(buffer[29]==(BYTE)(VIDEO_PLANE_STORE_SIZE/(128u*768u)-1u), "vesa planar/4F01 104h: image pages from one plane's store");
+      memset(&registers,0,sizeof registers);
+      VddSetAh(&registers,0x4F);
+      VddSetAl(&registers,0x01);
+      VddSetCx(&registers,0x6A);
+      registers.Es=segment;
+      registers.Edi=0;
+      VddBusDeliverInterrupt(&bus,0x10,&registers);
+      CHECK(VddGetAx(&registers)==0x004F && (buffer[18]|(buffer[19]<<8))==800 && buffer[27]==3, "vesa planar/4F01 6Ah: the same mode as 102h");
+
+      memset(&registers,0,sizeof registers);
+      VddSetAh(&registers,0x4F);
+      VddSetAl(&registers,0x02);
+      VddSetBx(&registers,0x4106);
+      VddBusDeliverInterrupt(&bus,0x10,&registers);
+      CHECK(VddGetAx(&registers)==0x014F, "vesa planar/4F02 4106h: no linear frame buffer -> fails");
+      memset(&registers,0,sizeof registers);
+      VddSetAh(&registers,0x4F);
+      VddSetAl(&registers,0x02);
+      VddSetBx(&registers,0x106);
+      VddBusDeliverInterrupt(&bus,0x10,&registers);
+      CHECK(VddGetAx(&registers)==0x004F && g_Video.IsVesa && g_Video.IsVesaPlanar && VddVideoIsPlanarActive(&g_Video)
+            && g_Video.VesaWidth==1280 && g_Video.VesaHeight==1024 && g_Video.VesaStride==160,
+            "vesa planar/4F02 106h: 1280x1024 planar, 160 bytes a plane line");
+      memset(&registers,0,sizeof registers);
+      VddSetAh(&registers,0x4F);
+      VddSetAl(&registers,0x03);
+      VddBusDeliverInterrupt(&bus,0x10,&registers);
+      CHECK(VddGetAx(&registers)==0x004F && VddGetBx(&registers)==0x106, "vesa planar/4F03: reports 106h");
+
+      memset(&registers,0,sizeof registers);
+      VddSetAh(&registers,0x4F);
+      VddSetAl(&registers,0x05);
+      VddSetDx(&registers,(WORD)(VIDEO_PLANE_STORE_SIZE/VIDEO_VESA_WINDOW));
+      VddBusDeliverInterrupt(&bus,0x10,&registers);
+      CHECK(VddGetAx(&registers)==0x024F && g_Video.VesaBank==0, "vesa planar/4F05: a bank past the plane store fails");
+      memset(&registers,0,sizeof registers);
+      VddSetAh(&registers,0x4F);
+      VddSetAl(&registers,0x05);
+      VddSetDx(&registers,2);
+      VddBusDeliverInterrupt(&bus,0x10,&registers);
+      CHECK(VddGetAx(&registers)==0x004F && g_Video.VesaBank==2, "vesa planar/4F05: bank 2");
+
+      /* Line 820 of 1280x1024 starts at 820 * 160 = 131200 bytes into each plane: bank 2
+       * (from 131072), window offset 128. Write mode 0, all planes, no set/reset: FFh is
+       * colour 15 for the eight pixels.
+       */
+      VddVideoPlanarWrite(&g_Video, 128, 0xFF);
+      CHECK(g_Video.Planes[0][2u*VIDEO_VESA_WINDOW+128]==0xFF && g_Video.Planes[3][2u*VIDEO_VESA_WINDOW+128]==0xFF
+            && g_Video.Planes[0][128]==0x00,
+            "vesa planar: an engine write lands in 4F05h's bank of every plane, not in bank 0");
+      CHECK(VddVideoPlanarRead(&g_Video, 128)==0xFF, "vesa planar: the engine reads it back through the same bank");
+      g_Video.IsDirty=1;
+      VddBusFrame(&bus);
+      CHECK(g_Video.Frame.Width==1280 && g_Video.Frame.Height==1024 && g_Video.Frame.BitsPerPixel==8, "vesa planar: frame 1280x1024x8");
+      CHECK(g_Video.FrameBuffer[820u*1280u]==15 && g_Video.FrameBuffer[820u*1280u+7]==15 && g_Video.FrameBuffer[820u*1280u+8]==0
+            && g_Video.FrameBuffer[0]==0,
+            "vesa planar: the renderer shows line 820's eight pixels in colour 15");
+      memset(&registers,0,sizeof registers);
+      VddSetAh(&registers,0x0D);
+      VddSetCx(&registers,3);
+      VddSetDx(&registers,820);
+      VddBusDeliverInterrupt(&bus,0x10,&registers);
+      CHECK(VddGetAl(&registers)==15, "vesa planar/AH=0Dh: reads the pixel past the first 64 KB");
+      memset(&registers,0,sizeof registers);
+      VddSetAh(&registers,0x4F);
+      VddSetAl(&registers,0x07);
+      VddBusDeliverInterrupt(&bus,0x10,&registers);
+      CHECK(VddGetAx(&registers)==0x034F, "vesa planar/4F07: not offered in a planar mode (AH=03)");
+
+      memset(&registers,0,sizeof registers);
+      VddSetAh(&registers,0x00);
+      VddSetAl(&registers,0x6A);
+      VddBusDeliverInterrupt(&bus,0x10,&registers);
+      CHECK(g_Video.IsVesaPlanar && g_Video.VesaMode==0x102 && g_Video.VesaWidth==800 && g_Video.VesaHeight==600 && g_Video.VesaStride==100,
+            "vesa planar/AH=00h AL=6Ah: 800x600x16, reported as 102h");
+      memset(&registers,0,sizeof registers);
+      VddSetAh(&registers,0x00);
+      VddSetAl(&registers,0x12);
+      VddBusDeliverInterrupt(&bus,0x10,&registers);
+      CHECK(!g_Video.IsVesaPlanar && !g_Video.IsVesa, "vesa planar: a standard mode set leaves it");
+      memset(&registers,0,sizeof registers);
+      VddSetAh(&registers,0x4F);
+      VddSetAl(&registers,0x02);
+      VddSetBx(&registers,0x0101);
+      VddBusDeliverInterrupt(&bus,0x10,&registers); }   /* back to 101h for what follows */
 
     /* T11b: 4F08 DAC width + 4F09 palette, VBE 2.0 section 4.11/section 4.12 ------------------- */
     { WORD segment=0x3200;
@@ -3840,6 +4015,142 @@ INT main(VOID)
         VddSetAh(&registers3, 0x00);
         VddSetAl(&registers3, 0x03);
         VddBusDeliverInterrupt(&bus, 0x10, &registers3);
+    }
+
+    /* #185: THE STORED REGISTERS THAT NOW CHANGE THE PICTURE. ------------------------
+     * The DAC Pixel Mask (3C6) and Colour Plane Enable (AR12) on the way to the DAC,
+     * Character Map Select (SR3) on the way to the glyph, and the text picture's smooth
+     * scroll: Horizontal Pixel Panning (AR13) and Preset Row Scan (CR08).
+     */
+    {
+        NTVDD_REGISTERS modeRegisters;
+        WORD fontSegment = 0x4100;
+        PBYTE solidGlyph = &g_GuestMemory[fontSegment << 4];
+        INT glyphRow;
+        INT glyphColumn;
+        INT mismatches;
+
+        memset(&modeRegisters, 0, sizeof modeRegisters);
+        VddSetAx(&modeRegisters, 0x0003);
+        VddBusDeliverInterrupt(&bus, 0x10, &modeRegisters);
+        memset(&modeRegisters, 0, sizeof modeRegisters);                       /* cursor out of the way */
+        VddSetAh(&modeRegisters, 0x02);
+        VddSetDx(&modeRegisters, (WORD)((24 << 8) | 79));
+        VddBusDeliverInterrupt(&bus, 0x10, &modeRegisters);
+
+        /* 3C6 ANDs the DAC address. */
+        VideoTestWriteDacMask(&bus, 0x00);
+        CHECK(g_Video.Palette[7] == g_Video.Dac[0] && g_Video.Palette[200] == g_Video.Dac[0],
+              "#185 3C6: a pixel mask of 00h sends every colour to DAC entry 0");
+        VideoTestWriteDacMask(&bus, 0xFF);
+        CHECK(g_Video.Palette[7] == g_Video.Dac[7] && g_Video.Palette[200] == g_Video.Dac[200],
+              "#185 3C6: FFh, the BIOS's value, is the identity again");
+
+        /* AR12 masks the 4-bit attribute pixel before the palette registers. */
+        VideoTestWriteAttribute(&bus, 0x12, 0x07);
+        CHECK(g_Video.Palette[15] == g_Video.Palette[7] && g_Video.Palette[9] == g_Video.Palette[1],
+              "#185 AR12: plane 3 disabled -> colour 15 is colour 7, 9 is 1");
+        VideoTestWriteAttribute(&bus, 0x12, 0x0F);
+        CHECK(g_Video.Palette[15] != g_Video.Palette[7], "#185 AR12: 0Fh enables all four planes again");
+
+        /* SR3: map A (attribute bit 3 set) from block 1, map B from block 0. */
+        memset(solidGlyph, 0xFF, 16);
+        memset(&modeRegisters, 0, sizeof modeRegisters);
+        VddSetAx(&modeRegisters, 0x1100);
+        VddSetBx(&modeRegisters, (WORD)((16 << 8) | 1));                        /* BH 16 rows, BL block 1 */
+        VddSetCx(&modeRegisters, 1);
+        VddSetDx(&modeRegisters, 'C');
+        modeRegisters.Es = fontSegment;
+        modeRegisters.Ebp = 0;
+        VddBusDeliverInterrupt(&bus, 0x10, &modeRegisters);
+        CHECK(g_Video.IsUserFontOn == 0 && (g_Video.FontBlocksLoaded & 0x02),
+              "#185 AH=11h BL=1: the load lands in block 1, not in block 0");
+        VideoTestTextCell(0, 0)[0] = 'C';
+        VideoTestTextCell(0, 0)[1] = 0x0F;
+        VideoTestTextCell(0, 1)[0] = 'C';
+        VideoTestTextCell(0, 1)[1] = 0x07;
+        g_Video.IsDirty = 1;
+        VddBusFrame(&bus);
+
+        for (mismatches = 0, glyphRow = 0; glyphRow < 16; ++glyphRow)
+            for (glyphColumn = 0; glyphColumn < 8; ++glyphColumn)
+                if (g_Video.FrameBuffer[glyphRow * TXW + glyphColumn] != VideoTestGlyphPixel('C', glyphRow, glyphColumn, 15))
+                    mismatches++;
+
+        CHECK(mismatches == 0, "#185 SR3=00h: block 1 is not shown -- 'C' is the ROM glyph");
+        VideoTestWriteSequencer(&bus, 0x03, 0x04);                             /* map A = 1, map B = 0 */
+        g_Video.IsDirty = 1;
+        VddBusFrame(&bus);
+
+        for (mismatches = 0, glyphRow = 0; glyphRow < 16; ++glyphRow)
+            for (glyphColumn = 0; glyphColumn < 8; ++glyphColumn)
+                if (g_Video.FrameBuffer[glyphRow * TXW + glyphColumn] != 15)
+                    mismatches++;
+
+        CHECK(mismatches == 0, "#185 SR3=04h: a cell with attribute bit 3 draws from block 1 (map A)");
+
+        for (mismatches = 0, glyphRow = 0; glyphRow < 16; ++glyphRow)
+            for (glyphColumn = 0; glyphColumn < 8; ++glyphColumn)
+                if (g_Video.FrameBuffer[glyphRow * TXW + 9 + glyphColumn] != VideoTestGlyphPixel('C', glyphRow, glyphColumn, 7))
+                    mismatches++;
+
+        CHECK(mismatches == 0, "#185 SR3=04h: a cell without it draws from block 0 (map B)");
+        VideoTestWriteSequencer(&bus, 0x03, 0x00);
+        VideoTestTextCell(0, 0)[1] = 0x07;
+
+        /* CR08: preset row scan, then byte panning. */
+        VideoTestWriteCrtc(&bus, 0x08, 0x03);
+        g_Video.IsDirty = 1;
+        VddBusFrame(&bus);
+
+        for (mismatches = 0, glyphColumn = 0; glyphColumn < 8; ++glyphColumn)
+            if (g_Video.FrameBuffer[glyphColumn] != VideoTestGlyphPixel('C', 3, glyphColumn, 7))
+                mismatches++;
+
+        CHECK(mismatches == 0, "#185 CR08=03h: the picture starts on scanline 3 of the first character row");
+        VideoTestWriteCrtc(&bus, 0x08, 0x20);
+        VideoTestTextCell(0, 1)[0] = 'D';
+        g_Video.IsDirty = 1;
+        VddBusFrame(&bus);
+
+        for (mismatches = 0, glyphColumn = 0; glyphColumn < 8; ++glyphColumn)
+            if (g_Video.FrameBuffer[glyphColumn] != VideoTestGlyphPixel('D', 0, glyphColumn, 7))
+                mismatches++;
+
+        CHECK(mismatches == 0, "#185 CR08=20h: byte panning 1 -- the first cell shown is column 1");
+        VideoTestWriteCrtc(&bus, 0x08, 0x00);
+
+        /* AR13 in a 9-dot mode: 0 shifts the picture left one dot. */
+        VideoTestWriteAttribute(&bus, 0x13, 0x00);
+        g_Video.IsDirty = 1;
+        VddBusFrame(&bus);
+
+        for (mismatches = 0, glyphColumn = 0; glyphColumn < 7; ++glyphColumn)
+            if (g_Video.FrameBuffer[glyphColumn] != VideoTestGlyphPixel('C', 0, glyphColumn + 1, 7))
+                mismatches++;
+
+        CHECK(mismatches == 0, "#185 AR13=00h in a 9-dot mode: the picture moves left one dot");
+        VideoTestWriteAttribute(&bus, 0x13, 0x08);
+        g_Video.IsDirty = 1;
+        VddBusFrame(&bus);
+
+        for (mismatches = 0, glyphColumn = 0; glyphColumn < 8; ++glyphColumn)
+            if (g_Video.FrameBuffer[glyphColumn] != VideoTestGlyphPixel('C', 0, glyphColumn, 7))
+                mismatches++;
+
+        CHECK(mismatches == 0, "#185 AR13=08h in a 9-dot mode: no shift");
+
+        /* 3C6 in a 256-colour mode masks the pixel itself. */
+        memset(&modeRegisters, 0, sizeof modeRegisters);
+        VddSetAx(&modeRegisters, 0x0013);
+        VddBusDeliverInterrupt(&bus, 0x10, &modeRegisters);
+        VideoTestWriteDacMask(&bus, 0x0F);
+        CHECK(g_Video.Palette[0x1F] == g_Video.Dac[0x0F] && g_Video.Palette[0xF3] == g_Video.Dac[0x03],
+              "#185 3C6=0Fh in mode 13h: pixel 1Fh shows DAC 0Fh, F3h shows 03h");
+        VideoTestWriteDacMask(&bus, 0xFF);
+        memset(&modeRegisters, 0, sizeof modeRegisters);
+        VddSetAx(&modeRegisters, 0x0003);
+        VddBusDeliverInterrupt(&bus, 0x10, &modeRegisters);
     }
 
     printf("\n%d checks, %d failed\n", g_Total, g_Failures);

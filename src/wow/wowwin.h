@@ -95,6 +95,9 @@
 #define WOWWIN_REASON_MAX                       96
 #define WOWWIN_DROP_LOG_MAX                     200
 #define WOWWIN_PAINT_LOG_MAX                    600
+
+/* #319: WM_SYSCOMMAND menu requests logged per run. */
+#define WOWWIN_MENU_LOG_MAX                     32
 #define WOWWIN_MM_LOG_MAX                       12
 
 /* A Win16 DROPFILES block (krnl386 global memory): pFiles, pt, fNC, then the names. */
@@ -219,6 +222,7 @@ extern DWORD g_WowWinCreated;
 extern DWORD g_WowWinPaintMs;
 extern INT g_WowWinIsDialogBounced;
 extern INT g_WowWinInDialogMessage;
+extern INT g_WowWinModalCall;
 extern HWND g_WowWinDialogWindow;
 extern UINT g_WowWinDialogMessage;
 extern UINT g_WowWinSetFocusCount;
@@ -232,7 +236,9 @@ extern DWORD g_WowWinPumpCalls;
 
 DWORD DpmiSelectorBase(WORD selector);            /* main.c: a selector's linear base */
 INT WowWinThreadTimerFire(const MSG *message);
+INT WowWinPaintPeek(WORD window16, PRECT output, PINT isErase);
 INT WowWinPaintTake(WORD window16, PRECT output, PINT isErase);
+VOID WowWinPaintValidate(WORD window16, const RECT *rect);
 INT WowWinReleaseChars(WORD window16, DWORD keyLParam);
 INT WowWinThreadTimerAdd(UINT_PTR id32, DWORD procedure);
 INT WowWinThreadTimerKill(UINT_PTR id32);

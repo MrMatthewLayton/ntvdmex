@@ -109,10 +109,14 @@
 #define IDC_S_GUSDMA                274     /* Combo: #235 GUS DMA */
 #define IDC_S_MPUADDR               275     /* Combo: #235 MPU-401 base */
 #define IDC_S_AUTOFS                268     /* Combo: start fullscreen Always/Graphics/Never */
-#define IDC_S_TEXTFONT              276     /* Combo: #321 text-mode font (the stored string) */
+#define IDC_S_TEXTFONT              276     /* Edit: #321 text-mode font file (the stored string) */
+#define IDC_S_TEXTFONT_DEFAULT      295     /* Radio: #321 the default font */
+#define IDC_S_TEXTFONT_OWN          300     /* Radio: #321 a font file the user supplies */
+#define IDC_S_TEXTFONT_BROWSE       301     /* Button: #321 Browse... */
 #define IDC_S_TEXTFONT_INFO         277     /* Static: #321 what the chosen font supplies */
 #define IDC_S_TEXTFONT_VIEW         278     /* Static: #321 owner-drawn preview */
 #define IDC_S_FIT                   279     /* Combo: #325 maximised/fullscreen fit */
+#define IDC_S_CPUDIE                302     /* Combo: #417 Auto / Off */
 
 /* Audio: */
 #define IDC_S_VOLUME                280
@@ -160,5 +164,12 @@
 #define IDC_S_CODEC_CONFIGURE       343     /* Button: the codec's own Configure window */
 #define IDC_S_VIDEOQUALITY          344     /* Edit: quality, % */
 #define IDC_S_KEYFRAMES             345     /* Edit: a key frame every N frames */
+
+/* Video (#331): */
+#define IDC_S_FSRES                 346     /* Combo: fullscreen's display mode (filled at run time) */
+
+/* Drives (s101): */
+#define IDC_S_FLOPPY_LETTER         347     /* Combo: the floppy image's drive letter (filled at run time) */
+#define IDC_S_CD_LETTER             348     /* Combo: the ISO's drive letter (filled at run time) */
 
 #endif

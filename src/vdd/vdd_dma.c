@@ -376,6 +376,81 @@ UINT32 VddDmaWrite(
     return DmaTransfer(state, channelNumber, 0, source, byteCount, isTerminalCount);
 }
 
+INT VddDmaQueryInfo(PCDMA_STATE state, BYTE channelNumber, PDMA_VDD_INFO info)
+{
+    PCDMA_CHANNEL channel;
+    BYTE line;
+
+    if (channelNumber >= DMA_CHANNELS || channelNumber == DMA_CASCADE_CHANNEL)
+        return 0;
+
+    channel = &state->Channels[channelNumber];
+    line = (BYTE)(channelNumber & DMA_LINE_MASK);
+    info->Address = channel->CurrentAddress;
+    info->Count = channel->CurrentCount;
+    info->Page = channel->Page;
+    info->Status = (BYTE)((channel->IsTerminalCount ? (1u << line) : 0)
+                          | ((state->Request[channelNumber >> DMA_CONTROLLER_SHIFT] & (1u << line)) ? (1u << line) << DMA_CHANNELS_PER_CONTROLLER : 0));
+    info->Mode = channel->Mode;
+    info->Mask = channel->IsMasked;
+    return 1;
+}
+
+INT VddDmaSetInfo(PDMA_STATE state, BYTE channelNumber, WORD flags, PCDMA_VDD_INFO info)
+{
+    PDMA_CHANNEL channel;
+    BYTE line;
+
+    if (channelNumber >= DMA_CHANNELS || channelNumber == DMA_CASCADE_CHANNEL)
+        return 0;
+
+    channel = &state->Channels[channelNumber];
+    line = (BYTE)(channelNumber & DMA_LINE_MASK);
+
+    if (flags & DMA_VDD_SET_ADDRESS)
+        channel->CurrentAddress = info->Address;
+
+    if (flags & DMA_VDD_SET_COUNT)
+        channel->CurrentCount = info->Count;
+
+    if (flags & DMA_VDD_SET_PAGE)
+        channel->Page = (BYTE)info->Page;
+
+    if (flags & DMA_VDD_SET_STATUS)
+    {
+        BYTE *request = &state->Request[channelNumber >> DMA_CONTROLLER_SHIFT];
+        channel->IsTerminalCount = (info->Status & (1u << line)) ? 1 : 0;
+
+        if (info->Status & ((1u << line) << DMA_CHANNELS_PER_CONTROLLER))
+            *request |= (BYTE)(1u << line);
+        else
+            *request &= (BYTE)~(1u << line);
+    }
+
+    return 1;
+}
+
+DWORD VddDmaRequest(PDMA_STATE state, BYTE channelNumber, BYTE *buffer, DWORD length)
+{
+    BYTE transfer;
+
+    if (channelNumber >= DMA_CHANNELS || channelNumber == DMA_CASCADE_CHANNEL)
+        return 0;
+
+    if (!buffer || !length)
+        return VddDmaRemaining(state, channelNumber);
+
+    transfer = (BYTE)(state->Channels[channelNumber].Mode & DMA_MODE_TRANSFER);
+
+    if (transfer == DMA_MODE_TRANSFER_READ)                            /* memory -> device: fill */
+        return VddDmaRead(state, channelNumber, buffer, length, 0);
+
+    if (transfer == DMA_MODE_TRANSFER_WRITE)                           /* device -> memory: empty */
+        return VddDmaWrite(state, channelNumber, buffer, length, 0);
+
+    return 0;                                                          /* verify: nothing moves */
+}
+
 static BYTE *DmaMemory(PDMA_STATE state, UINT32 physical)
 {
     if (physical >= DMA_PHYSICAL_LIMIT)

@@ -63,6 +63,13 @@
  * construction.
  */
 #define VIDEO_PLANE_SIZE                65536u                              /* Bytes/plane, as on a VGA */
+
+/* #326: WHAT BACKS A PLANE, WHICH AN SVGA HAS MORE OF THAN A VGA. The VESA 16-colour
+ * planar modes (102h 800x600, 104h 1024x768, 106h 1280x1024) need up to 160 KB per
+ * plane (1280 / 8 * 1024); the A0000 window still shows 64 KB of it, and 4F05h picks
+ * which 64 KB (VesaBank). VIDEO_PLANE_SIZE stays the VGA's plane and the window.
+ */
+#define VIDEO_PLANE_STORE_SIZE          0x40000u                            /* Bytes/plane behind a VESA planar mode */
 #define VIDEO_BPP_INDEXED               8
 
 /* INT 10h functions (AH) used outside the video VDD too. */
@@ -116,6 +123,7 @@
 #define VIDEO_VESA_LFB_PHYSICAL         0xE0000000u
 #define VIDEO_VESA_MAX_WIDTH            NTVDD_FRAME_MAX_WIDTH /* Widest mode advertised = what the presenter shows */
 #define VIDEO_VESA_MAX_HEIGHT           NTVDD_FRAME_MAX_HEIGHT
+#define VIDEO_FONT_BLOCKS               8                                   /* #185: character generators in plane 2 */
 #define VIDEO_FRAME_MAX                 (NTVDD_FRAME_MAX_WIDTH * NTVDD_FRAME_MAX_HEIGHT) /* Glyph/planar render target: 132 cols x 60 rows fits */
 
 /* How a mode is rendered.  Before this, only 13h and 12h were branched on and
@@ -393,6 +401,7 @@ typedef struct _VIDEO_STATE
     BYTE  VesaBpp;                  /* 8/15/16/24 -- bits per pixel of the mode */
     UINT32 VesaStride;               /* bytes per scan line of the current mode */
     BYTE  IsVesaLfb;                  /* the mode was set with bit 14: LFB in use */
+    BYTE  IsVesaPlanar;               /* #326: a VESA 16-colour planar mode (102h/104h/106h, 6Ah) */
     WORD VesaModeFlags;           /* D14|D15 of the last 4F02 (4F03 returns them, #226) */
     BYTE  IsModeSetNoClear;           /* the last mode set (AH=00h AL bit 7 / 4F02h D15) did
                                            not clear memory: BDA 40:87h bit 7 (#226)    */
@@ -410,7 +419,7 @@ typedef struct _VIDEO_STATE
      */
     UINT32 VesaArgb[(UINT32)VIDEO_VESA_MAX_WIDTH * VIDEO_VESA_MAX_HEIGHT];
     BYTE  VesaVram[VIDEO_VESA_VRAM];  /* full packed-256 framebuffer */
-    BYTE  Planes[VIDEO_PLANES][VIDEO_PLANE_SIZE];  /* mode 12h: 4 bit-planes (640x480x16) */
+    BYTE  Planes[VIDEO_PLANES][VIDEO_PLANE_STORE_SIZE];  /* the 4 bit-planes: mode 12h's first 64 KB, a VESA planar mode's all (#326) */
     /* VGA planar write engine (Sequencer 3C4/3C5 + Graphics Controller 3CE/3CF) */
     BYTE SequencerIndex;
     BYTE GcIndex;
@@ -692,6 +701,15 @@ typedef struct _VIDEO_STATE
     BYTE  UserFont[256 * 16];
     BYTE  UserFontRows;
     BYTE  IsUserFontOn;
+    /* #185: FONT BLOCKS 1-7, WHICH SR3 CAN SELECT. A VGA keeps up to eight character
+     * generators in plane 2; Character Map Select (SR3) names two of them, map A for cells
+     * with attribute bit 3 set and map B for the rest -- the 512-character mode. Block 0 is
+     * UserFont / the ROM tables above, exactly as before. Blocks 1-7 hold what AH=11h
+     * AL=00h/10h loaded with BL = the block; a block nobody loaded draws the ROM font.
+     * `FontBlocksLoaded` bit n = block n holds a load.
+     */
+    BYTE  FontBlocks[VIDEO_FONT_BLOCKS - 1][256 * 16];
+    BYTE  FontBlocksLoaded;
     BYTE  FontQueryCount;
     /* Every mode set, with what it RESOLVED TO. Added after a mode-table change
      * silently altered mode 12h rendering: the STAGE2 line said "modes
@@ -1046,6 +1064,7 @@ VOID VddCursorLines(
     _Out_ UINT *end,
     _Out_ INT *isHidden);
 VOID VddVideoPutChar(_Inout_ PVIDEO_STATE state, _In_ BYTE character);      /* console teletype sink */
+VOID VddVideoConsoleChar(_Inout_ PVIDEO_STATE state, _In_ BYTE character);  /* DOS console output: TAB expanded */
 
 /* Planar A0000 access (mode 12h): the host calls these from the memory-write trap
  * so direct framebuffer writes run through the VGA write-modes into the 4 planes.

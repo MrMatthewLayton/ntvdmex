@@ -163,6 +163,8 @@
 /* AH=44h IOCTL (AL) and AH=3Dh open modes (AL bits 0-2). */
 #define DOS_INT21_IOCTL_GET_DEVICE_INFO         0x00
 #define DOS_INT21_OPEN_ACCESS_MASK              7       /* AL bits 0-2: read, write, read/write */
+#define DOS_CDROM_SECTOR_SIZE                   2048    /* #241: what 36h reports for the CD drive */
+#define DOS_CDROM_LABEL_SIZE                    12      /* #241: an 11-character volume label and its NUL */
 #define DOS_INT21_OPEN_WRITE                    1
 #define DOS_INT21_OPEN_READ_WRITE               2
 #define DOS_INT21_IOCTL_SET_DEVICE_INFO         0x01
@@ -223,11 +225,15 @@
 #define DOS_INT53_SHELL_LOOP                    0x02    /* AX=5302h: the top of each pass of XP's shell loop */
 #define DOS_INT53_STARTUP                       0x05    /* AX=5305h: asked once at start-up */
 
+/* #272: one identity byte per device slot -- DOS_DEV_SLOTS (dos_fh.h); dos_int21.c checks they agree. */
+#define DOS_INT21_DEVICE_SLOTS                  32
+
 /* One saved handle table -- see DOS_MACHINE::HandleStack. */
 typedef struct _DOS_HANDLE_FRAME
 {
     HANDLE FileHandles[DOS_MAX_FILES];
     UINT32 StdOpen;
+    BYTE DeviceKind[DOS_INT21_DEVICE_SLOTS];
     BYTE JftKnown[DOS_PSP_JFT_HANDLES];
 } DOS_HANDLE_FRAME;
 
@@ -335,6 +341,7 @@ typedef struct _DOS_MACHINE
     WORD Trampoline;
     INT    (*PrinterOut)(PVOID context, BYTE character);   /* PRN byte -> LPT1; 0 = went nowhere */
     VOID   (*AuxOut)(PVOID context, BYTE character);   /* AUX byte -> COM1 */
+    INT    (*AuxIn)(PVOID context, PBYTE character);   /* #272: COM1 byte -> AUX; 0 = none waiting */
     PVOID DeviceContext;
     INT    (*ConsolePeek)(PVOID context); /* non-blocking status: 1 if a key is ready */
     /* AH=0Ah (buffered input) IS A BLOCKING SERVICE THAT SPANS MANY RETRIES, so the
@@ -371,6 +378,17 @@ typedef struct _DOS_MACHINE
      * listed one drive on a machine with four. (s72)
      */
     INT      VirtualDrive;
+    /* #241: THE MSCDEX DRIVE BACKED BY AN ISO IMAGE (0 = A:), or -1. Its letter is a real
+     * Win32 drive -- the host maps it onto a cache directory -- so every path call works
+     * unchanged; what the DOS layer adds is that the medium is READ-ONLY (a write-class
+     * call answers 5, as MSCDEX's redirector does) and that a path is handed to the host
+     * first (PathPrepare) so the file it names exists before Win32 is asked for it.
+     */
+    INT      CdromDrive;
+    DWORD    CdromSectors;    /* #241: the disc's 2048-byte sectors (36h reports them, none free) */
+    CHAR     CdromLabel[DOS_CDROM_LABEL_SIZE];    /* #241: the disc's volume id as DIR's label ("" = none) */
+    VOID   (*PathPrepare)(PVOID context, PCSTR path);
+    PVOID    PathPrepareContext;
     /* WHICH OF THE FIVE STANDARD HANDLES ARE STILL OPEN (bits 0-4, set at startup).
      * fh[0..4] are NULL because they are devices, not files, so "NULL" cannot also
      * mean "free" for them -- and the difference is load-bearing. DOS hands out the
@@ -382,6 +400,7 @@ typedef struct _DOS_MACHINE
      * before redirecting -- see DOS_DEV_SLOTS in dos_fh.h.
      */
     UINT32 StdOpen;
+    BYTE DeviceKind[DOS_INT21_DEVICE_SLOTS];    /* #272: which device each device slot is (dos_fh.h) */
     /* EACH PROGRAM HAS ITS OWN HANDLE TABLE ON DOS. OURS IS ONE TABLE. (s81) (Importance = 2):
      * fh[]/StdOpen are the machine's ONLY handle table, so a child that closed its
      * handle 1 closed the SHELL's stdout: Doom's SETUP does exactly that, and XP's
@@ -406,6 +425,13 @@ typedef struct _DOS_MACHINE
      */
     BYTE  JftKnown[DOS_PSP_JFT_HANDLES];
     HANDLE   SftHost[DOS_SFT_INDEXES];
+    /* #48: what the guest's SFT (SysVars+04h) shows for an index below DOS_SFT_ENTRIES --
+     * noted when the open succeeds, because only the open knows the name and the mode.
+     * See DosSftRefresh.
+     */
+    BYTE  SftName[DOS_SFT_ENTRIES][DOS_FCB_NAME_SIZE];
+    WORD  SftOpenMode[DOS_SFT_ENTRIES];
+    WORD  SftOwner[DOS_SFT_ENTRIES];
     INT      HandleDepth;
     /* AH=11h/12h: the 11-byte template the live FCB search matches against (s81) --
      * see DosFindMatches in dos_int21.c.
@@ -515,5 +541,20 @@ VOID DosInt21SetShellPsp(_Inout_ PDOS_MACHINE machine, _In_ WORD psp, _In_ INT i
 BYTE DosInt21CurrentDrive(_In_ PCDOS_MACHINE machine);
 
 INT DosInt21(_Inout_ PDOS_MACHINE machine);
+
+/* #240: a floppy disk image as a DOS drive (dos_int21.c, "DRIVE A: AS A DISK IMAGE").
+ * `isImageMode` 1 = drive `drive` (0 = A:) is the image `imagePath` (NULL or "" = the
+ * drive is empty); 0 = no image drive. s101 (user): the letter is Settings' choice, a
+ * letter Windows is not using, so every Windows drive -- a real A: included -- stays
+ * itself. Safe to call again with the same values (the copy is kept) or new ones (the
+ * next path on the drive reads the new disk).
+ */
+VOID DosInt21SetFloppyImage(_In_ INT isImageMode, _In_opt_ PCSTR imagePath, _In_ INT drive);
+
+/* #240: INT 13h wrote the image -- the DOS-level copy is stale. */
+VOID DosInt21FloppyChanged(VOID);
+
+/* #240: delete this process's extracted copies (at exit). */
+VOID DosInt21FloppyShutdown(VOID);
 
 #endif /* DOS_INT21_H */

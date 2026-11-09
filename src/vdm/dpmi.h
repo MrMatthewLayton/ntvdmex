@@ -48,6 +48,13 @@
 #define DPMI_SELECTOR_RPL3          0x3
 #define DPMI_SELECTOR(index)        (WORD)(((index) << X86_SELECTOR_INDEX_SHIFT) | DPMI_SELECTOR_TI_LDT | DPMI_SELECTOR_RPL3)
 
+/* #334: the VTIB_EVENT DpmiEnterProtectedMode leaves when it did NOT enter: an interrupt is
+ * pending in FIXED_NTVDMSTATE (dpmi_enter.S, label 2, writes it). It is OUR code, not the
+ * kernel's. The kernel's V86 I/O trap on real hardware uses the same number
+ * (VDM_EVENT_IO_HW), which is why the PM loops test for this one by name.
+ */
+#define DPMI_ENTER_EVENT_PENDING    3
+
 extern DWORD g_DpmiDebug[DPMI_DEBUG_ENTRIES];
 extern DWORD g_DpmiSegmentBase[DPMI_INITIAL_SELECTORS];
 

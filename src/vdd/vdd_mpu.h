@@ -33,6 +33,7 @@
 
 #define MPU_DEFAULT_BASE            0x330
 #define MPU_DEFAULT_BASE_CHOICE     3       /* MPU_DEFAULT_BASE in the Audio page's list */
+#define MPU_BASE_CHOICES            5       /* The Audio page's list: 300h, 310h, 320h, 330h, 340h */
 
 /* status register bits, both ACTIVE LOW */
 #define MPU_STATUS_DRR              0x40    /* Clear => the port can accept a byte from the guest */
@@ -51,7 +52,8 @@
  * So when Settings > Audio > MIDI picks an EXTERNAL synth (MT-32 / SoundFont, routed
  * by name in midi_route.h), the host sets `SysExSink` and each COMPLETE message,
  * F0 .. F7 inclusive, goes to it whole. NULL = swallowed exactly as before, byte for
- * byte -- the default path does not change.
+ * byte -- the default path does not change. The hosted synths (the built-in GS one and our
+ * SoundFont one) get SysEx the same way: their GM / GS resets.
  *
  * [CAUTION]: A message longer than MPU_SYSEX_MAX is dropped and counted, never truncated: a cut
  * DT1 has a wrong checksum and an MT-32 rejects it anyway, and a cut bulk dump that
@@ -103,6 +105,13 @@ typedef struct _MPU_STATE
 
 INT  VddMpuInitialize(_In_ PVDD_BUS bus, _In_ PVOID context);
 VOID VddMpuReset(_In_ PVOID context);
+
+/* #342: the base port for the Audio page's choice (SET_MPUADDR). One table, because the
+ * Sound Blaster advertises this port as BLASTER's P and the MPU listens on it: two copies
+ * that drifted apart would send the guest's MIDI to a port nobody answers. A choice off
+ * the end of the list is the default, 330h.
+ */
+WORD VddMpuBaseForChoice(_In_ DWORD choice);
 
 /* #190: one raw MIDI byte into this instance's message assembler (running status,
  * realtime, sysex -- the same rules as the data port in UART mode), whatever mode the

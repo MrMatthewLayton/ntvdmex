@@ -184,6 +184,9 @@ start:
         ;   blank:   same FCB, parse <CR>, AL=00h -- drive 0, name/ext blanked
         ;   si:      parse "ABC.TXT REST", AL=00h -- SI must end after "ABC.TXT"
         ;   sep:     parse ",;ABC", AL=01h -- leading separators skipped
+        ;   si.nul:  parse "WIN.INI"<NUL>, AL=00h -- SI on the NUL. XP's COMMAND.COM COPY
+        ;            searches for its source only when [SI] = 0 here (s101: every
+        ;            `copy C:\DIR\FILE X` said "File not found" while SI stayed put)
 %macro P29 4                                    ; label, text, AL, prefill?
         mov     di, fcbw
         mov     cx, 40
@@ -217,6 +220,7 @@ start:
         P29 "int21.29.blank", pcr, 00h, 1
         P29 "int21.29.si", prest, 00h, 0
         P29 "int21.29.sep", psep, 01h, 0
+        P29 "int21.29.si.nul", pnul, 00h, 0
 
         PROBE_END
 
@@ -235,6 +239,7 @@ pstarcr db '*', 0Dh, 0
 pcr     db 0Dh, 0
 prest   db 'ABC.TXT REST', 0
 psep    db ',;ABC', 0
+pnul    db 'WIN.INI', 0
 fcbkeep db 05h, 'KEEPNAME', 'EXT'
 fcb:
         times 40 db 0

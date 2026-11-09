@@ -1,0 +1,24 @@
+#PROBE w16upd
+CASE=upd.reg SIG=AX AX=0001
+CASE=upd.cw SIG=AX AX=0001
+CASE=upd.clean SIG=AX AX=0000
+CASE=upd.clean.l SIG=AX AX=0000
+CASE=upd.clean.t SIG=AX AX=0000
+CASE=upd.clean.r SIG=AX AX=0000
+CASE=upd.clean.b SIG=AX AX=0000
+CASE=upd.inval SIG=AX AX=0001
+CASE=upd.inval.l SIG=AX AX=000A
+CASE=upd.inval.t SIG=AX AX=000A
+CASE=upd.inval.r SIG=AX AX=0032
+CASE=upd.inval.b SIG=AX AX=0028
+CASE=upd.part SIG=AX AX=0001
+CASE=upd.part.l SIG=AX AX=001E
+CASE=upd.part.t SIG=AX AX=000A
+CASE=upd.part.r SIG=AX AX=0032
+CASE=upd.part.b SIG=AX AX=0028
+CASE=upd.all SIG=AX AX=0000
+CASE=upd.all.l SIG=AX AX=0000
+CASE=upd.all.t SIG=AX AX=0000
+CASE=upd.all.r SIG=AX AX=0000
+CASE=upd.all.b SIG=AX AX=0000
+#END

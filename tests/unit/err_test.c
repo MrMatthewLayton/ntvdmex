@@ -339,6 +339,12 @@ INT main(VOID)
     {
         BYTE readAh = DosCritInt24Ah(ERR_TEST_READ);
         BYTE writeAh = DosCritInt24Ah(ERR_TEST_WRITE);
+        ErrTestExpect("write-protect on a create: AH=1D (directory, WRITE, F+R)",
+                      DosCritInt24AhFor(ERR_TEST_CREATE, 19), 0x1D);
+        ErrTestExpect("write-protect on a 40h write: the data-area AH=3F",
+                      DosCritInt24AhFor(ERR_TEST_WRITE, 19), ERR_TEST_AH_WRITE);
+        ErrTestExpect("not ready on a find-first: unchanged, AH=1A",
+                      DosCritInt24AhFor(ERR_TEST_FIND_FIRST, ERR_TEST_NOT_READY), ERR_TEST_AH_PATH_CALL);
         ErrTestExpect("3Fh AH=3E (data area, read, F+R+I)", readAh, ERR_TEST_AH_READ);
         ErrTestExpect("40h AH=3F (data area, WRITE, F+R+I)", writeAh, ERR_TEST_AH_WRITE);
         ErrTestExpect("3Fh read bit (0) clear", readAh & ERR_TEST_AH_WRITE_BIT, 0);

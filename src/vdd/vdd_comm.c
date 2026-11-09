@@ -664,6 +664,17 @@ INT VddLptIsFitted(PCCOMM_STATE state, INT port)
     return state->Printers[port].IsFitted ? 1 : 0;
 }
 
+INT VddLptIndexOfBase(PCCOMM_STATE state, WORD basePort)
+{
+    INT portIndex;
+
+    for (portIndex = 0; portIndex < LPT_MAX_PORTS; ++portIndex)
+        if (state->Printers[portIndex].IsFitted && state->Printers[portIndex].BasePort == basePort && basePort)
+            return portIndex;
+
+    return -1;
+}
+
 INT VddCommIsFitted(PCCOMM_STATE state, INT port)
 {
     if (port < 0 || port >= COMM_MAX_PORTS)

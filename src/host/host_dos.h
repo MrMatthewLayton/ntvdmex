@@ -30,10 +30,22 @@ extern DWORD g_HmaState;
 extern DOS_EMS_STATE g_Ems;
 extern INT g_BehaveDos622;
 extern PCSTR g_FloppyImage;
+extern INT   g_FloppyPhysical;            /* #240: physical mode on a PC with the drive */
+extern INT   g_FloppyImageDrive;          /* s101: the floppy image's DOS letter (0 = A:), -1 = none */
 extern HANDLE g_Stdio;
 
 PDOS_DISK_GEOMETRY DiskFor(UINT drive);
 INT DiskIo(UINT drive, UINT32 lba, UINT count, BYTE *guest, INT write);
+/* #178: the floppy image, lent to the 82077AA (PFDC_MEDIA_GEOMETRY / PFDC_MEDIA_TRANSFER). */
+INT HostFdcGeometry(PVOID context, BYTE drive, PFDC_GEOMETRY geometry);
+INT HostFdcTransfer(
+    PVOID context,
+    BYTE drive,
+    WORD cylinder,
+    BYTE head,
+    BYTE sector,
+    PBYTE buffer,
+    INT isWrite);
 VOID HostSetFlags(volatile BYTE *tib, BYTE carryFlag, BYTE zeroFlag);
 VOID HostXms(volatile BYTE *tib);
 VOID HostEms(volatile BYTE *tib);
@@ -55,7 +67,9 @@ INT PmRwHardwareFail(
     PSTR *logCursor);
 INT DosPrnOut(PVOID context, BYTE character);
 VOID DosAuxOut(PVOID context, BYTE character);
+INT DosAuxIn(PVOID context, PBYTE character);
 INT DosTerminate(DOS_MACHINE *machine, PVOID tib, PSTR *logCursor, PSTR base);
+INT DosShellAbortResume(DOS_MACHINE *machine, PVOID tib, PSTR *logCursor);
 INT HostHasFloppy(VOID);
 INT HostHasCdrom(VOID);
 VOID StdioFlush(VOID);

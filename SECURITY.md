@@ -13,8 +13,10 @@ NTVDMEX runs with more reach than an ordinary program, and a report about it is 
 - It runs the guest's 16-bit code on the real processor, in Virtual-8086 mode and in
   protected mode through its DPMI host, inside the process of the user who started the
   program -- with that user's rights, no more.
-- It targets Windows XP, which has had no security updates since 2014. Do not run it, or
-  XP, on a machine whose safety matters.
+- It targets Windows XP, which has had no security updates since 2014. Plenty of people
+  still run XP on a home network, behind a router with nothing exposed to the internet, and
+  that's a reasonable choice, but it is a choice. Don't expose XP to the internet directly,
+  and give it access only to what it needs.
 
 ## Reporting a vulnerability
 

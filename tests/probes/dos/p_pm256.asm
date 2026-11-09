@@ -130,6 +130,39 @@ start:
         pop     es
         EMIT    "pm.int15.86.ticks", "AX,CF"
 
+        ; #276: INT 15h AH=83h from PM -- arm a 100 ms event on a flag byte (ES:BX =
+        ; our data selector : evflag), then poll bit 7, bounded by BIOS ticks (up to
+        ; ~1 s). AH = CF from the call, AL = 1 if the flag was posted.
+        mov     byte [evflag], 0
+        push    ds
+        pop     es
+        mov     bx, evflag
+        mov     ax, 8300h
+        mov     cx, 0001h
+        mov     dx, 86A0h                       ; 100 000 us
+        int     15h
+        mov     al, 0
+        adc     al, 0
+        mov     [evcf], al
+        push    es
+        mov     es, [sel40]
+        mov     bx, [es:6Ch]
+        mov     [t0], bx
+.evwait:
+        test    byte [evflag], 80h
+        jnz     .evdone
+        mov     ax, [es:6Ch]
+        sub     ax, [t0]
+        cmp     ax, 18
+        jb      .evwait
+.evdone:
+        pop     es
+        mov     ah, [evcf]
+        mov     al, [evflag]
+        shr     al, 7
+        call    pmcap
+        EMIT    "pm.int15.83.posted", "AX"
+
         mov     ah, 3Eh
         mov     bx, [hfile]
         int     21h
@@ -185,6 +218,8 @@ t0      dw      0
 sel40   dw      0
 hfile   dw      0
 hsave   dw      0
+evflag  db      0                       ; #276: the AH=83h flag byte
+evcf    db      0
 fname   db      'PM256.TXT', 0
 txt_pmw db      'PMW'
 txt_yz  db      'yz$'

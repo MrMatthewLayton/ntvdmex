@@ -14,6 +14,7 @@
 #include "host_wow.h"
 #include <commctrl.h>
 #include "host_state.h"
+#include "host_vddsvc.h"
 #include "log.h"
 #include "ne.h"
 #include "wow32.h"
@@ -220,6 +221,17 @@ typedef struct
     PVOID (*MapFlat)(WORD segment, DWORD offset, INT isProtectedMode);
     BOOL   (*InstallIoHook)(HANDLE vddHandle, WORD rangeCount, PCVOID ranges, PCVOID handlers);
     VOID   (*RemoveIoHook)(HANDLE vddHandle, WORD rangeCount, PCVOID ranges);
+    /* version 4 (#11): the rest of vddsvc.h -- see host_vddsvc.c */
+    BOOL   (*InstallMemoryHook)(HANDLE vddHandle, PVOID start, DWORD count, PVOID handler);
+    BOOL   (*RemoveMemoryHook)(HANDLE vddHandle, PVOID start, DWORD count);
+    DWORD  (*RequestDma)(HANDLE vddHandle, WORD channel, PVOID buffer, DWORD length);
+    BOOL   (*QueryDma)(HANDLE vddHandle, WORD channel, PVOID info);
+    BOOL   (*SetDma)(HANDLE vddHandle, WORD channel, WORD flags, PVOID info);
+    WORD   (*ReserveIrq)(HANDLE vddHandle, WORD line);
+    BOOL   (*ReleaseIrq)(HANDLE vddHandle, WORD line);
+    BOOL   (*VddMemory)(INT operation, HANDLE vddHandle, PVOID address, DWORD size);
+    BOOL   (*InstallUserHook)(HANDLE vddHandle, PVOID create, PVOID terminate, PVOID block, PVOID resume);
+    BOOL   (*RemoveUserHook)(HANDLE vddHandle);
 } NTVDMEX_SHIM_API;
 
 enum
@@ -495,22 +507,19 @@ INT WowCommOpen(PCSTR device)
      * else -- including the LPTn a guest may legally pass -- is not ours.
      */
     if (!device)
-        return WOWUSER_COMM_FAILED;                                                 /* IE_BADID */
+        return WOWUSER_IE_BADID;
 
     if ((device[0] != 'C' && device[0] != 'c') || (device[1] != 'O' && device[1] != 'o')
         || (device[2] != 'M' && device[2] != 'm'))
-        return WOWUSER_COMM_FAILED;
+        return WOWUSER_IE_BADID;                                                 /* not a COM device at all */
 
     index = device[3] - '1';
 
-    if (index < 0 || index >= WOWCOMM_MAX)
-        return WOWUSER_COMM_FAILED;                                                  /* no such port */
-
-    if (!VddCommIsFitted(&g_Comm, index))
-        return WOWUSER_COMM_FAILED;
+    if (index < 0 || index >= WOWCOMM_MAX || !VddCommIsFitted(&g_Comm, index))
+        return WOWUSER_IE_HARDWARE;                                              /* COMn, but no such port */
 
     if (g_WowCommOpen[index])
-        return WOWUSER_COMM_ALREADY_OPEN;                                                    /* IE_OPEN */
+        return WOWUSER_IE_OPEN;
 
     g_WowCommOpen[index] = 1;
     g_WowCommEvent[index] = 0;
@@ -3531,6 +3540,16 @@ VOID WowShimsLoad(VOID)
     shimApi.MapFlat = ShimMapFlat;
     shimApi.InstallIoHook = ShimInstallIoHook;
     shimApi.RemoveIoHook = ShimRemoveIoHook;
+    shimApi.InstallMemoryHook = HostVddInstallMemoryHook;
+    shimApi.RemoveMemoryHook = HostVddRemoveMemoryHook;
+    shimApi.RequestDma = HostVddRequestDma;
+    shimApi.QueryDma = HostVddQueryDma;
+    shimApi.SetDma = HostVddSetDma;
+    shimApi.ReserveIrq = HostVddReserveIrq;
+    shimApi.ReleaseIrq = HostVddReleaseIrq;
+    shimApi.VddMemory = HostVddMemory;
+    shimApi.InstallUserHook = HostVddInstallUserHook;
+    shimApi.RemoveUserHook = HostVddRemoveUserHook;
 
     for (index = 0; index < WOW_SHIMS; ++index)
     {
@@ -3656,7 +3675,7 @@ INT WowCall16SyncEx(
         event  = VDM_REG(tib, VTIB_EVENT);
         eip = DpmiPmEip(tib);
 
-        if (event == 3)
+        if (event == DPMI_ENTER_EVENT_PENDING)
             continue;
 
         if (event == VDM_EVENT_IO || event == VDM_EVENT_IO_HW || event == VDM_EVENT_GPFAULT)

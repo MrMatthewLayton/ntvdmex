@@ -31,9 +31,17 @@ static UINT64 g_FakeMicroseconds = 0;
 
 static UINT32 g_Irq1Count = 0;
 
+static UINT32 g_Irq12Count = 0;
+
 static UINT64 InputTestFakeClock(VOID)
 {
     return g_FakeMicroseconds;
+}
+
+static VOID InputTestCountIrq12(PVOID context, BYTE irq)
+{
+    if (irq == 12)
+        ++*(PUINT32)context;
 }
 
 static VOID InputTestCountIrq(PVOID context, BYTE irq)
@@ -590,6 +598,134 @@ INT main(VOID)
             VddBusIo(&bus, 0x92, 1, 0, &value);
             CHECK(input.ControllerResetsAsked == before + 2, "a20: port 92h fast reset is counted too");
         }
+
+        /* #180: THE KEYBOARD ANSWERS ITS COMMANDS. What p_kbd4 measured on 6.22/QEMU,
+         * dosbox-x and PCem: FAh to every command and parameter, EEh echoed, F2h -> FA AB 41
+         * behind a translating 8042, and a reply even after ADh.
+         */
+        {
+#define KBD_SEND(byteValue)     do { value = (byteValue); VddBusIo(&bus, 0x60, 1, 0, &value); } while (0)
+#define KBD_READ()              (VddBusIo(&bus, 0x60, 1, 1, &value), (BYTE)value)
+#define KBC_STATUS()            (VddBusIo(&bus, 0x64, 1, 1, &value), (BYTE)value)
+#define KBC_COMMAND(byteValue)  do { value = (byteValue); VddBusIo(&bus, 0x64, 1, 0, &value); } while (0)
+            BYTE first;
+            BYTE second;
+            BYTE third;
+            VddInputReset(&input);
+            KBD_SEND(0xEE);
+            CHECK((KBC_STATUS() & 0x01) && KBD_READ() == 0xEE, "kbd: EEh echoes EEh");
+            KBD_SEND(0xF2);
+            first = KBD_READ();
+            second = KBD_READ();
+            third = KBD_READ();
+            CHECK(first == 0xFA && second == 0xAB && third == 0x41, "kbd: F2h -> FA AB 41 (translating 8042)");
+            KBD_SEND(0xED);
+            first = KBD_READ();
+            KBD_SEND(0x02);
+            second = KBD_READ();
+            CHECK(first == 0xFA && second == 0xFA && input.LedState == 0x02, "kbd: EDh and its LED byte are each ACKed; the LEDs are kept");
+            KBD_SEND(0xF3);
+            first = KBD_READ();
+            KBD_SEND(0x20);
+            second = KBD_READ();
+            CHECK(first == 0xFA && second == 0xFA && input.TypematicByte == 0x20, "kbd: F3h and its rate are each ACKed; the rate is kept");
+            KBD_SEND(0xF4);
+            CHECK(KBD_READ() == 0xFA, "kbd: F4h (enable) ACKed");
+            KBD_SEND(0xFF);
+            first = KBD_READ();
+            second = KBD_READ();
+            CHECK(first == 0xFA && second == 0xAA && input.LedState == 0, "kbd: FFh -> FA, then the self test's AA; LEDs back off");
+            KBD_SEND(0x10);
+            CHECK(KBD_READ() == 0xFE, "kbd: a byte that is no command -> FEh (resend)");
+            KBD_SEND(0xFE);
+            CHECK(KBD_READ() == 0xAA, "kbd: FEh resends the last reply");
+            CHECK((KBC_STATUS() & 0x01) == 0, "kbd: nothing left over");
+
+            /* ADh holds the NEXT byte, not the one already presented. */
+            VddInputReset(&input);
+            VddInputPushScanCode(&input, 0x1E);
+            KBC_COMMAND(0xAD);
+            VddInputPushScanCode(&input, 0x1F);
+            CHECK(KBD_READ() == 0x1E, "kbc: ADh -- the byte already in the buffer is still read");
+            CHECK((KBC_STATUS() & 0x01) == 0, "kbc: ...and the next one waits (OBF clear)");
+            KBC_COMMAND(0xAE);
+            CHECK((KBC_STATUS() & 0x01) && KBD_READ() == 0x1F, "kbc: AEh sends the byte that waited");
+
+            /* A keyboard command re-enables the interface: the reply arrives after ADh. */
+            KBC_COMMAND(0xAD);
+            KBD_SEND(0xEE);
+            CHECK((KBC_STATUS() & 0x01) && KBD_READ() == 0xEE, "kbc: a reply arrives even after ADh");
+            KBC_COMMAND(0xAE);
+            CHECK((KBC_STATUS() & 0x01) == 0, "kbc: ...and AEh after it presents nothing more (p_kbd4 kbd.cmd.ee.while.disabled)");
+
+            /* The BIOS INT 09h: an ACK is a flag in 0040:0097, never a key. */
+            {   WORD key;
+            InputTestFresh(&input, &bus);
+            VddInputPushScanCode(&input, 0xFA);
+            VddInputBiosConsume(&input);
+            CHECK((g_BiosDataArea[0x97] & 0x10) && VddInputPop(&input, &key) == 0, "int09: FAh sets 0097 bit 4 and stores no key");
+            VddInputPushScanCode(&input, 0xFE);
+            VddInputBiosConsume(&input);
+            CHECK((g_BiosDataArea[0x97] & 0x20) && VddInputPop(&input, &key) == 0, "int09: FEh sets 0097 bit 5 and stores no key"); }
+#undef KBD_SEND
+#undef KBD_READ
+#undef KBC_STATUS
+#undef KBC_COMMAND
+        }
+
+        /* #199: THE AUXILIARY PORT -- D4h routes a byte to the PS/2 mouse, whose answer
+         * comes out at 60h with AUXB (status bit 5) and IRQ12 when command-byte bit 1 asks.
+         */
+        {
+#define KBC_COMMAND(byteValue)  do { value = (byteValue); VddBusIo(&bus, 0x64, 1, 0, &value); } while (0)
+#define KBC_DATA(byteValue)     do { value = (byteValue); VddBusIo(&bus, 0x60, 1, 0, &value); } while (0)
+#define KBC_STATUS()            (VddBusIo(&bus, 0x64, 1, 1, &value), (BYTE)value)
+#define KBC_READ()              (VddBusIo(&bus, 0x60, 1, 1, &value), (BYTE)value)
+            BYTE status;
+            BYTE first;
+            BYTE second;
+            VddInputReset(&input);
+            g_Irq12Count = 0;
+            VddBusSetSinks(&bus, InputTestCountIrq12, &g_Irq12Count, 0, 0);
+            KBC_COMMAND(0xA9);
+            CHECK(KBC_READ() == 0x00, "aux: A9h interface test -> 00h");
+            KBC_COMMAND(0xD4);
+            KBC_DATA(0xF2);                                   /* get ID, through the 8042 */
+            status = KBC_STATUS();
+            CHECK((status & 0x21) == 0x21, "aux: D4h F2h -> OBF and AUXB");
+            first = KBC_READ();
+            second = KBC_READ();
+            CHECK(first == 0xFA && second == 0x00, "aux: ...the mouse answers FA 00");
+            CHECK(g_Irq12Count == 0, "aux: no IRQ12 while command-byte bit 1 is clear (POST)");
+            KBC_COMMAND(0x60);
+            KBC_DATA(0x47);                                   /* IRQ1 + IRQ12 on, translation, SYS */
+            KBC_COMMAND(0xD4);
+            KBC_DATA(0xF4);                                   /* enable reporting */
+            CHECK(KBC_READ() == 0xFA && g_Irq12Count == 1, "aux: F4h -> FA, with IRQ12");
+            CHECK(VddInputAuxIsStreaming(&input), "aux: the host now feeds it");
+            CHECK(VddInputAuxMove(&input, 1, 0, 0) == 1 && (KBC_STATUS() & 0x21) == 0x21, "aux: a move -> a packet, AUXB");
+            first = KBC_READ();
+            CHECK(first == 0x08 && KBC_READ() == 0x01 && KBC_READ() == 0x00, "aux: the packet is 08 01 00");
+            /* the keyboard's byte goes first, and the mouse's waits behind it */
+            VddInputPushScanCode(&input, 0x1E);
+            (VOID)VddInputAuxMove(&input, 2, 0, 0);
+            status = KBC_STATUS();
+            CHECK((status & 0x21) == 0x01 && KBC_READ() == 0x1E, "aux: a keyboard byte first (OBF, no AUXB)");
+            CHECK((KBC_STATUS() & 0x21) == 0x21 && KBC_READ() == 0x08, "aux: ...then the mouse's");
+            (VOID)KBC_READ();
+            (VOID)KBC_READ();
+            /* command-byte bit 5 (aux clock off) holds the mouse */
+            KBC_COMMAND(0xA7);
+            (VOID)VddInputAuxMove(&input, 3, 0, 0);
+            CHECK((KBC_STATUS() & 0x21) == 0, "aux: A7h holds its bytes");
+            KBC_COMMAND(0xA8);
+            CHECK((KBC_STATUS() & 0x21) == 0x21, "aux: A8h sends what waited");
+            VddBusSetSinks(&bus, 0, 0, 0, 0);
+#undef KBC_COMMAND
+#undef KBC_DATA
+#undef KBC_STATUS
+#undef KBC_READ
+        }
         VddInputReset(&input);
     }
 
@@ -997,7 +1133,10 @@ INT main(VOID)
         EXPECT(0x1E61, "kbc D2h: ...'a' in the ring");
         value = 0x3A;
         VddBusIo(&bus, 0x60, 1, 0, &value);              /* no D2h: a KEYBOARD cmd */
-        CHECK(VddInputScanCodesQueued(&input) == 0, "kbc D2h: one byte per command (the next 60h write is not a keystroke)");
+        value = 0;
+        VddBusIo(&bus, 0x60, 1, 1, &value);
+        CHECK(VddInputScanCodesQueued(&input) == 0 && value == 0xFE,
+              "kbc D2h: one byte per command (the next 60h write goes to the keyboard, which asks for it again: FEh, #180)");
         VddBusSetSinks(&bus, 0, 0, 0, 0);
 
         /* (e) */

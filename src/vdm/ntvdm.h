@@ -195,7 +195,7 @@
  */
 #define VDM_EVENT_IO_STRING             1
 #define VDM_EVENT_GPFAULT               2
-#define VDM_EVENT_IO_HW                 3               /* I/O reflect code on real hardware (HVF uses 0) */
+#define VDM_EVENT_IO_HW                 3 /* I/O reflect code on real hardware (HVF uses 0); not DPMI_ENTER_EVENT_PENDING */
 #define VDM_EVENT_BOP                   4
 #define VDM_EVENT_HWIRQ                 6
 
@@ -208,19 +208,19 @@
  *                the kernel inc's it, so the host re-arms it to 0 before each PM entry.
  *   +0x636 word  16/32-bit client flag (stock ntvdm arms it per client).
  *   +0x638 word  handler selector -- the kernel loads this as the new CS.
- *   +0x63a word  saved faulting CS   (kernel writes).
- *   +0x63c dword saved faulting EIP  (kernel writes).
- *   +0x640 dword saved third slot ([trap+0x10]; SS:ESP-class, kernel writes).
+ *   +0x63a word  the faulting SS   (kernel writes; s19 took it for CS, s74 measured SS).
+ *   +0x63c dword the faulting ESP, full width (kernel writes; once taken for EIP).
+ *   +0x640 dword the faulting EIP, full width ([trap+0x10], kernel writes; s74 measured it).
  * The plan (Kernel RE session 6): make +0x638 a code selector whose base+0x1000 holds a
  * BOP (C4 C4 nn); the kernel jumps the guest to selector:0x1000 -> the BOP reflects as
- * VTIB_EVENT=4 -> the host reads the saved fault CS:EIP from +0x63a/0x63c and services it.
+ * VTIB_EVENT=4 -> the host reads the fault from +0x63a/0x63c/0x640 (SS, ESP, EIP) and services it.
  */
 #define VTIB_FLT_NEST                   0x634           /* Nesting counter (arm to 0 each entry) */
 #define VTIB_FLT_FLAG                   0x636           /* 16/32-bit client flag */
 #define VTIB_FLT_HSEL                   0x638           /* PM-fault handler selector (our trampoline H) */
-#define VTIB_FLT_SAVCS                  0x63A           /* Kernel: saved faulting CS */
-#define VTIB_FLT_SAVEIP                 0x63C           /* Kernel: saved faulting EIP */
-#define VTIB_FLT_SAV3                   0x640           /* Kernel: saved third slot (SS:ESP-class) */
+#define VTIB_FLT_SAVSS                  0x63A           /* Kernel: the faulting SS (s74; was VTIB_FLT_SAVCS) */
+#define VTIB_FLT_SAVESP                 0x63C           /* Kernel: the faulting ESP, full width (was VTIB_FLT_SAVEIP) */
+#define VTIB_FLT_FAULTEIP               0x640           /* Kernel: the faulting EIP, full width (was VTIB_FLT_SAV3) */
 
 /* Access a 32-bit guest register/field at VDM_TIB offset `off` (e.g. VTIB_EAX). */
 /* FIXED_NTVDMSTATE, the kernel's VDM state word at linear 0x714, and its pending-interrupt bits. */

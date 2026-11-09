@@ -127,6 +127,8 @@ HWND     g_WowWinSetFocusWindow;
  */
 LONGLONG g_WowWinPumpTicks = 0;
 DWORD    g_WowWinPumpCalls = 0;
+/* #318: depth of modal Win32 calls the guest is parked in (MessageBox) -- see WM_PAINT. */
+INT g_WowWinModalCall;
 /* #160: menus held back until the guest set them up, and the replay's re-entry flag. */
 static DWORD g_WowWinMenuDeferred = 0;
 static INT   g_WowWinIsReplaying = 0;
@@ -150,6 +152,7 @@ static INT g_WowWinSendingCount;
  */
 static INT g_WowWinSizeMove;
 static UINT g_WowWinPaintsLogged;
+static UINT g_WowWinMenuLogged;
 
 static WOWWIN_HELD_CHAR g_WowWinHeldChars[WOWWIN_MAX_HELD_CHARS];
 static DWORD g_WowWinHeldCharSequence;
@@ -195,6 +198,47 @@ static VOID WowWinPaintWant(WORD window16, const RECT *rect, INT isErase)
     g_WowWinPaints[freeSlot].Rect = *rect;
     g_WowWinPaints[freeSlot].IsErase = isErase;
     g_WowWinPaints[freeSlot].IsPending = 1;
+}
+
+/* The pending rectangle for a window, left pending, or 0 if there is none. */
+INT WowWinPaintPeek(WORD window16, PRECT output, PINT isErase)
+{
+    INT index;
+
+    for (index = 0; index < WOWWIN_MAXPAINT; ++index)
+        if (g_WowWinPaints[index].IsPending && g_WowWinPaints[index].Window16 == window16)
+        {
+            *output = g_WowWinPaints[index].Rect;
+
+            if (isErase)
+                *isErase = g_WowWinPaints[index].IsErase;
+
+            return 1;
+        }
+
+    return 0;
+}
+
+/* #328: the guest validated part of its window (ValidateRect), so the pending rectangle
+ * loses that part -- all of it for a NULL rectangle. A remainder that is not a rectangle
+ * stays whole (SubtractRect's rule): a repaint too many, never one too few.
+ */
+VOID WowWinPaintValidate(WORD window16, const RECT *rect)
+{
+    INT index;
+
+    for (index = 0; index < WOWWIN_MAXPAINT; ++index)
+        if (g_WowWinPaints[index].IsPending && g_WowWinPaints[index].Window16 == window16)
+        {
+            RECT remainder;
+
+            if (!rect || !SubtractRect(&remainder, &g_WowWinPaints[index].Rect, rect))
+                g_WowWinPaints[index].IsPending = 0;
+            else
+                g_WowWinPaints[index].Rect = remainder;
+
+            return;
+        }
 }
 
 /* Take the pending rectangle for a window, or 0 if there is none. */
@@ -665,11 +709,16 @@ static LRESULT CALLBACK WowWinProc(HWND window, UINT message, WPARAM wParam, LPA
                 paintCursor = LogPut(paintCursor, ","); paintCursor = LogHex(paintCursor, (DWORD)paint.rcPaint.right);
                 paintCursor = LogPut(paintCursor, ","); paintCursor = LogHex(paintCursor, (DWORD)paint.rcPaint.bottom);
                 paintCursor = LogPut(paintCursor, paint.fErase ? " erase" : " noerase");
-                paintCursor = LogPut(paintCursor, g_WowWinSizeMove ? " SENT\r\n" : " posted\r\n");
+                paintCursor = LogPut(paintCursor, (g_WowWinSizeMove || g_WowWinModalCall) ? " SENT\r\n" : " posted\r\n");
                 LogAppend(LOG_PATH, paintLog, paintCursor);
             }
 
-            if (g_WowWinSizeMove)
+            /* #318: and inside a modal Win32 call the guest is parked in (MessageBox),
+             * whose own loop is the only one running: posted, WinHelp's paint waited
+             * for the box to close and its window showed the desktop through it.
+             * Win16's MessageBox dispatches paints as it waits.
+             */
+            if (g_WowWinSizeMove || g_WowWinModalCall)
                 WowWinSendOrPost(window16, WM_PAINT16, 0, 0, pointX, pointY);
             else
                 WowMsgPost(window16, WM_PAINT16, 0, 0, GetTickCount(), pointX, pointY);
@@ -1048,6 +1097,36 @@ static LRESULT CALLBACK WowWinProc(HWND window, UINT message, WPARAM wParam, LPA
 
         break;
 
+    /* #288 (s100): WM_PARENTNOTIFY FOR A CLICK ON A CHILD, SENT, as Windows sends it
+     * before the child's own button message. Charmap moves its status-line help text
+     * from here (GetMessagePos -> WindowFromPoint -> GetDlgCtrlID); dropped, the text
+     * stayed on the font box's for good. The mouse packing is the same in both:
+     * wParam = the button message, lParam = the point in this window's client area.
+     *
+     * [CAUTION]: WM_CREATE / WM_DESTROY notifications are NOT relayed. Win16 packs
+     * them as lParam = MAKELONG(hwndChild16, id), and they arrive inside the
+     * CreateWindow / DestroyWindow, before the child has a 16-bit handle or after
+     * it has lost it.
+     */
+    case WM_PARENTNOTIFY:
+        if (window16)
+        {
+            switch (LOWORD(wParam))
+            {
+            case WM_LBUTTONDOWN:
+            case WM_MBUTTONDOWN:
+            case WM_RBUTTONDOWN:
+                WowWinSendOrPost(window16, (WORD)message, LOWORD(wParam), (DWORD)lParam, pointX, pointY);
+                ++g_WowWinMessages;
+                break;
+
+            default:
+                break;
+            }
+        }
+
+        break;
+
     case WM_GETMINMAXINFO:
         if (window16 && g_WowWinSend16Blob && lParam && g_WowWinSendingCount < WOWWIN_MAX_SENDING)
         {
@@ -1227,6 +1306,23 @@ static LRESULT CALLBACK WowWinProc(HWND window, UINT message, WPARAM wParam, LPA
      * before; handled afterwards, they set the state the menu already has.
      */
     case WM_SYSCOMMAND:
+        /* #319: which window a keyboard/mouse menu request reaches, and whether it is
+         * the replay. Bounded.
+         */
+        if (window16 && g_WowWinMenuLogged < WOWWIN_MENU_LOG_MAX
+            && ((wParam & WOWWIN_SC_MASK) == SC_KEYMENU || (wParam & WOWWIN_SC_MASK) == SC_MOUSEMENU))
+        {
+            CHAR menuLog[WOWWIN_LOG_LINE_MAX];
+            CHAR *menuCursor = menuLog;
+            ++g_WowWinMenuLogged;
+            menuCursor = LogPut(menuCursor, "WOWWIN: WM_SYSCOMMAND h16=0x"); menuCursor = LogHex(menuCursor, window16);
+            menuCursor = LogPut(menuCursor, " sc=0x");        menuCursor = LogHex(menuCursor, (DWORD)wParam);
+            menuCursor = LogPut(menuCursor, " lp=0x");        menuCursor = LogHex(menuCursor, (DWORD)lParam);
+            menuCursor = LogPut(menuCursor, (GetWindowLongA(window, GWL_STYLE) & WS_CHILD) ? " CHILD" : " top");
+            menuCursor = LogPut(menuCursor, g_WowWinIsReplaying ? " replay\r\n" : "\r\n");
+            LogAppend(LOG_PATH, menuLog, menuCursor);
+        }
+
         if (window16 && !g_WowWinIsReplaying
             && ((wParam & WOWWIN_SC_MASK) == SC_KEYMENU || (wParam & WOWWIN_SC_MASK) == SC_MOUSEMENU)
             && GetMenu(window))

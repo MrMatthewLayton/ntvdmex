@@ -34,6 +34,8 @@
 /* INT 15h, system services (AH), and the AH it answers with. */
 #define BIOS_SYSTEM_KEYBOARD_INTERCEPT          0x4F
 #define BIOS_SERIAL_SEND                        0x01        /* INT 14h AH=01h */
+#define BIOS_SERIAL_RECEIVE                     0x02        /* INT 14h AH=02h (#272) */
+#define BIOS_SERIAL_TIMEOUT                     0x80        /* INT 14h AH bit 7: nothing came (#272) */
 #define BIOS_ROM_SEGMENT                        0xF000      /* The BIOS ROM: F000:0000 up */
 #define BIOS_SYSTEM_EVENT_WAIT                  0x83
 #define BIOS_SYSTEM_JOYSTICK                    0x84
@@ -43,6 +45,7 @@
 #define BIOS_SYSTEM_EXTENDED_MEMORY             0x88
 #define BIOS_SYSTEM_GET_CONFIGURATION           0xC0
 #define BIOS_SYSTEM_GET_EBDA                    0xC1
+#define BIOS_SYSTEM_POINTING_DEVICE             0xC2        /* #199: PS/2 mouse, AL = function (RBIL INT 15/AX=C2xx) */
 #define BIOS_MOVE_BLOCK_SOURCE                  0x10        /* AH=87h's GDT: the source descriptor */
 #define BIOS_MOVE_BLOCK_DESTINATION             0x18
 #define BIOS_MOVE_BLOCK_WORDS_MAX_U             0x8000u     /* CX: 64 KB, one descriptor's reach */
@@ -71,6 +74,9 @@
 #define MULTIPLEX_XMS_INSTALLATION_CHECK        0x4300
 #define MULTIPLEX_XMS_GET_ENTRY                 0x4310
 #define MULTIPLEX_XMS_INSTALLED                 0x80        /* AL */
+#define MULTIPLEX_IPX_INSTALLATION_CHECK        0x7A00      /* #315: NetWare IPX (RBIL INT 2F/7A00) */
+#define MULTIPLEX_IPX_INSTALLED                 0xFF        /* AL; ES:DI = the far-call entry */
+#define MULTIPLEX_DOS_UPPERCASE_CHARACTER       0x1213      /* The pushed WORD -> AL (DosCtabMultiplexUppercaseAx) */
 #define MULTIPLEX_DOS_TABLES                    0x122E      /* DL selects: see DOS_INT2F_TBL_* */
 #define MULTIPLEX_DEVICE_API_ENTRY              0x1684
 #define MULTIPLEX_DPMI_INSTALLATION_CHECK       0x1687

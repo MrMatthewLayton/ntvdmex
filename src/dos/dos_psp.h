@@ -179,4 +179,23 @@ static inline VOID DosPspRestoreVectors(_In_opt_ volatile BYTE *base, _In_ WORD 
             ivt[vectors[vectorIndex] * IVT_ENTRY_SIZE + byteIndex] = psp[copyOffsets[vectorIndex] + byteIndex];
 }
 
+/* A TERMINATE BY A PROCESS THAT IS ITS OWN PARENT. (s101 rig: Abort at the shell's
+ * "Not ready reading drive D" ended the whole session.) The permanent COMMAND.COM sets
+ * PSP:16h to its own PSP and PSP:0Ah to its own re-entry; DOS cannot free it or return
+ * to a parent, so it resumes at that terminate address and the shell prints a new
+ * prompt. Returns the far address (segment << 16 | offset), or 0 when the process is
+ * not its own parent or has none -- then the run ends, as it always did.
+ */
+static inline DWORD DosPspSelfTerminateAddress(_In_opt_ volatile BYTE *base, _In_ WORD pspSegment)
+{
+    volatile BYTE *psp = DosMcbSegmentAddress(base, pspSegment);
+    WORD offset = DosMcbReadWord(psp + DOS_PSP_INT22_COPY);
+    WORD segment = DosMcbReadWord(psp + DOS_PSP_INT22_COPY + X86_FAR_POINTER_SEGMENT);
+
+    if (DosMcbReadWord(psp + DOS_PSP_PARENT) != pspSegment)
+        return 0;
+
+    return ((DWORD)segment << WORD_SHIFT) | offset;
+}
+
 #endif /* NTVDMEX_DOS_PSP_H */

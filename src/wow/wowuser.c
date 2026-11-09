@@ -2148,6 +2148,15 @@ static INT WowUserDestroy(WORD window16, PSTR note, INT noteCapacity, PINT noteL
         return 1;
 }
 
+/* #328: the modal loop's DestroyWindow. Win16's DialogBox destroys its dialog when
+ * EndDialog ends the loop; ours is the loop, so it is ours to do. Same path as the
+ * guest's own DestroyWindow: WM_DESTROY sent, the record and its children released.
+ */
+INT WowUserDestroyDialog(WORD window16, PSTR note, INT noteCapacity, PINT noteLengthInOut)
+{
+    return WowUserDestroy(window16, note, noteCapacity, noteLengthInOut);
+}
+
 static LONG WowUserDefProc(
     PWOW32_FRAME frame,
     PWOWUSER_WINDOW window,
@@ -3085,7 +3094,14 @@ static VOID WowUserDefaultPaint(PWOWUSER_WINDOW window, INT isDialog)
     if (!WowWinPaintTake(window->Window16, &rect, &shouldErase) || !shouldErase)
         return;
 
-    dc = GetDCEx(window->Window32, NULL, DCX_CACHE | DCX_CLIPCHILDREN);
+    /* #283: and SIBLINGS as the style says, as BeginPaint does. Every top-level window
+     * has WS_CLIPSIBLINGS, and without it the erase painted straight over the
+     * windows above this one: Terminal's first paint, dispatched from the modal loop
+     * of its own Default Serial Port dialog, greyed out that dialog's frame and
+     * controls (only its client, erased next, came back).
+     */
+    dc = GetDCEx(window->Window32, NULL, DCX_CACHE | DCX_CLIPCHILDREN
+                 | ((GetWindowLongA(window->Window32, GWL_STYLE) & WS_CLIPSIBLINGS) ? DCX_CLIPSIBLINGS : 0));
 
     if (!dc)
         return;
@@ -3828,6 +3844,7 @@ INT WowUserCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
         DWORD style;
         DWORD controlStyle;
         INT   isShowDeferred = 0;
+        INT   isHiddenChild;
         INT count;
         INT positionX;
         INT positionY;
@@ -3860,6 +3877,15 @@ INT WowUserCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
 
         style = WowDlgTemplateDword(templateBytes, 0);
         controlStyle = style;           /* what we actually CREATE it with */
+        /* #320: a CHILD dialog whose template omits WS_VISIBLE stays hidden, as
+         * CreateDialog leaves it ("if the template specifies WS_VISIBLE, CreateDialog
+         * displays the dialog box"); its program shows it when it wants it. Terminal's
+         * function-key bar (DIALOG 24, 44800040) is one: stock keeps it hidden, and
+         * ours showed it and took 40 pixels from the terminal. Top-level dialogs keep
+         * the show below -- Calc, Charmap, Sound Recorder and Media Player are popups
+         * without WS_VISIBLE too, and that path is measured working for them.
+         */
+        isHiddenChild = (style & WS_CHILD) && !(style & WS_VISIBLE);
         count = templateBytes[WOWDLG_TEMPLATE_COUNT];
         positionX  = (INT)(SHORT)WowDlgTemplateWord(templateBytes, WOWDLG_TEMPLATE_X);
         positionY  = (INT)(SHORT)WowDlgTemplateWord(templateBytes, WOWDLG_TEMPLATE_Y);
@@ -4339,8 +4365,17 @@ INT WowUserCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
          * return, because it hangs the guest instead of ending it" -- is why
          * that file has FOUR named exits and why two paths in the arm below
          * still return immediately and say so.
+         *
+         * [CAUTION]: #328: NOT A MODAL ONE. Since s91 (#283) the modal loop shows every
+         * modal dialog after its WM_INITDIALOG (IsShowDeferred), and the two arms below
+         * show it when there is no loop. Showing it here as well put Terminal's
+         * Communications dialog on screen BEFORE it centred itself with a
+         * non-repainting MoveWindow: it arrived at its place with no frame, no
+         * buttons and no group boxes painted, and the deferred show was then a
+         * no-op on a window already visible.
          */
-        if (window->Window32 && !(style & WS_VISIBLE) && (isModal || !g_WowUserSend16 || !frame->IsCallbackAllowed))
+        if (window->Window32 && !(style & WS_VISIBLE) && !isModal && !isHiddenChild
+            && (!g_WowUserSend16 || !frame->IsCallbackAllowed))
             ShowWindow(window->Window32, SW_SHOW);
 
         /* [INFO]: SAY WHICH ONE THIS IS, EVERY TIME. Until the modal loop exists, a
@@ -4517,10 +4552,10 @@ INT WowUserCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
                 isSent = g_WowUserSend16(window->Window16, WM_INITDIALOG, firstFocus,
                                    Wow32ArgDword(frame, WOWUSER_CD_ARG_PARAM), &result16);
 
-                if (isSent && !g_WowUserIsInitDialogShown && window->Window32 && IsWindow(window->Window32))
+                if (isSent && !g_WowUserIsInitDialogShown && !isHiddenChild && window->Window32 && IsWindow(window->Window32))
                     ShowWindow(window->Window32, SW_SHOW);
 
-                if (!isSent && window->Window32)
+                if (!isSent && !isHiddenChild && window->Window32)
                     ShowWindow(window->Window32, SW_SHOW);
 
                 g_WowUserInitDialogWindow = savedWindow;
@@ -4539,7 +4574,7 @@ INT WowUserCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
                 WowNotePut(note, noteCapacity, &noteLength, " + WM_INITDIALOG (modeless)");
             }
         }
-        else if (!isModal && window->Window32 && !IsWindowVisible(window->Window32)
+        else if (!isModal && !isHiddenChild && window->Window32 && !IsWindowVisible(window->Window32)
                    && g_WowUserSend16 && frame->IsCallbackAllowed)
         {
             ShowWindow(window->Window32, SW_SHOW);  /* no procedure: shown as before */
@@ -6411,6 +6446,11 @@ INT WowUserCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
         }
 
         ValidateRect(window->Window32, hasRect ? &rect : NULL);
+        /* #328: and the relay's paint record, which GetUpdateRect now reports. Write
+         * paints its document with GetUpdateRect + GetDC + ValidateRect, never
+         * BeginPaint, so nothing else would ever clear it.
+         */
+        WowWinPaintValidate(window16, hasRect ? &rect : NULL);
         Wow32SetReturn(frame, 1);
         return 1;
     }
@@ -6796,7 +6836,40 @@ INT WowUserCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
         WowNoteHex(note, noteCapacity, &noteLength, type, WOW_HEX_WORD_DIGITS);
         WowNotePut(note, noteCapacity, &noteLength, " -- ★ MODAL: the VDM stops until it is"
                                    " dismissed");
+        /* #318: AND THE PAINTS ALREADY QUEUED GO FIRST. WinHelp posts its own window's
+         * first paint and then calls MessageBox before its loop ever runs again, so
+         * the paint sat in our queue for as long as the box was up: its window
+         * showed the desktop through it (stock: its dark-blue client). Win16's
+         * MessageBox loop dispatches a task's pending paints; here they are sent
+         * through the nested run, each once, before the box opens.
+         */
+        if (g_WowUserSend16 && frame->IsCallbackAllowed)
+        {
+            WORD paintWindows[WOWUSER_MODAL_PAINTS_MAX];
+            INT paintCount = 0;
+            INT paintIndex;
+            WOWMSG pending;
+
+            while (paintCount < WOWUSER_MODAL_PAINTS_MAX && WowMsgTake(0, WM_PAINT16, WM_PAINT16, PM_REMOVE, &pending))
+                paintWindows[paintCount++] = pending.Window;
+
+            for (paintIndex = 0; paintIndex < paintCount; ++paintIndex)
+            {
+                WORD paintResult;
+
+                if (WowUserFindWindow(paintWindows[paintIndex])
+                    && !g_WowUserSend16(paintWindows[paintIndex], WM_PAINT16, 0, 0, &paintResult))
+                    WowMsgPost(paintWindows[paintIndex], WM_PAINT16, 0, 0, GetTickCount(), 0, 0);
+            }
+
+            if (paintCount) { WowNotePut(note, noteCapacity, &noteLength, " [queued paints sent first: 0x");
+                              WowNoteHex(note, noteCapacity, &noteLength, (DWORD)paintCount, WOW_HEX_BYTE_DIGITS);
+                              WowNotePut(note, noteCapacity, &noteLength, "]"); }
+        }
+
+        ++g_WowWinModalCall;            /* #318: paints are SENT while it waits */
         result = MessageBoxA(window ? window->Window32 : NULL, text, caption, (UINT)type);
+        --g_WowWinModalCall;
         WowNotePut(note, noteCapacity, &noteLength, "; answered 0x");
         WowNoteHex(note, noteCapacity, &noteLength, (DWORD)result, WOW_HEX_WORD_DIGITS);
         Wow32SetReturn(frame, (DWORD)(WORD)result);
@@ -7992,6 +8065,26 @@ INT WowUserCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
                                 return 1; }
 
         hasAny = GetUpdateRect(window->Window32, &rect, erase ? TRUE : FALSE) ? 1 : 0;
+        /* #328 (Write): THE RELAY ALREADY EMPTIED THE REAL REGION. wowwin's WM_PAINT ran
+         * the OS's BeginPaint/EndPaint and kept the rectangle in the paint record for
+         * the guest's BeginPaint, so the real window reports clean. Write's document
+         * window opens its WM_PAINT with GetUpdateRect and returns without painting
+         * when it is told FALSE -- an area uncovered by another window stayed as the
+         * other window's pixels. The record is the update region the guest still
+         * has; report it, and leave it for BeginPaint.
+         */
+        {   RECT pendingRect;
+
+            if (WowWinPaintPeek(window16, &pendingRect, NULL))
+            {
+                if (hasAny)
+                    UnionRect(&rect, &rect, &pendingRect);
+                else
+                    rect = pendingRect;
+
+                hasAny = 1;
+            }
+        }
 
         if (rectBytes)
         {
@@ -8989,8 +9082,9 @@ INT WowUserCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
 
         if (portId < 0)
         {
-            WowNotePut(note, noteCapacity, &noteLength, portId == WOWUSER_COMM_ALREADY_OPEN ? "IE_OPEN (already open)"
-                                                : "IE_BADID (no such port here)");
+            WowNotePut(note, noteCapacity, &noteLength, portId == WOWUSER_IE_OPEN ? "IE_OPEN (already open)"
+                                                : portId == WOWUSER_IE_HARDWARE ? "IE_HARDWARE (no such port here)"
+                                                : "IE_BADID (not a device name)");
         }
         else
         {
@@ -9327,6 +9421,22 @@ INT WowUserCall(PWOW32_FRAME frame, PSTR note, INT noteCapacity)
             WowNotePut(note, noteCapacity, &noteLength, " -> WM_CTLCOLOR: the default brush, token 0x");
             WowNoteHex(note, noteCapacity, &noteLength, brush16, WOW_HEX_WORD_DIGITS);
             Wow32SetReturn(frame, brush16);
+            return 1;
+        }
+
+        /* [CAUTION]: #319: THE SYSTEM KEYS HAVE HAD THEIR DEFAULT ALREADY. wowwin hands every
+         * real WM_SYSKEYDOWN / WM_SYSKEYUP / WM_SYSCHAR to the OS's default procedure as
+         * it arrives (that is what opens the menu) and posts a copy to the guest. The
+         * copy coming back here was a SECOND default for the same key: USER32 toggles
+         * its menu-key state on each Alt down it sees, so with two the Alt-up opened
+         * nothing -- Program Manager's menus were dead from the keyboard whenever a
+         * group window had the focus (plain windows are spared: Win16's DefWindowProc
+         * does not forward these to us). Answered 0, as the default had answered.
+         */
+        if (message16 == WM_SYSKEYDOWN || message16 == WM_SYSKEYUP || message16 == WM_SYSCHAR || message16 == WM_SYSDEADCHAR)
+        {
+            WowNotePut(note, noteCapacity, &noteLength, " -> a system key: defaulted on arrival (wowwin); 0");
+            Wow32SetReturn(frame, 0);
             return 1;
         }
 

@@ -205,9 +205,66 @@
  */
 #define DOS_NUL_NAME                        "NUL     "
 
+/* #48: AN SFT ENTRY, DOS 4.0-6.0 FORMAT -- the 59 bytes (DOS_SFT_ENTSZ) a walker of
+ * SysVars+04h's chain reads for each open file.
+ *
+ * [CAUTION]: THIS LAYOUT IS RBIL'S, NOT A MEASUREMENT. The entry SIZE is measured (dos_layout.h);
+ * the field offsets are Ralf Brown's Interrupt List, INT 21h AH=52h, "Format of DOS 4.0-6.0
+ * system file tables and FCB tables" -- the source docs/ref/SOURCES.md names for DOS's internal
+ * structures. p_sysvar dumps the first 30h bytes of the chain (BUF sysvars.sft0), so an oracle
+ * run of it pins the header and entry 0's first 42 bytes.
+ *
+ *   00 WORD   handles referring to this entry (0 = free)
+ *   02 WORD   open mode (AL of 3Dh; bit 15 = opened by FCB)
+ *   04 BYTE   attribute
+ *   05 WORD   device info (bit 7 = character device; a file: bits 0-5 its drive)
+ *   07 DWORD  a device's header, or a file's DPB
+ *   0B WORD   starting cluster
+ *   0D WORD   time (packed)            0F WORD   date (packed)
+ *   11 DWORD  size                     15 DWORD  current position
+ *   19 WORD   relative cluster of the last access
+ *   1B DWORD  sector of the directory entry      1F BYTE  entry within that sector
+ *   20 11     name, FCB form ("NAME    EXT")
+ *   2B DWORD  SHARE: previous SFT for the same file     2F WORD  SHARE: machine number
+ *   31 WORD   PSP of the owner
+ *   33 WORD   SHARE record offset      35 WORD   absolute cluster of the last access
+ *   37 DWORD  IFS driver (0 = native)
+ *
+ * [INFO]: WHAT WE CANNOT KNOW IS ZERO. There is no FAT behind a host file, so the DPB pointer,
+ * the clusters and the directory sector/entry are 0 -- the "nothing here" a walker already copes
+ * with for a redirected (network) file. The device info word is what our own AX=4400h answers
+ * for the handle, so the two never disagree.
+ */
+#define DOS_SFT_REFERENCES                  0x00
+#define DOS_SFT_OPEN_MODE                   0x02
+#define DOS_SFT_ATTRIBUTE                   0x04
+#define DOS_SFT_DEVICE_INFO                 0x05
+#define DOS_SFT_TIME                        0x0D
+#define DOS_SFT_DATE                        0x0F
+#define DOS_SFT_SIZE                        0x11
+#define DOS_SFT_POSITION                    0x15
+#define DOS_SFT_NAME                        0x20
+#define DOS_SFT_NAME_SIZE                   11
+#define DOS_SFT_OWNER_PSP                   0x31
+
 enum { DOS_DEVICE_CON, DOS_DEVICE_AUX, DOS_DEVICE_PRN, DOS_DEVICE_CLOCK, DOS_DEVICE_BLOCK,
        DOS_DEVICE_COM1, DOS_DEVICE_LPT1, DOS_DEVICE_LPT2, DOS_DEVICE_LPT3, DOS_DEVICE_COM2,
        DOS_DEVICE_COM3, DOS_DEVICE_COM4, DOS_DEVICE_COUNT };
+
+typedef struct _DOS_SFT_FILE
+{
+    WORD  References;
+    WORD  OpenMode;
+    BYTE  Attribute;
+    WORD  DeviceInfo;
+    WORD  Time;
+    WORD  Date;
+    DWORD Size;
+    DWORD Position;
+    BYTE  Name[DOS_SFT_NAME_SIZE];   /* FCB form, blank-padded */
+    WORD  OwnerPsp;
+} DOS_SFT_FILE, *PDOS_SFT_FILE;
+typedef const DOS_SFT_FILE *PCDOS_SFT_FILE;
 
 /* static INLINE: dos_int21.c includes this for AH=1Fh/32h's DPB (#48) and uses one
  * builder of the five, and a plain `static` would warn for every unused one.
@@ -468,6 +525,77 @@ static inline VOID DosNulHeaderBuild(
     _In_ UINT interruptEntry)
 {
     DosDeviceHeaderBuild(header, nextSegment, nextOffset, DOS_DEVICE_ATTRIBUTE_NUL, strategyEntry, interruptEntry, DOS_NUL_NAME);
+}
+
+/* Entry `index` of an SFT block (the block starts with its 6-byte header). */
+static inline PBYTE DosSftEntryAt(_In_ PBYTE block, _In_ UINT index)
+{
+    return block + DOS_SFT_HEADER + index * DOS_SFT_ENTSZ;
+}
+
+/* Write one entry from `file`; every field it does not carry is 0. */
+static inline VOID DosSftEntryBuild(
+    _Out_writes_bytes_(DOS_SFT_ENTSZ) PBYTE entry,
+    _In_ PCDOS_SFT_FILE file)
+{
+    UINT index;
+
+    for (index = 0; index < DOS_SFT_ENTSZ; ++index)
+        entry[index] = 0;
+
+    DosSysVarsWriteWord(entry, DOS_SFT_REFERENCES, file->References);
+    DosSysVarsWriteWord(entry, DOS_SFT_OPEN_MODE, file->OpenMode);
+    entry[DOS_SFT_ATTRIBUTE] = file->Attribute;
+    DosSysVarsWriteWord(entry, DOS_SFT_DEVICE_INFO, file->DeviceInfo);
+    DosSysVarsWriteWord(entry, DOS_SFT_TIME, file->Time);
+    DosSysVarsWriteWord(entry, DOS_SFT_DATE, file->Date);
+    DosSysVarsWriteWord(entry, DOS_SFT_SIZE, file->Size & 0xFFFFu);
+    DosSysVarsWriteWord(entry, DOS_SFT_SIZE + 2, file->Size >> 16);
+    DosSysVarsWriteWord(entry, DOS_SFT_POSITION, file->Position & 0xFFFFu);
+    DosSysVarsWriteWord(entry, DOS_SFT_POSITION + 2, file->Position >> 16);
+
+    for (index = 0; index < DOS_SFT_NAME_SIZE; ++index)
+        entry[DOS_SFT_NAME + index] = file->Name[index];
+
+    DosSysVarsWriteWord(entry, DOS_SFT_OWNER_PSP, file->OwnerPsp);
+}
+
+/* A free entry: all zero, so its reference count says "unused". */
+static inline VOID DosSftEntryClear(_Out_writes_bytes_(DOS_SFT_ENTSZ) PBYTE entry)
+{
+    UINT index;
+
+    for (index = 0; index < DOS_SFT_ENTSZ; ++index)
+        entry[index] = 0;
+}
+
+/* The last path component of `path` ("C:\DIR\FILE.TXT" -> FILE.TXT) in FCB form: the name
+ * blank-padded to 8, the extension to 3, upper-cased (DOS stores names upper-case).
+ */
+static inline VOID DosSftNameFromPath(
+    _In_ PCSTR path,
+    _Out_writes_bytes_(DOS_SFT_NAME_SIZE) PBYTE name)
+{
+    PCSTR base = path;
+    PCSTR cursor;
+    UINT index = 0;
+
+    for (cursor = path; *cursor; ++cursor)
+        if (*cursor == '\\' || *cursor == '/' || *cursor == ':')
+            base = cursor + 1;
+
+    for (index = 0; index < DOS_SFT_NAME_SIZE; ++index)
+        name[index] = ' ';
+
+    for (cursor = base, index = 0; *cursor && *cursor != '.' && index < 8; ++cursor, ++index)
+        name[index] = (BYTE)((*cursor >= 'a' && *cursor <= 'z') ? *cursor - ('a' - 'A') : *cursor);
+
+    while (*cursor && *cursor != '.')
+        ++cursor;
+
+    if (*cursor == '.')
+        for (++cursor, index = 8; *cursor && index < DOS_SFT_NAME_SIZE; ++cursor, ++index)
+            name[index] = (BYTE)((*cursor >= 'a' && *cursor <= 'z') ? *cursor - ('a' - 'A') : *cursor);
 }
 
 #endif /* NTVDMEX_DOS_SYSVARS_H */

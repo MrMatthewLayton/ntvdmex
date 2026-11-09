@@ -16,8 +16,24 @@ if errorlevel 1 (
     pause
     exit /b 1
 )
+rem An earlier run's log must not answer for this one: the checks below read it.
+del /q "%~dp0debug\out\ntvdmhost.log" >nul 2>&1
 "%~dp0bin\selftest.com"
 echo.
+rem WAIT FOR THE HOST TO FINISH ITS LOG. The host tells Windows the program has ended
+rem before it copies the program's output into the log, so this script resumes while
+rem the log is still being written: the ALL TESTS PASSED check used to run first and
+rem fail a self-test that had passed (#141, on the XP rig). "STAGE2: complete" is the
+rem host's last report line. Up to 30 seconds, one second at a time.
+set /a WAITED=0
+:waitlog
+findstr /C:"STAGE2: complete" "%~dp0debug\out\ntvdmhost.log" >nul 2>&1
+if not errorlevel 1 goto logdone
+if %WAITED% GEQ 30 goto logdone
+set /a WAITED+=1
+ping -n 2 127.0.0.1 >nul
+goto waitlog
+:logdone
 if not exist "%~dp0debug\out\ntvdmhost.log" (
     echo FAIL: no log was written to debug\out\ -- NTVDMEX did not run at all.
     echo Run status.bat and send its output.

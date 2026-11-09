@@ -193,6 +193,27 @@ INT main(VOID)
     FhTestExpect("h = 0xFFFF is not a file", DosHandleIsFile(fileHandles, FH_TEST_RAW_GUEST_BX), FALSE);
     FhTestExpect("h = 0xFFFF is not a device", DosHandleIsDevice(fileHandles, deviceMask, FH_TEST_RAW_GUEST_BX), FALSE);
 
+    /* #272: A DEVICE SLOT KEEPS WHICH DEVICE IT IS. The identity is the SFT number the
+     * JFT holds -- 0 AUX, 1 CON, 2 PRN (DOS's own defaults: 01 01 01 00 02) -- so a
+     * duplicate of PRN is the printer wherever it sits.
+     */
+    {
+        BYTE deviceKind[DOS_DEV_SLOTS];
+        DosDeviceReset(deviceKind);
+        FhTestExpect("default: handle 0 is CON", DosDeviceOf(deviceKind, 0), 1);
+        FhTestExpect("default: handle 2 is CON", DosDeviceOf(deviceKind, 2), 1);
+        FhTestExpect("default: handle 3 is AUX", DosDeviceOf(deviceKind, 3), 0);
+        FhTestExpect("default: handle 4 is PRN", DosDeviceOf(deviceKind, 4), 2);
+        FhTestExpect("default: a free slot (5) starts as CON", DosDeviceOf(deviceKind, 5), 1);
+        deviceKind[5] = DosDeviceOf(deviceKind, 4);           /* AH=45h of PRN into slot 5 */
+        FhTestExpect("a duplicate of PRN in slot 5 is PRN", DosDeviceOf(deviceKind, 5), 2);
+        deviceKind[1] = DosDeviceOf(deviceKind, 3);           /* AH=46h: handle 1 -> AUX */
+        FhTestExpect("handle 1 forced onto AUX is AUX", DosDeviceOf(deviceKind, 1), 0);
+        FhTestExpect("a slot past the table answers CON", DosDeviceOf(deviceKind, 32), 1);
+        DosDeviceReset(deviceKind);
+        FhTestExpect("reset: handle 1 is CON again", DosDeviceOf(deviceKind, 1), 1);
+    }
+
     printf("== %d checks, %d failed\n", g_Checks, g_Failures);
     return g_Failures ? 1 : 0;
 }

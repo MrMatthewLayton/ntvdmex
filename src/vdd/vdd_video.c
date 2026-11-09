@@ -62,6 +62,8 @@ BYTE g_VgaFont8x16[VGA_FONT_CHARACTERS][VGA_FONT16_HEIGHT];
 #define VIDEO_AR_OVERSCAN                       0x11
 #define VIDEO_AR_PAN                            0x13
 #define VIDEO_AR_COLOR_SELECT                   0x14
+#define VIDEO_AR_PLANE_ENABLE                   0x12        /* #185: colour plane enable, bits 0-3 */
+#define VIDEO_AR_PLANE_ENABLE_ALL               0x0F
 #define VIDEO_AR_MODE_P54S                      0x80        /* AR10 bit 7: P5-4 from AR14 */
 #define VIDEO_AR_BLINK_SHIFT                    3
 #define VIDEO_AR_PALETTE_MASK                   0x3F
@@ -76,9 +78,14 @@ BYTE g_VgaFont8x16[VGA_FONT_CHARACTERS][VGA_FONT16_HEIGHT];
 #define VIDEO_CR_VERTICAL_TOTAL                 0x06
 #define VIDEO_CR_OVERFLOW                       0x07
 #define VIDEO_CR_MAX_SCAN                       0x09
+#define VIDEO_TAB_STOP                          8           /* DOS console output: TAB to the next multiple of 8 */
 #define VIDEO_CR_VERTICAL_DISPLAY_END           0x12
 #define VIDEO_CR_VERTICAL_BLANK_START           0x15
 #define VIDEO_CR_LINE_COMPARE                   0x18
+#define VIDEO_CR_PRESET_ROW_SCAN                0x08        /* #185 */
+#define VIDEO_CR08_ROW_MASK                     0x1F        /* bits 4-0: preset row scan */
+#define VIDEO_CR08_BYTE_PAN_SHIFT               5           /* bits 6-5: byte panning */
+#define VIDEO_CR08_BYTE_PAN_MASK                0x03u
 
 /* Raster-split bookkeeping (VideoPaletteSplitNote). */
 #define VIDEO_ROW_NONE                          0xFFFFu
@@ -157,6 +164,7 @@ BYTE g_VgaFont8x16[VGA_FONT_CHARACTERS][VGA_FONT16_HEIGHT];
 #define VIDEO_VBE_MODE_LFB                      0x4000u
 #define VIDEO_VBE_MODE_NO_CLEAR                 0x8000u
 #define VIDEO_VBE_SEGMENT_BYTES                 256
+#define VIDEO_BPP_PLANAR                        4           /* #326: the VESA 16-colour planar modes */
 #define VIDEO_BPP_15                            15
 #define VIDEO_BPP_16                            16
 #define VIDEO_BPP_24                            24
@@ -273,6 +281,7 @@ BYTE g_VgaFont8x16[VGA_FONT_CHARACTERS][VGA_FONT16_HEIGHT];
 #define VIDEO_MODE_INFO_LINEAR_RESERVED_POSITION 61
 #define VIDEO_MODE_ATTRIBUTES_TEXT              0x000F      /* Supported, info, BIOS output, colour */
 #define VIDEO_MODE_ATTRIBUTES_GRAPHICS          0x009B      /* D0|D1|D3|D4|D7 */
+#define VIDEO_MODE_ATTRIBUTES_PLANAR            0x001B      /* #326: D0|D1|D3|D4 -- banked only, no LFB (D7) */
 #define VIDEO_WINDOW_READ_WRITE                 0x07
 #define VIDEO_TEXT_WINDOW_KB                    32
 #define VIDEO_TEXT_WINDOW_BYTES                 0x8000u
@@ -281,6 +290,7 @@ BYTE g_VgaFont8x16[VGA_FONT_CHARACTERS][VGA_FONT16_HEIGHT];
 #define VIDEO_SEGMENT_GRAPHICS                  0xA000
 #define VIDEO_TEXT_ATTRIBUTE_BITS               4
 #define VIDEO_MEMORY_MODEL_TEXT                 0
+#define VIDEO_MEMORY_MODEL_PLANAR               3           /* #326: VBE 2.0 section 4.4, 03h planar */
 #define VIDEO_MEMORY_MODEL_PACKED               4
 #define VIDEO_MEMORY_MODEL_DIRECT               6
 #define VIDEO_VBE_MAX_IMAGE_PAGES               256u
@@ -441,6 +451,13 @@ BYTE g_VgaFont8x16[VGA_FONT_CHARACTERS][VGA_FONT16_HEIGHT];
 #define VIDEO_FONT_QUERIES                      4
 #define VIDEO_SR_CLOCKING_MODE                  1
 #define VIDEO_SR_CHARACTER_MAP                  3
+#define VIDEO_SR3_MAP_A_LOW_SHIFT               2           /* #185: SR3 bits 3-2 = map A, bits 1-0 */
+#define VIDEO_SR3_MAP_A_HIGH_SHIFT              3           /* SR3 bit 5 -> map A bit 2 */
+#define VIDEO_SR3_MAP_B_HIGH_SHIFT              2           /* SR3 bit 4 -> map B bit 2 */
+#define VIDEO_SR3_MAP_LOW_MASK                  0x03u
+#define VIDEO_FONT_BLOCK_MASK                   0x07u       /* AH=11h BL: the font block */
+#define VIDEO_SR3_MAP_HIGH_BIT                  0x04u
+#define VIDEO_ATTRIBUTE_INTENSITY               0x08u       /* attribute bit 3: map A or B */
 #define VIDEO_SR1_SCREEN_OFF                    0x20u
 #define VIDEO_MISC_RAM_ENABLE                   0x02u
 
@@ -895,10 +912,30 @@ static INT  VideoBeam(
     UINT32 *verticalBlank,
     UINT32 *frameNumber,
     UINT32 *line);   /* fwd: defined with VideoStatusIn */
+/* #185: THE TWO MASKS ON THE WAY TO THE DAC (docs/ref/vga.md, Attribute Controller and
+ * DAC). A 4-bit attribute pixel is ANDed with AR12, Colour Plane Enable, before it
+ * indexes the 16 palette registers; the 8-bit DAC address that comes out of the
+ * attribute stage (or straight out of a 256-colour pixel) is ANDed with 3C6, the Pixel
+ * Mask, before it indexes the DAC. Both are per-pixel on the hardware; applying them
+ * here, where the presented palette is composed, is the same thing for every pixel at
+ * once -- and it is how a guest's mask fade or plane-disable shows at all.
+ * AR12 before a guest has written it is 0Fh: every mode definition loads 0Fh, and a
+ * path that loads none (a VESA set) must not turn every pixel into colour 0.
+ */
+static BYTE VideoPlaneEnable(PCVIDEO_STATE state)
+{
+    if (!state->AttributeWrites[VIDEO_AR_PLANE_ENABLE])
+        return VIDEO_AR_PLANE_ENABLE_ALL;
+
+    return (BYTE)(state->AttributeRegisters[VIDEO_AR_PLANE_ENABLE] & VIDEO_AR_PLANE_ENABLE_ALL);
+}
+
 static VOID VideoPaletteRefresh(PVIDEO_STATE state)
 {
     INT index;
     UINT32 prev[NTVDD_PALETTE_ENTRIES];
+    BYTE mask = state->DacMask;
+    BYTE planeEnable = VideoPlaneEnable(state);
 
     for (index = 0; index < NTVDD_PALETTE_ENTRIES; ++index)
         prev[index] = state->Palette[index];
@@ -912,13 +949,13 @@ static VOID VideoPaletteRefresh(PVIDEO_STATE state)
     if (state->ModeKind == VIDEO_KIND_LINEAR8 || (state->IsVesa && state->VesaBpp <= VIDEO_BPP_INDEXED))
     {
         for (index = 0; index < NTVDD_PALETTE_ENTRIES; ++index)
-            state->Palette[index] = state->Dac[index];
+            state->Palette[index] = state->Dac[index & mask];
     }
     else
     {
         for (index = 0; index < VIDEO_EGA_PALETTE_REGISTERS; ++index)
         {
-            BYTE value = (BYTE)(state->PaletteRegisters[index] & VIDEO_AR_PALETTE_MASK);
+            BYTE value = (BYTE)(state->PaletteRegisters[index & planeEnable] & VIDEO_AR_PALETTE_MASK);
             /* AR14 Color Select supplies the high DAC bits on a real VGA; zero by
              * default, which makes this the identity.
              */
@@ -926,11 +963,11 @@ static VOID VideoPaletteRefresh(PVIDEO_STATE state)
                 value = (BYTE)((value & VIDEO_AR_PALETTE_LOW) | ((state->AttributeColorSelect & VIDEO_AR_CSE_P54) << VIDEO_AR_CSE_SHIFT));
 
             value = (BYTE)(value | ((state->AttributeColorSelect & VIDEO_AR_CSE_P76) << VIDEO_AR_CSE_SHIFT));
-            state->Palette[index] = state->Dac[value];
+            state->Palette[index] = state->Dac[value & mask];
         }
 
         for (index = VIDEO_EGA_PALETTE_REGISTERS; index < NTVDD_PALETTE_ENTRIES; ++index)
-            state->Palette[index] = state->Dac[index];
+            state->Palette[index] = state->Dac[index & mask];
     }
 
     VideoPaletteSplitNote(state, prev);
@@ -1196,8 +1233,12 @@ static VOID VideoAttributeOut(PVOID context, WORD port, BYTE width, UINT32 value
         VideoPaletteRefresh(state);
         break;
 
+    case VIDEO_AR_PLANE_ENABLE:
+        VideoPaletteRefresh(state);                                 /* #185: AR12 masks the pixel */
+        break;
+
     default:
-        break;                                  /* 12h plane enable, 13h pan */
+        break;                                  /* 13h pan: VideoLatch, above */
     }
 }
 
@@ -1312,9 +1353,31 @@ static BYTE *VideoDisplayCell(PVIDEO_STATE state, INT row, INT column)
  * the renderer all use them; without a host (the off-VM harness) st->Planes[] as
  * before. The sections are MODEY_WIN = VIDEO_PLANE_SIZE bytes, so nothing changes size.
  */
+/* #326: A VESA PLANAR MODE IS ALWAYS st->Planes[]. Its planes are larger than the host's
+ * 64 KB plane sections (VIDEO_PLANE_STORE_SIZE), and the window into them moves with
+ * 4F05h rather than with the map mask. [CAUTION] So a protected-mode guest's NATIVE
+ * stores to A0000 -- which the host maps onto its sections -- do not reach a VESA planar
+ * picture; the interpreter path does. Unverified on the test machine.
+ */
 static BYTE *VideoPlaneBytes(PVIDEO_STATE state, INT plane)
 {
+    if (state->IsVesaPlanar)
+        return state->Planes[plane & VIDEO_PLANE_INDEX_MASK];
+
     return state->YMapPlane ? state->YMapPlane(state->YMapContext, plane & VIDEO_PLANE_INDEX_MASK) : state->Planes[plane & VIDEO_PLANE_INDEX_MASK];
+}
+
+/* #326: where window offset `offset` (A0000-relative) lands in a plane. In a VESA
+ * planar mode the window is 4F05h's bank of the plane store; otherwise the plane IS the
+ * window. 0 = no plane byte there.
+ */
+static INT VideoPlanarAddress(PCVIDEO_STATE state, UINT32 offset, UINT32 *address)
+{
+    if (offset >= VIDEO_PLANE_SIZE)
+        return 0;
+
+    *address = state->IsVesaPlanar ? (UINT32)state->VesaBank * VIDEO_VESA_WINDOW + offset : offset;
+    return *address < (state->IsVesaPlanar ? VIDEO_PLANE_STORE_SIZE : VIDEO_PLANE_SIZE);
 }
 
 static VOID VideoClearText(PVIDEO_STATE state, BYTE attribute)
@@ -2102,7 +2165,19 @@ static const VIDEO_VESA_MODE g_VideoVesaModes[] = {
     { 0x116, 1024, 768, 15 }, { 0x117, 1024, 768, 16 }, { 0x118, 1024, 768, 24 },
     { 0x107, 1280, 1024, 8 },
     { 0x119, 1280, 1024, 15 }, { 0x11A, 1280, 1024, 16 }, { 0x11B, 1280, 1024, 24 },
+    /* #326: THE 16-COLOUR PLANAR MODES, the VBE standard numbers (VBE 2.0, mode table: 102h
+     * 800x600x16, 104h 1024x768x16, 106h 1280x1024x16). They are mode 12h's register file
+     * and planar engine at a larger geometry, so the mode set goes through the INT 10h 12h
+     * set and adds the geometry (see 4F02h). 6Ah, the pre-VBE 800x600x16 standard, is the
+     * same mode by its INT 10h AH=00h number (VideoVesaFind accepts it; the list does not
+     * repeat it).
+     */
+    { 0x102, 800, 600, VIDEO_BPP_PLANAR }, { 0x104, 1024, 768, VIDEO_BPP_PLANAR },
+    { 0x106, 1280, 1024, VIDEO_BPP_PLANAR },
 };
+#define VIDEO_MODE_VESA_LEGACY_800_PLANAR   0x6A    /* #326: INT 10h AH=00h's name for 102h */
+#define VIDEO_VBE_MODE_800_PLANAR           0x102
+
 /* VESA TEXT MODES (VBE 1.2 section , mode numbers 108h..10Ch). (s74b):
  * 132-column text is what editors and file managers of the period ask for. A VESA
  * text mode is an ordinary text mode with a different geometry: it lives at B800,
@@ -2259,11 +2334,20 @@ static INT VideoVesaFind(WORD modeNumber, WORD *width, WORD *height, BYTE *bitsP
 {
     UINT index;
 
+    if ((modeNumber & VIDEO_VBE_MODE_NUMBER_MASK) == VIDEO_MODE_VESA_LEGACY_800_PLANAR)
+        modeNumber = (WORD)((modeNumber & ~VIDEO_VBE_MODE_NUMBER_MASK) | VIDEO_VBE_MODE_800_PLANAR);   /* #326 */
+
     for (index = 0; index < sizeof(g_VideoVesaModes)/sizeof(g_VideoVesaModes[0]); ++index)
         if (g_VideoVesaModes[index].Number == (modeNumber & VIDEO_VBE_MODE_NUMBER_MASK))
         {
             UINT32 need = (UINT32)g_VideoVesaModes[index].Width * g_VideoVesaModes[index].Height
                           * VideoVesaBytesPerPixel(g_VideoVesaModes[index].Bpp);
+
+            /* #326: a planar mode lives in the four planes, one bit a pixel in each. */
+            if (g_VideoVesaModes[index].Bpp == VIDEO_BPP_PLANAR
+                && (UINT32)g_VideoVesaModes[index].Width / BITS_PER_BYTE * g_VideoVesaModes[index].Height > VIDEO_PLANE_STORE_SIZE)
+                return 0;
+
             /* [CAUTION]: A MODE WE CANNOT STORE IS NOT A MODE WE SUPPORT. Answering 4F01 for
              * geometry that does not fit VIDEO_VESA_VRAM invites a 4F02 we would have
              * to fail, or worse, blits off the end of the buffer. Checked here so
@@ -2307,7 +2391,7 @@ static VOID VideoVesaSync(PVIDEO_STATE state)
     /* [CAUTION]: AN LFB GUEST NEVER WRITES A0000, so copying that window into vram would
      * paint a stale (usually blank) 64KB hole over the frame it just drew.
      */
-    if (state->IsVesaLfb)
+    if (state->IsVesaLfb || state->IsVesaPlanar)                  /* #326: planar banks are the planes */
         return;
 
     if (offset + VIDEO_VESA_WINDOW > VIDEO_VESA_VRAM)
@@ -2329,6 +2413,19 @@ static INT VideoVesaSetBank(PVIDEO_STATE state, UINT32 bank)
 
     if (!state->IsVesa || state->IsVesaLfb)
         return 0;
+
+    /* #326: A PLANAR MODE'S BANK IS WHERE THE WINDOW SITS IN EACH PLANE -- the planar
+     * engine reads it per access (VideoPlanarAddress), so there is nothing to copy.
+     */
+    if (state->IsVesaPlanar)
+    {
+        if (offset >= VIDEO_PLANE_STORE_SIZE)
+            return 0;
+
+        state->VesaBank = (WORD)bank;
+        state->IsDirty = 1;
+        return 1;
+    }
 
     if (offset + VIDEO_VESA_WINDOW > VIDEO_VESA_VRAM)
         return 0;
@@ -2416,7 +2513,7 @@ static VOID VideoVbePortOut(PVOID context, WORD port, BYTE width, UINT32 value)
         UINT32 origin = (((UINT32)data << WORD_SHIFT) | state->VbeStartLow) * VIDEO_VBE_START_UNIT;
         UINT32 bytesPerPixel = VideoVesaBytesPerPixel(state->VesaBpp);
 
-        if (!state->IsVesa || !state->VesaStride || !VideoVesaOriginFits(state, origin))
+        if (!state->IsVesa || state->IsVesaPlanar || !state->VesaStride || !VideoVesaOriginFits(state, origin))
         {
             state->VbePmRejected++;
             break;
@@ -3021,6 +3118,29 @@ static VOID VideoVesa(PVIDEO_STATE state, PNTVDD_REGISTERS registers)
                 buffer[VIDEO_MODE_INFO_LINEAR_RESERVED_SIZE]=buffer[VIDEO_MODE_INFO_RESERVED_SIZE];
                 buffer[VIDEO_MODE_INFO_LINEAR_RESERVED_POSITION]=buffer[VIDEO_MODE_INFO_RESERVED_POSITION]; }
 
+            /* #326: A PLANAR MODE DESCRIBES ITS PLANES (VBE 2.0 section 4.4): MemoryModel 03h,
+             * four planes of one bit each, BytesPerScanLine per PLANE (width / 8), no
+             * linear frame buffer -- the window and 4F05h banks are the only way in,
+             * so D7 and PhysBasePtr are 0 and the linear fields with them. Image pages
+             * are what one plane's store holds, minus one.
+             */
+            if (modeBitsPerPixel == VIDEO_BPP_PLANAR)
+            {
+                UINT32 planePitch = (UINT32)width / BITS_PER_BYTE;
+                UINT32 planePage = planePitch * height;
+                UINT32 planePages = planePage ? VIDEO_PLANE_STORE_SIZE / planePage : 1u;
+                VideoWrite16(buffer + VIDEO_MODE_INFO_ATTRIBUTES, VIDEO_MODE_ATTRIBUTES_PLANAR);
+                VideoWrite16(buffer + VIDEO_MODE_INFO_BYTES_PER_LINE, (WORD)planePitch);
+                buffer[VIDEO_MODE_INFO_PLANES] = VIDEO_PLANES;
+                buffer[VIDEO_MODE_INFO_BITS_PER_PIXEL] = VIDEO_BPP_PLANAR;
+                buffer[VIDEO_MODE_INFO_MEMORY_MODEL] = VIDEO_MEMORY_MODEL_PLANAR;
+                buffer[VIDEO_MODE_INFO_IMAGE_PAGES] = (BYTE)(planePages ? planePages - 1u : 0u);
+                buffer[VIDEO_MODE_INFO_BANKED_IMAGE_PAGES] = buffer[VIDEO_MODE_INFO_IMAGE_PAGES];
+                buffer[VIDEO_MODE_INFO_LINEAR_IMAGE_PAGES] = 0;
+                VideoWrite32(buffer + VIDEO_MODE_INFO_PHYSICAL_BASE, 0);
+                VideoWrite16(buffer + VIDEO_MODE_INFO_LINEAR_BYTES_PER_LINE, 0);
+            }
+
             VddSetAx(registers, VIDEO_VBE_OK);
         }
         else
@@ -3091,10 +3211,74 @@ static VOID VideoVesa(PVIDEO_STATE state, PNTVDD_REGISTERS registers)
         state->IsVesaSetSeen = 1;
         state->IsVesaSetOk = (BYTE)(VideoVesaFind(VddGetBx(registers), &width, &height, &modeBitsPerPixel) ? 1 : 0);
 
+        /* #326: A VESA 16-COLOUR PLANAR MODE IS MODE 12h AT A LARGER GEOMETRY. Set 12h
+         * through the standard path -- it loads the planar register file, the 16-colour
+         * palette, the planar kind and the host's window, everything a 4F02h of a packed
+         * mode has to do by hand below -- then give it this mode's size, its planes
+         * the larger store and 4F05h's bank. No linear frame buffer: D14 fails (section 4.5).
+         */
+        if (modeBitsPerPixel == VIDEO_BPP_PLANAR && state->IsVesaSetOk)
+        {
+            WORD vesaMode = (WORD)(VddGetBx(registers) & VIDEO_VBE_MODE_NUMBER_MASK);
+            INT isNoClear = (VddGetBx(registers) & VIDEO_VBE_MODE_NO_CLEAR) != 0;
+            NTVDD_REGISTERS modeRegisters;
+            UINT byteIndex;
+
+            if (VddGetBx(registers) & VIDEO_VBE_MODE_LFB)
+            {
+                state->IsVesaSetOk = 0;
+                VddSetAx(registers, VIDEO_VBE_FAILED);
+                break;
+            }
+
+            for (byteIndex = 0; byteIndex < sizeof modeRegisters; ++byteIndex)
+                ((BYTE *)&modeRegisters)[byteIndex] = 0;
+
+            VddSetAh(&modeRegisters, VIDEO_FUNCTION_SET_MODE);
+            VddSetAl(&modeRegisters, (BYTE)(VIDEO_MODE_VGA_480 | (isNoClear ? VIDEO_MODE_NO_CLEAR : 0x00)));
+            VideoInt10(state, &modeRegisters);
+
+            if (!isNoClear)
+            {
+                INT plane;
+
+                for (plane = 0; plane < VIDEO_PLANES; ++plane)
+                    for (byteIndex = 0; byteIndex < VIDEO_PLANE_STORE_SIZE; ++byteIndex)
+                        state->Planes[plane][byteIndex] = 0;
+            }
+
+            state->IsVesa = 1;
+            state->IsVesaPlanar = 1;
+            state->IsVesaLfb = 0;
+            state->VesaMode = (vesaMode == VIDEO_MODE_VESA_LEGACY_800_PLANAR) ? VIDEO_VBE_MODE_800_PLANAR : vesaMode;
+            state->VesaWidth = width;
+            state->VesaHeight = height;
+            state->VesaBpp = VIDEO_BPP_PLANAR;
+            state->VesaStride = (UINT32)width / BITS_PER_BYTE;               /* bytes per line, per plane */
+            state->VesaStartX = state->VesaStartY = 0;
+            state->VesaOrigin = state->VesaOriginVs = state->VesaOriginLive = 0;
+            state->VesaBank = 0;
+            state->VesaModeFlags = (WORD)(VddGetBx(registers) & VIDEO_VBE_MODE_NO_CLEAR);
+            state->IsModeSetNoClear = (BYTE)(isNoClear ? 1 : 0);
+            state->Mode = VIDEO_MODE_NOT_STANDARD;                             /* 40:49h = FFh, as for any VBE mode */
+            state->GraphicsWidth = width;
+            state->GraphicsHeight = height;
+            state->CellHeight = VGA_FONT16_HEIGHT;
+            state->Columns = (BYTE)(width / VIDEO_GLYPH_WIDTH);
+            state->Rows = (BYTE)(height / VGA_FONT16_HEIGHT);
+            state->CursorRow = state->CursorColumn = 0;
+            state->Page = 0;
+            state->VesaTextMode = 0;
+            state->IsDirty = 1;
+            VddSetAx(registers, VIDEO_VBE_OK);
+            break;
+        }
+
         if (VideoVesaFind(VddGetBx(registers), &width, &height, &modeBitsPerPixel))
         {
             UINT32 count;
             state->IsVesa = 1;
+            state->IsVesaPlanar = 0;
             state->VesaMode = VddGetBx(registers) & VIDEO_VBE_MODE_NUMBER_MASK;
             state->VesaWidth = width;
             state->VesaHeight = height;
@@ -3274,7 +3458,8 @@ static VOID VideoVesa(PVIDEO_STATE state, PNTVDD_REGISTERS registers)
         UINT32 maxBank = state->VesaHeight ? VIDEO_VESA_VRAM / state->VesaHeight : 0; /* longest line that still holds h rows */
         maxBank -= maxBank % bytesPerPixel;                                         /* whole pixels */
 
-        if (!state->IsVesa || !minBank || !maxBank)
+        /* #326: a planar mode's line is per plane, not per pixel: not offered here. */
+        if (!state->IsVesa || state->IsVesaPlanar || !minBank || !maxBank)
         {
             VddSetAx(registers, VIDEO_VBE_INVALID_IN_MODE);
             break;
@@ -3332,7 +3517,7 @@ static VOID VideoVesa(PVIDEO_STATE state, PNTVDD_REGISTERS registers)
     {
         BYTE bl = (BYTE)(VddGetBx(registers) & BYTE_MASK);
 
-        if (!state->IsVesa)
+        if (!state->IsVesa || state->IsVesaPlanar)                     /* #326: see 4F06h */
         {
             VddSetAx(registers, VIDEO_VBE_INVALID_IN_MODE);
             break;
@@ -3842,8 +4027,28 @@ static VOID VideoInt10(PVOID context, PNTVDD_REGISTERS registers)
          *   which is the whole difference the bit describes.
          */
         {   INT noclear = (al & VIDEO_MODE_NO_CLEAR) != 0;
+
+        /* #326: 6Ah IS THE VESA 800x600x16 MODE BY ITS INT 10h NUMBER (VBE 1.2's note on
+         * the pre-VBE mode it standardised as 102h). Same mode, same set: 4F02h 102h, with
+         * AL bit 7 carried over as D15.
+         */
+        if ((al & VIDEO_MODE_NUMBER_MASK) == VIDEO_MODE_VESA_LEGACY_800_PLANAR)
+        {
+            NTVDD_REGISTERS vbeRegisters;
+            UINT byteIndex;
+
+            for (byteIndex = 0; byteIndex < sizeof vbeRegisters; ++byteIndex)
+                ((BYTE *)&vbeRegisters)[byteIndex] = 0;
+
+            VddSetAx(&vbeRegisters, (WORD)((VIDEO_FUNCTION_VESA << BYTE_SHIFT) | VIDEO_VBE_SET_MODE));
+            VddSetBx(&vbeRegisters, (WORD)(VIDEO_VBE_MODE_800_PLANAR | (noclear ? VIDEO_VBE_MODE_NO_CLEAR : 0u)));
+            VideoVesa(state, &vbeRegisters);
+            break;
+        }
+
         state->Mode = al & VIDEO_MODE_NUMBER_MASK;
         state->IsVesa = 0;        /* a standard mode leaves VESA */
+        state->IsVesaPlanar = 0;  /* #326: ...and its planar store */
         state->VesaTextMode = 0;                       /* ...including a VESA text mode */
         /* 40:87h bit 7 is "the last mode set did not clear memory" -- IBM's EGA/VGA
          * BIOS copies AL bit 7 there, and VBE 2.0 section 4.5/section 4.6 builds 4F02h's D15 on the
@@ -4215,7 +4420,7 @@ static VOID VideoInt10(PVOID context, PNTVDD_REGISTERS registers)
         UINT32 line = VddGetDx(registers);
         INT isXor = (al & VIDEO_PIXEL_XOR) != 0;
 
-        if (state->IsVesa)
+        if (state->IsVesa && !state->IsVesaPlanar)                 /* #326: planar draws below */
             break;
 
         if (state->ModeKind == VIDEO_KIND_LINEAR8)
@@ -4227,11 +4432,12 @@ static VOID VideoInt10(PVOID context, PNTVDD_REGISTERS registers)
         {
             if (pixelColumn < state->GraphicsWidth && line < state->GraphicsHeight)
             {
-                UINT32 byteOffset = (UINT32)((VddGetBx(registers) >> BYTE_SHIFT) & VIDEO_PAGE_MASK) * VideoPageSize(state) + line * (state->GraphicsWidth / VIDEO_PIXELS_PER_PLANE_BYTE) + (pixelColumn >> VIDEO_PLANE_BYTE_SHIFT);
+                UINT32 pageBase = state->IsVesaPlanar ? 0u : (UINT32)((VddGetBx(registers) >> BYTE_SHIFT) & VIDEO_PAGE_MASK) * VideoPageSize(state);
+                UINT32 byteOffset = pageBase + line * (state->GraphicsWidth / VIDEO_PIXELS_PER_PLANE_BYTE) + (pixelColumn >> VIDEO_PLANE_BYTE_SHIFT);
                 BYTE bitMask = (BYTE)(VIDEO_PIXEL_LEFT_BIT >> (pixelColumn & VIDEO_PIXEL_IN_BYTE_MASK));
                 BYTE planeIndex;
 
-                if (byteOffset < VIDEO_PLANE_SIZE)
+                if (byteOffset < (state->IsVesaPlanar ? VIDEO_PLANE_STORE_SIZE : VIDEO_PLANE_SIZE))
                     for (planeIndex = 0; planeIndex < VIDEO_PLANES; ++planeIndex)
                     {
                         if (isXor)
@@ -4573,10 +4779,12 @@ static VOID VideoInt10(PVOID context, PNTVDD_REGISTERS registers)
         }
         else if (state->ModeKind == VIDEO_KIND_PLANAR)       /* page BH (#252) */
         {
-            UINT32 byteIndex = (UINT32)((VddGetBx(registers) >> BYTE_SHIFT) & VIDEO_PAGE_MASK) * VideoPageSize(state) + line * (state->GraphicsWidth / VIDEO_PIXELS_PER_PLANE_BYTE) + (pixelColumn >> VIDEO_PLANE_BYTE_SHIFT);
+            UINT32 pageBase = state->IsVesaPlanar ? 0u : (UINT32)((VddGetBx(registers) >> BYTE_SHIFT) & VIDEO_PAGE_MASK) * VideoPageSize(state);
+            UINT32 byteIndex = pageBase + line * (state->GraphicsWidth / VIDEO_PIXELS_PER_PLANE_BYTE) + (pixelColumn >> VIDEO_PLANE_BYTE_SHIFT);
             BYTE  pixelMask = (BYTE)(VIDEO_PIXEL_LEFT_BIT >> (pixelColumn & VIDEO_PIXEL_IN_BYTE_MASK));
 
-            if (byteIndex < VIDEO_PLANE_SIZE)
+            if (pixelColumn < state->GraphicsWidth && line < state->GraphicsHeight
+                && byteIndex < (state->IsVesaPlanar ? VIDEO_PLANE_STORE_SIZE : VIDEO_PLANE_SIZE))
                 value = (BYTE)(((VideoPlaneBytes(state,0)[byteIndex] & pixelMask) ? 1 : 0)
                             | ((VideoPlaneBytes(state,1)[byteIndex] & pixelMask) ? VIDEO_PLANE1_BIT : 0)
                             | ((VideoPlaneBytes(state,2)[byteIndex] & pixelMask) ? VIDEO_PLANE2_BIT : 0)
@@ -4875,6 +5083,41 @@ static VOID VideoInt10(PVOID context, PNTVDD_REGISTERS registers)
                      */
                     VIDEO_UNIMPLEMENTED_SET(state->UnimplementedFunctions, VIDEO_FUNCTION_FONT);
                 }
+                else if (VddGetBx(registers) & VIDEO_FONT_BLOCK_MASK)
+                {
+                    /* #185: A BLOCK OTHER THAN 0 IS ITS OWN CHARACTER GENERATOR. It is drawn
+                     * only where SR3 selects it (VideoFontBlockFor) -- the 512-character
+                     * mode, or a whole screen switched to another font with AH=11h AL=03h.
+                     */
+                    UINT block = VddGetBx(registers) & VIDEO_FONT_BLOCK_MASK;
+                    BYTE *blockFont = state->FontBlocks[block - 1];
+                    UINT index;
+                    UINT line;
+
+                    if (!(state->FontBlocksLoaded & (1u << block)))
+                    {
+                        UINT candidate;
+
+                        for (candidate = 0; candidate < VGA_FONT_CHARACTERS; ++candidate)
+                            for (line = 0; line < VIDEO_CELL_HEIGHT; ++line)
+                                blockFont[candidate * VIDEO_CELL_HEIGHT + line] = g_VgaFont8x16[candidate][line];
+                    }
+
+                    for (index = 0; index < characterCount && (first + index) < VGA_FONT_CHARACTERS; ++index)
+                        for (line = 0; line < VIDEO_CELL_HEIGHT; ++line)
+                            blockFont[(first + index) * VIDEO_CELL_HEIGHT + line] =
+                                (line < bytesPerCharacter) ? fontSource[index * bytesPerCharacter + line] : 0;
+
+                    state->FontBlocksLoaded |= (BYTE)(1u << block);
+                    state->IsDirty = 1;
+
+                    if (al == (VIDEO_FONT_RECALCULATE | VIDEO_FONT_LOAD_USER) && state->ModeKind == VIDEO_KIND_TEXT)
+                    {
+                        state->CellHeight = bytesPerCharacter;
+                        state->Rows = VideoTextRowsFor(bytesPerCharacter);
+                        VideoInt43Rom(state, bytesPerCharacter);
+                    }
+                }
                 else
                 {
                     UINT index;
@@ -4923,7 +5166,12 @@ static VOID VideoInt10(PVOID context, PNTVDD_REGISTERS registers)
                  * caller that follows 1102h with its own CRTC programming expects.
                  */
                 BYTE height = (BYTE)(((al & VIDEO_FONT_LOAD_MASK) == VIDEO_FONT_LOAD_8X8) ? VGA_FONT8_HEIGHT : ((al & VIDEO_FONT_LOAD_MASK) == VIDEO_FONT_LOAD_8X14) ? VGA_FONT14_HEIGHT : VGA_FONT16_HEIGHT);
-                state->IsUserFontOn = 0;              /* back to the ROM tables */
+                UINT romBlock = VddGetBx(registers) & VIDEO_FONT_BLOCK_MASK;
+
+                if (romBlock)
+                    state->FontBlocksLoaded &= (BYTE)~(1u << romBlock);          /* #185: block n is the ROM font again */
+                else
+                    state->IsUserFontOn = 0;              /* back to the ROM tables */
 
                 if ((al & VIDEO_FONT_RECALCULATE) && state->ModeKind == VIDEO_KIND_TEXT)
                 {
@@ -5268,7 +5516,7 @@ static VOID VideoPlanarWrite1(PVIDEO_STATE state, UINT32 offset, BYTE cpu)
     BYTE bitMask = state->BitMask;
     INT plane;
 
-    if (offset >= VIDEO_PLANE_SIZE)
+    if (!VideoPlanarAddress(state, offset, &offset))                               /* #326: the bank */
         return;
 
     state->IsDirty = 1;
@@ -5447,7 +5695,9 @@ VOID VddVideoPlanarWrite(PVIDEO_STATE state, UINT32 offset, BYTE cpu)
     VideoPlanarWrite1(state, offset, cpu);
 
     for (plane = 0; plane < VIDEO_PLANES; ++plane)
-        registers.After[plane] = (offset < VIDEO_PLANE_SIZE) ? VideoPlaneBytes(state,plane)[offset] : 0;
+    {   UINT32 watchAddress;
+
+        registers.After[plane] = VideoPlanarAddress(state, offset, &watchAddress) ? VideoPlaneBytes(state,plane)[watchAddress] : 0; }
 
     if (state->WatchCount < VIDEO_WATCH_MAX)
         state->Watch[state->WatchCount] = registers;
@@ -5508,7 +5758,7 @@ BYTE VddVideoPlanarRead(PVIDEO_STATE state, UINT32 offset)
 
     VideoCacheSiteNote(state, offset, X86_ACCESS_READ);
 
-    if (offset >= VIDEO_PLANE_SIZE)
+    if (!VideoPlanarAddress(state, offset, &offset))                               /* #326: the bank */
         return VIDEO_FLOATING_BUS;
 
     for (plane = 0; plane < VIDEO_PLANES; ++plane)
@@ -5948,7 +6198,7 @@ static VOID VideoLoadModeDefinition(PVIDEO_STATE state, BYTE mode)
  * IBM's ROM fills them -- p_vid266 dumps slots 03h and 18h so the lead can see what
  * a naive `mode * 64` lookup finds there on the real ROM.
  */
-static const BYTE VideoParameterMode[VDD_VPARAM_N] = {
+static const BYTE g_VideoParameterMode[VDD_VPARAM_N] = {
     0, 0, 0, 0, 0x04, 0x05, 0x06, 0x07,  0, 0, 0, 0, 0, 0x0D, 0x0E, 0,
     0, 0, 0x10, 0, 0, 0, 0, 0x01,  0x03, 0x07, 0x11, 0x12, 0x13
 };
@@ -5962,7 +6212,7 @@ INT VddVideoParameterEntry(BYTE tableIndex, BYTE entry[VIDEO_PARAMETER_ENTRY_BYT
     for (index = 0; index < VIDEO_PARAMETER_ENTRY_BYTES; ++index)
         entry[index] = 0;
 
-    if (tableIndex >= VDD_VPARAM_N || !(mode = VideoParameterMode[tableIndex]))
+    if (tableIndex >= VDD_VPARAM_N || !(mode = g_VideoParameterMode[tableIndex]))
         return 0;
 
     for (definitionIndex = 0; definitionIndex < VGA_MODEDEF_COUNT; ++definitionIndex)
@@ -7128,6 +7378,7 @@ static VOID VideoExternalOut(PVOID context, WORD port, BYTE width, UINT32 value)
     {
         state->DacMask   = (BYTE)value;
         state->DacMaskWrites++;
+        VideoPaletteRefresh(state);                                 /* #185: the mask ANDs every pixel */
     }
 
     /* 3CA and 3CC are READ-ONLY aliases (Feature Control / Misc Output); a write
@@ -7586,8 +7837,28 @@ static VOID VideoWrite(PVOID context, UINT32 offset, BYTE value)
  * table for the cell height in force -- 8x8 after a 1112h, 8x14 after 1111h, 8x16
  * otherwise. One predictable branch in the ordinary case.
  */
-static const BYTE *VideoGlyphRows(PCVIDEO_STATE state, BYTE character)
+/* #185: WHICH FONT BLOCK A CELL IS DRAWN FROM. Character Map Select (SR3; IBM VGA
+ * Technical Reference, Sequencer "Character Map Select Register"): map A = bits 5,3,2,
+ * map B = bits 4,1,0, each a block number 0-7; a cell whose attribute bit 3 is set
+ * draws from map A, any other from map B. With A = B (the power-on 00h) bit 3 picks
+ * nothing and is only colour -- which is every ordinary text screen.
+ */
+static UINT VideoFontBlockFor(PCVIDEO_STATE state, BYTE attribute)
 {
+    BYTE select = state->SequencerRegisters[VIDEO_SR_CHARACTER_MAP];
+    UINT mapA = ((select >> VIDEO_SR3_MAP_A_LOW_SHIFT) & VIDEO_SR3_MAP_LOW_MASK) | ((select >> VIDEO_SR3_MAP_A_HIGH_SHIFT) & VIDEO_SR3_MAP_HIGH_BIT);
+    UINT mapB = (select & VIDEO_SR3_MAP_LOW_MASK) | ((select >> VIDEO_SR3_MAP_B_HIGH_SHIFT) & VIDEO_SR3_MAP_HIGH_BIT);
+
+    return (attribute & VIDEO_ATTRIBUTE_INTENSITY) ? mapA : mapB;
+}
+
+static const BYTE *VideoGlyphRows(PCVIDEO_STATE state, BYTE character, BYTE attribute)
+{
+    UINT block = VideoFontBlockFor(state, attribute);
+
+    if (block && (state->FontBlocksLoaded & (1u << block)))
+        return &state->FontBlocks[block - 1][character * VIDEO_CELL_HEIGHT];
+
     if (state->IsUserFontOn)
         return &state->UserFont[character * VIDEO_CELL_HEIGHT];
 
@@ -7638,7 +7909,7 @@ static VOID VideoRenderCell(PVIDEO_STATE state, INT row, INT column, BYTE charac
     INT isLineGraphics = cellWidth == VIDEO_CHARACTER_CLOCK_9 && (state->AttributeMode & VIDEO_AR_MODE_LINE_GRAPHICS) && character >= VIDEO_LINE_GRAPHICS_FIRST && character <= VIDEO_LINE_GRAPHICS_LAST;
     BYTE foreground = attribute & VIDEO_ATTRIBUTE_COLOUR_MASK;
     BYTE background;
-    const BYTE *glyph = VideoGlyphRows(state, character);
+    const BYTE *glyph = VideoGlyphRows(state, character, attribute);
 
     if (state->IsBlink)
     {
@@ -7666,6 +7937,102 @@ static VOID VideoRenderCell(PVIDEO_STATE state, INT row, INT column, BYTE charac
 }
 
 static VOID VideoDrawHardwareCursor(PVIDEO_STATE state);
+static VOID VideoDrawHardwareCursorAt(
+    PVIDEO_STATE state,
+    INT shiftX,
+    INT shiftY,
+    INT width,
+    INT height);
+
+/* #185: ONE TEXT PIXEL -- column glyphX, line glyphY of the cell holding `character` and
+ * `attribute`. The same rules as VideoRenderCell (blink or bright background, the ninth
+ * column), for the shifted renderer below, which samples cells rather than drawing them.
+ */
+static BYTE VideoTextPixel(
+    PCVIDEO_STATE state,
+    BYTE character,
+    BYTE attribute,
+    INT glyphX,
+    INT glyphY,
+    INT cellWidth)
+{
+    const BYTE *glyph = VideoGlyphRows(state, character, attribute);
+    BYTE foreground = attribute & VIDEO_ATTRIBUTE_COLOUR_MASK;
+    BYTE background;
+    BYTE bits = glyph[glyphY];
+
+    if (state->IsBlink)
+    {
+        background = (BYTE)((attribute >> VIDEO_ATTRIBUTE_BACKGROUND_SHIFT) & VIDEO_ATTRIBUTE_BACKGROUND_DIM);
+
+        if ((attribute & VIDEO_ATTRIBUTE_BLINK) && state->IsBlinkOffPhase)
+            foreground = background;
+    }
+    else
+        background = (BYTE)((attribute >> VIDEO_ATTRIBUTE_BACKGROUND_SHIFT) & VIDEO_ATTRIBUTE_COLOUR_MASK);
+
+    if (glyphX < VIDEO_CHARACTER_CLOCK_8)
+        return (bits & (VIDEO_GLYPH_LEFT_BIT >> glyphX)) ? foreground : background;
+
+    return (cellWidth == VIDEO_CHARACTER_CLOCK_9 && (state->AttributeMode & VIDEO_AR_MODE_LINE_GRAPHICS)
+            && character >= VIDEO_LINE_GRAPHICS_FIRST && character <= VIDEO_LINE_GRAPHICS_LAST
+            && (bits & VIDEO_GLYPH_RIGHT_BIT)) ? foreground : background;
+}
+
+/* #185: THE TEXT PICTURE'S SMOOTH SCROLL (docs/ref/vga.md, CRTC and Attribute Controller):
+ * horizontally, Horizontal Pixel Panning (AR13, the latched DisplayPan) -- in a 9-dot
+ * mode 8 means no shift and 0-7 shift 1-8 dots; in an 8-dot mode 0-7 shift 0-7 -- plus
+ * Preset Row Scan's byte panning (CR08 bits 6-5), whole character clocks; vertically,
+ * Preset Row Scan bits 4-0, the scanline of the first character row the picture starts
+ * on. Every one of them is 0 in every mode a BIOS sets, so the ordinary frame is drawn
+ * by the cell renderer exactly as before and only a guest that scrolls comes here.
+ */
+static INT VideoTextPanPixels(PCVIDEO_STATE state, INT cellWidth)
+{
+    UINT pan = state->DisplayPan & VIDEO_AR_PAN_MASK;
+    UINT bytePan = ((UINT)state->CrtcRegisters[VIDEO_CR_PRESET_ROW_SCAN] >> VIDEO_CR08_BYTE_PAN_SHIFT) & VIDEO_CR08_BYTE_PAN_MASK;
+    INT pixels;
+
+    /* Only a pan the GUEST wrote. A state no guest has panned can hold 0 here (the
+     * register file's reset, or a latch before the first frame), and in a 9-dot mode 0
+     * is a one-dot shift; every BIOS text mode sets 08h, "no shift".
+     */
+    if (!state->AttributeWrites[VIDEO_AR_PAN])
+        pixels = 0;
+    else if (cellWidth == VIDEO_CHARACTER_CLOCK_9)
+        pixels = (pan == VIDEO_PAN_PIXELS) ? 0 : (pan < VIDEO_PAN_PIXELS ? (INT)pan + 1 : 0);
+    else
+        pixels = (pan < VIDEO_PAN_PIXELS) ? (INT)pan : 0;
+
+    return pixels + (INT)bytePan * cellWidth;
+}
+
+static VOID VideoRenderTextShifted(PVIDEO_STATE state, INT shiftX, INT shiftY)
+{
+    INT cellHeight = state->CellHeight ? state->CellHeight : VIDEO_CELL_HEIGHT;
+    INT cellWidth = VideoTextCellWidthOf(state);
+    INT width = state->Columns * cellWidth;
+    INT height = state->Rows * cellHeight;
+    INT pixelX;
+    INT pixelY;
+
+    for (pixelY = 0; pixelY < height; ++pixelY)
+    {
+        INT sourceY = pixelY + shiftY;
+        INT cellRow = sourceY / cellHeight;
+        INT glyphY = sourceY % cellHeight;
+        BYTE *output = &state->FrameBuffer[pixelY * width];
+
+        for (pixelX = 0; pixelX < width; ++pixelX)
+        {
+            INT sourceX = pixelX + shiftX;
+            BYTE *cell = VideoDisplayCell(state, cellRow, sourceX / cellWidth);   /* past the last column: the counter runs on */
+            output[pixelX] = VideoTextPixel(state, cell[0], cell[1], sourceX % cellWidth, glyphY, cellWidth);
+        }
+    }
+
+    VideoDrawHardwareCursorAt(state, shiftX, shiftY, width, height);
+}
 
 /* THE TEXT SCREEN AS THE GUEST WROTE IT, not as we drew it:
  * An instrument for exactly one question, and it is a question screenshots cannot
@@ -7732,6 +8099,16 @@ VOID VddVideoRender(PVIDEO_STATE state)                 /* text glyph render */
     state->IsBlinkOffPhase = (BYTE)((state->IsBlink && state->TimeUs)
                               ? ((state->TimeUs() % VIDEO_BLINK_PERIOD_US) >= VIDEO_BLINK_HALF_US) : 0);
 
+    {   INT shiftX = VideoTextPanPixels(state, VideoTextCellWidthOf(state));
+        INT shiftY = state->CrtcRegisters[VIDEO_CR_PRESET_ROW_SCAN] & VIDEO_CR08_ROW_MASK;
+
+        if (shiftX || shiftY)
+        {
+            VideoRenderTextShifted(state, shiftX, shiftY);                  /* #185 */
+            return;
+        }
+    }
+
     for (row = 0; row < state->Rows; ++row)
         for (column = 0; column < state->Columns; ++column)
         {
@@ -7766,6 +8143,20 @@ VOID VddVideoTextCursor(PVIDEO_STATE state, INT column, INT row, WORD andMask, W
 }
 
 static VOID VideoDrawHardwareCursor(PVIDEO_STATE state)
+{
+    INT cellHeight = state->CellHeight ? state->CellHeight : VIDEO_CELL_HEIGHT;
+    INT cellWidth = VideoTextCellWidthOf(state);
+
+    VideoDrawHardwareCursorAt(state, 0, 0, state->Columns * cellWidth, state->Rows * cellHeight);
+}
+
+/* The cursor of a picture scrolled by (shiftX, shiftY) pixels (#185), clipped to it. */
+static VOID VideoDrawHardwareCursorAt(
+    PVIDEO_STATE state,
+    INT shiftX,
+    INT shiftY,
+    INT width,
+    INT height)
 {
     INT glyphY;
     INT glyphX;
@@ -7822,8 +8213,13 @@ static VOID VideoDrawHardwareCursor(PVIDEO_STATE state)
 
             for (glyphY = (INT)start; glyphY <= (INT)end; ++glyphY)
                 for (glyphX = 0; glyphX < cellWidth; ++glyphX)              /* all nine: the CRTC does */
-                    state->FrameBuffer[(state->CursorRow*cellHeight + glyphY) * stride
-                           + state->CursorColumn*cellWidth + glyphX] = foreground;
+                {
+                    INT pixelY = state->CursorRow*cellHeight + glyphY - shiftY;
+                    INT pixelX = state->CursorColumn*cellWidth + glyphX - shiftX;
+
+                    if (pixelY >= 0 && pixelY < height && pixelX >= 0 && pixelX < width)
+                        state->FrameBuffer[pixelY * stride + pixelX] = foreground;
+                }
         }
     }
 }
@@ -8063,6 +8459,20 @@ static VOID VideoRenderPlanar(PVIDEO_STATE state)
      */
     UINT32 pan  = (state->DisplayPan & VIDEO_AR_PAN_MASK) < VIDEO_PAN_PIXELS ? (UINT32)(state->DisplayPan & VIDEO_PAN_SHIFT_MASK) : 0u;
     INT      isPelPanMode  = (state->AttributeMode >> VIDEO_AR_MODE_PPM_SHIFT) & 1;
+    UINT32 planeExtent = VIDEO_PLANE_SIZE;
+
+    /* #326: A VESA PLANAR MODE IS SIZED BY 4F02h, NOT BY THE CRTC the 12h set left behind:
+     * its pitch is VesaStride (width / 8), it starts at 0 (4F07h is not offered), it has
+     * no split or pan, and its planes are the larger store.
+     */
+    if (state->IsVesaPlanar)
+    {
+        pitch = state->VesaStride;
+        base = 0;
+        split = (UINT32)graphicsHeight;
+        pan = 0;
+        planeExtent = VIDEO_PLANE_STORE_SIZE;
+    }
 
     if (!pitch)
         pitch = bytes;
@@ -8078,7 +8488,7 @@ static VOID VideoRenderPlanar(PVIDEO_STATE state)
         {
             for (byteColumn = 0; byteColumn < (INT)bytes; ++byteColumn)
             {
-                UINT32 planeOffset = (rowAddress + (UINT32)byteColumn) % (UINT32)VIDEO_PLANE_SIZE;
+                UINT32 planeOffset = (rowAddress + (UINT32)byteColumn) % planeExtent;
                 BYTE plane0 = VideoPlaneBytes(state,0)[planeOffset];
                 BYTE plane1 = VideoPlaneBytes(state,1)[planeOffset];
                 BYTE plane2 = VideoPlaneBytes(state,2)[planeOffset];
@@ -8098,7 +8508,7 @@ static VOID VideoRenderPlanar(PVIDEO_STATE state)
             for (column = 0; column < graphicsWidth; ++column)
             {
                 UINT32 shiftedX = (UINT32)column + shift;
-                UINT32 planeOffset  = (rowAddress + (shiftedX >> VIDEO_PLANE_BYTE_SHIFT)) % (UINT32)VIDEO_PLANE_SIZE;
+                UINT32 planeOffset  = (rowAddress + (shiftedX >> VIDEO_PLANE_BYTE_SHIFT)) % planeExtent;
                 BYTE  mask  = (BYTE)(VIDEO_PIXEL_LEFT_BIT >> (shiftedX & VIDEO_PIXEL_IN_BYTE_MASK));
                 output[column] = (BYTE)(((VideoPlaneBytes(state,0)[planeOffset]&mask)?1:0) | ((VideoPlaneBytes(state,1)[planeOffset]&mask)?VIDEO_PLANE1_BIT:0)
                                  | ((VideoPlaneBytes(state,2)[planeOffset]&mask)?VIDEO_PLANE2_BIT:0) | ((VideoPlaneBytes(state,3)[planeOffset]&mask)?VIDEO_PLANE3_BIT:0));
@@ -8241,7 +8651,7 @@ static VOID VideoOnFrame(PVOID context)
      */
     VideoLatch(state, VIDEO_LATCH_AT_FRAME);                /* start address + pel panning as displayed (s83) */
 
-    if (state->IsVesa)                                   /* VESA: sync window -> vram */
+    if (state->IsVesa && !state->IsVesaPlanar)           /* VESA: sync window -> vram (#326: planar is below) */
     {
         VideoVesaSync(state);
         state->Frame.Width = state->VesaWidth;
@@ -8386,6 +8796,26 @@ static VOID VideoOnFrame(PVOID context)
 VOID VddVideoPutChar(PVIDEO_STATE state, BYTE character)
 {
     VideoTeletype(state, character);
+    state->IsDirty = 1;
+}
+
+/* DOS'S CONSOLE OUTPUT IS NOT THE BIOS TELETYPE. (s101) MS-DOS's character output moves
+ * a TAB to the next multiple of 8 columns with spaces; INT 10h AH=0Eh prints its glyph.
+ * DIR /W separates its columns with TABs, so every name came out behind a small circle.
+ * INT 29h stays the plain teletype (VddVideoPutChar): it is the driver below DOS.
+ */
+VOID VddVideoConsoleChar(PVIDEO_STATE state, BYTE character)
+{
+    if (character == ASCII_TAB)
+    {
+        do
+            VideoTeletype(state, ' ');
+
+        while (state->CursorColumn % VIDEO_TAB_STOP);
+    }
+    else
+        VideoTeletype(state, character);
+
     state->IsDirty = 1;
 }
 
@@ -8559,6 +8989,7 @@ VOID VddVideoReset(PVOID context)
     state->CellHeight = VIDEO_CELL_HEIGHT;
     state->IsBlink = 1;
     state->IsUserFontOn = 0;
+    state->FontBlocksLoaded = 0;                                    /* #185: blocks 1-7 empty at power-on */
     state->AttributeMode = (BYTE)(state->AttributeMode | VIDEO_AR_MODE_BLINK);
     state->CrtcCursor = 0;
     state->ModeQueryCount = 0;
@@ -8587,6 +9018,7 @@ VOID VddVideoReset(PVOID context)
     state->ReadMode = state->ColorCompare = state->ColorDontCare = 0;
     state->Latch[0] = state->Latch[1] = state->Latch[2] = state->Latch[3] = 0;
     state->IsVesa = 0;
+    state->IsVesaPlanar = 0;                                             /* #326 */
     state->VesaMode = 0;
     state->VesaBank = 0;
     state->VesaModeFlags = 0;

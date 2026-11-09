@@ -254,6 +254,11 @@ INT main(VOID)
     MpuTestWrite(BASE, 0x64);
     CHECK(g_MessageCount == 0, "not in UART mode: data bytes are ignored");
 
+    /* T8 (#342): the Audio page's choice -> the base port, one table ---------- */
+    CHECK(VddMpuBaseForChoice(0) == 0x300 && VddMpuBaseForChoice(4) == 0x340, "base port: choices 0 and 4 = 300h, 340h");
+    CHECK(VddMpuBaseForChoice(MPU_DEFAULT_BASE_CHOICE) == MPU_DEFAULT_BASE, "base port: the default choice is 330h");
+    CHECK(VddMpuBaseForChoice(5) == 0x330 && VddMpuBaseForChoice(0xFFFFFFFF) == 0x330, "base port: off the list -> 330h");
+
     printf("-- %d checks, %d failures --\n", g_Total, g_Failures);
     return g_Failures ? 1 : 0;
 }

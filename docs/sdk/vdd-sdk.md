@@ -105,25 +105,58 @@ How it works:
 - **Loading is the DDK's third-party BOP** (`isvbop.inc`): `C4 C4 58 00` RegisterModule
   (DS:SI DLL, DS:DI init routine, DS:BX dispatch routine; CF + AX = 1/2/3 on failure),
   `C4 C4 58 01` UnRegisterModule, `C4 C4 58 02` DispatchCall (AX = handle).
-- **Provided:** every register accessor (`get/setAX`…`GS`, the 8-bit halves, `EAX`…,
-  the flags `CF ZF SF OF PF AF IF DF`, `getMSW`), `VdmMapFlat` / `VdmUnmapFlat` /
-  `VdmFlushCache`, `VDDInstallIOHook` / `VDDDeInstallIOHook`, `VDDSimulateInterrupt`,
-  `VDDTerminateVDM`.
+- **Loading from the registry** (#11), as NTVDM does when a VDM starts: every DLL named in
+  `HKLM\SYSTEM\CurrentControlSet\Control\VirtualDeviceDrivers`, value `VDD`
+  (`REG_MULTI_SZ`), is loaded with `NTVDM.EXE` already in place. A VDD sets itself up in
+  its `DllEntryPoint`, so loading is the whole protocol. Each load is logged
+  (`VDDSVC: registry VDD [...]`); one that fails to load is skipped. `cfg\noregvdd.flag`
+  turns the list off.
+- **Provided** — the whole service API of the DDK's `vddsvc.h`:
+  - every register accessor (`get/setAX`…`GS`, the 8-bit halves, `EAX`…, the flags
+    `CF ZF SF OF PF AF IF DF`, `getMSW`), `VdmMapFlat` / `VdmUnmapFlat` / `VdmFlushCache`;
+  - `VDDInstallIOHook` / `VDDDeInstallIOHook`, `VDDSimulateInterrupt` (=
+    `call_ica_hw_interrupt`), `VDDTerminateVDM`;
+  - SDK 2 (#11): `VDDInstallMemoryHook` / `VDDDeInstallMemoryHook`, `VDDAllocMem` /
+    `VDDFreeMem` / `VDDIncludeMem` / `VDDExcludeMem`, `VDDRequestDMA` / `VDDQueryDMA` /
+    `VDDSetDMA`, `VDDReserveIrqLine` / `VDDReleaseIrqLine`, `VDDInstallUserHook` /
+    `VDDDeInstallUserHook`.
 - ⚠ **I/O handlers are STDCALL.** `nt_vdd.h` declares `PFNVDD_INB` etc. with no
   convention, but NT and the DDK compile with `__stdcall` as the default, and stock
-  NTVDM calls them that way (a cdecl handler made stock die at the first `IN`).
+  NTVDM calls them that way (a cdecl handler made stock die at the first `IN`). The same
+  goes for memory-hook handlers and user hooks.
 
 Build one: `tests/probes/dos/isvtest/build.sh` (`ntvdm.def` → `libntvdm.a` with
-`dlltool -k`, then one compiler line).
+`dlltool -k`, then one compiler line), or against the SDK: `sdk/lib/ntvdm.def` lists every
+export with its STDCALL decoration and `sdk/include/ntvdmex-vddsvc.h` declares the SDK 2
+calls; `sdk/sample/vddsvc.c` uses all of them (`sdk/build-sample.sh` builds it). Link the
+import library BY PATH: the mingw-w64 toolchain ships a `libntvdm.a` of its own, which
+`-lntvdm` can find first.
+
+### What NTVDMEX does with each call, and where it differs from NTVDM
+
+| call | here |
+|---|---|
+| `VDDInstallMemoryHook` | The range (inside the VDM's 1 MB + HMA; no overlap with another hook) is recorded and its pages marked hooked. ⚠ **Only accesses the HOST INTERPRETER makes reach the handler** (planar and mode-Y video, and other interpreted stretches). NTVDM traps a hooked range by leaving its pages not present and taking the fault; here marking a page of the V86 window inaccessible freezes the guest on real hardware (measured for A0000), so a guest running natively on the CPU reads and writes the page as plain memory. The handler gets the address and 0 = read / 1 = write; if it then makes the memory present (`VDDAllocMem`) the access lands there, otherwise a read floats high (FFh) and a write is dropped. |
+| `VDDAllocMem` / `VDDFreeMem` | Commits the range's pages (inside the VDM's range); `VDDFreeMem` decommits only pages `VDDAllocMem` committed, and a hooked range is hooked again. |
+| `VDDIncludeMem` / `VDDExcludeMem` | Checked and logged, and nothing else: they tell NTVDM's memory manager a range is or is not usable as upper memory, and this host provides no UMBs. |
+| `VDDRequestDMA` | Moves bytes between the guest's DMA buffer and yours in the direction the channel's mode names (read transfer → your buffer is filled; write transfer → it is emptied), advancing address and count and raising terminal count exactly as a device on the 8237 model does. A NULL buffer or zero length answers the bytes left. Verify-mode, masked and cascade channels move nothing. |
+| `VDDQueryDMA` / `VDDSetDMA` | The channel's current address, count, page, status (bit *line* = TC, bit *line*+4 = request), mode and mask. `VDDSetDMA` writes the fields its flags name (`ADDR 1`, `COUNT 2`, `PAGE 4`, `STATUS 8`). |
+| `VDDReserveIrqLine` | A line the host's own devices do not raise (by default only 9 is free; FFFFh asks for any free line, in AT add-in order). Answers the line or FFFFh. The host's own lines cannot be released. |
+| `VDDInstallUserHook` | Create and terminate are called with the program's PSP when a program is EXECed and when one ends (AH=4Ch, INT 20h, ...); block and resume around the background pause (#219: the window loses focus; never under Win16 or headless). The very first program is already running when a VDD loaded by RegisterModule installs its hook. |
 
 ## What is not here yet
 
-- From the Microsoft API: memory hooks (`VDDInstallMemoryHook`), DMA (`VDDRequestDMA`…),
-  `VDDReserveIrqLine`, `VDDAllocMem`, user hooks (`VDDInstallUserHook`), and the
-  registry-listed VDDs NTVDM loads at start-up (`VirtualDeviceDrivers`).
-- In our own ABI: `claim_mem` is accepted but never dispatched, and `claim_int` only reaches
-  a device for a vector the host has a BIOS stub for (#315).
-- No versioned SDK drop.
+- Memory hooks are not seen by native V86 execution (above).
+- `claim_int` is delivered for the user vectors (60h–66h, 68h–6Fh, 78h–FEh, a generic stub
+  each, #315); a claim on a DOS, BIOS or IRQ vector is logged and refused rather than stolen
+  from the system.
+
+## SDK versions
+
+| version | what changed |
+|---|---|
+| 1 (s91) | Our ABI (`ntvdmex-vdd.h`, ABI version 1); Microsoft-ABI VDDs through the third-party BOP: register accessors, `VdmMapFlat`, I/O hooks, `VDDSimulateInterrupt`, `VDDTerminateVDM`. |
+| 2 (#11) | `claim_mem` is delivered (to the interpreter's accesses, as memory hooks are). Microsoft ABI: memory hooks, `VDDAllocMem`/`FreeMem`/`IncludeMem`/`ExcludeMem`, DMA, IRQ lines, user hooks, and the registry's VDD list. `sdk/lib/ntvdm.def`, `sdk/include/ntvdmex-vddsvc.h`, `sdk/sample/vddsvc.c`. `NTVDMEX_VDD_SDK_VERSION` in the header. The ABI version stays 1. |
 
 ## Files
 
@@ -132,7 +165,10 @@ Build one: `tests/probes/dos/isvtest/build.sh` (`ntvdm.def` → `libntvdm.a` wit
 | `sdk/include/ntvdmex-vdd.h` | the whole public ABI, self-contained |
 | `sdk/sample/portecho.c` | a complete device in one file |
 | `sdk/sample/abi_check.c` | fails the build if the SDK header drifts from `src/vdd/ntvdd.h` |
-| `sdk/build-sample.sh` | one compiler line |
+| `sdk/build-sample.sh` | one compiler line per sample |
+| `sdk/include/ntvdmex-vddsvc.h` | the Microsoft-ABI SDK 2 calls, declared without the DDK |
+| `sdk/lib/ntvdm.def` | every `NTVDM.EXE` export, decorated, for an import library |
+| `sdk/sample/vddsvc.c` | a Microsoft-ABI VDD using every SDK 2 call |
 | `tests/probes/dos/vddtest.asm` | a DOS driver that detects and drives the sample |
 | `tests/probes/dos/isvtest/` | a Microsoft-ABI VDD (`isvtest.c`, `ntvdm.def`, `build.sh`) |
 | `tests/probes/dos/p_isv.asm` | its DOS half: RegisterModule / DispatchCall / port I/O / UnRegisterModule |

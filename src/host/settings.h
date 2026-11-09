@@ -28,9 +28,9 @@
  *
  * [CAUTION]: SOME OF THESE ARE STORED BUT NOT HONOURED. The CPU, Display, Audio, Drives pages
  * and parts of Input came from the menu scaffold, where they were IDM_STUB. Most are
- * live now; as of #136 (s92) the rows still stored only are Umb, A20, CdRomUsePhysical,
- * CdRomImage and SoundFontPath, and the startup report (STAGE2: settings) prints WHY for
- * each. settings_apply() in main.c is the ONLY place a stored value reaches the
+ * live now; the rows still stored only are Umb and A20 (CdRomUsePhysical and CdRomImage
+ * went live with #241, SoundFontPath with our SF2 synth, audio_sf2.h), and the startup report
+ * (STAGE2: settings) prints WHY for each. settings_apply() in main.c is the ONLY place a stored value reaches the
  * machine, so that function -- with SET_LIVE_IDS beside it -- is the honest list of
  * what actually works. Wiring one up means adding a line there, not adding storage.
  *
@@ -96,6 +96,10 @@ typedef enum
     SET_FIT,                    /* #325: maximised/fullscreen -- whole pixels or fill */
     SET_RESTARTCAPTURE,         /* #155: Capture Video restarts the running program first */
     SET_VIDEOCODEC, SET_VIDEOQUALITY, SET_VIDEOKEYFRAMES,   /* #155: Settings > Capture's codec */
+    SET_FSRES,                  /* #331: fullscreen's display mode (fullscreen_mode.h) */
+    SET_FLOPPYLETTER,           /* s101: the floppy image's drive letter (0 = automatic, 1..26 = A:..Z:) */
+    SET_CDLETTER,               /* s101: the ISO's drive letter, likewise */
+    SET_CPUDIE,                 /* #417: keep the host on one CPU die (CPU_DIE_MODE) */
     SET_COUNT
 } SET_ID;
 

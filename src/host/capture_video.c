@@ -19,6 +19,7 @@
 #include <vfw.h>
 #pragma pop_macro("PERCENT")
 #include "capture_avi.h"
+#include "capture_scale.h"
 #include "host_state.h"
 #include "audio_wave.h"
 #include "log.h"
@@ -32,7 +33,6 @@
 #define CAPTURE_VIDEO_TALL_LINES            400
 #define CAPTURE_VIDEO_RGB_BYTES             3
 #define CAPTURE_VIDEO_RGB_BITS              24
-#define CAPTURE_VIDEO_ROW_ALIGN             3                           /* DIB rows are padded to 4 bytes */
 #define CAPTURE_VIDEO_PALETTE_ENTRIES       256
 #define CAPTURE_VIDEO_PALETTED_BPP          8
 #define CAPTURE_VIDEO_XRGB_BPP              32
@@ -93,10 +93,16 @@ typedef struct _CAPTURE_VIDEO_SEGMENT
     CHAR Path[MAX_PATH];        /* while recording: <app>-recording.avi; at close, the final name */
     CHAR AppName[PROGRAM_NAME_SIZE];   /* the program running when it started */
     CAPTURE_AVI Avi;
-    DWORD Width;
+    DWORD Width;                /* the recording's output size (#357): fixed, see capture_scale.h */
     DWORD Height;
     DWORD Fps;
     DWORD ImageBytes;
+    DWORD SourceWidth;          /* the guest frame being scaled into it, and where it goes */
+    DWORD SourceHeight;
+    CAPTURE_SCALE_PLACEMENT Placement;
+    BYTE *Source;               /* that frame, 24-bit top-down, before scaling */
+    DWORD SourceCapacity;
+    DWORD ModeChanges;
     BITMAPINFOHEADER Input;
     BYTE Format[CAPTURE_VIDEO_FORMAT_MAX];
     DWORD FormatBytes;
@@ -119,6 +125,12 @@ static UINT32 g_CaptureVideoPaletteSplit[CAPTURE_VIDEO_PALETTE_ENTRIES];
 static WORD g_CaptureVideoSplitRow[CAPTURE_VIDEO_PALETTE_ENTRIES];
 static UINT32 g_CaptureVideoSplitFrame[CAPTURE_VIDEO_PALETTE_ENTRIES];
 static NTVDD_FRAME g_CaptureVideoFrame;
+/* #357: the recording's output size and frame rate, chosen from its first frame and kept by
+ * every segment after it (a split at CAPTURE_AVI_SPLIT_BYTES included). 0 = not chosen yet.
+ */
+static DWORD g_CaptureVideoOutputWidth;
+static DWORD g_CaptureVideoOutputHeight;
+static DWORD g_CaptureVideoFps;
 
 static BOOL CaptureVideoBind(VOID)
 {
@@ -659,20 +671,44 @@ static BOOL CaptureVideoGrab(VOID)
     return TRUE;
 }
 
-/* The grabbed frame -> 24-bit bottom-up RGB (a DIB), each row's palette resolved. */
+/* #357: the grabbed frame's size is the one being scaled. FALSE = no memory for it. */
+static BOOL CaptureVideoSetSource(PCAPTURE_VIDEO_SEGMENT segment)
+{
+    DWORD bytes = g_CaptureVideoFrame.Width * CAPTURE_VIDEO_RGB_BYTES * g_CaptureVideoFrame.Height;
+
+    if (bytes > segment->SourceCapacity)
+    {
+        BYTE *grown = (BYTE *)CaptureVideoResize(NULL, segment->Source, bytes);
+
+        if (!grown)
+            return FALSE;
+
+        segment->Source = grown;
+        segment->SourceCapacity = bytes;
+    }
+
+    segment->SourceWidth = g_CaptureVideoFrame.Width;
+    segment->SourceHeight = g_CaptureVideoFrame.Height;
+    CaptureScalePlace(segment->SourceWidth, segment->SourceHeight, segment->Width, segment->Height, &segment->Placement);
+    return TRUE;
+}
+
+/* The grabbed frame -> 24-bit RGB, each row's palette resolved, then scaled into the
+ * output picture (#357): a bottom-up DIB at the recording's fixed size.
+ */
 static VOID CaptureVideoConvert(PCAPTURE_VIDEO_SEGMENT segment)
 {
     PCNTVDD_FRAME frame = &g_CaptureVideoFrame;
-    DWORD stride = (segment->Width * CAPTURE_VIDEO_RGB_BYTES + CAPTURE_VIDEO_ROW_ALIGN) & ~(DWORD)CAPTURE_VIDEO_ROW_ALIGN;
+    DWORD sourceStride = segment->SourceWidth * CAPTURE_VIDEO_RGB_BYTES;
     DWORD row;
 
-    for (row = 0; row < segment->Height; ++row)
+    for (row = 0; row < segment->SourceHeight; ++row)
     {
         const BYTE *source = frame->Pixels + (SIZE_T)row * frame->Stride;
-        BYTE *target = segment->Rgb + (SIZE_T)(segment->Height - 1 - row) * stride;
+        BYTE *target = segment->Source + (SIZE_T)row * sourceStride;
         DWORD column;
 
-        for (column = 0; column < segment->Width; ++column)
+        for (column = 0; column < segment->SourceWidth; ++column)
         {
             UINT32 colour;
 
@@ -687,10 +723,10 @@ static VOID CaptureVideoConvert(PCAPTURE_VIDEO_SEGMENT segment)
             target[column * CAPTURE_VIDEO_RGB_BYTES + 1] = (BYTE)(colour >> 8);      /* G */
             target[column * CAPTURE_VIDEO_RGB_BYTES + 2] = (BYTE)(colour >> 16);     /* R */
         }
-
-        for (column *= CAPTURE_VIDEO_RGB_BYTES; column < stride; ++column)
-            target[column] = 0;
     }
+
+    CaptureScaleBlit(segment->Source, segment->SourceWidth, segment->SourceHeight, sourceStride,
+                     segment->Rgb, segment->Width, segment->Height, &segment->Placement);
 }
 
 static BOOL CaptureVideoSame(const BYTE *left, const BYTE *right, DWORD bytes)
@@ -719,7 +755,9 @@ static VOID CaptureVideoLog(PCSTR text, PCSTR path)
     LogAppend(LOG_PATH, line, cursor);
 }
 
-/* A new file at the grabbed frame's size. FALSE = could not (logged). */
+/* A new file at the recording's output size (#357: chosen from the first frame, then kept).
+ * FALSE = could not (logged).
+ */
 static BOOL CaptureVideoOpenSegment(PCAPTURE_VIDEO_SEGMENT segment)
 {
     CAPTURE_AVI_IO io;
@@ -728,15 +766,23 @@ static BOOL CaptureVideoOpenSegment(PCAPTURE_VIDEO_SEGMENT segment)
     INT number;
 
     ZeroMemory(segment, sizeof(*segment));
-    segment->Width = g_CaptureVideoFrame.Width;
-    segment->Height = g_CaptureVideoFrame.Height;
-    segment->Fps = segment->Height > CAPTURE_VIDEO_TALL_LINES ? CAPTURE_VIDEO_FPS_TALL : CAPTURE_VIDEO_FPS_VGA;
-    stride = (segment->Width * CAPTURE_VIDEO_RGB_BYTES + CAPTURE_VIDEO_ROW_ALIGN) & ~(DWORD)CAPTURE_VIDEO_ROW_ALIGN;
+
+    if (!g_CaptureVideoOutputWidth)
+    {
+        CaptureScaleChooseOutput(g_CaptureVideoFrame.Width, g_CaptureVideoFrame.Height,
+                                 &g_CaptureVideoOutputWidth, &g_CaptureVideoOutputHeight);
+        g_CaptureVideoFps = g_CaptureVideoFrame.Height > CAPTURE_VIDEO_TALL_LINES ? CAPTURE_VIDEO_FPS_TALL : CAPTURE_VIDEO_FPS_VGA;
+    }
+
+    segment->Width = g_CaptureVideoOutputWidth;
+    segment->Height = g_CaptureVideoOutputHeight;
+    segment->Fps = g_CaptureVideoFps;
+    stride = CaptureScaleStride(segment->Width);
     segment->ImageBytes = stride * segment->Height;
     segment->Rgb = (BYTE *)HeapAlloc(GetProcessHeap(), 0, segment->ImageBytes);
     segment->Previous = (BYTE *)HeapAlloc(GetProcessHeap(), 0, segment->ImageBytes);
 
-    if (!segment->Rgb || !segment->Previous)
+    if (!segment->Rgb || !segment->Previous || !CaptureVideoSetSource(segment))
         return FALSE;
 
     segment->Input.biSize = sizeof(segment->Input);
@@ -828,6 +874,9 @@ static BOOL CaptureVideoOpenSegment(PCAPTURE_VIDEO_SEGMENT segment)
         cursor = LogPut(cursor, segment->Path);
         cursor = LogPut(cursor, " ");           cursor = LogDecimal(cursor, segment->Width);
         cursor = LogPut(cursor, "x");           cursor = LogDecimal(cursor, segment->Height);
+        cursor = LogPut(cursor, " (guest ");    cursor = LogDecimal(cursor, segment->SourceWidth);
+        cursor = LogPut(cursor, "x");           cursor = LogDecimal(cursor, segment->SourceHeight);
+        cursor = LogPut(cursor, ")");
         cursor = LogPut(cursor, " @ ");         cursor = LogDecimal(cursor, segment->Fps);
         cursor = LogPut(cursor, " fps, codec 0x"); cursor = LogHex(cursor, format.Handler);
         cursor = LogPut(cursor, " (0 = uncompressed) (#155)\r\n");
@@ -863,17 +912,22 @@ static VOID CaptureVideoCloseSegment(PCAPTURE_VIDEO_SEGMENT segment)
     cursor = LogPut(cursor, " frames=");      cursor = LogDecimal(cursor, segment->Frames);
     cursor = LogPut(cursor, " repeats=");     cursor = LogDecimal(cursor, segment->Repeats);
     cursor = LogPut(cursor, " late=");        cursor = LogDecimal(cursor, segment->Late);
+    cursor = LogPut(cursor, " mode_changes="); cursor = LogDecimal(cursor, segment->ModeChanges);
     cursor = LogPut(cursor, " bytes=");       cursor = LogDecimal(cursor, segment->Avi.Bytes);
     cursor = LogPut(cursor, " audio_dropped="); cursor = LogDecimal(cursor, (UINT)g_CaptureVideoDropped);
     cursor = LogPut(cursor, isComplete ? "\r\n" : " INCOMPLETE (a write failed)\r\n");
     LogAppend(LOG_PATH, line, cursor);
     HeapFree(GetProcessHeap(), 0, segment->Rgb);
     HeapFree(GetProcessHeap(), 0, segment->Previous);
+
+    if (segment->Source)
+        HeapFree(GetProcessHeap(), 0, segment->Source);
+
     segment->File = INVALID_HANDLE_VALUE;
 }
 
-/* One video frame: the current picture, or a repeat. TRUE = the guest changed mode. */
-static BOOL CaptureVideoWriteFrame(PCAPTURE_VIDEO_SEGMENT segment, BOOL isLate)
+/* One video frame: the current picture, or a repeat. */
+static VOID CaptureVideoWriteFrame(PCAPTURE_VIDEO_SEGMENT segment, BOOL isLate)
 {
     BOOL isKey = TRUE;
     LONG size = (LONG)segment->ImageBytes;
@@ -886,14 +940,27 @@ static BOOL CaptureVideoWriteFrame(PCAPTURE_VIDEO_SEGMENT segment, BOOL isLate)
         segment->Repeats++;
         segment->Late += isLate;
         CaptureAviVideo(&segment->Avi, NULL, 0, FALSE);
-        return FALSE;
+        return;
     }
 
-    if (g_CaptureVideoFrame.Width != segment->Width || g_CaptureVideoFrame.Height != segment->Height)
+    /* #357: A NEW MODE IS SCALED INTO THE SAME PICTURE, NOT A NEW FILE. The frame after it
+     * is always written (never a repeat of the old mode) and is asked to be a key frame,
+     * so a player can seek to the change.
+     */
+    if (g_CaptureVideoFrame.Width != segment->SourceWidth || g_CaptureVideoFrame.Height != segment->SourceHeight)
     {
-        segment->Repeats++;
-        CaptureAviVideo(&segment->Avi, NULL, 0, FALSE);
-        return TRUE;
+        if (!CaptureVideoSetSource(segment))
+        {
+            segment->Repeats++;
+            CaptureAviVideo(&segment->Avi, NULL, 0, FALSE);
+            return;
+        }
+
+        segment->ModeChanges++;
+        segment->HasPrevious = FALSE;
+
+        if (segment->HasCodec)
+            segment->Codec.lKeyCount = 0;       /* ICSeqCompressFrame: the next frame is a key frame */
     }
 
     CaptureVideoConvert(segment);
@@ -902,7 +969,7 @@ static BOOL CaptureVideoWriteFrame(PCAPTURE_VIDEO_SEGMENT segment, BOOL isLate)
     {
         segment->Repeats++;
         CaptureAviVideo(&segment->Avi, NULL, 0, FALSE);
-        return FALSE;
+        return;
     }
 
     CopyMemory(segment->Previous, segment->Rgb, segment->ImageBytes);
@@ -916,12 +983,11 @@ static BOOL CaptureVideoWriteFrame(PCAPTURE_VIDEO_SEGMENT segment, BOOL isLate)
         {
             segment->Repeats++;
             CaptureAviVideo(&segment->Avi, NULL, 0, FALSE);
-            return FALSE;
+            return;
         }
     }
 
     CaptureAviVideo(&segment->Avi, data, (DWORD)size, isKey);
-    return FALSE;
 }
 
 /* the writer: */
@@ -937,7 +1003,6 @@ static DWORD WINAPI CaptureVideoWriter(LPVOID parameter)
     for (;;)
     {
         BOOL isStopping = g_CaptureVideoIsStopping;
-        BOOL hasModeChanged = FALSE;
         DWORD framesDue = 0;
 
         /* [CAUTION]: ONCE STOPPING, NEVER THE HOST LOCK. CaptureVideoStop runs on exit paths
@@ -973,6 +1038,9 @@ static DWORD WINAPI CaptureVideoWriter(LPVOID parameter)
                 if (segment.Previous)
                     HeapFree(GetProcessHeap(), 0, segment.Previous);
 
+                if (segment.Source)
+                    HeapFree(GetProcessHeap(), 0, segment.Source);
+
                 break;
             }
 
@@ -1007,9 +1075,9 @@ static DWORD WINAPI CaptureVideoWriter(LPVOID parameter)
         }
 
         if (framesDue)
-            hasModeChanged = CaptureVideoWriteFrame(&segment, isStopping);
+            CaptureVideoWriteFrame(&segment, isStopping);
 
-        if (hasModeChanged || CaptureAviBytes(&segment.Avi) > CAPTURE_AVI_SPLIT_BYTES || isStopping)
+        if (CaptureAviBytes(&segment.Avi) > CAPTURE_AVI_SPLIT_BYTES || isStopping)
         {
             CaptureVideoCloseSegment(&segment);
             isOpen = FALSE;
@@ -1049,6 +1117,7 @@ BOOL CaptureVideoStart(VOID)
 
     g_CaptureVideoHead = g_CaptureVideoTail = 0;
     g_CaptureVideoDropped = 0;
+    g_CaptureVideoOutputWidth = g_CaptureVideoOutputHeight = 0;     /* #357: chosen by the first frame */
     g_CaptureVideoIsStopping = 0;
     InterlockedExchange(&g_CaptureVideoIsRecording, 1);
     AudioWaveSetTap(CaptureVideoTap, NULL);

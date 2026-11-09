@@ -19,14 +19,20 @@
 #include "dos_ctab.h"       /* CP437 tables dumped from the 6.22 oracle */
 #include "dos_auxprn.h"     /* #251: the AUX/PRN driver entries (guest code) */
 #include "dos_lfn.h"        /* #210: the long-filename API's pure half */
+#include "dos_version.h"    /* #28: which services the configured version has */
+#include "dos_fatimg.h"     /* #240: drive A: as a disk image */
+#include "dos_fcbfind.h"    /* #240: the drive an FCB search lists */
+#include "dos_alias.h"      /* s101: 8.3 aliases for names the volume gives none */
 
 /* Characters, drives, paths. */
 #define DOS_INT21_PATH_SIZE                     300
-#define DOS_INT21_DRIVE_ROOT_SIZE               3       /* "A:" */
-#define DOS_INT21_DRIVE_VARIABLE_SIZE           5       /* "=A:", the drive's current directory */
-#define DOS_INT21_DRIVE_PREFIX_ROOM             3       /* "A:" + NUL */
-#define DOS_INT21_WILDCARD_ROOM                 2       /* "*" + NUL */
-#define DOS_INT21_SERIAL_INFO_SIZE              23      /* AH=69h's block, per drive */
+#define DOS_ALIAS_CACHE_TABLES                  4                       /* Directories whose aliases are kept */
+#define DOS_ALIAS_FIND_SLOTS                    16 /* Open searches whose directory is remembered */
+#define DOS_INT21_DRIVE_ROOT_SIZE               3                       /* "A:" */
+#define DOS_INT21_DRIVE_VARIABLE_SIZE           5                       /* "=A:", the drive's current directory */
+#define DOS_INT21_DRIVE_PREFIX_ROOM             3                       /* "A:" + NUL */
+#define DOS_INT21_WILDCARD_ROOM                 2                       /* "*" + NUL */
+#define DOS_INT21_SERIAL_INFO_SIZE              23                      /* AH=69h's block, per drive */
 #define DOS_INT21_MS_PER_HUNDREDTH              10
 
 /* The find-first DTA (AH=4Eh): what DOS leaves for the caller. */
@@ -35,27 +41,27 @@
 #define DOS_INT21_DTA_DATE                      24
 #define DOS_INT21_DTA_SIZE                      26
 #define DOS_INT21_DTA_NAME                      30
-#define DOS_INT21_DTA_NAME_LENGTH               12      /* 8.3, with its dot */
+#define DOS_INT21_DTA_NAME_LENGTH               12                      /* 8.3, with its dot */
 
 /* FCBs. */
-#define DOS_INT21_XFCB_FLAG                     0xFF    /* An extended FCB starts 0xFF... */
-#define DOS_INT21_XFCB_HEADER                   7       /* ...and the FCB proper follows 7 bytes on */
-#define DOS_INT21_FCB_NAME                      1       /* The drive byte, then the 8.3 name */
+#define DOS_INT21_XFCB_FLAG                     0xFF                    /* An extended FCB starts 0xFF... */
+#define DOS_INT21_XFCB_HEADER                   7                       /* ...and the FCB proper follows 7 bytes on */
+#define DOS_INT21_FCB_NAME                      1                       /* The drive byte, then the 8.3 name */
 #define DOS_INT21_FCB_BASE_LENGTH               8
 #define DOS_INT21_FCB_EXTENSION                 9
 #define DOS_INT21_EXTENSION_LENGTH              3
 
 /* The handle table: standard handles, SFT indexes in the JFT. */
-#define DOS_INT21_STD_HANDLES                   5       /* Stdin, stdout, stderr, stdaux, stdprn */
+#define DOS_INT21_STD_HANDLES                   5                       /* Stdin, stdout, stderr, stdaux, stdprn */
 #define DOS_INT21_STDAUX_HANDLE                 3
 #define DOS_INT21_STDPRN_HANDLE                 4
-#define DOS_INT21_STD_OPEN_ALL                  0x1F    /* All five open */
+#define DOS_INT21_STD_OPEN_ALL                  0x1F                    /* All five open */
 #define DOS_INT21_STD_OPEN_BITS                 32
-#define DOS_INT21_SFT_FIRST_HOST                3       /* Past AUX, CON, PRN: a host handle */
+#define DOS_INT21_SFT_FIRST_HOST                3                       /* Past AUX, CON, PRN: a host handle */
 #define DOS_INT21_SFT_LAST                      255
-#define DOS_INT21_SHELL_VERSION_MAJOR           5       /* What an NTVDM-aware shell is told: 5.00 */
+#define DOS_INT21_SHELL_VERSION_MAJOR           5                       /* What an NTVDM-aware shell is told: 5.00 */
 #define DOS_INT21_SHELL_VERSION_MINOR           0
-#define DOS_INT21_DEFAULT_VERSION_MAJOR         6       /* The oracle: 6.22 */
+#define DOS_INT21_DEFAULT_VERSION_MAJOR         6                       /* The oracle: 6.22 */
 #define DOS_INT21_DEFAULT_VERSION_MINOR         22
 
 /* NtQueryObject, for the drive a handle is on. */
@@ -66,48 +72,47 @@
 #define DOS_INT21_WCHAR_BYTES                   2
 
 /* The INT 21h the guest executed, and its frame. */
-#define DOS_INT21_CALLSITE_BEFORE               24      /* The trace's bytes around the call site */
+#define DOS_INT21_CALLSITE_BEFORE               24                      /* The trace's bytes around the call site */
 #define DOS_INT21_CALLSITE_AFTER                10
 #define DOS_INT21_CALLSITE_MAX                  48
 
 /* Console I/O. */
 #define DOS_INT21_CRLF_LENGTH                   2
-#define DOS_INT21_DIRECT_INPUT                  0xFF    /* AH=06h DL=FFh: read, don't write */
-#define DOS_INT21_INPUT_READY                   0xFF    /* AH=0Bh/06h: a character is waiting */
+#define DOS_INT21_DIRECT_INPUT                  0xFF                    /* AH=06h DL=FFh: read, don't write */
+#define DOS_INT21_INPUT_READY                   0xFF                    /* AH=0Bh/06h: a character is waiting */
 #define DOS_INT21_INPUT_NONE                    0x00
-#define DOS_INT21_LINE_COUNT                    1       /* AH=0Ah's buffer: max, count, then text */
+#define DOS_INT21_LINE_COUNT                    1                       /* AH=0Ah's buffer: max, count, then text */
 #define DOS_INT21_LINE_TEXT                     2
-#define DOS_INT21_CONSOLE_LINE_MAX              127     /* AH=3Fh from CON: a line, then CR LF */
-#define DOS_INT21_PRINT_STRING_MAX              1024    /* AH=09h: the most a '$' string is read */
+#define DOS_INT21_CONSOLE_LINE_MAX              127                     /* AH=3Fh from CON: a line, then CR LF */
+#define DOS_INT21_PRINT_STRING_MAX              1024                    /* AH=09h: the most a '$' string is read */
 #define DOS_INT21_TRACE_LINE_MAX                64
 #define DOS_INT21_TRACE_FIRST_BYTES             8
 #define DOS_INT21_TRACE_DTA_BYTES               44
 
 /* Files. */
-#define DOS_INT21_HARD_ERROR_FIRST              19      /* Win32 19..31: the critical-error codes */
+#define DOS_INT21_HARD_ERROR_FIRST              19                      /* Win32 19..31: the critical-error codes */
 #define DOS_INT21_HARD_ERROR_LAST               31
-#define DOS_INT21_OEM_SERIAL_HIGH               0xFF00  /* AH=30h: BH = OEM FFh, BL = serial high */
+#define DOS_INT21_OEM_SERIAL_HIGH               0xFF00                  /* AH=30h: BH = OEM FFh, BL = serial high */
 #define DOS_INT21_SERIAL_LOW                    0x0000
 #define DOS_INT21_ATTRIBUTE_VOLUME              0x08
 #define DOS_INT21_VOLUME_SIZE                   128
-#define DOS_INT21_ALL_PATTERN_SIZE              8
 
 /* The find-first DTA's reserved area: our search, as DOS keeps its own there. */
-#define DOS_INT21_FIND_DRIVE_C                  3       /* The drive byte: C: */
+#define DOS_INT21_FIND_DRIVE_C                  3                       /* The drive byte: C: */
 #define DOS_INT21_FIND_MASK                     12
 #define DOS_INT21_FIND_RESERVED                 13
-#define DOS_INT21_FIND_TAG                      19      /* DOS_FIND_MAGIC: the slot below is ours */
+#define DOS_INT21_FIND_TAG                      19                      /* DOS_FIND_MAGIC: the slot below is ours */
 #define DOS_INT21_FIND_SLOT                     20
 
 /* The FCB, past the drive byte and the 8.3 name. */
 #define DOS_INT21_FCB_DRIVE_AND_NAME            12
-#define DOS_INT21_FCB_BLOCK                     12      /* Current block */
+#define DOS_INT21_FCB_BLOCK                     12                      /* Current block */
 #define DOS_INT21_FCB_RECORD_SIZE               14
 #define DOS_INT21_FCB_FILE_SIZE                 16
-#define DOS_INT21_FCB_NEW_NAME                  16      /* AH=17h: the new name's drive byte */
+#define DOS_INT21_FCB_NEW_NAME                  16                      /* AH=17h: the new name's drive byte */
 #define DOS_INT21_FCB_DATE                      20
 #define DOS_INT21_FCB_TIME                      22
-#define DOS_INT21_FCB_TAG                       24      /* DOS_FCB_MAGIC: the handle below is ours */
+#define DOS_INT21_FCB_TAG                       24                      /* DOS_FCB_MAGIC: the handle below is ours */
 #define DOS_INT21_FCB_HANDLE                    25
 #define DOS_INT21_FCB_CURRENT_RECORD            32
 #define DOS_INT21_FCB_RANDOM_RECORD             33
@@ -115,9 +120,9 @@
 #define DOS_INT21_FCB_DEFAULT_RECORD            128
 #define DOS_INT21_FCB_RECORDS_PER_BLOCK         128
 #define DOS_INT21_FCB_RECORD_BUFFER             512
-#define DOS_INT21_FCB_END_OF_FILE               1       /* AL: nothing transferred */
-#define DOS_INT21_FCB_PARTIAL_RECORD            3       /* AL: a partial final record */
-#define DOS_INT21_XFCB_ATTRIBUTE                6       /* An extended FCB's attribute byte */
+#define DOS_INT21_FCB_END_OF_FILE               1                       /* AL: nothing transferred */
+#define DOS_INT21_FCB_PARTIAL_RECORD            3                       /* AL: a partial final record */
+#define DOS_INT21_XFCB_ATTRIBUTE                6                       /* An extended FCB's attribute byte */
 
 /* A found entry, as AH=11h/12h leave it after the drive byte (a directory entry). */
 #define DOS_INT21_DIRENTRY_ATTRIBUTE            12
@@ -129,8 +134,8 @@
 #define DOS_INT21_DIRENTRY_LAST                 32
 
 /* The vectors AH=00h unwinds. */
-#define DOS_INT21_IVT_TIMER                     0x20    /* INT 08h's vector */
-#define DOS_INT21_IVT_USER_TICK                 0x70    /* INT 1Ch's vector */
+#define DOS_INT21_IVT_TIMER                     0x20                    /* INT 08h's vector */
+#define DOS_INT21_IVT_USER_TICK                 0x70                    /* INT 1Ch's vector */
 
 /* A subfunction (AL) that gets or sets. */
 #define DOS_INT21_GET                           0x00
@@ -139,29 +144,29 @@
 #define DOS_INT21_CH_CLEAR_MASK                 0xFFFF00FFu
 
 /* EXEC (AH=4Bh): AL, and the parameter block. */
-#define DOS_INT21_EXEC_PB_TAIL                  2       /* Environment, then tail, FCB1, FCB2 */
+#define DOS_INT21_EXEC_PB_TAIL                  2                       /* Environment, then tail, FCB1, FCB2 */
 #define DOS_INT21_EXEC_PB_FCB1                  6
 #define DOS_INT21_EXEC_PB_FCB2                  10
 
 /* Drives: free space and the DPB. */
-#define DOS_INT21_DRIVE_C                       2       /* 0-based */
-#define DOS_INT21_ROOT_PATH_SIZE                4       /* "A:\" */
+#define DOS_INT21_DRIVE_C                       2                       /* 0-based */
+#define DOS_INT21_ROOT_PATH_SIZE                4                       /* "A:\" */
 #define DOS_INT21_INVALID_DRIVE_AL              0xFF
 #define DOS_INT21_MEDIA_FIXED                   0xF8
 #define DOS_INT21_MEDIA_FLOPPY                  0xF0
 #define DOS_INT21_DEFAULT_SECTOR_SIZE           512
-#define DOS_INT21_FLOPPY_ROOT_ENTRIES           224     /* 6.22's floppy */
+#define DOS_INT21_FLOPPY_ROOT_ENTRIES           224                     /* 6.22's floppy */
 #define DOS_INT21_FIXED_ROOT_ENTRIES            512
 #define DOS_INT21_MAX_CLUSTER                   0xFFFE
-#define DOS_INT21_DPB_LAST                      0xFFFF  /* The next-DPB pointer: none */
-#define DOS_INT21_WOW_CURRENT_DRIVE             0xF0    /* AH=47h DL=F0h: WOW's "current drive" */
-#define DOS_INT21_DRIVE_PREFIX_LENGTH           2       /* "C:" */
+#define DOS_INT21_DPB_LAST                      0xFFFF                  /* The next-DPB pointer: none */
+#define DOS_INT21_WOW_CURRENT_DRIVE             0xF0                    /* AH=47h DL=F0h: WOW's "current drive" */
+#define DOS_INT21_DRIVE_PREFIX_LENGTH           2                       /* "C:" */
 #define DOS_INT21_CURRENT_DIRECTORY_MAX         63
-#define DOS_INT21_CURRENT_DIRECTORY_AX          0x0100  /* Oracle: AX=0100h */
+#define DOS_INT21_CURRENT_DIRECTORY_AX          0x0100                  /* Oracle: AX=0100h */
 #define DOS_INT21_LABEL_SIZE                    64
 #define DOS_INT21_FILE_SYSTEM_SIZE              32
 #define DOS_INT21_FILE_SYSTEM_LENGTH            8
-#define DOS_INT21_SERIAL_INFO                   2       /* AH=69h's block: info level, serial, ... */
+#define DOS_INT21_SERIAL_INFO                   2                       /* AH=69h's block: info level, serial, ... */
 #define DOS_INT21_SERIAL_LABEL                  6
 #define DOS_INT21_SERIAL_FILE_SYSTEM            17
 
@@ -170,7 +175,7 @@
 #define DOS_INT21_CODE_PAGE_GET                 0x01
 #define DOS_INT21_CODE_PAGE_SET                 0x02
 #define DOS_INT21_COUNTRY_US                    0x01
-#define DOS_INT21_COUNTRY_GENERAL               0x01    /* AX=6501h: the general information */
+#define DOS_INT21_COUNTRY_GENERAL               0x01                    /* AX=6501h: the general information */
 #define DOS_INT21_COUNTRY_UPPERCASE             0x02
 #define DOS_INT21_COUNTRY_FILENAME_UPPERCASE    0x04
 #define DOS_INT21_COUNTRY_FILENAME_TERMINATORS  0x05
@@ -185,18 +190,18 @@
 #define DOS_INT21_YES                           1
 #define DOS_INT21_NEITHER                       2
 #define DOS_INT21_COUNTRY_INFO_SIZE             41
-#define DOS_INT21_COUNTRY_DATA_SIZE             0x26    /* What follows the size word */
+#define DOS_INT21_COUNTRY_DATA_SIZE             0x26                    /* What follows the size word */
 #define DOS_INT21_COUNTRY_ID                    3
 #define DOS_INT21_COUNTRY_CODE_PAGE             5
 #define DOS_INT21_COUNTRY_TABLE                 7
 #define DOS_INT21_COUNTRY_TABLE_SIZE            24
-#define DOS_INT21_COUNTRY_CASEMAP               18      /* The table's case-map far pointer */
+#define DOS_INT21_COUNTRY_CASEMAP               18                      /* The table's case-map far pointer */
 
 /* Temporary names (AH=5Ah). */
 #define DOS_INT21_TEMP_DIRECTORY_MAX            280
 #define DOS_INT21_TEMP_SEED_STEP                0x1234u
 #define DOS_INT21_TEMP_NAME_DIGITS              8
-#define DOS_INT21_TEMP_TOP_SHIFT                28      /* The first of eight hex digits */
+#define DOS_INT21_TEMP_TOP_SHIFT                28                      /* The first of eight hex digits */
 
 /* Network and server calls. */
 #define DOS_INT21_MACHINE_NAME_SIZE             16
@@ -206,33 +211,35 @@
 #define DOS_INT21_TRUENAME_MAX                  127
 #define DOS_INT21_ZERO_FLAG                     0x0040
 #define DOS_INT21_TRACE_MCB_MAX                 40
-#define DOS_INT21_INVALID_DRIVE_AX              0xFFFF  /* AH=36h: no such drive */
-#define DOS_INT21_COUNTRY_IN_BX                 0xFF    /* AH=38h AL=FFh: the country code is in BX */
-#define DOS_INT21_COUNTRY_SET                   0xFFFF  /* AH=38h DX=FFFFh: set, not get */
-#define DOS_INT21_STRATEGY_GET                  0x00    /* AH=58h */
+#define DOS_INT21_INVALID_DRIVE_AX              0xFFFF                  /* AH=36h: no such drive */
+#define DOS_INT21_COUNTRY_IN_BX                 0xFF                    /* AH=38h AL=FFh: the country code is in BX */
+#define DOS_INT21_COUNTRY_SET                   0xFFFF                  /* AH=38h DX=FFFFh: set, not get */
+#define DOS_INT21_STRATEGY_GET                  0x00                    /* AH=58h */
 #define DOS_INT21_STRATEGY_SET                  0x01
 #define DOS_INT21_UMB_LINK_GET                  0x02
 #define DOS_INT21_UMB_LINK_SET                  0x03
-#define DOS_INT21_BREAK_GET                     0x00    /* AH=33h */
+#define DOS_INT21_BREAK_GET                     0x00                    /* AH=33h */
 #define DOS_INT21_BREAK_SET                     0x01
 #define DOS_INT21_BREAK_SWAP                    0x02
 #define DOS_INT21_BOOT_DRIVE                    0x05
-#define DOS_INT21_BOOT_DRIVE_C                  3       /* 1-based */
+#define DOS_INT21_BOOT_DRIVE_C                  3                       /* 1-based */
 #define DOS_INT21_TRUE_VERSION                  0x06
 #define DOS_INT21_SUBFUNCTION_INVALID_AL        0xFF
-#define DOS_INT21_CLOCK_SET                     0x00    /* AH=2Bh/2Dh: AL */
+#define DOS_INT21_CLOCK_SET                     0x00                    /* AH=2Bh/2Dh: AL */
 #define DOS_INT21_CLOCK_INVALID                 0xFF
 
 /* IOCTL (AH=44h). */
-#define DOS_INT21_DEVICE_INFO_CONSOLE           0x80D3  /* AX=4400h DX, as 6.22 answers */
+#define DOS_INT21_DEVICE_INFO_CONSOLE           0x80D3                  /* AX=4400h DX, as 6.22 answers */
 #define DOS_INT21_DEVICE_INFO_FILE              0x0002
 #define DOS_INT21_DEVICE_INFO_AUX               0x80C0
 #define DOS_INT21_DEVICE_INFO_PRN               0xA0C0
-#define DOS_INT21_NT_PREFIX_LENGTH              4       /* "\\??\\" */
+#define DOS_INT21_NT_PREFIX_LENGTH              4                       /* "\\??\\" */
 #define DOS_INT21_NONE                          0x0000
-#define DOS_INT21_PARSE_KEEP_DRIVE              0x02    /* AH=29h AL: keep what the FCB already has */
+#define DOS_INT21_PARSE_SKIP_SEPARATOR          0x01                    /* AH=29h AL: skip ONE leading separator */
+#define DOS_INT21_PARSE_KEEP_DRIVE              0x02                    /* AH=29h AL: keep what the FCB already has */
 #define DOS_INT21_PARSE_KEEP_NAME               0x04
 #define DOS_INT21_PARSE_KEEP_EXTENSION          0x08
+#define DOS_INT21_FCB_DOTDOT_LENGTH             2                       /* ".." parsed as a name: two characters */
 
 /* INT 21h 4Eh/4Fh find-first/find-next.  GH #29:
  *
@@ -304,6 +311,55 @@
  * compare AX on 714Eh -- a program that treats the handle as opaque cannot tell.
  */
 #define DOS_LFN_FIND_SLOTS                      16
+
+/* #240: DRIVE A: AS A DISK IMAGE, AT THE DOS LEVEL. (s101: at Settings' letter -- see
+ * g_DosImageDrive; "A:" below means the image's letter, which is A: only when chosen.)
+ * Settings > Drives can mount an image file as A:. INT 13h and INT 25h have read it since
+ * #44; INT 21h, which serves files through Win32, used to send A:\SETUP.EXE to the host's
+ * own A: instead. Here the image's files are read out of it (dos_fatimg.c) into a private
+ * directory, and every A: path the guest gives -- through DosGuestPath or an FCB -- is
+ * pointed into it. Drive A: then becomes a VIRTUAL current drive (VirtualDrive = 0) with
+ * its own current directory, kept here, so 3Bh/47h/60h answer in A: terms and the host
+ * directory never reaches the guest.
+ *
+ * [CAUTION]: READ-ONLY, AS A WRITE-PROTECTED FLOPPY. The directory is a COPY; a write into it
+ * would vanish when the host exits while the guest was told it succeeded. So everything
+ * that would change the disk -- create, delete, rename, mkdir, rmdir, set attributes, a
+ * write through a handle -- answers 13h's twin, DOS error 19 (write protect), which the
+ * tail turns into the program's INT 24h exactly as a write-protect tab would. An OPEN for
+ * writing succeeds, as it does on DOS (it does not touch the disk); the file is opened
+ * for reading underneath, and the first write is the one that fails.
+ *
+ * [CAUTION]: A BLANK IMAGE PATH IS AN EMPTY DRIVE: every A: path answers 21 (not ready), the
+ * INT 24h a floppy bay with nothing in it gives. Only when image mode was CHOSEN (see
+ * DosInt21SetFloppyImage): a PC that merely has no floppy drive keeps its old answer.
+ *
+ * [CAUTION]: INT 13h CAN WRITE THE IMAGE (a guest formatting or copying sectors). Each such
+ * write marks the copy stale (DosInt21FloppyChanged), and the next A: path extracts a
+ * fresh one into a new directory -- the old one may still hold the guest's open handles.
+ */
+#define DOS_IMAGE_DRIVE_DEFAULT                 0                       /* A:, until Settings picks a letter */
+#define DOS_IMAGE_PATH_SIZE                     MAX_PATH
+#define DOS_IMAGE_MAX_BYTES                     (32u * 1024u * 1024u)   /* Larger is no floppy, nor a FAT16 we serve */
+#define DOS_IMAGE_COPY_CHUNK                    0x10000u
+#define DOS_IMAGE_MAX_DEPTH                     32
+#define DOS_IMAGE_REFUSED_PATH                  "\\\\.\\NTVDMEX-FLOPPY-A-REFUSED\\X" /* Opens nothing, creates nothing */
+#define DOS_IMAGE_DIRECTORY_PREFIX              "NTVDMEX-FLOPPY-A-"
+#define DOS_IMAGE_STATE_UNTRIED                 0
+#define DOS_IMAGE_STATE_READY                   1
+#define DOS_IMAGE_STATE_EMPTY                   (-1)
+#define DOS_IMAGE_EXTOPEN_EXISTS_MASK           0x0F                    /* 6Ch DX: what to do if the file exists */
+#define DOS_IMAGE_EXTOPEN_TRUNCATE              0x02
+#define DOS_IMAGE_EXTOPEN_MISSING_MASK          0xF0                    /* ...and if it does not */
+#define DOS_IMAGE_EXTOPEN_CREATE                0x10
+#define DOS_IMAGE_LFN_DELETE                    0x41
+#define DOS_IMAGE_LFN_ATTRIBUTES                0x43
+#define DOS_IMAGE_SET_ATTRIBUTES                0x01                    /* 43h AL; 7143h BL odd = a SET */
+#define DOS_IMAGE_NOTE_SIZE                     192
+#define DOS_IMAGE_NUMBER_SIZE                   24                      /* "<pid>-<generation>\\" in hex */
+
+/* #272: DOS_MACHINE's DeviceKind[] is sized in dos_int21.h, which cannot see dos_fh.h. */
+typedef CHAR DosDeviceSlotsAgree[(DOS_INT21_DEVICE_SLOTS == DOS_DEV_SLOTS) ? 1 : -1];
 
 /* #275: WHICH DRIVE AN OPEN FILE IS ON, for INT 24h's AL on a 3Fh/40h failure:
  * We keep no SFT, so the handle has to be asked. XP has no GetFinalPathNameByHandle;
@@ -412,6 +468,41 @@ static HANDLE  g_DosLfnFinds[DOS_LFN_FIND_SLOTS];
 static BYTE g_DosLfnAllow[DOS_LFN_FIND_SLOTS];
 static BYTE g_DosLfnNeed[DOS_LFN_FIND_SLOTS];
 static UINT g_DosLfnNext;
+static INT  g_DosImageIsCurrent = 0;                      /* #240: the current drive is the image A: */
+
+static INT   g_DosImageMode = 0;                         /* 1 = A: is an image (or an empty bay) */
+static INT g_DosImageDrive = DOS_IMAGE_DRIVE_DEFAULT;        /* s101: the letter the image is (0 = A:) */
+static CHAR  g_DosImageFile[DOS_IMAGE_PATH_SIZE];       /* The image; "" = no disk in the drive */
+static INT   g_DosImageState = DOS_IMAGE_STATE_UNTRIED;
+static UINT  g_DosImageGeneration = 0;                   /* Each extraction gets its own directory */
+static CHAR  g_DosImageRoot[DOS_IMAGE_PATH_SIZE];       /* The extracted copy, with its trailing '\\' */
+static CHAR  g_DosImageCurrent[DOS_INT21_PATH_SIZE];    /* A:'s current directory: "" or "SUB\\DIR" */
+static CHAR  g_DosImageResolved[DOS_INT21_PATH_SIZE];   /* The last A: path, resolved the same way */
+static CHAR  g_DosImageNote[DOS_IMAGE_NOTE_SIZE];       /* One line for the trace, from the extractor */
+static INT   g_DosImageTouched = 0;                      /* This call named an A: path */
+static WORD  g_DosImageRefusal = 0;                      /* ...and is to be answered with this error */
+static DWORD g_DosImageFunction = 0;                     /* This call's AH (after the LFN aliasing) */
+static BYTE  g_DosImageSubfunction = 0;                  /* ...its AL */
+static WORD  g_DosImageAction = 0;                       /* ...6Ch's DX, 7143h's BL */
+static DWORD g_DosImageSectorsPerCluster = 0;
+static DWORD g_DosImageClusters = 0;
+static DWORD g_DosImageFreeClusters = 0;
+static BYTE  g_DosImageMedia = 0;
+static CHAR  g_DosImageLabel[FAT_IMAGE_NAME_SIZE];       /* The image's volume label; "" = none */
+
+/* SHORT NAMES FOR NAMES THE VOLUME GIVES NONE. (s101 rig report: DIR on a NAS share at Z:
+ * listed "Files", "Movies", "Music" -- and left "Documentaries", "Television" and "Movie
+ * Featurettes" out, because the share gives no 8.3 alias and the long names are not 8.3.)
+ * Such an entry now gets the alias Windows would have made (dos_alias.c), assigned per
+ * directory from one enumeration and kept in a small cache, so the name DIR shows is the
+ * name CD, TYPE and COPY resolve. Entries with a short name, and 8.3 long names, never
+ * change. The LFN API (71xxh) still answers with the real long names.
+ */
+static DOS_ALIAS_TABLE g_DosAliasTables[DOS_ALIAS_CACHE_TABLES];
+static INT g_DosAliasNextTable;
+static HANDLE g_DosAliasFindHandles[DOS_ALIAS_FIND_SLOTS];
+static CHAR g_DosAliasFindDirectories[DOS_ALIAS_FIND_SLOTS][DOS_ALIAS_DIRECTORY_SIZE];
+static INT g_DosAliasNextFind;
 
 VOID DosInt21SetProtectedMode(INT isOn)
 {
@@ -640,7 +731,652 @@ static volatile BYTE *DosFcbAt(DWORD segment, DWORD offset)
     return (fcb[0] == DOS_INT21_XFCB_FLAG) ? fcb + DOS_INT21_XFCB_HEADER : fcb;  /* skip an extended FCB's prefix */
 }
 
-/* Build "D:NAME.EXT" from an FCB's drive/name/extension fields. */
+/* "CON", "NUL.TXT"...: a device name means the device on any drive, as on DOS. */
+static INT DosImageIsDeviceName(PCSTR path)
+{
+    static const PCSTR devices[] = { "CON", "PRN", "AUX", "NUL", "COM1", "COM2", "COM3", "COM4", "LPT1", "LPT2", "LPT3", "CLOCK$" };
+    PCSTR name = path;
+    PCSTR cursor;
+    INT index;
+
+    for (cursor = path; *cursor; ++cursor)
+        if (*cursor == '\\' || *cursor == '/')
+            name = cursor + 1;
+
+    for (index = 0; index < (INT)(sizeof(devices) / sizeof(devices[0])); ++index)
+    {
+        PCSTR device = devices[index];
+        INT length = 0;
+
+        while (device[length] && name[length] && (CHAR)(name[length] & ~ASCII_CASE_BIT) == (CHAR)(device[length] & ~ASCII_CASE_BIT))
+            ++length;
+
+        if (!device[length] && (!name[length] || name[length] == '.'))
+            return 1;
+    }
+
+    return 0;
+}
+
+static INT DosImageAppend(PSTR destination, INT capacity, PCSTR first, PCSTR second)
+{
+    INT length = 0;
+
+    while (*first && length < capacity - 1)
+        destination[length++] = *first++;
+
+    while (second && *second && length < capacity - 1)
+        destination[length++] = *second++;
+
+    destination[length] = 0;
+    return !*first && (!second || !*second);
+}
+
+static VOID DosImageNote(PCSTR first, PCSTR second)
+{
+    INT length = 0;
+    PCSTR parts[2];
+    INT part;
+
+    parts[0] = first;
+    parts[1] = second;
+
+    for (part = 0; part < 2; ++part)
+        while (parts[part] && *parts[part] && length < DOS_IMAGE_NOTE_SIZE - 3)
+            g_DosImageNote[length++] = *parts[part]++;
+
+    g_DosImageNote[length++] = '\r';
+    g_DosImageNote[length++] = '\n';
+    g_DosImageNote[length] = 0;
+}
+
+/* A name Win32 can create, from a FAT entry: nothing it would read as syntax. */
+static INT DosImageNameIsSafe(PCSTR name)
+{
+    for (; *name; ++name)
+        if ((BYTE)*name < ' ' || *name == '"' || *name == '*' || *name == '/' || *name == ':' || *name == '<'
+            || *name == '>' || *name == '?' || *name == '\\' || *name == '|')
+            return 0;
+
+    return 1;
+}
+
+static VOID DosImageSetTimes(HANDLE file, PCFAT_ENTRY entry)
+{
+    FILETIME local;
+    FILETIME universal;
+
+    if (DosDateTimeToFileTime(entry->Date, entry->Time, &local) && LocalFileTimeToFileTime(&local, &universal))
+        SetFileTime(file, &universal, &universal, &universal);
+}
+
+static DWORD DosImageWin32Attributes(BYTE attributes)
+{
+    DWORD win32 = attributes & (FAT_ATTRIBUTE_READ_ONLY | FAT_ATTRIBUTE_HIDDEN | FAT_ATTRIBUTE_SYSTEM | FAT_ATTRIBUTE_ARCHIVE);
+
+    return win32 ? win32 : FILE_ATTRIBUTE_NORMAL;
+}
+
+static INT DosImageExtractDirectory(
+    PCFAT_IMAGE image,
+    WORD firstCluster,
+    PCSTR hostDirectory,
+    INT depth,
+    PBYTE buffer)
+{
+    INT count;
+    INT index;
+    PFAT_ENTRY entries;
+
+    if (depth > DOS_IMAGE_MAX_DEPTH)
+        return 0;
+
+    count = FatImageListDirectory(image, firstCluster, NULL, 0);
+
+    if (!count)
+        return 1;
+
+    entries = (PFAT_ENTRY)VirtualAlloc(NULL, (SIZE_T)count * sizeof(FAT_ENTRY), MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE);
+
+    if (!entries)
+        return 0;
+
+    FatImageListDirectory(image, firstCluster, entries, count);
+
+    for (index = 0; index < count; ++index)
+    {
+        CHAR hostPath[DOS_IMAGE_PATH_SIZE];
+        PCFAT_ENTRY entry = &entries[index];
+
+        if (!entry->Name[0] || !DosImageNameIsSafe(entry->Name)
+            || !DosImageAppend(hostPath, sizeof(hostPath), hostDirectory, entry->Name))
+        {
+            DosImageNote("  #240 floppy image: skipped an entry Win32 cannot name: ", entry->Name);
+            continue;
+        }
+
+        if (entry->Attributes & FAT_ATTRIBUTE_DIRECTORY)
+        {
+            CHAR childDirectory[DOS_IMAGE_PATH_SIZE];
+
+            if (!CreateDirectoryA(hostPath, NULL) && GetLastError() != ERROR_ALREADY_EXISTS)
+                continue;
+
+            if (DosImageAppend(childDirectory, sizeof(childDirectory), hostPath, "\\"))
+                DosImageExtractDirectory(image, entry->FirstCluster, childDirectory, depth + 1, buffer);
+
+            SetFileAttributesA(hostPath, (entry->Attributes & (FAT_ATTRIBUTE_HIDDEN | FAT_ATTRIBUTE_SYSTEM)) | FILE_ATTRIBUTE_DIRECTORY);
+        }
+        else
+        {
+            HANDLE file = CreateFileA(hostPath, GENERIC_WRITE, 0, NULL, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
+            DWORD offset = 0;
+
+            if (file == INVALID_HANDLE_VALUE)
+                continue;
+
+            for (;;)
+            {
+                DWORD got = FatImageReadFile(image, entry, offset, buffer, DOS_IMAGE_COPY_CHUNK);
+                DWORD written = 0;
+
+                if (!got)
+                    break;
+
+                WriteFile(file, buffer, got, &written, NULL);
+                offset += got;
+            }
+
+            DosImageSetTimes(file, entry);
+            CloseHandle(file);
+            SetFileAttributesA(hostPath, DosImageWin32Attributes(entry->Attributes));
+        }
+    }
+
+    VirtualFree(entries, 0, MEM_RELEASE);
+    return 1;
+}
+
+/* Read the image and lay its files out in a fresh directory. 1 if A: has a disk in it. */
+static INT DosImageExtract(VOID)
+{
+    HANDLE file;
+    DWORD size;
+    DWORD got = 0;
+    PBYTE data;
+    PBYTE buffer;
+    FAT_IMAGE image;
+    CHAR temporary[DOS_IMAGE_PATH_SIZE];
+    CHAR number[DOS_IMAGE_NUMBER_SIZE];
+    PSTR cursor;
+    INT isOk;
+
+    g_DosImageState = DOS_IMAGE_STATE_EMPTY;
+
+    if (!g_DosImageFile[0])
+        return 0;                                           /* no disk in the drive */
+
+    file = CreateFileA(g_DosImageFile, GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, NULL,
+                       OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
+
+    if (file == INVALID_HANDLE_VALUE)
+    {
+        DosImageNote("  #240 floppy image cannot be opened -- the drive reads as empty: ", g_DosImageFile);
+        return 0;
+    }
+
+    size = GetFileSize(file, NULL);
+
+    if (size == INVALID_FILE_SIZE || size < FAT_IMAGE_SECTOR_SIZE || size > DOS_IMAGE_MAX_BYTES)
+    {
+        CloseHandle(file);
+        DosImageNote("  #240 floppy image is not a floppy-sized file -- the drive reads as empty: ", g_DosImageFile);
+        return 0;
+    }
+
+    data = (PBYTE)VirtualAlloc(NULL, size + DOS_IMAGE_COPY_CHUNK, MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE);
+
+    if (!data)
+    {
+        CloseHandle(file);
+        return 0;
+    }
+
+    isOk = ReadFile(file, data, size, &got, NULL) && got == size;
+    CloseHandle(file);
+    buffer = data + size;                                   /* the copy chunk, after the image */
+
+    if (!isOk || !FatImageMount(&image, data, size))
+    {
+        VirtualFree(data, 0, MEM_RELEASE);
+        DosImageNote("  #240 floppy image has no FAT12/FAT16 filesystem we can read -- the drive reads as empty: ", g_DosImageFile);
+        return 0;
+    }
+
+    /* A directory of its own per process and per extraction (see the note above). */
+    if (!GetTempPathA(sizeof(temporary), temporary))
+        temporary[0] = 0;
+
+    cursor = number;
+    cursor = LogHex(cursor, GetCurrentProcessId());
+    *cursor++ = '-';
+    cursor = LogHex(cursor, ++g_DosImageGeneration);
+    *cursor++ = '\\';
+    *cursor = 0;
+    DosImageAppend(g_DosImageRoot, sizeof(g_DosImageRoot), temporary, DOS_IMAGE_DIRECTORY_PREFIX);
+    DosImageAppend(g_DosImageRoot, sizeof(g_DosImageRoot), g_DosImageRoot, number);
+    CreateDirectoryA(g_DosImageRoot, NULL);
+    DosImageExtractDirectory(&image, 0, g_DosImageRoot, 0, buffer);
+    g_DosImageSectorsPerCluster = image.SectorsPerCluster;
+    g_DosImageClusters = image.ClusterCount;
+    g_DosImageFreeClusters = FatImageFreeClusters(&image);
+    g_DosImageMedia = image.Media;
+    FatImageVolumeLabel(&image, g_DosImageLabel);           /* DIR's "Volume in drive A is ..." */
+    VirtualFree(data, 0, MEM_RELEASE);
+    g_DosImageState = DOS_IMAGE_STATE_READY;
+    DosImageNote("  #240 floppy image mounted at the DOS level from ", g_DosImageFile);
+    return 1;
+}
+
+/* 1 if A: has a readable disk (extracting it the first time it is asked for). */
+static INT DosImageEnsure(VOID)
+{
+    if (g_DosImageState == DOS_IMAGE_STATE_UNTRIED)
+        DosImageExtract();
+
+    return g_DosImageState == DOS_IMAGE_STATE_READY;
+}
+
+/* Does this call change the disk? Then a write-protected image refuses it. `hostPath`
+ * says whether the file is already there, which is what 6Ch's action turns on.
+ */
+static INT DosImageIsWriteCall(PCSTR hostPath)
+{
+    switch (g_DosImageFunction)
+    {
+    case DOS_FN_MKDIR:
+    case DOS_FN_RMDIR:
+    case DOS_FN_CREATE:
+    case DOS_FN_DELETE:
+    case DOS_FN_RENAME:
+    case DOS_FN_CREATE_TEMP:
+    case DOS_FN_CREATE_NEW:
+    case DOS_FN_FCB_DELETE:
+    case DOS_FN_FCB_CREATE:
+    case DOS_FN_FCB_RENAME:
+        return 1;
+
+    case DOS_FN_FILE_ATTRIBUTES:
+        return g_DosImageSubfunction == DOS_IMAGE_SET_ATTRIBUTES;
+
+    case DOS_FN_EXTENDED_OPEN:
+        if ((g_DosImageAction & DOS_IMAGE_EXTOPEN_EXISTS_MASK) == DOS_IMAGE_EXTOPEN_TRUNCATE)
+            return 1;
+
+        return (g_DosImageAction & DOS_IMAGE_EXTOPEN_MISSING_MASK) == DOS_IMAGE_EXTOPEN_CREATE
+            && GetFileAttributesA(hostPath) == INVALID_FILE_ATTRIBUTES;
+
+    case DOS_FN_LFN:
+        return g_DosImageSubfunction == DOS_IMAGE_LFN_DELETE
+            || (g_DosImageSubfunction == DOS_IMAGE_LFN_ATTRIBUTES && (g_DosImageAction & DOS_IMAGE_SET_ATTRIBUTES));
+
+    default:
+        return 0;
+    }
+}
+
+/* "X:\\" for the image's letter -- the drive DOS sees, never the host directory behind it. */
+static PCSTR DosImageRootText(VOID)
+{
+    static CHAR root[] = "A:\\";
+
+    root[0] = (CHAR)('A' + g_DosImageDrive);
+    return root;
+}
+
+/* Point an "X:..." path on the image's letter into the image's directory (see the note above). */
+static VOID DosImageMapPath(PSTR path, INT capacity)
+{
+    CHAR hostPath[DOS_IMAGE_PATH_SIZE];
+
+    if (!g_DosImageMode || (path[0] | ASCII_CASE_BIT) != 'a' + g_DosImageDrive || path[1] != ':' || DosImageIsDeviceName(path + 2))
+        return;
+
+    g_DosImageTouched = 1;
+
+    if (!FatImageResolvePath(g_DosImageCurrent, path + 2, g_DosImageResolved, sizeof(g_DosImageResolved)))
+    {
+        g_DosImageRefusal = DOS_ERR_PATH_NOT_FOUND;
+        DosImageAppend(path, capacity, DOS_IMAGE_REFUSED_PATH, NULL);
+        return;
+    }
+
+    if (!DosImageEnsure())
+    {
+        g_DosImageRefusal = DOS_ERR_NOT_READY;
+        DosImageAppend(path, capacity, DOS_IMAGE_REFUSED_PATH, NULL);
+        return;
+    }
+
+    DosImageAppend(hostPath, sizeof(hostPath), g_DosImageRoot, g_DosImageResolved);
+
+    if (DosImageIsWriteCall(hostPath))
+    {
+        g_DosImageRefusal = DOS_ERR_WRITE_PROTECT;
+        DosImageAppend(path, capacity, DOS_IMAGE_REFUSED_PATH, NULL);
+        return;
+    }
+
+    DosImageAppend(path, capacity, hostPath, NULL);
+}
+
+/* `directory` (with its trailing '\'), enumerated once into a table -- the cached one,
+ * unless `isRebuild` asks for a fresh listing.
+ */
+static PCDOS_ALIAS_TABLE DosAliasTableFor(PCSTR directory, INT isRebuild)
+{
+    CHAR pattern[DOS_ALIAS_DIRECTORY_SIZE + 2];
+    PDOS_ALIAS_TABLE table = NULL;
+    WIN32_FIND_DATAA findData;
+    HANDLE find;
+    INT index;
+
+    for (index = 0; index < DOS_ALIAS_CACHE_TABLES; ++index)
+        if (g_DosAliasTables[index].Directory[0] && DosAliasTableIsFor(&g_DosAliasTables[index], directory))
+            table = &g_DosAliasTables[index];
+
+    if (table && !isRebuild)
+        return table;
+
+    if (!table)
+    {
+        table = &g_DosAliasTables[g_DosAliasNextTable];
+        g_DosAliasNextTable = (g_DosAliasNextTable + 1) % DOS_ALIAS_CACHE_TABLES;
+    }
+
+    DosAliasTableBegin(table, directory);
+
+    if (lstrlenA(directory) + 2 <= (INT)sizeof(pattern))
+    {
+        lstrcpyA(pattern, directory);
+        lstrcatA(pattern, "*");
+        find = FindFirstFileA(pattern, &findData);
+
+        if (find != INVALID_HANDLE_VALUE)
+        {
+            do
+                DosAliasTableNote(table, findData.cFileName, findData.cAlternateFileName);
+
+            while (FindNextFileA(find, &findData));
+
+            FindClose(find);
+        }
+    }
+
+    DosAliasTableFinish(table);
+    return table;
+}
+
+/* The directory a search pattern lists, as a full path with its trailing '\' (the table key). */
+static INT DosAliasDirectoryOf(PCSTR pattern, PSTR directory)
+{
+    CHAR part[DOS_INT21_PATH_SIZE];
+    DWORD length;
+    INT cut = 0;
+    INT index;
+
+    for (index = 0; pattern[index]; ++index)
+        if (pattern[index] == '\\' || pattern[index] == '/' || pattern[index] == ':')
+            cut = index + 1;
+
+    if (cut >= (INT)sizeof(part))
+        return 0;
+
+    for (index = 0; index < cut; ++index)
+        part[index] = pattern[index];
+
+    part[cut] = 0;
+
+    if (!cut)
+        lstrcpyA(part, ".");
+
+    length = GetFullPathNameA(part, DOS_ALIAS_DIRECTORY_SIZE - 1, directory, NULL);
+
+    if (!length || length >= DOS_ALIAS_DIRECTORY_SIZE - 1)
+        return 0;
+
+    if (directory[length - 1] != '\\')
+    {
+        directory[length++] = '\\';
+        directory[length] = 0;
+    }
+
+    return 1;
+}
+
+/* An entry the volume gave no 8.3 name, and whose long name is not one: its alias goes
+ * where Win32 would have put the short name, so every DOS find path after this sees it.
+ * `isListed` -- this search already rebuilt the directory's table once.
+ */
+static VOID DosAliasFill(WIN32_FIND_DATAA *findData, PCSTR directory, PINT isListed)
+{
+    PCSTR alias;
+
+    if (!directory || !directory[0] || findData->cAlternateFileName[0] || DosAliasIsShortName(findData->cFileName)
+        || (findData->cFileName[0] == '.' && (!findData->cFileName[1] || (findData->cFileName[1] == '.' && !findData->cFileName[2]))))
+        return;
+
+    alias = DosAliasTableAliasOf(DosAliasTableFor(directory, !*isListed), findData->cFileName);
+
+    if (!alias && *isListed)
+        alias = DosAliasTableAliasOf(DosAliasTableFor(directory, 1), findData->cFileName);    /* created since */
+
+    *isListed = 1;
+
+    if (alias)
+        lstrcpynA(findData->cAlternateFileName, alias, sizeof(findData->cAlternateFileName));
+}
+
+static VOID DosAliasRememberFind(HANDLE find, PCSTR directory)
+{
+    g_DosAliasFindHandles[g_DosAliasNextFind] = find;
+    lstrcpynA(g_DosAliasFindDirectories[g_DosAliasNextFind], directory, DOS_ALIAS_DIRECTORY_SIZE);
+    g_DosAliasNextFind = (g_DosAliasNextFind + 1) % DOS_ALIAS_FIND_SLOTS;
+}
+
+static PCSTR DosAliasFindDirectory(HANDLE find)
+{
+    INT index;
+
+    for (index = 0; index < DOS_ALIAS_FIND_SLOTS; ++index)
+        if (g_DosAliasFindHandles[index] == find)
+            return g_DosAliasFindDirectories[index];
+
+    return NULL;
+}
+
+/* Where a full path's first component starts: after "X:\", or after "\\server\share\". */
+static INT DosAliasRootLength(PCSTR path)
+{
+    INT separators = 0;
+    INT index;
+
+    if (path[0] && path[1] == ':')
+        return (path[2] == '\\') ? DOS_INT21_DRIVE_ROOT_SIZE : DOS_INT21_DRIVE_ROOT_SIZE - 1;
+
+    if (path[0] != '\\' || path[1] != '\\')
+        return 0;
+
+    for (index = 2; path[index]; ++index)
+        if (path[index] == '\\' && ++separators == 2)
+            return index + 1;
+
+    return index;
+}
+
+/* A guest path that names an entry by its alias, mapped to the long name before Win32
+ * sees it. Untouched unless a component looks like an alias ('~' and a digit), names
+ * nothing as it stands, and is one of its directory's aliases -- so a real file called
+ * DOCUME~1, and every ordinary path, go through exactly as before.
+ */
+static VOID DosAliasResolvePath(PSTR path, INT capacity)
+{
+    CHAR fullPath[DOS_INT21_PATH_SIZE];
+    CHAR output[DOS_INT21_PATH_SIZE];
+    DWORD length;
+    INT position;
+    INT outputLength;
+    INT isChanged = 0;
+
+    if (!DosAliasLooksLikeAlias(path, lstrlenA(path)))
+        return;
+
+    length = GetFullPathNameA(path, sizeof(fullPath), fullPath, NULL);
+
+    if (!length || length >= sizeof(fullPath))
+        return;
+
+    position = DosAliasRootLength(fullPath);
+    lstrcpynA(output, fullPath, position + 1);
+    outputLength = position;
+
+    while (fullPath[position])
+    {
+        INT start = position;
+        INT componentLength;
+        PCSTR longName = NULL;
+
+        while (fullPath[position] && fullPath[position] != '\\')
+            ++position;
+
+        componentLength = position - start;
+
+        if (DosAliasLooksLikeAlias(fullPath + start, componentLength))
+        {
+            CHAR candidate[DOS_INT21_PATH_SIZE];
+
+            if (outputLength + componentLength >= (INT)sizeof(candidate))
+                return;
+
+            lstrcpyA(candidate, output);
+            lstrcpynA(candidate + outputLength, fullPath + start, componentLength + 1);
+
+            if (GetFileAttributesA(candidate) == INVALID_FILE_ATTRIBUTES && outputLength < DOS_ALIAS_DIRECTORY_SIZE)
+            {
+                longName = DosAliasTableLongOf(DosAliasTableFor(output, 0), fullPath + start, componentLength);
+
+                if (!longName)
+                    longName = DosAliasTableLongOf(DosAliasTableFor(output, 1), fullPath + start, componentLength);
+            }
+        }
+
+        if (longName)
+        {
+            if (outputLength + lstrlenA(longName) >= (INT)sizeof(output))
+                return;
+
+            lstrcpyA(output + outputLength, longName);
+            outputLength += lstrlenA(longName);
+            isChanged = 1;
+        }
+        else
+        {
+            if (outputLength + componentLength >= (INT)sizeof(output))
+                return;
+
+            lstrcpynA(output + outputLength, fullPath + start, componentLength + 1);
+            outputLength += componentLength;
+        }
+
+        if (fullPath[position] == '\\')
+        {
+            if (outputLength + 1 >= (INT)sizeof(output))
+                return;
+
+            output[outputLength++] = '\\';
+            output[outputLength] = 0;
+            ++position;
+        }
+    }
+
+    if (isChanged && outputLength < capacity)
+        lstrcpyA(path, output);
+}
+
+/* A host path as DOS shows it: each component that is neither 8.3 nor shortened by the
+ * volume is replaced by its alias (AH=47h, 7160h CL=1). Each directory is looked up by
+ * the path's own -- real -- prefix, never by the aliases already written out.
+ */
+static VOID DosAliasShortenPath(PSTR path, INT capacity)
+{
+    CHAR output[DOS_INT21_PATH_SIZE];
+    CHAR prefix[DOS_INT21_PATH_SIZE];
+    INT position = DosAliasRootLength(path);
+    INT outputLength = position;
+    INT isChanged = 0;
+
+    if (position >= (INT)sizeof(output))
+        return;
+
+    lstrcpynA(output, path, position + 1);
+
+    while (path[position])
+    {
+        INT start = position;
+        INT componentLength;
+        PCSTR alias = NULL;
+        CHAR component[MAX_PATH];
+
+        while (path[position] && path[position] != '\\')
+            ++position;
+
+        componentLength = position - start;
+
+        if (componentLength >= (INT)sizeof(component) || start >= (INT)sizeof(prefix))
+            return;
+
+        lstrcpynA(component, path + start, componentLength + 1);
+
+        if (!DosAliasIsShortName(component) && component[0] != '.' && start < DOS_ALIAS_DIRECTORY_SIZE)
+        {
+            lstrcpynA(prefix, path, start + 1);
+            alias = DosAliasTableAliasOf(DosAliasTableFor(prefix, 0), component);
+        }
+
+        if (alias)
+        {
+            if (outputLength + lstrlenA(alias) >= (INT)sizeof(output))
+                return;
+
+            lstrcpyA(output + outputLength, alias);
+            outputLength += lstrlenA(alias);
+            isChanged = 1;
+        }
+        else
+        {
+            if (outputLength + componentLength >= (INT)sizeof(output))
+                return;
+
+            lstrcpyA(output + outputLength, component);
+            outputLength += componentLength;
+        }
+
+        if (path[position] == '\\')
+        {
+            if (outputLength + 1 >= (INT)sizeof(output))
+                return;
+
+            output[outputLength++] = '\\';
+            output[outputLength] = 0;
+            ++position;
+        }
+    }
+
+    if (isChanged && outputLength < capacity)
+        lstrcpyA(path, output);
+}
+
+/* Build "D:NAME.EXT" from an FCB's drive/name/extension fields. `out` holds DOS_INT21_PATH_SIZE. */
 static VOID DosFcbName(const volatile BYTE *fcb, PSTR out)
 {
     INT index;
@@ -649,6 +1385,11 @@ static VOID DosFcbName(const volatile BYTE *fcb, PSTR out)
     if (fcb[0])
     {
         out[length++] = (CHAR)('A' + fcb[0] - 1);
+        out[length++] = ':';
+    }
+    else if (g_DosImageIsCurrent)                         /* #240: the default drive is the image */
+    {
+        out[length++] = (CHAR)('A' + g_DosImageDrive);
         out[length++] = ':';
     }
 
@@ -664,6 +1405,8 @@ static VOID DosFcbName(const volatile BYTE *fcb, PSTR out)
     }
 
     out[length] = 0;
+    DosImageMapPath(out, DOS_INT21_PATH_SIZE);                     /* #240 */
+    DosAliasResolvePath(out, DOS_INT21_PATH_SIZE);                 /* s101: DOCUME~1 -> Documentaries */
 }
 
 /* A DOS FILENAME ENDS AT A TERMINATOR, NOT ONLY AT A NUL:
@@ -690,7 +1433,7 @@ static INT DosFcbIsNameEnd(BYTE character)
         || character == ',';
 }
 
-static VOID DosFcbPutName(volatile BYTE *destination, PCSTR name)
+static INT DosFcbPutName(volatile BYTE *destination, PCSTR name)
 {
     INT source = 0;
     INT index;
@@ -711,7 +1454,7 @@ static VOID DosFcbPutName(volatile BYTE *destination, PCSTR name)
             destination[1] = '.';
 
         if (name[1] == 0 || name[1] == '.')
-            return;
+            return (name[1] == '.') ? DOS_INT21_FCB_DOTDOT_LENGTH : 1;
     }
 
     /* `*` IS EXPANDED INTO `?`s, IT IS NOT STORED (Importance = 1):
@@ -757,6 +1500,10 @@ static VOID DosFcbPutName(volatile BYTE *destination, PCSTR name)
 
         destination[index] = (BYTE)(name[source] >= 'a' && name[source] <= 'z' ? name[source] - ASCII_CASE_BIT : name[source]);
     }
+
+    while (!DosFcbIsNameEnd((BYTE)name[source]) && name[source] != '.') ++source;   /* an extension past 3 */
+
+    return source;
 }
 
 /* A DOS SEARCH MATCHES THE 8.3 NAME AGAINST AN 11-BYTE TEMPLATE. (s81 sweep) (Importance = 1):
@@ -767,8 +1514,8 @@ static VOID DosFcbPutName(volatile BYTE *destination, PCSTR name)
  * Real NTVDM matches the SHORT name (NTVDMH~1.EXE), which is the only name DOS has.
  * - So enumerate the directory with `*` and decide each entry DOS's way: its 8.3 name
  *   (the short alias, or the long name when that is already a legal 8.3 name -- and
- *   no name at all otherwise: such a file is invisible to DOS, as it is on NTVDM),
- *   laid out as 11 bytes, matched position by position, `?` matching anything.
+ *   where the volume gives neither, the alias DosAliasFill put in cAlternateFileName,
+ *   s101), laid out as 11 bytes, matched position by position, `?` matching anything.
  */
 static INT DosShortNameOf(const WIN32_FIND_DATAA *findData, BYTE out[DOS_FCB_NAME_SIZE])
 {
@@ -876,6 +1623,8 @@ static HANDLE DosFindFirst(
     PINT isNoDirectory)
 {
     HANDLE find = FindFirstFileA(directoryPattern, findData);
+    CHAR directory[DOS_ALIAS_DIRECTORY_SIZE];
+    INT isListed = 0;
 
     *isNoDirectory = 0;
     g_DosFindWin32Error = 0;
@@ -887,17 +1636,28 @@ static HANDLE DosFindFirst(
         return find;
     }
 
+    if (!DosAliasDirectoryOf(directoryPattern, directory))
+        directory[0] = 0;
+
+    DosAliasFill(findData, directory, &isListed);              /* s101: an alias where the volume gave no 8.3 name */
+
     while (!DosFindMatches(findData, nameTemplate, mask))
+    {
         if (!FindNextFileA(find, findData))
         {
             FindClose(find);
             return INVALID_HANDLE_VALUE;
         }
 
+        DosAliasFill(findData, directory, &isListed);
+    }
+
+    DosAliasRememberFind(find, directory);
     return find;
 }
 
-static INT DosHandleDrive(HANDLE file)
+/* An open file's NT name ("\Device\HarddiskVolume1\..."), through NtQueryObject. 1 if found. */
+static INT DosHandleNtName(HANDLE file, PSTR name, INT capacity)
 {
     static DOS_NT_QUERY_OBJECT queryObject;
     union
@@ -905,12 +1665,7 @@ static INT DosHandleDrive(HANDLE file)
         DOS_UNICODE_STRING String;
         BYTE Raw[DOS_INT21_OBJECT_NAME_SIZE];
     } objectName;
-    CHAR name[DOS_INT21_NT_NAME_SIZE];
-    CHAR deviceBuffers[DOS_DRIVE_LETTERS][DOS_INT21_DEVICE_NAME_SIZE];
-    PCSTR devices[DOS_DRIVE_LETTERS];
     ULONG returned = 0;
-    DWORD drives = GetLogicalDrives();
-    INT drive;
     INT length;
 
     if (!queryObject)
@@ -921,19 +1676,32 @@ static INT DosHandleDrive(HANDLE file)
             queryObject = (DOS_NT_QUERY_OBJECT)GetProcAddress(ntdll, "NtQueryObject");
 
         if (!queryObject)
-            return -1;
+            return 0;
     }
 
     if (queryObject(file, DOS_INT21_OBJECT_NAME_INFORMATION, &objectName, sizeof(objectName) - DOS_INT21_WCHAR_BYTES, &returned) < 0
         || !objectName.String.Buffer || !objectName.String.Length)
-        return -1;
+        return 0;
 
-    length = WideCharToMultiByte(CP_ACP, 0, objectName.String.Buffer, objectName.String.Length / DOS_INT21_WCHAR_BYTES, name, sizeof(name) - 1, NULL, NULL);
+    length = WideCharToMultiByte(CP_ACP, 0, objectName.String.Buffer, objectName.String.Length / DOS_INT21_WCHAR_BYTES, name, capacity - 1, NULL, NULL);
 
     if (length <= 0)
-        return -1;
+        return 0;
 
     name[length] = 0;
+    return 1;
+}
+
+static INT DosHandleDrive(HANDLE file)
+{
+    CHAR name[DOS_INT21_NT_NAME_SIZE];
+    CHAR deviceBuffers[DOS_DRIVE_LETTERS][DOS_INT21_DEVICE_NAME_SIZE];
+    PCSTR devices[DOS_DRIVE_LETTERS];
+    DWORD drives = GetLogicalDrives();
+    INT drive;
+
+    if (!DosHandleNtName(file, name, sizeof(name)))
+        return -1;
 
     for (drive = 0; drive < DOS_DRIVE_LETTERS; ++drive)
     {
@@ -956,10 +1724,15 @@ static INT DosFindNext(
     WORD mask,
     WIN32_FIND_DATAA *findData)
 {
+    PCSTR directory = DosAliasFindDirectory(find);
+    INT isListed = 1;
+
     do
     {
         if (!FindNextFileA(find, findData))
             return 0;
+
+        DosAliasFill(findData, directory, &isListed);              /* s101 */
     } while (!DosFindMatches(findData, nameTemplate, mask));
 
     return 1;
@@ -1030,12 +1803,200 @@ static VOID DosNoteDriveDirectory(PCSTR fullPath)
     SetEnvironmentVariableA(variable, fullPath);
 }
 
+/* "X:relative" ON ANOTHER DRIVE, WHILE THE CURRENT DRIVE IS VIRTUAL. (s101 rig: with the
+ * image A: current, COPY C:\WINDOWS\WIN.INI ... found nothing.) Win32 reads `=X:` only for
+ * a drive that is not its own current one -- and while A: is the image, the process stands
+ * in the image's directory, which is ON C:. So "C:*" resolved there, not in C:'s DOS
+ * directory. Expanded here from `=X:` (DosNoteDriveDirectory keeps it), or X:'s root.
+ * Only while VirtualDrive is set: otherwise Win32 already gets it right.
+ */
+static VOID DosExpandOtherDriveRelative(PCDOS_MACHINE machine, PSTR path, INT capacity)
+{
+    CHAR variable[DOS_INT21_DRIVE_VARIABLE_SIZE];
+    CHAR expanded[MAX_PATH];
+    DWORD length;
+    INT drive;
+
+    if (machine->VirtualDrive < 0 || !path[0] || path[1] != ':' || path[2] == '\\')
+        return;
+
+    drive = (path[0] | ASCII_CASE_BIT) - 'a';
+
+    if (drive < 0 || drive >= DOS_DRIVE_LETTERS || drive == machine->VirtualDrive)
+        return;
+
+    variable[0] = '=';
+    variable[1] = (CHAR)('A' + drive);
+    variable[2] = ':';
+    variable[3] = 0;
+    length = GetEnvironmentVariableA(variable, expanded, sizeof expanded);
+
+    if (!length || length >= sizeof expanded)
+    {
+        expanded[0] = (CHAR)('A' + drive);
+        expanded[1] = ':';
+        expanded[2] = 0;
+        length = 2;
+    }
+
+    if (expanded[length - 1] != '\\' && length + 1 < sizeof expanded)
+    {
+        expanded[length++] = '\\';
+        expanded[length] = 0;
+    }
+
+    if (length + lstrlenA(path + 2) < (DWORD)capacity)
+    {
+        lstrcatA(expanded, path + 2);
+        lstrcpyA(path, expanded);
+    }
+}
+
+/* Is this host path inside the image's directory? Then it is opened for reading only. */
+static INT DosImageIsHostPath(PCSTR path)
+{
+    INT index;
+
+    if (!g_DosImageMode || g_DosImageState != DOS_IMAGE_STATE_READY || !g_DosImageRoot[0])
+        return 0;
+
+    for (index = 0; g_DosImageRoot[index]; ++index)
+        if ((path[index] | ASCII_CASE_BIT) != (g_DosImageRoot[index] | ASCII_CASE_BIT))
+            return 0;
+
+    return 1;
+}
+
+/* Is this open file one of the image's? Asked only when a write has ALREADY failed (an
+ * image file is open for reading underneath), so it costs nothing on an ordinary write.
+ */
+static INT DosImageHandleIsImage(HANDLE file)
+{
+    CHAR name[DOS_INT21_NT_NAME_SIZE];
+    PCSTR cursor;
+
+    if (!g_DosImageMode || !g_DosImageRoot[0] || !DosHandleNtName(file, name, sizeof(name)))
+        return 0;
+
+    /* "...\NTVDMEX-FLOPPY-A-<pid>-<generation>\...": any extraction of this process's. */
+    for (cursor = name; *cursor; ++cursor)
+    {
+        INT index;
+
+        for (index = 0; DOS_IMAGE_DIRECTORY_PREFIX[index]; ++index)
+            if ((cursor[index] | ASCII_CASE_BIT) != (DOS_IMAGE_DIRECTORY_PREFIX[index] | ASCII_CASE_BIT))
+                break;
+
+        if (!DOS_IMAGE_DIRECTORY_PREFIX[index])
+            return 1;
+    }
+
+    return 0;
+}
+
+VOID DosInt21SetFloppyImage(INT isImageMode, PCSTR imagePath, INT drive)
+{
+    INT isSame = (g_DosImageMode == (isImageMode ? 1 : 0)) && g_DosImageDrive == drive;
+    INT index;
+
+    for (index = 0; imagePath && imagePath[index] && isSame; ++index)
+        if (g_DosImageFile[index] != imagePath[index])
+            isSame = 0;
+
+    if (isSame && (imagePath ? !g_DosImageFile[index] : !g_DosImageFile[0]))
+        return;                                             /* nothing changed: keep the copy */
+
+    g_DosImageMode = isImageMode ? 1 : 0;
+    g_DosImageDrive = (drive >= 0 && drive < DOS_DRIVE_LETTERS) ? drive : DOS_IMAGE_DRIVE_DEFAULT;
+    DosImageAppend(g_DosImageFile, sizeof(g_DosImageFile), imagePath ? imagePath : "", NULL);
+    g_DosImageState = DOS_IMAGE_STATE_UNTRIED;              /* a new disk: read it on first use */
+    g_DosImageCurrent[0] = 0;
+}
+
+VOID DosInt21FloppyChanged(VOID)
+{
+    if (g_DosImageState == DOS_IMAGE_STATE_READY)
+        g_DosImageState = DOS_IMAGE_STATE_UNTRIED;
+}
+
+/* Delete one extracted tree (read-only files included). */
+static VOID DosImageDeleteTree(PCSTR directory)
+{
+    CHAR pattern[DOS_IMAGE_PATH_SIZE];
+    WIN32_FIND_DATAA findData;
+    HANDLE find;
+
+    if (!DosImageAppend(pattern, sizeof(pattern), directory, "*"))
+        return;
+
+    find = FindFirstFileA(pattern, &findData);
+
+    if (find != INVALID_HANDLE_VALUE)
+    {
+        do
+        {
+            CHAR child[DOS_IMAGE_PATH_SIZE];
+
+            if (findData.cFileName[0] == '.' && (!findData.cFileName[1] || (findData.cFileName[1] == '.' && !findData.cFileName[2])))
+                continue;
+
+            if (!DosImageAppend(child, sizeof(child), directory, findData.cFileName))
+                continue;
+
+            SetFileAttributesA(child, FILE_ATTRIBUTE_NORMAL);
+
+            if (findData.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY)
+            {
+                CHAR childDirectory[DOS_IMAGE_PATH_SIZE];
+
+                if (DosImageAppend(childDirectory, sizeof(childDirectory), child, "\\"))
+                    DosImageDeleteTree(childDirectory);
+            }
+            else
+                DeleteFileA(child);
+        } while (FindNextFileA(find, &findData));
+
+        FindClose(find);
+    }
+
+    RemoveDirectoryA(directory);
+}
+
+VOID DosInt21FloppyShutdown(VOID)
+{
+    CHAR temporary[DOS_IMAGE_PATH_SIZE];
+    CHAR directory[DOS_IMAGE_PATH_SIZE];
+    CHAR number[DOS_IMAGE_NUMBER_SIZE];
+    PSTR cursor;
+    UINT generation;
+
+    if (!g_DosImageGeneration || !GetTempPathA(sizeof(temporary), temporary))
+        return;
+
+    for (generation = 1; generation <= g_DosImageGeneration; ++generation)
+    {
+        CHAR suffix[DOS_IMAGE_NUMBER_SIZE];
+        cursor = number;
+        cursor = LogHex(cursor, GetCurrentProcessId());
+        *cursor = 0;
+        DosImageAppend(directory, sizeof(directory), temporary, DOS_IMAGE_DIRECTORY_PREFIX);
+        DosImageAppend(directory, sizeof(directory), directory, number);
+        cursor = suffix;
+        *cursor++ = '-';
+        cursor = LogHex(cursor, generation);
+        *cursor++ = '\\';
+        *cursor = 0;
+        DosImageAppend(directory, sizeof(directory), directory, suffix);
+        DosImageDeleteTree(directory);
+    }
+}
+
 /* A guest path, as Win32 should see it: DosGuestString, then -- only while the current
  * drive is one Win32 cannot stand on -- a relative path is prefixed with that
  * drive so it resolves (and fails) THERE. "X:..." and "\\server" are left alone.
  * A device name survives the prefix: Win32 reads "A:CON" as CON, as DOS does.
  */
-static VOID DosGuestPath(
+static VOID DosGuestPathRaw(
     PCDOS_MACHINE machine,
     DWORD segment,
     DWORD offset,
@@ -1059,6 +2020,77 @@ static VOID DosGuestPath(
         destination[length++] = guestPath[index];
 
     destination[length] = 0;
+    DosExpandOtherDriveRelative(machine, destination, capacity);
+    DosImageMapPath(destination, capacity);                       /* #240: A: as an image */
+    DosAliasResolvePath(destination, capacity);                   /* s101: DOCUME~1 -> Documentaries */
+}
+
+/* The guest's path as Win32 will see it -- and, #241, handed to the host first, so a
+ * file on the ISO-backed CD drive is there by the time Win32 opens it.
+ */
+static VOID DosGuestPath(
+    PCDOS_MACHINE machine,
+    DWORD segment,
+    DWORD offset,
+    PSTR destination,
+    INT capacity)
+{
+    DosGuestPathRaw(machine, segment, offset, destination, capacity);
+
+    if (machine->PathPrepare)
+        machine->PathPrepare(machine->PathPrepareContext, destination);
+}
+
+/* #240: is 3Bh's path one on the image drive? Resolves it (DosGuestPath) as a side effect.
+ * A bare "A:" is path not found, as 6.22 answers for a bare "C:".
+ */
+static INT DosImageIsChdir(PDOS_MACHINE machine, DWORD segment, DWORD offset)
+{
+    CHAR guestPath[DOS_INT21_PATH_SIZE];
+    CHAR mapped[DOS_INT21_PATH_SIZE];
+
+    DosGuestString(segment, offset, guestPath, sizeof(guestPath));
+
+    if ((guestPath[0] | ASCII_CASE_BIT) == 'a' + g_DosImageDrive && guestPath[1] == ':' && !guestPath[2])
+    {
+        g_DosImageRefusal = DOS_ERR_PATH_NOT_FOUND;
+        return 1;
+    }
+
+    DosGuestPath(machine, segment, offset, mapped, sizeof(mapped));
+    return g_DosImageTouched;
+}
+
+/* #241: is this path on the read-only CD drive? Resolved the way Win32 will resolve it
+ * (relative paths against that drive's own current directory). Nothing is prepared:
+ * a delete or a rename that is going to be refused must not first copy the file out.
+ */
+static INT DosPathIsOnCdrom(PCDOS_MACHINE machine, PCSTR path)
+{
+    CHAR fullPath[DOS_INT21_PATH_SIZE];
+    PSTR filePart;
+    DWORD length;
+
+    if (machine->CdromDrive < 0)
+        return 0;
+
+    length = GetFullPathNameA(path, sizeof fullPath, fullPath, &filePart);
+
+    if (!length || length >= sizeof fullPath || fullPath[1] != ':')
+        return 0;
+
+    return ((fullPath[0] | ASCII_CASE_BIT) - 'a') == machine->CdromDrive;
+}
+
+static INT DosGuestPathIsOnCdrom(PCDOS_MACHINE machine, DWORD segment, DWORD offset)
+{
+    CHAR path[DOS_INT21_PATH_SIZE];
+
+    if (machine->CdromDrive < 0)
+        return 0;
+
+    DosGuestPathRaw(machine, segment, offset, path, sizeof path);
+    return DosPathIsOnCdrom(machine, path);
 }
 
 VOID DosInt21Initialize(PDOS_MACHINE machine, WORD firstMcb)
@@ -1094,6 +2126,10 @@ VOID DosInt21Initialize(PDOS_MACHINE machine, WORD firstMcb)
     machine->IsBreakOn = 0;  /* BREAK=OFF, DOS's default. [CAUTION] m is a stack local and this
                                function sets fields one by one -- nothing zeroes it */
     machine->VirtualDrive = -1;  /* the current drive is the process current directory's */
+    machine->CdromDrive = -1;    /* #241: no ISO-backed CD drive until the host mounts one */
+    machine->CdromSectors = 0;
+    machine->PathPrepare = 0;
+    machine->PathPrepareContext = 0;
     machine->PspSegment = DOS_PSP_SEG;
     {   INT index2;          /* s91: the JFT a fresh PSP carries (DosPspBuild) */
         static const BYTE initialJft[DOS_INT21_STD_HANDLES] = { DOS_PSP_JFT_STDIN_ENTRY, DOS_PSP_JFT_STDOUT_ENTRY, DOS_PSP_JFT_STDERR_ENTRY, DOS_PSP_JFT_AUX_ENTRY, DOS_PSP_JFT_PRN_ENTRY };
@@ -1118,6 +2154,7 @@ VOID DosInt21Initialize(PDOS_MACHINE machine, WORD firstMcb)
     machine->LineOffset = 0;
     machine->TraceCount = 0;
     machine->StdOpen = DOS_INT21_STD_OPEN_ALL;                /* stdin/stdout/stderr/aux/prn all open */
+    DosDeviceReset(machine->DeviceKind);                      /* #272 */
     {
         INT index3;
 
@@ -1202,6 +2239,9 @@ VOID DosHandlesPush(PDOS_MACHINE machine)
 
     machine->HandleStack[machine->HandleDepth].StdOpen = machine->StdOpen;
 
+    for (index = 0; index < DOS_DEV_SLOTS; ++index)
+        machine->HandleStack[machine->HandleDepth].DeviceKind[index] = machine->DeviceKind[index];
+
     for (index = 0; index < DOS_PSP_JFT_HANDLES; ++index)
         machine->HandleStack[machine->HandleDepth].JftKnown[index] = machine->JftKnown[index];
 
@@ -1262,9 +2302,131 @@ static BYTE DosSftValue(PDOS_MACHINE machine, UINT handle)
     }
 
     if (handle < DOS_INT21_STD_OPEN_BITS && (machine->StdOpen & (1u << handle)))
-        return (BYTE)(handle == DOS_INT21_STDAUX_HANDLE ? DOS_PSP_JFT_AUX_ENTRY : handle == DOS_INT21_STDPRN_HANDLE ? DOS_PSP_JFT_PRN_ENTRY : DOS_PSP_JFT_STDIN_ENTRY);
+        return DosDeviceOf(machine->DeviceKind, handle);             /* #272: its own device, not its number's */
 
     return DOS_PSP_JFT_CLOSED;
+}
+
+/* #48: NOTE WHAT AN OPEN TOLD US, for the SFT mirror -- the name (FCB form), the mode the
+ * guest asked for, and the PSP that owns the file. Indexes past the guest block (and the three
+ * devices) have nowhere to show it.
+ */
+static VOID DosSftNote(PDOS_MACHINE machine, BYTE value, WORD segment, WORD offset, WORD openMode)
+{
+    CHAR path[DOS_INT21_PATH_SIZE];
+
+    if (value < DOS_INT21_SFT_FIRST_HOST || value >= DOS_SFT_ENTRIES)
+        return;
+
+    DosGuestPath(machine, segment, offset, path, sizeof path);
+    DosSftNameFromPath(path, machine->SftName[value]);
+    machine->SftOpenMode[value] = openMode;
+    machine->SftOwner[value] = machine->PspSegment;
+}
+
+/* #48: THE GUEST'S SFT, REBUILT FROM WHAT IS OPEN. SftHost[] stays the truth; this writes the
+ * mirror a program walking SysVars+04h reads (MEM /D, PC Tools-style file lists, krnl386).
+ * Entry i is JFT value i: 0 AUX, 1 CON, 2 PRN (the standard devices, referenced by the standard
+ * handles still bound to them, mapped as DosSftValue maps them), 3.. a host file (referenced
+ * by every DOS handle on it).
+ *
+ * [CAUTION]: CALLED AFTER AN OPEN, CLOSE OR DUP AND AT AH=52h -- NOT ON EVERY READ, WRITE OR
+ * SEEK. Size and position are read from the handle when it runs, so a walker that asks AH=52h
+ * first (as one must, to find the chain) sees them current; one that keeps the pointer and
+ * re-reads later sees them as of the last open/close. Re-querying every handle on every byte of
+ * I/O would cost far more than any walker is worth.
+ * The block and its size come from SysVars+04h itself, so this follows whichever block the host
+ * planted (DOS's, or WOW's from the host pool); none planted -> nothing to do.
+ */
+static VOID DosSftRefresh(PDOS_MACHINE machine)
+{
+    static const CHAR deviceNames[DOS_INT21_SFT_FIRST_HOST][DOS_FCB_NAME_SIZE + 1] = { "AUX        ", "CON        ", "PRN        " };
+    static const WORD deviceInfo[DOS_INT21_SFT_FIRST_HOST] = { DOS_INT21_DEVICE_INFO_AUX, DOS_INT21_DEVICE_INFO_CONSOLE, DOS_INT21_DEVICE_INFO_PRN };
+    volatile BYTE *sysVars;
+    WORD sftOffset;
+    WORD sftSegment;
+    PBYTE block;
+    UINT count;
+    UINT index;
+
+    if (!machine->SysvarsSegment)
+        return;
+
+    sysVars = (volatile BYTE *)(ULONG_PTR)(((DWORD)machine->SysvarsSegment << PARAGRAPH_SHIFT) + machine->SysvarsOffset);
+    sftOffset = *(volatile WORD *)(sysVars + DOS_SYSVARS_SFT);
+    sftSegment = *(volatile WORD *)(sysVars + DOS_SYSVARS_SFT + X86_WORD_SIZE);
+
+    if (!sftSegment || sftSegment == DOS_SFT_LAST)
+        return;
+
+    block = (PBYTE)(ULONG_PTR)(((DWORD)sftSegment << PARAGRAPH_SHIFT) + sftOffset);
+    count = (UINT)(block[DOS_SFT_COUNT] | (block[DOS_SFT_COUNT + 1] << BYTE_SHIFT));
+
+    if (count > DOS_SFT_ENTRIES)
+        count = DOS_SFT_ENTRIES;
+
+    for (index = 0; index < count; ++index)
+    {
+        DOS_SFT_FILE file;
+        UINT handle;
+        UINT byteIndex;
+
+        for (byteIndex = 0; byteIndex < sizeof file; ++byteIndex)
+            ((PBYTE)&file)[byteIndex] = 0;
+
+        if (index < DOS_INT21_SFT_FIRST_HOST)
+        {
+            for (handle = 0; handle < DOS_INT21_STD_OPEN_BITS; ++handle)
+            {
+                UINT device = (handle == DOS_INT21_STDAUX_HANDLE) ? DOS_PSP_JFT_AUX_ENTRY
+                            : (handle == DOS_INT21_STDPRN_HANDLE) ? DOS_PSP_JFT_PRN_ENTRY : DOS_PSP_JFT_STDIN_ENTRY;
+
+                if (device == index && (handle >= DOS_MAX_FILES || !machine->FileHandles[handle]) && (machine->StdOpen & (1u << handle)))
+                    ++file.References;
+            }
+
+            for (byteIndex = 0; byteIndex < DOS_FCB_NAME_SIZE; ++byteIndex)
+                file.Name[byteIndex] = (BYTE)deviceNames[index][byteIndex];
+
+            file.OpenMode = DOS_INT21_OPEN_READ_WRITE;
+            file.DeviceInfo = deviceInfo[index];
+            file.OwnerPsp = machine->PspSegment;
+        }
+        else if (machine->SftHost[index])
+        {
+            HANDLE host = machine->SftHost[index];
+            FILETIME fileTime;
+            FILETIME localTime;
+
+            for (handle = 0; handle < DOS_MAX_FILES; ++handle)
+                if (machine->FileHandles[handle] == host)
+                    ++file.References;
+
+            if (file.References)
+            {
+                for (byteIndex = 0; byteIndex < DOS_FCB_NAME_SIZE; ++byteIndex)
+                    file.Name[byteIndex] = machine->SftName[index][byteIndex];
+
+                file.OpenMode = machine->SftOpenMode[index];
+                file.OwnerPsp = machine->SftOwner[index];
+                file.DeviceInfo = DOS_INT21_DEVICE_INFO_FILE;                  /* what AX=4400h answers for it */
+
+                if (GetFileType(host) == FILE_TYPE_DISK)
+                {
+                    file.Size = GetFileSize(host, NULL);
+                    file.Position = SetFilePointer(host, 0, NULL, FILE_CURRENT);
+
+                    if (GetFileTime(host, NULL, NULL, &fileTime) && FileTimeToLocalFileTime(&fileTime, &localTime))
+                        FileTimeToDosDateTime(&localTime, &file.Date, &file.Time);
+                }
+            }
+        }
+
+        if (file.References)
+            DosSftEntryBuild(DosSftEntryAt(block, index), &file);
+        else
+            DosSftEntryClear(DosSftEntryAt(block, index));
+    }
 }
 
 static VOID DosJftPut(PDOS_MACHINE machine, UINT handle, BYTE value)
@@ -1324,6 +2486,9 @@ VOID DosJftExec(PDOS_MACHINE machine, WORD childPsp)
 
             if (handle < DOS_INT21_STD_OPEN_BITS)
                 machine->StdOpen |= (1u << handle);
+
+            if (handle < DOS_DEV_SLOTS)
+                machine->DeviceKind[handle] = value;                 /* #272: the device the JFT names */
         }
         else if (machine->SftHost[value])
         {
@@ -1384,6 +2549,9 @@ VOID DosHandlesPop(PDOS_MACHINE machine, INT isTsr)
         machine->FileHandles[index] = machine->HandleStack[depth].FileHandles[index];
 
     machine->StdOpen = machine->HandleStack[depth].StdOpen;
+
+    for (index = 0; index < DOS_DEV_SLOTS; ++index)
+        machine->DeviceKind[index] = machine->HandleStack[depth].DeviceKind[index];
 
     for (index = 0; index < DOS_PSP_JFT_HANDLES; ++index)
         machine->JftKnown[index] = machine->HandleStack[depth].JftKnown[index];
@@ -1539,6 +2707,8 @@ INT DosInt21(PDOS_MACHINE machine)
     DWORD callOffset = 0;
     INT   isCallFramed  = 0;
     BYTE isLfnAlias = 0;                        /* #210: the AL of a 71xxh served by xxh */
+    BYTE inputAl;
+    INT isCdromRefused = 0;                     /* #241: a write to the read-only CD drive */
 
     #define R_AX VDM_REG(tib, VTIB_EAX)
     #define R_BX VDM_REG(tib, VTIB_EBX)
@@ -1592,6 +2762,7 @@ INT DosInt21(PDOS_MACHINE machine)
         : (volatile WORD *)(((VDM_REG(tib, VTIB_SS) & WORD_MASK) << PARAGRAPH_SHIFT)
                             + (((VDM_REG(tib, VTIB_ESP) & WORD_MASK) + X86_FRAME16_FLAGS) & WORD_MASK));
     function = (R_AX >> BYTE_SHIFT) & BYTE_MASK;
+    inputAl = (BYTE)(R_AX & BYTE_MASK);                                         /* #48: 3Dh's mode, before AX is the handle */
     machine->Trampoline = 0;
     /* #251: resume the V86 guest in the AUX/PRN driver code -- see dos_auxprn.asm. */
     #define AUXPRN_TRAMP(entry) (machine->Trampoline = (WORD)(DOS_AUXPRN_OFF + (entry)))
@@ -1702,7 +2873,85 @@ INT DosInt21(PDOS_MACHINE machine)
         }
     }
 
-    if (function == DOS_FN_EXIT)                       /* terminate */
+    /* #28: A SERVICE THE CONFIGURED VERSION DOES NOT HAVE IS ANSWERED AS THAT VERSION
+     * ANSWERS IT -- see dos_version.h for the table and its sources. The Settings
+     * version decides (VersionMajor/Minor), not the per-process report XP's shell gets.
+     * An LFN alias (716Ch served by 6Ch) is the LFN API's, which every version keeps.
+     */
+    { INT versionAnswer = isLfnAlias ? DOS_VERSION_HAS
+                        : DosVersionAnswer(machine->VersionMajor, machine->VersionMinor, (BYTE)function, (BYTE)(R_AX & BYTE_MASK));
+
+      if (versionAnswer != DOS_VERSION_HAS)
+      {
+          trace = LogPut(trace, "  INT21 AH=0x"); trace = LogHexByte(trace, (UINT)function);
+          trace = LogPut(trace, " AL=0x"); trace = LogHexByte(trace, (UINT)(R_AX & BYTE_MASK));
+          trace = LogPut(trace, " not in the configured DOS version -- answered as that version\r\n");
+
+          if (versionAnswer == DOS_VERSION_LACKS_SUBFUNCTION)
+              SETAX((R_AX & HIGH_BYTE_MASK) | DOS_INT21_SUBFUNCTION_INVALID_AL);       /* AL=FF, carry left alone */
+          else
+          {
+              SETAX(R_AX & HIGH_BYTE_MASK);                                         /* AL=00h, CF clear */
+              OKCF();
+          }
+
+          machine->TraceCursor = trace;
+          return shouldContinue;
+      }
+    }
+
+    /* #240: what this call is, for the image drive's write protection (DosImageIsWriteCall). */
+    g_DosImageTouched = 0;
+    g_DosImageRefusal = 0;
+    g_DosImageFunction = function;
+    g_DosImageSubfunction = (BYTE)(R_AX & BYTE_MASK);
+    g_DosImageAction = (function == DOS_FN_EXTENDED_OPEN) ? (WORD)(R_DX & WORD_MASK)
+                     : (WORD)(R_BX & BYTE_MASK);          /* 7143h: BL */
+    g_DosImageIsCurrent = g_DosImageMode && machine->VirtualDrive == g_DosImageDrive;
+
+    /* #241: THE CD-ROM IS READ-ONLY. A write-class call whose path lands on the ISO-backed
+     * MSCDEX drive answers 5, access denied -- the answer MSCDEX's redirector gives -- before
+     * any arm can create, delete or rename something in the cache directory behind it.
+     * Opens for writing need no guard: the files there are read-only, so Win32 refuses them.
+     */
+    if (machine->CdromDrive >= 0)
+    {
+        BYTE subfunction = (BYTE)(R_AX & BYTE_MASK);
+        INT isOnCdrom = 0;
+
+        if (function == DOS_FN_CREATE || function == DOS_FN_CREATE_NEW || function == DOS_FN_CREATE_TEMP
+            || function == DOS_FN_MKDIR || function == DOS_FN_RMDIR || function == DOS_FN_DELETE
+            || (function == DOS_FN_FILE_ATTRIBUTES && subfunction == DOS_INT21_SET))
+            isOnCdrom = DosGuestPathIsOnCdrom(machine, R_DS, R_DX);
+        else if (function == DOS_FN_RENAME)
+            isOnCdrom = DosGuestPathIsOnCdrom(machine, R_DS, R_DX) || DosGuestPathIsOnCdrom(machine, R_ES, R_DI);
+        else if (function == DOS_FN_LFN && (subfunction == DOS_INT21_LFN_DELETE
+                 || (subfunction == DOS_INT21_LFN_ATTRIBUTES && ((R_BX & BYTE_MASK) & 1))))   /* 7143h BL odd = a set */
+            isOnCdrom = DosGuestPathIsOnCdrom(machine, R_DS, R_DX);
+        else if (function == DOS_FN_EXTENDED_OPEN && DosGuestPathIsOnCdrom(machine, R_DS, R_SI))
+        {
+            /* 6Ch/716Ch: refused if it asks to write, to replace, or to create a file the
+             * disc does not have; opening an existing file for reading is fine.
+             */
+            CHAR path[DOS_INT21_PATH_SIZE];
+            DosGuestPath(machine, R_DS, R_SI, path, sizeof path);
+            isOnCdrom = (R_BX & DOS_EXT_OPEN_ACCESS_MASK) != 0
+                        || (R_DX & DOS_EXT_OPEN_ACTION_MASK) == DOS_EXT_OPEN_IF_EXISTS_TRUNCATE
+                        || GetFileAttributesA(path) == INVALID_FILE_ATTRIBUTES;
+        }
+
+        if (isOnCdrom)
+            isCdromRefused = 1;
+    }
+
+    if (isCdromRefused)
+    {
+        SETAX(DOS_ERR_ACCESS_DENIED);
+        ERRCF();
+        trace = LogPut(trace, "  INT21 AH=0x"); trace = LogHex(trace, function);
+        trace = LogPut(trace, " on the CD-ROM (read-only) -> AX=5\r\n");
+    }
+    else if (function == DOS_FN_EXIT)                       /* terminate */
     {
         machine->ExitCode = (INT)(R_AX & BYTE_MASK);  /* DOS errorlevel */
         trace = LogPut(trace, "  ==> DOS terminate (AH=4Ch), exit code AL=0x");
@@ -2051,12 +3300,23 @@ INT DosInt21(PDOS_MACHINE machine)
             DWORD win32Error = 0;
             WORD dosError = 0;
 
+            INT isImageFile = 0;
+
             if (!WriteFile(machine->FileHandles[handle], buffer, count, &written, NULL))
                 win32Error = GetLastError();
 
+            /* #240: a file of the image drive is open for reading underneath -- the disk is
+             * write protected, and that is what the guest is told (see DosImageMapPath).
+             */
+            if (win32Error == ERROR_ACCESS_DENIED && DosImageHandleIsImage(machine->FileHandles[handle]))
+            {
+                win32Error = ERROR_WRITE_PROTECT;
+                isImageFile = 1;
+            }
+
             if (win32Error && DosErrFromWin32((unsigned long)win32Error, &dosError) && DosCritIsHardwareError(dosError))
             {
-                g_DosReadWriteDrive = DosHandleDrive(machine->FileHandles[handle]);
+                g_DosReadWriteDrive = isImageFile ? g_DosImageDrive : DosHandleDrive(machine->FileHandles[handle]);
                 SETAX(dosError);
                 ERRCF();
                 trace = LogPut(trace, "  INT21 AH=40 h="); trace = LogHex(trace, handle);
@@ -2084,18 +3344,23 @@ INT DosInt21(PDOS_MACHINE machine)
         /* #251: AN UNREDIRECTED 3 IS AUX AND 4 IS PRN, and they go to the BIOS
          * (INT 14h / INT 17h) like DOS's own drivers -- they used to be refused
          * with error 6 here, after AH=04h/05h had thrown their bytes away.
+         * #272: and so does ANY slot that IS one of them -- a duplicate of PRN, or
+         * handle 1 pointed at PRN with AH=46h. The slot's identity decides, not its number.
          */
-        else if ((handle == DOS_INT21_STDAUX_HANDLE || handle == DOS_INT21_STDPRN_HANDLE) && DosHandleIsDevice((PVOID const *)machine->FileHandles, machine->StdOpen, handle))
+        else if (DosHandleIsDevice((PVOID const *)machine->FileHandles, machine->StdOpen, handle)
+                 && DosDeviceOf(machine->DeviceKind, handle) != DOS_DEVICE_CON)
         {
+            INT isPrinter = (DosDeviceOf(machine->DeviceKind, handle) == DOS_DEVICE_PRN);
+
             if (AUXPRN_V86)
-                AUXPRN_TRAMP(handle == DOS_INT21_STDPRN_HANDLE ? DOS_AUXPRN_PRN_WRITE : DOS_AUXPRN_AUX_WRITE);
+                AUXPRN_TRAMP(isPrinter ? DOS_AUXPRN_PRN_WRITE : DOS_AUXPRN_AUX_WRITE);
             else
             {
                 DWORD index;
 
                 for (index = 0; index < count; ++index)
                 {
-                    if (handle == DOS_INT21_STDPRN_HANDLE)
+                    if (isPrinter)
                     {
                         if (machine->PrinterOut)
                             (VOID)machine->PrinterOut(machine->DeviceContext, (BYTE)buffer[index]);
@@ -2108,10 +3373,9 @@ INT DosInt21(PDOS_MACHINE machine)
                 OKCF();
             }
         }
-        /* [CAUTION]: ANY device slot, not just 1 and 2 -- after AH=45h the console can be
-         * sitting in slot 5. A duplicate loses which device it was, so a dup of
-         * AUX would print here; nothing does that, and the alternative is a
-         * per-slot identity byte we have no caller for.
+        /* [CAUTION]: ANY console slot, not just 1 and 2 -- after AH=45h the console can be
+         * sitting in slot 5. (#272: a duplicate of AUX or PRN no longer lands here; the
+         * slot keeps its identity -- see DosDeviceOf.)
          */
         else if (DosHandleIsDevice((PVOID const *)machine->FileHandles, machine->StdOpen, handle))
              {
@@ -2164,6 +3428,10 @@ INT DosInt21(PDOS_MACHINE machine)
             DWORD mode = R_AX & DOS_INT21_OPEN_ACCESS_MASK;
             DWORD access = (mode == DOS_INT21_OPEN_WRITE) ? GENERIC_WRITE
                       : (mode == DOS_INT21_OPEN_READ_WRITE) ? (GENERIC_READ | GENERIC_WRITE) : GENERIC_READ;
+
+            if (DosImageIsHostPath(fileName))
+                access = GENERIC_READ;                    /* #240: write protected -- the WRITE fails */
+
             file = DosOpenStampable(fileName, access, share, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL);
         }
 
@@ -2277,9 +3545,11 @@ INT DosInt21(PDOS_MACHINE machine)
             trace = LogPut(trace, " first="); trace = LogDump(trace, (PCBYTE)buffer, (read >= DOS_INT21_TRACE_FIRST_BYTES) ? DOS_INT21_TRACE_FIRST_BYTES : 0);
             trace = LogPut(trace, "\r\n");
         }
-        else if (handle == 0 && DosHandleIsDevice((PVOID const *)machine->FileHandles, machine->StdOpen, handle))
+        else if (DosHandleIsDevice((PVOID const *)machine->FileHandles, machine->StdOpen, handle)
+                 && DosDeviceOf(machine->DeviceKind, handle) == DOS_DEVICE_CON)
         {
             /* #251: STDIN IS THE KEYBOARD, AND DOS READS A LINE FROM IT:
+             * (#272: so does ANY console slot -- a duplicate of stdin is still CON.)
              * This answered 0 bytes -- end of file -- so any program reading its
              * input through handle 0 (C's gets/scanf/fgets do) saw an empty stream
              * and gave up. DOS's console read is cooked: it echoes, honours
@@ -2354,10 +3624,39 @@ INT DosInt21(PDOS_MACHINE machine)
             OKCF();
         readDone: ;
         }
-        else if (handle == DOS_INT21_STDAUX_HANDLE && AUXPRN_V86 && DosHandleIsDevice((PVOID const *)machine->FileHandles, machine->StdOpen, handle))
+        else if (DosHandleIsDevice((PVOID const *)machine->FileHandles, machine->StdOpen, handle)
+                 && DosDeviceOf(machine->DeviceKind, handle) == DOS_DEVICE_AUX && AUXPRN_V86)
              AUXPRN_TRAMP(DOS_AUXPRN_AUX_READ);       /* #251: AUX, through INT 14h */
+        else if (DosHandleIsDevice((PVOID const *)machine->FileHandles, machine->StdOpen, handle)
+                 && DosDeviceOf(machine->DeviceKind, handle) == DOS_DEVICE_AUX && machine->AuxIn)
+        {
+            /* #272: AUX FROM PROTECTED MODE (or any caller that cannot resume in the
+             * driver). The same contract as the driver's rd3 (p_auxprn, 6.22): byte by
+             * byte from COM1, stopping AFTER a CR or at CX. A PM caller cannot be left
+             * spinning in our INT 21h, so where the driver would wait for the next byte
+             * this returns what has arrived -- possibly 0 bytes.
+             */
+            volatile BYTE *bytes = (volatile BYTE *)buffer;
+            DWORD transferred = 0;
+
+            while (transferred < count)
+            {
+                BYTE character;
+
+                if (!machine->AuxIn(machine->DeviceContext, &character))
+                    break;
+
+                bytes[transferred++] = character;
+
+                if (character == ASCII_CR)
+                    break;
+            }
+
+            SETAX(transferred);
+            OKCF();
+        }
         else if (DosHandleIsDevice((PVOID const *)machine->FileHandles, machine->StdOpen, handle))
-             { /* PRN, a dup, or AUX in PM: EOF */
+             { /* PRN (output only), or AUX with no way to read it: EOF */
                  SETAX(0);
                  OKCF();
              }
@@ -2559,8 +3858,8 @@ INT DosInt21(PDOS_MACHINE machine)
             HANDLE file;
             DWORD slot;
             DosFcbName(fcb, name);
-            file = CreateFileA(name, GENERIC_READ | GENERIC_WRITE, FILE_SHARE_READ, NULL,
-                              (function == DOS_FN_FCB_CREATE) ? CREATE_ALWAYS : OPEN_EXISTING,
+            file = CreateFileA(name, DosImageIsHostPath(name) ? GENERIC_READ : (GENERIC_READ | GENERIC_WRITE),   /* #240 */
+                              FILE_SHARE_READ, NULL, (function == DOS_FN_FCB_CREATE) ? CREATE_ALWAYS : OPEN_EXISTING,
                               FILE_ATTRIBUTE_NORMAL, NULL);
 
             if (file == INVALID_HANDLE_VALUE)
@@ -2658,10 +3957,33 @@ INT DosInt21(PDOS_MACHINE machine)
                     INT volumeIndex;
                     volatile BYTE *extension;
                     INT isExtended = (fcb != (volatile BYTE *)((R_DS << PARAGRAPH_SHIFT) + (R_DX & WORD_MASK))) ? DOS_INT21_XFCB_HEADER : 0;
+                    INT searchDrive = DosFcbSearchDrive(fcb[0], DosCurrentDrive(machine));
+                    INT isImageDrive = g_DosImageMode && searchDrive == g_DosImageDrive;
+                    INT isLabel;
                     volume[0] = 0;
 
-                    if (!GetVolumeInformationA("C:\\", volume, sizeof volume,
-                                               NULL, NULL, NULL, NULL, 0) || !volume[0])
+                    if (isImageDrive)                          /* #240: the image's own label */
+                    {
+                        isLabel = DosImageEnsure() && g_DosImageLabel[0];
+
+                        if (isLabel)
+                            DosImageAppend(volume, sizeof(volume), g_DosImageLabel, NULL);
+                    }
+                    else if (searchDrive == machine->CdromDrive)      /* #241: the disc's own label */
+                    {
+                        isLabel = machine->CdromLabel[0] != 0;
+
+                        if (isLabel)
+                            lstrcpynA(volume, machine->CdromLabel, sizeof volume);
+                    }
+                    else                                            /* the searched drive's, not always C:'s */
+                    {
+                        CHAR root[] = "C:\\";
+                        root[0] = (CHAR)('A' + searchDrive);
+                        isLabel = GetVolumeInformationA(root, volume, sizeof volume, NULL, NULL, NULL, NULL, 0) && volume[0];
+                    }
+
+                    if (!isLabel)
                     {
                         if (machine->FcbFind)
                         {
@@ -2687,7 +4009,7 @@ INT DosInt21(PDOS_MACHINE machine)
                         dta[DOS_INT21_XFCB_ATTRIBUTE] = DOS_INT21_ATTRIBUTE_VOLUME;
                     }
 
-                    extension[0] = DOS_INT21_FIND_DRIVE_C;                     /* drive C: */
+                    extension[0] = isImageDrive ? g_DosImageDrive + 1 : DOS_INT21_FIND_DRIVE_C;   /* A: (#240) or C: */
 
                     for (volumeIndex = 0; volumeIndex < DOS_FCB_NAME_SIZE; ++volumeIndex)
                     {
@@ -2733,11 +4055,10 @@ INT DosInt21(PDOS_MACHINE machine)
                  * against each entry's 8.3 name -- see DosFindMatches. The drive byte
                  * picks the directory: "X:*" is that drive's current directory.
                  */
-                HANDLE find;
-                CHAR allPattern[DOS_INT21_ALL_PATTERN_SIZE];
+                HANDLE find = INVALID_HANDLE_VALUE;
+                CHAR allPattern[DOS_INT21_PATH_SIZE];
                 INT index;
                 INT isNoDirectory;
-                INT count = 0;
 
                 if (machine->FcbFind)
                 {
@@ -2748,15 +4069,19 @@ INT DosInt21(PDOS_MACHINE machine)
                 for (index = 0; index < DOS_FCB_NAME_SIZE; ++index)
                     machine->FcbTemplate[index] = fcb[DOS_INT21_FCB_NAME + index];
 
-                if (fcb[0])
-                {
-                    allPattern[count++] = (CHAR)('A' + fcb[0] - 1);
-                    allPattern[count++] = ':';
-                }
+                /* #240: the current drive may be one Win32 cannot stand on -- the image A:
+                 * above all, where "*" listed the PROCESS directory (bin\) -- so the
+                 * pattern takes DosGuestPath's prefix, then the image's mapping.
+                 */
+                DosFcbSearchPattern(fcb[0], machine->VirtualDrive, allPattern, sizeof(allPattern));
+                DosExpandOtherDriveRelative(machine, allPattern, sizeof(allPattern));
+                DosImageMapPath(allPattern, sizeof(allPattern));
 
-                allPattern[count++] = '*';
-                allPattern[count] = 0;
-                find = DosFindFirst(allPattern, machine->FcbTemplate, mask, &findData, &isNoDirectory);
+                if (machine->PathPrepare)                         /* #241: the disc's directory laid out first */
+                    machine->PathPrepare(machine->PathPrepareContext, allPattern);
+
+                if (!g_DosImageRefusal)
+                    find = DosFindFirst(allPattern, machine->FcbTemplate, mask, &findData, &isNoDirectory);
 
                 if (find != INVALID_HANDLE_VALUE)
                 {
@@ -2805,7 +4130,7 @@ INT DosInt21(PDOS_MACHINE machine)
              */
             if (!received)
             {
-                machine->LastError = DOS_ERR_NO_MORE_FILES;
+                machine->LastError = g_DosImageRefusal ? g_DosImageRefusal : DOS_ERR_NO_MORE_FILES;   /* #240: 21 = no disk */
                 FCB_FAIL();
             }
             else
@@ -2844,7 +4169,8 @@ INT DosInt21(PDOS_MACHINE machine)
                     dta[DOS_INT21_XFCB_ATTRIBUTE] = (BYTE)(findData.dwFileAttributes & DOS_LFN_ATTRIBUTE_MASK);
                 }
 
-                extension[0] = DOS_INT21_FIND_DRIVE_C;                         /* drive C: */
+                extension[0] = (g_DosImageMode && DosFcbSearchDrive(fcb[0], DosCurrentDrive(machine)) == g_DosImageDrive)
+                             ? g_DosImageDrive + 1 : DOS_INT21_FIND_DRIVE_C;  /* A: (#240) or C: */
                 DosFcbPutName(extension + 1, baseName);
                 extension[DOS_INT21_DIRENTRY_ATTRIBUTE] = (BYTE)(findData.dwFileAttributes & DOS_LFN_ATTRIBUTE_MASK);
 
@@ -3083,6 +4409,15 @@ INT DosInt21(PDOS_MACHINE machine)
             while (input[inputIndex] == ' ' || input[inputIndex] == ASCII_TAB)
                 ++inputIndex;
 
+            /* AL bit 0: ONE leading separator (RBIL: ": . ; , = +") is skipped, not a run of
+             * them -- 6.22 and DOSBox-X parse ",;ABC" to a blank name with SI past the comma
+             * only (p_fcb int21.29.sep). (s101)
+             */
+            if ((subfunction & DOS_INT21_PARSE_SKIP_SEPARATOR)
+                && (input[inputIndex] == ':' || input[inputIndex] == '.' || input[inputIndex] == ';'
+                    || input[inputIndex] == ',' || input[inputIndex] == '=' || input[inputIndex] == '+'))
+                ++inputIndex;
+
             destination[0] = 0;
 
             if (input[inputIndex] && input[inputIndex + 1] == ':')
@@ -3100,7 +4435,7 @@ INT DosInt21(PDOS_MACHINE machine)
 
             hasName = (index2 > inputIndex);
             hasExtension  = (input[index2] == '.');
-            DosFcbPutName(destination + 1, input + inputIndex);
+            inputIndex += DosFcbPutName(destination + 1, input + inputIndex);
 
             if (!hasName && (subfunction & DOS_INT21_PARSE_KEEP_NAME))
                 for (index = DOS_INT21_FCB_NAME; index <= DOS_INT21_FCB_BASE_LENGTH;  ++index)
@@ -3118,6 +4453,12 @@ INT DosInt21(PDOS_MACHINE machine)
                 destination[index] = 0;
 
             SETAX((R_AX & HIGH_BYTE_MASK) | (isWild ? 1 : 0));
+            /* SI COMES BACK PAST THE NAME, AT THE FIRST CHARACTER NOT PARSED (RBIL INT 21/29h). (s101)
+             * It used to stop after the blanks and the drive. XP's COMMAND.COM COPY parses the
+             * source's file name with AL=00h and goes on to its FCB search (11h) only when
+             * [SI] is the string's NUL -- so every `copy C:\DIR\FILE X` printed "File not
+             * found" without searching at all. tests/probes/dos/p_fcb.asm int21.29.si pins it.
+             */
             SET16(R_SI, (WORD)((R_SI & WORD_MASK) + inputIndex));
             OKCF();
             /* THE CALL COMMAND.COM'S DISPATCH TURNS ON. `ver ` runs and `ver` does
@@ -3230,6 +4571,7 @@ INT DosInt21(PDOS_MACHINE machine)
         CHAR root[DOS_INT21_ROOT_PATH_SIZE];
         PSTR rootPointer = 0;
         BYTE driveNumber = (function == DOS_FN_GET_DRIVE_INFO) ? (BYTE)(R_DX & BYTE_MASK) : 0;  /* 1Bh: default drive */
+        INT isImageDisk = 0;
 
         if (!driveNumber && machine->VirtualDrive >= 0)
             driveNumber = (BYTE)(machine->VirtualDrive + 1);
@@ -3240,10 +4582,20 @@ INT DosInt21(PDOS_MACHINE machine)
                     root[3] = 0;
                     rootPointer = root; }
 
-        if (GetDiskFreeSpaceA(rootPointer, &sectorsPerCluster, &bytesPerSector, &freeClusters, &totalClusters))
+        /* #240: the image drive's geometry is the image's; with no disk in it, no answer. */
+        if (g_DosImageMode && driveNumber == g_DosImageDrive + 1 && DosImageEnsure())
+        {
+            isImageDisk = 1;
+            sectorsPerCluster = g_DosImageSectorsPerCluster;
+            bytesPerSector = FAT_IMAGE_SECTOR_SIZE;
+            totalClusters = g_DosImageClusters;
+        }
+
+        if (isImageDisk || (!(g_DosImageMode && driveNumber == g_DosImageDrive + 1)
+                            && GetDiskFreeSpaceA(rootPointer, &sectorsPerCluster, &bytesPerSector, &freeClusters, &totalClusters)))
         {
             volatile BYTE *media = (volatile BYTE *)((DOS_CTAB_SEG << PARAGRAPH_SHIFT) + DOS_MEDIA_OFF);
-            *media = DOS_INT21_MEDIA_FIXED;                       /* fixed disk */
+            *media = isImageDisk ? g_DosImageMedia : DOS_INT21_MEDIA_FIXED;    /* the image's, or fixed disk */
             SETAX((R_AX & HIGH_BYTE_MASK) | (sectorsPerCluster & BYTE_MASK));
             SET16(R_DS, DOS_CTAB_SEG);
             SET16(R_BX, DOS_MEDIA_OFF);
@@ -3542,7 +4894,16 @@ INT DosInt21(PDOS_MACHINE machine)
             AUXPRN_TRAMP(function == DOS_FN_PRINTER_OUTPUT ? DOS_AUXPRN_PRN_OUTPUT : function == DOS_FN_AUX_OUTPUT ? DOS_AUXPRN_AUX_OUTPUT : DOS_AUXPRN_AUX_INPUT);
         else if (function == DOS_FN_AUX_INPUT)
         {
-            SETAX((R_AX & HIGH_BYTE_MASK) | ASCII_END_OF_FILE);
+            /* #272: from protected mode, the byte COM1 has waiting (INT 14h AH=02h, as
+             * the driver reads it). DOS would wait for one; a PM caller cannot be left
+             * spinning here, so with nothing waiting the answer stays ^Z, end of file.
+             */
+            BYTE character = ASCII_END_OF_FILE;
+
+            if (machine->AuxIn && !machine->AuxIn(machine->DeviceContext, &character))
+                character = ASCII_END_OF_FILE;
+
+            SETAX((R_AX & HIGH_BYTE_MASK) | character);
             OKCF();
         }
         else
@@ -3784,6 +5145,10 @@ INT DosInt21(PDOS_MACHINE machine)
                 else
                 {
                     machine->FileHandles[targetHandle] = newHandle;
+
+                    if (isSourceDevice)
+                        machine->DeviceKind[targetHandle] = DosDeviceOf(machine->DeviceKind, sourceHandle);   /* #272 */
+
                     SETAX(targetHandle);
                     OKCF();
                 }
@@ -3812,6 +5177,8 @@ INT DosInt21(PDOS_MACHINE machine)
 
                        if (!isSourceDevice)
                            DosHandleSetDevice(&machine->StdOpen, targetHandle, FALSE);
+                       else
+                           machine->DeviceKind[targetHandle] = DosDeviceOf(machine->DeviceKind, sourceHandle);   /* #272 */
 
                        OKCF(); }
             }
@@ -4037,6 +5404,10 @@ INT DosInt21(PDOS_MACHINE machine)
         DWORD access = (DWORD)DosExtOpenAccess((UINT)(R_BX & WORD_MASK));
         disposition = DosExtOpenDisposition((UINT)(R_DX & WORD_MASK));  /* Win32's own numbers */
         DosGuestPath(machine, R_DS, R_SI, fileName, sizeof(fileName));
+
+        if (DosImageIsHostPath(fileName))
+            access = GENERIC_READ;                        /* #240: write protected -- the WRITE fails */
+
         /* FILE_SHARE_WRITE too: we do not emulate SHARE.EXE, so a second open of a
          * file this VDM holds must not fail -- the rule AH=3Dh learned in session 37
          * and this twin had not (#168).
@@ -4126,6 +5497,16 @@ INT DosInt21(PDOS_MACHINE machine)
         DWORD count;
         DosGuestPath(machine, R_DS, R_SI, input, sizeof(input));
         count = GetFullPathNameA(input, sizeof(output), output, NULL);
+
+        if (g_DosImageTouched && g_DosImageRefusal != DOS_ERR_PATH_NOT_FOUND)
+        {
+            /* #240: in A: terms -- the host directory never reaches the guest -- and, like
+             * 6.22's, without reading the disk, so an empty drive answers too.
+             */
+            DosImageAppend(output, sizeof(output), DosImageRootText(), g_DosImageResolved);
+            count = 1;
+            g_DosImageRefusal = 0;
+        }
 
         if (count == 0 || count >= sizeof(output))
         {
@@ -4380,6 +5761,53 @@ INT DosInt21(PDOS_MACHINE machine)
             ERRCF();
         }
     }
+    else if (function == DOS_FN_GET_CURRENT_DIRECTORY && g_DosImageMode
+             && ((R_DX & BYTE_MASK) == g_DosImageDrive + 1
+                 || (((R_DX & BYTE_MASK) == 0 || (R_DX & BYTE_MASK) == DOS_INT21_WOW_CURRENT_DRIVE) && DosCurrentDrive(machine) == g_DosImageDrive)))
+    {
+        /* #240: A:'s current directory is the one kept beside the image (DosImageMapPath),
+         * in the form DOS returns -- no drive, no leading backslash. Like DOS's, it is the
+         * CDS's answer and does not read the disk, so an empty drive answers too.
+         */
+        volatile BYTE *destination = (volatile BYTE *)((R_DS << PARAGRAPH_SHIFT) + (R_SI & WORD_MASK));
+        INT index;
+
+        for (index = 0; g_DosImageCurrent[index] && index < DOS_INT21_CURRENT_DIRECTORY_MAX; ++index)
+            destination[index] = (BYTE)g_DosImageCurrent[index];
+
+        destination[index] = 0;
+        SETAX(DOS_INT21_CURRENT_DIRECTORY_AX);
+        OKCF();
+    }
+    else if (function == DOS_FN_CHDIR && g_DosImageMode && DosImageIsChdir(machine, R_DS, R_DX))
+    {
+        /* #240: a directory of the image drive. DosImageIsChdir resolved and mapped it; it
+         * becomes A:'s current directory if it is a directory of the image.
+         */
+        CHAR hostPath[DOS_IMAGE_PATH_SIZE];
+        DWORD attributes;
+
+        if (g_DosImageRefusal)
+        {
+            SETAX(g_DosImageRefusal);                         /* 21: no disk; 3: "A:" alone, or too long */
+            ERRCF();
+        }
+        else if (DosImageAppend(hostPath, sizeof(hostPath), g_DosImageRoot, g_DosImageResolved)
+                 && (attributes = GetFileAttributesA(hostPath)) != INVALID_FILE_ATTRIBUTES && (attributes & FILE_ATTRIBUTE_DIRECTORY))
+        {
+            DosImageAppend(g_DosImageCurrent, sizeof(g_DosImageCurrent), g_DosImageResolved, NULL);
+            g_DosImageRefusal = 0;
+            OKCF();
+            trace = LogPut(trace, "  INT21 AH=3B chdir "); trace = LogPut(trace, DosImageRootText()); trace = LogPut(trace, g_DosImageCurrent);
+            trace = LogPut(trace, " (image) -> ok\r\n");
+        }
+        else
+        {
+            g_DosImageRefusal = 0;
+            SETAX(DOS_ERR_PATH_NOT_FOUND);
+            ERRCF();
+        }
+    }
     else if (function == DOS_FN_GET_CURRENT_DIRECTORY)                /* get current directory -> DS:SI */
     {
         /* DOS returns the path WITHOUT the drive letter and WITHOUT a leading
@@ -4472,6 +5900,8 @@ INT DosInt21(PDOS_MACHINE machine)
 
                 if (shortLength && shortLength < sizeof shortPath)
                     lstrcpynA(currentDirectory, shortPath, sizeof currentDirectory);
+
+                DosAliasShortenPath(currentDirectory, sizeof currentDirectory);     /* s101: the volume gave none */
 
                 for (charIndex = 0; currentDirectory[charIndex]; ++charIndex)
                     if (currentDirectory[charIndex] >= 'a' && currentDirectory[charIndex] <= 'z')
@@ -4587,7 +6017,35 @@ INT DosInt21(PDOS_MACHINE machine)
                     root[3] = 0;
                     rootPointer = root; }
 
-        if (driveNumber <= DOS_DRIVE_LETTERS && GetDiskFreeSpaceA(rootPointer, &sectorsPerCluster, &bytesPerSector, &freeClusters, &totalClusters))
+        /* #240: the image drive answers from its own FAT -- and an empty one as no drive,
+         * because 36h has no error path of its own (a real empty bay would raise INT 24h).
+         */
+        if (g_DosImageMode && driveNumber == g_DosImageDrive + 1)
+        {
+            if (DosImageEnsure())
+            {
+                SETAX((WORD)g_DosImageSectorsPerCluster);
+                SET16(R_BX, g_DosImageFreeClusters);
+                SET16(R_CX, FAT_IMAGE_SECTOR_SIZE);
+                SET16(R_DX, g_DosImageClusters);
+            }
+            else
+                SETAX(DOS_INT21_INVALID_DRIVE_AX);
+
+            OKCF();
+        }
+        else if (driveNumber && (INT)driveNumber - 1 == machine->CdromDrive)
+        {
+            /* #241: a CD-ROM is full -- one 2048-byte sector a cluster, the disc's size,
+             * nothing free -- whatever the disk under the cache directory has.
+             */
+            SETAX(1);
+            SET16(R_BX, 0);
+            SET16(R_CX, (WORD)DOS_CDROM_SECTOR_SIZE);
+            SET16(R_DX, machine->CdromSectors > WORD_MASK ? WORD_MASK : machine->CdromSectors);
+            OKCF();
+        }
+        else if (driveNumber <= DOS_DRIVE_LETTERS && GetDiskFreeSpaceA(rootPointer, &sectorsPerCluster, &bytesPerSector, &freeClusters, &totalClusters))
         {
             SETAX((WORD)sectorsPerCluster);
             SET16(R_BX, freeClusters > WORD_MASK ? WORD_MASK : freeClusters);
@@ -4713,18 +6171,18 @@ INT DosInt21(PDOS_MACHINE machine)
     }
     else if (function == DOS_FN_GET_LIST_OF_LISTS)                /* get list of lists -> ES:BX */
     {
-        /* The word at ES:BX-2 is the first MCB segment, and that is the field a
-         * memory walker actually follows -- it is filled in truthfully from our
-         * own MCB chain. The rest of SysVars is a stub, so it is ZEROED rather
-         * than left as whatever was in memory: a walker that follows a garbage
-         * DPB or SFT pointer wanders off into nonsense, which is the silent
-         * failure #27 exists to remove, whereas a null pointer stops it.
+        /* The host builds SysVars at start-up (host_startup.c; layout in dos_sysvars.h, measured
+         * on 6.22): the first MCB at ES:BX-2, the DPB chain, the SFT block, CLOCK$/CON, the CDS
+         * array, LASTDRIVE and the inline NUL header with the device chain behind it. #48: the
+         * SFT entries mirror what is open, and are brought up to date here, because a walker
+         * asks for this pointer first.
          */
         if (machine->SysvarsSegment)
         {
+            DosSftRefresh(machine);
             SET16(R_ES, machine->SysvarsSegment);
             SET16(R_BX, machine->SysvarsOffset);
-            trace = LogPut(trace, "  INT21 AH=52 list-of-lists (MCB head only; rest stubbed)\r\n");
+            trace = LogPut(trace, "  INT21 AH=52 list-of-lists (MCB, DPB, SFT, CDS, devices; SFT refreshed)\r\n");
             OKCF();
         }
         else
@@ -4747,8 +6205,10 @@ INT DosInt21(PDOS_MACHINE machine)
         {
             WORD deviceInfo = (handle < DOS_INT21_STD_HANDLES) ? DOS_INT21_DEVICE_INFO_CONSOLE : DOS_INT21_DEVICE_INFO_FILE;
 
-            if ((handle == DOS_INT21_STDAUX_HANDLE || handle == DOS_INT21_STDPRN_HANDLE) && DosHandleIsDevice((PVOID const *)machine->FileHandles, machine->StdOpen, handle))
-                deviceInfo = (handle == DOS_INT21_STDAUX_HANDLE) ? DOS_INT21_DEVICE_INFO_AUX : DOS_INT21_DEVICE_INFO_PRN;
+            if (DosHandleIsDevice((PVOID const *)machine->FileHandles, machine->StdOpen, handle))     /* #272: by identity */
+                deviceInfo = (DosDeviceOf(machine->DeviceKind, handle) == DOS_DEVICE_AUX) ? DOS_INT21_DEVICE_INFO_AUX
+                           : (DosDeviceOf(machine->DeviceKind, handle) == DOS_DEVICE_PRN) ? DOS_INT21_DEVICE_INFO_PRN
+                           : DOS_INT21_DEVICE_INFO_CONSOLE;
 
             SET16(R_DX, deviceInfo);
             SETAX(deviceInfo);
@@ -4797,6 +6257,9 @@ INT DosInt21(PDOS_MACHINE machine)
                 type = GetDriveTypeA(root);
             }
 
+            if (type && (INT)drive - 1 == machine->CdromDrive)
+                type = DRIVE_CDROM;                               /* #241: the cache behind it is a fixed disk */
+
             if (!type || type == DRIVE_NO_ROOT_DIR) /* invalid drive */
             {
                 SETAX(DOS_ERR_INVALID_DRIVE);
@@ -4813,7 +6276,7 @@ INT DosInt21(PDOS_MACHINE machine)
                 /* DX = the device attribute word; bit 12 = the drive is remote.
                  * Nothing else in it is load-bearing for the callers we have.
                  */
-                SET16(R_DX, (type == DRIVE_REMOTE) ? DOS_INT21_IOCTL_REMOTE_BIT : DOS_INT21_NONE);
+                SET16(R_DX, (type == DRIVE_REMOTE || (INT)drive - 1 == machine->CdromDrive) ? DOS_INT21_IOCTL_REMOTE_BIT : DOS_INT21_NONE);   /* #241: MSCDEX's drive is a redirector's */
                 OKCF();
             }
             else
@@ -5071,7 +6534,16 @@ INT DosInt21(PDOS_MACHINE machine)
          */
         BYTE driveNumber = (BYTE)(R_DX & BYTE_MASK);
 
-        if (driveNumber < DOS_DRIVE_LETTERS && (GetLogicalDrives() & (1u << driveNumber)))
+        if (g_DosImageMode && driveNumber == g_DosImageDrive)     /* #240: the image drive is ours */
+        {
+            CHAR currentDirectory[DOS_INT21_PATH_SIZE];
+
+            if (machine->VirtualDrive < 0 && GetCurrentDirectoryA(sizeof(currentDirectory), currentDirectory))
+                DosNoteDriveDirectory(currentDirectory);
+
+            machine->VirtualDrive = g_DosImageDrive;
+        }
+        else if (driveNumber < DOS_DRIVE_LETTERS && (GetLogicalDrives() & (1u << driveNumber)))
         {
             CHAR driveSpec[DOS_INT21_DRIVE_ROOT_SIZE];
             CHAR currentDirectory[DOS_INT21_PATH_SIZE];
@@ -5693,8 +7165,13 @@ INT DosInt21(PDOS_MACHINE machine)
             CHAR output[DOS_INT21_PATH_SIZE];
             BYTE nameKind = (BYTE)(R_CX & BYTE_MASK);
             DWORD count;
+            INT isImagePath;
             DosGuestPath(machine, R_DS, R_SI, input, sizeof(input));
             count = GetFullPathNameA(input, sizeof(fullPath), fullPath, NULL);
+            isImagePath = g_DosImageTouched && g_DosImageRefusal != DOS_ERR_PATH_NOT_FOUND;
+
+            if (isImagePath && nameKind == 0)
+                g_DosImageRefusal = 0;                    /* #240: the full form reads no disk */
 
             if (count == 0 || count >= sizeof(fullPath))
             {
@@ -5708,13 +7185,34 @@ INT DosInt21(PDOS_MACHINE machine)
             }
             else
             {
-                if (nameKind == 0)
+                if (isImagePath)
+                {
+                    /* #240: in A: terms. On a FAT image the short and long forms are the one
+                     * 8.3 name; they ask that it exist, which the full form does not.
+                     */
+                    CHAR hostPath[DOS_IMAGE_PATH_SIZE];
+                    DosImageAppend(output, sizeof(output), DosImageRootText(), g_DosImageResolved);
+                    count = 1;
+
+                    if (nameKind && (!DosImageAppend(hostPath, sizeof(hostPath), g_DosImageRoot, g_DosImageResolved)
+                                     || GetFileAttributesA(hostPath) == INVALID_FILE_ATTRIBUTES))
+                    {
+                        count = 0;
+                        SetLastError(ERROR_FILE_NOT_FOUND);
+                    }
+                }
+                else if (nameKind == 0)
                 {
                     lstrcpynA(output, fullPath, sizeof(output));
                     count = 1;
                 }
                 else if (nameKind == 1)
+                {
                     count = GetShortPathNameA(fullPath, output, sizeof(output));
+
+                    if (count && count < sizeof(output))
+                        DosAliasShortenPath(output, sizeof(output));                /* s101: the volume gave none */
+                }
                 else
                     count = GetLongPathNameA(fullPath, output, sizeof(output));
 
@@ -6069,6 +7567,24 @@ INT DosInt21(PDOS_MACHINE machine)
         ERRCF();
     }
 
+    /* #240: THE IMAGE DRIVE'S ANSWER, where this call named an A: path that is not to be
+     * served (no disk: 21; write protected: 19; too long: 3). The call itself ran against
+     * DOS_IMAGE_REFUSED_PATH and failed without touching anything; this sets the code it
+     * fails WITH, which the INT 24h raise below then reads. The FCB calls answer AL=FFh
+     * on their own and carry no code.
+     */
+    if (g_DosImageRefusal && !(function >= DOS_FN_FCB_OPEN && function <= DOS_FN_FCB_RENAME))
+    {
+        SETAX(g_DosImageRefusal);
+        ERRCF();
+    }
+
+    if (g_DosImageNote[0])
+    {
+        trace = LogPut(trace, g_DosImageNote);
+        g_DosImageNote[0] = 0;
+    }
+
     /* GH #34: remember the last failure for AH=59h. Done HERE, once, rather
      * than at each of the ~20 error sites -- CF and AX are already exactly what
      * the guest is about to see. 59h itself is excluded so reading the error
@@ -6114,7 +7630,7 @@ INT DosInt21(PDOS_MACHINE machine)
 
         machine->IsCritPending = 1;
         machine->CritAl = drive;
-        machine->CritAh = DosCritInt24Ah((BYTE)function);
+        machine->CritAh = DosCritInt24AhFor((BYTE)function, (BYTE)(R_AX & BYTE_MASK));
         machine->CritCode = (BYTE)((R_AX & BYTE_MASK) - DOS_INT21_HARD_ERROR_FIRST);
     }
     /* #275: A 3Fh/40h HARDWARE ERROR WHERE INT 24h CANNOT BE RAISED IS ANSWERED AS
@@ -6160,15 +7676,28 @@ INT DosInt21(PDOS_MACHINE machine)
     if (!g_DosInt21IsProtectedMode && !(*guestFlags & 1))
     {
         if (function == DOS_FN_CREATE || function == DOS_FN_OPEN || function == DOS_FN_CREATE_TEMP || function == DOS_FN_CREATE_NEW || function == DOS_FN_EXTENDED_OPEN)
-            DosJftPut(machine, (UINT)(R_AX & WORD_MASK), DosSftValue(machine, (UINT)(R_AX & WORD_MASK)));
+        {
+            BYTE value = DosSftValue(machine, (UINT)(R_AX & WORD_MASK));
+            DosJftPut(machine, (UINT)(R_AX & WORD_MASK), value);
+            /* #48: 6Ch names the file at DS:SI and takes its mode in BL; the rest at DS:DX, 3Dh's in AL. */
+            DosSftNote(machine, value, (WORD)R_DS,
+                       (WORD)((function == DOS_FN_EXTENDED_OPEN) ? R_SI : R_DX),
+                       (WORD)((function == DOS_FN_EXTENDED_OPEN) ? (R_BX & BYTE_MASK)
+                              : (function == DOS_FN_OPEN) ? inputAl : DOS_INT21_OPEN_READ_WRITE));
+            DosSftRefresh(machine);
+        }
         else if (function == DOS_FN_DUP || function == DOS_FN_DUP2)
         {
             UINT sourceHandle = (UINT)(R_BX & WORD_MASK);
             UINT targetHandle = (function == DOS_FN_DUP) ? (UINT)(R_AX & WORD_MASK) : (UINT)(R_CX & WORD_MASK);
             DosJftPut(machine, targetHandle, DosSftValue(machine, sourceHandle));
+            DosSftRefresh(machine);
         }
         else if (function == DOS_FN_CLOSE)
+        {
             DosJftPut(machine, (UINT)(R_BX & WORD_MASK), DOS_PSP_JFT_CLOSED);
+            DosSftRefresh(machine);
+        }
     }
 
     /* AND WHAT WE ANSWERED, WHICH IS THE HALF THAT WAS MISSING:

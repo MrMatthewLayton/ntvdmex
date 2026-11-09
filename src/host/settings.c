@@ -83,7 +83,7 @@ const SET_DEF g_SetDefinitions[SET_COUNT] = {
  */
 { "FullscreenRenderer", IDC_S_RENDERER,   SK_COMBO,      0,  0,   1,
                                           "GDI|DirectDraw" },
-{ "Scaler",            IDC_S_SCALER,      SK_COMBO,      0,  0,   4, "None|Scale2x|hq2x|Scanlines|CRT" },
+{ "Scaler",            IDC_S_SCALER,      SK_COMBO,      0,  0,   4, PRESENT_SCALER_ITEMS },
 /* #325: only consulted when the picture is not a whole multiple of the frame (a forced
  * ratio, Fill, a window too big for the screen). Sharp -- whole-multiple point-sampling,
  * then the remainder smoothed -- is APPENDED, so a stored 0/1 keeps its meaning; it is
@@ -154,6 +154,8 @@ const SET_DEF g_SetDefinitions[SET_COUNT] = {
 /* #136: which host midiOut device the MPU-401 (and the GUS's MIDI UART) play through --
  * MIDI_ROUTE_* in src/vdd/midi_route.h. Host GM = device 0, as always; MT-32 / SoundFont
  * = a host DRIVER found by name (Munt, BASSMIDI...), which also gets SysEx. Start-up only.
+ * SoundFont with a SoundFontPath set = our own SF2 synth in OUR mixer (audio_sf2.h); the
+ * driver found by name is then only its fallback.
  * #155: Built-in GS (the default) = Windows' GS synth hosted in OUR mixer, so MIDI music is
  * recorded and follows the master volume; "Windows MIDI" is the old Host GM, unchanged.
  */
@@ -232,7 +234,8 @@ const SET_DEF g_SetDefinitions[SET_COUNT] = {
  * greys that radio and the host treats the setting as "image"; a blank image path is an
  * EMPTY drive. See settings_drive_radios / settings_apply in main.c.
  * #136: FloppyUsePhysical is live (it decides whether FloppyAImage is what INT 13h opens);
- * CdRomUsePhysical is STORED ONLY until a CD-ROM is mounted into DOS (#240/#241).
+ * CdRomUsePhysical / CdRomImage: unticked + a path = an ISO image as the MSCDEX drive (#241,
+ * host_cdrom.c); ticked = the host's own CD drives, as always.
  */
 { "FloppyUsePhysical", IDC_S_FLOPPY_PHYS, SK_CHECK,      1,  0,   1, NULL },
 { "CdRomUsePhysical",  IDC_S_CD_PHYS,     SK_CHECK,      1,  0,   1, NULL },
@@ -254,6 +257,24 @@ const SET_DEF g_SetDefinitions[SET_COUNT] = {
 { "VideoCodec",        0,                 SK_UINT,       0,  0, 0xFFFFFFFFu, NULL },
 { "VideoQuality",      IDC_S_VIDEOQUALITY, SK_UINT,     75,  1, 100, NULL },
 { "VideoKeyFrames",    IDC_S_KEYFRAMES,   SK_UINT,      70,  0, 10000, NULL },
+/* #331: the display mode fullscreen switches to. 0 = the desktop's (no change, as always),
+ * 1 = the largest the display offers at the desktop's depth and refresh (the panel's own),
+ * else a size, width << 16 | height -- a SIZE, not a list index, so it survives the list
+ * changing. Its list is this display's modes, so the page fills that combo itself (no
+ * ControlId here). Read when fullscreen is entered. See src/host/fullscreen_mode.h.
+ */
+{ "FullscreenResolution", 0,              SK_UINT,       0,  0, 0xFFFFFFFFu, NULL },
+/* s101 (user): "always respect the drives that are set up in Windows ... mounting a floppy
+ * should specify an available drive letter, and the same goes for CD/DVD-ROM ISOs." The
+ * letter each mounted image takes: 0 = automatic (the first free one), 1..26 = A:..Z:. A
+ * stored letter Windows is using when the image mounts falls back to automatic (logged).
+ * Their lists are the free letters, so the page fills those combos itself (no ControlId).
+ * See DriveLetterPolicyChoose (src/host/cdrom_policy.h).
+ */
+{ "FloppyImageLetter", 0,                 SK_UINT,       0,  0,  26, NULL },
+{ "CdRomImageLetter",  0,                 SK_UINT,       0,  0,  26, NULL },
+/* #417: Auto keeps the host on one die of a CPU made of several (cpu_die.h). */
+{ "CpuDie",            IDC_S_CPUDIE,      SK_COMBO,      0,  0,   1, "Auto|Off" },
 };
 
 const SET_STR_DEF g_SetStringDefinitions[SET_STR_COUNT] = {
@@ -265,8 +286,10 @@ const SET_STR_DEF g_SetStringDefinitions[SET_STR_COUNT] = {
  */
 { "DosPrompt",    IDC_S_SHELL,     "" },
 /* #321: the text-mode font. Empty = the default (Fixedsys + code page 437 Terminal, see
- * src/host/sysfont.h); otherwise the name of any font installed on this machine, laid
- * over the default character by character. NTVDMEX ships no font. Live.
+ * src/host/sysfont.h); otherwise the path of a TrueType, OpenType or .fon file the user
+ * supplies, loaded for NTVDMEX alone and laid over the default character by character. A
+ * value that is not a path is an installed font's name (what this row held before files).
+ * NTVDMEX ships no font. Live.
  */
 { "TextFont",     IDC_S_TEXTFONT,  "" },
 /* #155: where screenshots and recordings go. Empty = the debug\out folder, as before. Live. */

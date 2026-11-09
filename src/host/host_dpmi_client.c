@@ -24,6 +24,7 @@
 #include "host_mouse.h"
 #include "host_timing.h"
 #include "host_video.h"
+#include "host_vddsvc.h"
 #include "host_window.h"
 #include "host_wow.h"
 
@@ -142,7 +143,12 @@
 enum
 {
     PENDING_INT_RETRIES_MAX = 0x10000
-};   /* event 3 ("interrupt pending, not entered"): retries before giving up */
+};
+
+enum
+{
+    PM_BIOS_TICKS_PER_PASS_MAX = IRQ0_PENDING_MAX
+};   /* #276: BIOS ticks one PM pass may run for an unhooked timer -- all g_Irq0Pending can hold */   /* event 3 ("interrupt pending, not entered"): retries before giving up */
 
 /* A #GP through an IDT gate is an unserviced INT nn the client issued, not an exception it asked for: reflect it as the interrupt, and patch the site so the next pass takes the BOP path. */
 static INT DpmiServiceIdtGateFault(
@@ -208,8 +214,8 @@ static INT DpmiServiceIdtGateFault(
         /* THE FULL-WIDTH REGISTERS ARE IN THE TIB; THE FRAME IS
          * THE TRUNCATED COPY. (s74, second pass) ---------------------
          * The kernel saves the faulting SS:ESP and EIP at full width
-         * BEFORE it builds the 16-bit DPMI frame: `faultSs:faultEsp` (from the misnamed
-         * VTIB_FLT_SAVCS/SAVEIP) is SS:ESP and `faultEip` (VTIB_FLT_SAV3) is EIP. That is
+         * BEFORE it builds the 16-bit DPMI frame: `faultSs:faultEsp` (from VTIB_FLT_SAVSS/SAVESP, once
+         * misnamed SAVCS/SAVEIP) is SS:ESP and `faultEip` (VTIB_FLT_FAULTEIP) is EIP. That is
          * not a reading of the layout, it is three faults with every
          * field known independently, from one heaven7 run:
          *     based CS 0x287:0x0119   sav3=0x00000119  savSS:ESP=0x297:0x5874
@@ -884,9 +890,9 @@ static INT DpmiHandleReflectedFault(
          */
         INT faultClass = (eip == DPMI_FAULT_COFF)
                    ? -1 : (INT)((eip - DPMI_FAULT_SITE(0)) / DOS_FLTSITE_SIZE);
-        DWORD faultSs  = *(volatile WORD  *)(tib + VTIB_FLT_SAVCS);
-        DWORD faultEsp = *(volatile DWORD *)(tib + VTIB_FLT_SAVEIP);
-        DWORD faultEip = *(volatile DWORD *)(tib + VTIB_FLT_SAV3);
+        DWORD faultSs  = *(volatile WORD  *)(tib + VTIB_FLT_SAVSS);
+        DWORD faultEsp = *(volatile DWORD *)(tib + VTIB_FLT_SAVESP);
+        DWORD faultEip = *(volatile DWORD *)(tib + VTIB_FLT_FAULTEIP);
         /* [CAUTION]: THESE TWO FIELDS ARE **NOT** CS:EIP, WHATEVER THEIR NAMES SAY.
          * Measured (session 19): the pair reads 0x00c7:0x...6f1e while the
          * guest's CS was 0x6f and its SS:ESP was 0x00c7:0x...6f14 -- i.e.
@@ -908,7 +914,7 @@ static INT DpmiHandleReflectedFault(
 
         cursor = LogPut(cursor, " -- savSS:savESP=0x");
         cursor = LogHex(cursor, faultSs); cursor = LogPut(cursor, ":0x"); cursor = LogHex(cursor, faultEsp);
-        cursor = LogPut(cursor, " (MISNAMED VTIB_FLT_SAVCS/SAVEIP) sav3=0x"); cursor = LogHex(cursor, faultEip);
+        cursor = LogPut(cursor, " faultEIP=0x"); cursor = LogHex(cursor, faultEip);
         cursor = LogPut(cursor, " nest=0x"); cursor = LogHex(cursor, *(volatile WORD *)(tib + VTIB_FLT_NEST));
         /* THE KERNEL BUILDS A FRAME AND WE HAVE NEVER LOOKED AT IT (Importance = 1):
          * The reflect sets SS:ESP = [TIB+0x638]:0x1000 and then PUSHES:
@@ -945,7 +951,7 @@ static INT DpmiHandleReflectedFault(
 
           cursor = LogPut(cursor, "\r\n "); }
         /* - READ THE LAYOUT OFF THE TIB INSTEAD OF TRUSTING THE OFFSETS.
-         * VTIB_FLT_SAVCS/SAVEIP were reverse-engineered in an earlier
+         * VTIB_FLT_SAVCS/SAVEIP (now SAVSS/SAVESP) were reverse-engineered in an earlier
          * session, and what they return does not look like a code
          * address: the argument-run fault reported CS=0x00c7 -- which is
          * the guest's SS, not its CS (0x6f) -- and EIP=0xb33b6f1e, which
@@ -2104,14 +2110,32 @@ static VOID DpmiRunClient(
          */
         OplPumpTime();
 
-        if (InterlockedExchange(&g_Irq0Pending, 0))
-        {
-            NTVDD_REGISTERS trapRegisters;
-            RegistersLoad(&trapRegisters, tib);
-            HOST_LOCK();
-            VddBusDeliverInterrupt(&g_Bus, VECTOR_TIMER, &trapRegisters);   /* PitInt08 -> ++0040:006C */
-            HOST_UNLOCK();
-            g_PmIrq0Latch = 1;    /* #2b: latch a virtual IRQ0 for the PM hook */
+        /* #276: EVERY PENDING TICK, NOT ONE, WHILE NOTHING ELSE COUNTS THEM. The exchange
+         * takes all the IRQ0s raised since the last pass, and only one BIOS tick was run for
+         * them -- so when passes were sparse (a PM INT 15h AH=86h wait: 1 tick of 0040:006C
+         * where 3.6 were due, p_pm256) time stood still. A client that has NOT hooked the
+         * timer is served by nothing else, so it gets one BIOS tick per IRQ0, capped. A
+         * client that HAS hooked it keeps one, as before: its ticks are metered through
+         * g_PmTickOwed into its own handler, and its timing was tuned against that.
+         */
+        {   LONG ticksPending = InterlockedExchange(&g_Irq0Pending, 0);
+
+            if (ticksPending > 0)
+            {
+                LONG ticksToRun = g_PmInt[VECTOR_TIMER].Client ? 1
+                                : (ticksPending > PM_BIOS_TICKS_PER_PASS_MAX ? PM_BIOS_TICKS_PER_PASS_MAX : ticksPending);
+                NTVDD_REGISTERS trapRegisters;
+
+                while (ticksToRun-- > 0)
+                {
+                    RegistersLoad(&trapRegisters, tib);
+                    HOST_LOCK();
+                    VddBusDeliverInterrupt(&g_Bus, VECTOR_TIMER, &trapRegisters);   /* PitInt08 -> ++0040:006C */
+                    HOST_UNLOCK();
+                }
+
+                g_PmIrq0Latch = 1;    /* #2b: latch a virtual IRQ0 for the PM hook */
+            }
         }
 
         /* #2b async IRQ0 injection: when the client has hooked INT 08h in PM
@@ -2275,10 +2299,17 @@ static VOID DpmiRunClient(
         if (!DpmiSelectorIs32((WORD)VDM_REG16(tib, VTIB_SS)))
             VDM_REG(tib, VTIB_ESP) &= WORD_MASK_U;
 
-        while (g_PauseWant && g_Running) /* #219 */
+        if (g_PauseWant && g_Running)                                               /* #219 */
         {
-            ++g_PauseCooperative;
-            Sleep(PAUSE_POLL_MS);
+            HostVddUserBlock();                                                     /* #11: the VDM is blocked */
+
+            while (g_PauseWant && g_Running)
+            {
+                ++g_PauseCooperative;
+                Sleep(PAUSE_POLL_MS);
+            }
+
+            HostVddUserResume();
         }
 
         CpuSpeedCooperativePark();                                                  /* #225 */
@@ -2328,7 +2359,7 @@ static VOID DpmiRunClient(
          * Clear the stale pending bits and re-enter. Bounded so a genuinely re-arming
          * pending can't spin; the BIOS tick still advances via the IRQ0 path above.
          */
-        if (event == 3)
+        if (event == DPMI_ENTER_EVENT_PENDING)
         {
             if (++event3Retries <= PENDING_INT_RETRIES_MAX)
             {
@@ -2413,6 +2444,18 @@ static VOID DpmiRunClient(
             cursor = LogPut(cursor, " lim=0x"); cursor = LogHex(cursor, selectorLim); cursor = LogPut(cursor, " bytes=");
             cursor = LogDump(cursor, (const VOID *)faultInstruction, 12); cursor = LogPut(cursor, "\r\n");
             LogAppend(LOG_PATH, base, cursor); SerialOut(base, cursor); cursor = base;
+        }
+
+        /* #268: 0306h's protected-to-real entry. Ours by ORIGIN -- our handler code
+         * selector at DPMI_RAW2RM_OFF -- never by the BOP number.
+         */
+        if (event == VDM_EVENT_BOP && g_DpmiHandlerSelector && currentCs == g_DpmiHandlerSelector
+            && eip == DPMI_RAW2RM_OFF)
+        {
+            if (DpmiRawSwitchToRealMode(&cursor, base, tib, machine))
+                continue;
+
+            break;
         }
 
         vector = (event == VDM_EVENT_BOP) ? DpmiBopVector(currentCs, eip) : 0;

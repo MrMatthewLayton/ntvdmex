@@ -7,12 +7,15 @@
  *   (AudioWaveSetTap), which copies it into a ring; a writer thread drains the ring and,
  *   for each 1/fps of sound, writes that sound and the picture current at that moment. So
  *   the picture can never drift from the sound, whatever the guest's frame rate is.
- * - The picture is the guest's own pixels at its own resolution, converted to 24-bit RGB
- *   (the per-row palette included), then compressed by the codec the user chose in
- *   Windows' Video Compression dialog (remembered in the registry), or stored uncompressed.
+ * - The picture is the guest's own pixels, converted to 24-bit RGB (the per-row palette
+ *   included) and scaled into the recording's fixed output size (#357), then compressed by
+ *   the codec the user chose in Windows' Video Compression dialog (remembered in the
+ *   registry), or stored uncompressed.
  *   An unchanged picture is written as a repeat: no bytes.
- * - A new file ("segment") starts when the guest changes video mode (an AVI stream has one
- *   size) or when the file nears CAPTURE_AVI_SPLIT_BYTES.
+ * - ONE RECORDING THROUGH MODE CHANGES (#357): the output size is fixed when it starts
+ *   (capture_scale.h), and every frame after a mode change is scaled into it, letterboxed,
+ *   with a key frame at the change. A new file ("segment") starts only when the file nears
+ *   CAPTURE_AVI_SPLIT_BYTES.
  * - The writer is behind by at most a ring's worth; if the codec cannot keep up, frames
  *   become repeats and, past that, sound is dropped and counted.
  *

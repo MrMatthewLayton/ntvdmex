@@ -13,6 +13,7 @@
 
 #include "host_audio.h"
 #include "audio_dmsynth.h"
+#include "audio_sf2.h"
 #include "host_state.h"
 #include "log.h"
 #include "main.h"
@@ -286,12 +287,19 @@ VOID HostAudioFill(PVOID context, INT16 *out, UINT32 frames)
     /* #155: THE HOSTED MIDI SYNTH RENDERS BEFORE THE LOCK IS TAKEN. Up to ~0.2 ms per
      * tick (the s96 spike's worst), and the exec thread waits on this lock: rendered
      * here it costs the guest nothing. The mixer then adds it like any other source.
+     * The SoundFont synth (audio_sf2.h) is hosted the same way, in the same place.
      */
     {
         static INT16 synthPcm[AUDIO_STEREO_CHANNELS * AUDIO_WAVE_FRAMES];
-        BOOL hasSynth = g_MidiBuiltIn
-            && frames <= AUDIO_WAVE_FRAMES
-            && AudioDmSynthRender(synthPcm, frames);
+        BOOL hasSynth = FALSE;
+
+        if (frames <= AUDIO_WAVE_FRAMES)
+        {
+            if (g_MidiBuiltIn)
+                hasSynth = AudioDmSynthRender(synthPcm, frames);
+            else if (g_MidiSoundFont)
+                hasSynth = AudioSf2Render(synthPcm, frames);
+        }
 
         HOST_LOCK();
         g_Audio.Premixed = hasSynth ? synthPcm : NULL;
@@ -301,9 +309,10 @@ VOID HostAudioFill(PVOID context, INT16 *out, UINT32 frames)
     }
 }
 
-/* MPU-401 output -> the built-in synth (#155), or the host's MIDI device: XP ships a GS
- * Wavetable device, and an MT-32 or SoundFont driver may be chosen (#136). The built-in
- * synth says FALSE only when it could not start; then midiOut, as before it existed.
+/* MPU-401 output -> the built-in synth (#155), our SoundFont synth (a SoundFontPath is set),
+ * or the host's MIDI device: XP ships a GS Wavetable device, and an MT-32 or SoundFont driver
+ * may be chosen (#136). A hosted synth says FALSE only when it could not start; then midiOut,
+ * as before it existed.
  */
 VOID HostMidiSink(PVOID context, UINT32 message)
 {
@@ -312,11 +321,14 @@ VOID HostMidiSink(PVOID context, UINT32 message)
     if (g_MidiBuiltIn && AudioDmSynthShort(message))
         return;
 
+    if (g_MidiSoundFont && AudioSf2Short(message))
+        return;
+
     AudioWaveMidi(&g_Wave, message);
 }
 
-/* #155: the guest put the MPU-401 into UART mode -- start the built-in synth now, so its
- * instruments are loaded before the first note.
+/* #155: the guest put the MPU-401 into UART mode -- start the hosted synth now, so its
+ * instruments (or its SoundFont) are loaded before the first note.
  */
 VOID HostMidiUartMode(PVOID context)
 {
@@ -324,6 +336,8 @@ VOID HostMidiUartMode(PVOID context)
 
     if (g_MidiBuiltIn)
         AudioDmSynthWake();
+    else if (g_MidiSoundFont)
+        AudioSf2Wake();
 }
 
 /* Every note off, wherever the music is playing (child exit, pause). */
@@ -333,12 +347,14 @@ VOID HostMidiSilence(VOID)
 
     if (g_MidiBuiltIn)
         AudioDmSynthSilence();
+    else if (g_MidiSoundFont)
+        AudioSf2Silence();
 }
 
 /* #136: whole SysEx messages, wired ONLY when Settings > Audio > MIDI found an external
- * synth by name (g_Wave.IsMidiExternal) -- see midi_route.h -- or chose the built-in synth
- * (#155: GM/GS resets matter to it). Otherwise SysEx is swallowed in vdd_mpu exactly as it
- * always was.
+ * synth by name (g_Wave.IsMidiExternal) -- see midi_route.h -- or chose a hosted synth
+ * (#155 and the SoundFont synth: GM/GS resets matter to them). Otherwise SysEx is swallowed
+ * in vdd_mpu exactly as it always was.
  */
 VOID HostMidiSysEx(PVOID context, const BYTE *message, UINT32 length)
 {
@@ -349,6 +365,12 @@ VOID HostMidiSysEx(PVOID context, const BYTE *message, UINT32 length)
         AudioDmSynthLong(message, length);      /* a failed synth's SysEx is not for device 0 */
         return;
     }
+
+    /* A failed SoundFont synth falls back to what MIDI = SoundFont did before: SysEx only to
+     * an external driver found by name, never to device 0.
+     */
+    if (g_MidiSoundFont && (AudioSf2Long(message, length) || !g_Wave.IsMidiExternal))
+        return;
 
     AudioWaveMidiLong(&g_Wave, message, length);
 }

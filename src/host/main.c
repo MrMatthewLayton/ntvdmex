@@ -128,6 +128,7 @@
 #include "main.h"
 #include "host_timing.h"
 #include "host_install.h"
+#include "host_cdrom.h"
 
 /* #321: what the last font build did (Settings shows it) and the TextFont it was for. */
 SYSFONT_REPORT g_SysFontReport;
@@ -321,7 +322,7 @@ DWORD g_Kb4FCalls;
 DWORD g_Kb4FTranslate;
 DWORD g_PrintScreenJobs;
 DWORD g_PrintScreenErrors;
-BYTE       g_PrintScreenStatus = BIOS_PRINT_SCREEN_STATUS_OK;   /* what 0050:0000 would hold */
+BYTE       g_PrintScreenStatus = BIOS_PRINT_SCREEN_STATUS_OK;   /* a mirror of 0050:0000, for the report */
 DWORD          g_ExecPriority     = 0;   /* guest thread priority class; see EXECPRIO_PATH */
 INT            g_QiRaise      = 0;
 INT            g_QiVif        = 0;   /* start the guest with EFLAGS.VIF set */
@@ -914,7 +915,7 @@ INT WINAPI WinMain(
      * changes. See StatusUpdate.
      */
 
-    StartupBuildDos(&cursor, readCount, &image, programPathBuffer, args, &machine, report);
+    StartupBuildDos(&cursor, readCount, &image, programPathBuffer, args, &machine);
 
     cursor = StartupAttachDevices(cursor);
     StartupLoadTuningKnobs();
@@ -946,6 +947,8 @@ INT WINAPI WinMain(
      * way so it does not force-exit us mid-flush and lose the DOS output.
      */
     InterlockedExchange(&g_WoundDown, 1);
+    DosInt21FloppyShutdown();                  /* #240: the A: image's extracted copy */
+    HostCdromUnmount();                 /* #241: the guest is gone; so is its CD-ROM letter */
 
     g_CommandInfo.ExitCode = (ULONG)machine.ExitCode;
     /* Flush captured DOS output to the console + the log.

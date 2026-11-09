@@ -64,7 +64,7 @@ leaves EIP on the BOP, so the guest keeps running its ISRs while it "waits".
 | `00h` | terminate (CP/M style) | **IMPL** | `:682-710`; = `4Ch` with code 0 | untested (Skyroads exits through it) |
 | `01h`/`07h`/`08h` | character input (01 echoes) | **IMPL** | `:713-721`, non-blocking + retry. Ctrl-C checking is §4 | untested |
 | `02h` | character output | **IMPL** | `:711-712` | via every probe's own output |
-| `03h` | AUX input | **IMPL** | #251: V86 resumes in DOS's AUX driver code (`dos_auxprn.asm`): INT 14h `03h` then `02h`, through the IVT. PM: still `1Ah` | **oracle** (`p_auxprn`, 6.22 + PCem; DOSBox-X hangs on it) |
+| `03h` | AUX input | **IMPL** | #251: V86 resumes in DOS's AUX driver code (`dos_auxprn.asm`): INT 14h `03h` then `02h`, through the IVT. PM (#272): the byte COM1 has waiting, through INT 14h `02h` on the bus (`DosAuxIn`); `1Ah` only when none is | **oracle** (`p_auxprn`, 6.22 + PCem; DOSBox-X hangs on it) |
 | `04h` | AUX output | **IMPL** | #251: INT 14h `03h` then `01h` (V86, through the IVT); PM straight to COM1 | **oracle** (`p_auxprn`) |
 | `05h` | printer output | **IMPL** | #251: INT 17h `02h`, `02h`, `00h` (V86, through the IVT, so a printer redirector sees it); PM straight to the LPT1 spool. A BIOS error status is not acted on (no retry / INT 24h) | **oracle** (`p_auxprn`) |
 | `06h` | direct console I/O | **IMPL** | `:786-794`; `DL=FFh` reads with ZF | untested |
@@ -100,7 +100,7 @@ leaves EIP on the BOP, so the guest keeps running its ISRs while it "waits".
 
 | AH | Unit | Status | Where / what is missing | Verification |
 |---|---|---|---|---|
-| `30h` | DOS version, OEM, serial | **IMPL** | `:918-927`; the version is a setting, per process (`dos_version_word`, #208) | **oracle** while the test machine is set to 6.22 — see [sweep.md](sweep.md) |
+| `30h` | DOS version, OEM, serial | **IMPL** | `:918-927`; the version is a setting, per process (`dos_version_word`, #208). #28: the configured version also decides which services exist -- `src/dos/dos_version.h` (RBIL "DOS x.y+": 59h-62h 3.0/3.1, 65h-68h 3.3, 69h/6Ah/6Ch 4.0, 3305h 4.0, 3306h 5.0); one the version lacks answers as 6.22 answers past its table (AL=00h CF clear; 33xxh AL=FFh). 5.00 and up lose nothing; AH=71h (stock's LFN) is never gated | **oracle** while the test machine is set to 6.22 — see [sweep.md](sweep.md) |
 | `31h` | terminate and stay resident | **IMPL** | `:1446-1463`; the host resizes and keeps vectors | **oracle** except `tsr.paras.still.held` (`0x26` vs `0x21`, open) |
 | `32h` | DPB for drive DL | **PART** | as `1Fh` (`:1386-1415`), including #48's derived FAT layout | **oracle**, AL only (`p_rest`); `p_devchn dpb.c.layout` owed |
 | `33h` | Ctrl-Break flag, boot drive, true version | **IMPL** | `:2335-2368`; `00h`–`02h` state, `05h` = C:, `06h` true version | **oracle** (`p_subfn`, `p_ver`) |
@@ -126,7 +126,7 @@ leaves EIP on the BOP, so the guest keeps running its ISRs while it "waits".
 | `44h` `09h` | IOCTL: remote drive? | **IMPL** | `:2217-2220`; DX bit 12 only | **oracle** (`p_ioctl`) |
 | `44h` `0Eh` | IOCTL: logical drive map | **IMPL** | `:2221-2225` | **oracle** (`p_ioctl`) |
 | `44h` other | `0Ah`–`0Dh`, `0Fh`–`11h` (remote handle, sharing retry, generic IOCTL, drive map set, query) | **MISS** | `:2233`: CF clear, registers untouched — the "unimplemented call still answers" shape | — |
-| `45h`/`46h` | dup / dup2 (files and devices) | **IMPL** | `:1633-1681` | **oracle** (`p_redir`, `p_file`) |
+| `45h`/`46h` | dup / dup2 (files and devices) | **IMPL** | `:1633-1681`; #272: a device copy keeps WHICH device it is (`DOS_MACHINE::DeviceKind`, the JFT's SFT number: 0 AUX, 1 CON, 2 PRN), so a duplicate of PRN prints and a duplicate of stdin reads the keyboard; 40h, 3Fh, 4400h and the PM write path go by identity, not by handle number (`p_auxprn` `int21.40.dup4`, unrun) | **oracle** (`p_redir`, `p_file`) |
 | `47h` | current directory (per drive; `DL=F0h` WOW sentinel) | **IMPL** | `:1965-2038` | **oracle** (`p_curdir`, `p_dir`, `p_drv`) |
 | `48h`/`49h`/`4Ah` | allocate / free / resize, owner = current PSP | **IMPL** | `:2252-2281`, `dos_mcb.h` | **oracle** (`p_alloc`, `p_mcb`, `p_tsr`) |
 | `4Bh` `00h`/`01h` | EXEC load-and-run / load-only | **IMPL** | `:1315-1332`; the host builds the child (`exec_pending`) | **oracle** (`p_exec`, `p_curdir`) |
@@ -142,7 +142,7 @@ leaves EIP on the BOP, so the guest keeps running its ISRs while it "waits".
 | AH | Unit | Status | Where / what is missing | Verification |
 |---|---|---|---|---|
 | `50h`/`51h`/`62h` | set / get current PSP | **IMPL** | `:2282-2285` | **oracle** (`p_psp psp.50.dispatch`) |
-| `52h` | List of Lists | **PART** | `:2163-2179`: the first MCB (`BX-2`), LASTDRIVE and the UMB head are real; **the SFT, CDS and DPB chains are stubs** — `p_sysvar`'s six BUF rows read back the probe's poison. ⚠ Superseded in part (s52/s72): DPB chain, CDS array and a terminated SFT block exist. **#207/#48 (2026-10-04):** the first MCB is `7Eh`, **above** SysVars' `72h` (was `5Fh`, which made MEM /D's MSDOS row negative); NUL links to IO.SYS's twelve headers (CON AUX PRN CLOCK$ block COM1 LPT1-3 COM2-4) at `0060:0000`, terminated, with `+08h`/`+0Ch` naming CLOCK$/CON — order/stride measured, **attribute words RBIL's, unmeasured**; DPB FAT layout derived; `+45h` = `CMOS_EXT_KB` (15360) = INT 15h `88h`, XMS pool = that − 64 K HMA. **Still open:** SFT entries do not mirror open handles (all zero, a free table) | **oracle** for the MCB head (`p_alloc`); 6 rows abstained (`p_sysvar`); `p_devchn` (layout, every device's attribute/order, DPB layout) and MEM /D **owed an oracle run** |
+| `52h` | List of Lists | **PART** | `:2163-2179`: the first MCB (`BX-2`), LASTDRIVE and the UMB head are real; **the SFT, CDS and DPB chains are stubs** — `p_sysvar`'s six BUF rows read back the probe's poison. ⚠ Superseded in part (s52/s72): DPB chain, CDS array and a terminated SFT block exist. **#207/#48 (2026-10-04):** the first MCB is `7Eh`, **above** SysVars' `72h` (was `5Fh`, which made MEM /D's MSDOS row negative); NUL links to IO.SYS's twelve headers (CON AUX PRN CLOCK$ block COM1 LPT1-3 COM2-4) at `0060:0000`, terminated, with `+08h`/`+0Ch` naming CLOCK$/CON — order/stride measured, **attribute words RBIL's, unmeasured**; DPB FAT layout derived; `+45h` = `CMOS_EXT_KB` (15360) = INT 15h `88h`, XMS pool = that − 64 K HMA. **#48 (2026-10-23):** the SFT entries **mirror the open handles** (`DosSftRefresh`, `dos_int21.c`; entry layout `DosSftEntryBuild`, `dos_sysvars.h`, **RBIL's DOS 4.0–6.0 format, unmeasured**): 0 AUX / 1 CON / 2 PRN, then one entry per host file (references, mode, attribute 0, device info as `4400h` answers, time/date, size, position, FCB name, owner PSP; FAT fields 0). Rebuilt after open/create/close/dup and at `52h`; V86 opens only (a DPMI client's handles are not JFT-bound) | **oracle** for the MCB head (`p_alloc`); 6 rows abstained (`p_sysvar`); `p_devchn` (layout, every device's attribute/order, DPB layout) and MEM /D **owed an oracle run** |
 | `53h` | BPB → DPB, and XP COMMAND.COM's private `AL` queries | **PART** | `:1464-1548`: `AL=00h`–`07h` from a table measured on **stock XP NTVDM** (`g_dos_int53`, `:22-31`); ⚠ `AL=05h` is context-dependent (the shell's interactive gate). The documented BPB→DPB translation is **not** implemented | stock NTVDM (`p_int53`) — `p_int53f` owed a supervised run |
 | `54h` | get verify flag | **IMPL** | `:1578-1579` | **oracle** (`p_file`) |
 | `55h` | create child PSP | **PART** | `:1432-1445`: as `26h`, copies the top-level PSP | untested |
@@ -182,7 +182,7 @@ leaves EIP on the BOP, so the guest keeps running its ISRs while it "waits".
 | INT 23h default handler | **IMPL** | a bare `IRET` (`:27120-27122`) | **oracle** (`psp.0E.int23`) |
 | INT 24h default handler | **IMPL** | `MOV AL,3; IRET` — Fail (`:27123-27125`) | **oracle** (`psp.12.int24`, `psp.int24.live` abstained) |
 | **Ctrl-C / Ctrl-Break checking → INT 23h** | **MISS** | no input or output call checks for Ctrl-C, and `BREAK=ON` (`33h`) changes nothing; INT 23h is never raised (keyboard.md §3: no Ctrl-Break either) | — |
-| **Critical errors → INT 24h** | **PART** | #34: a hardware error (DOS 19-31) on a PATH call raises the program's INT 24h from the main V86 loop (`crit_raise`/`crit_return`, `main.c`; detection at the tail of `dos_int21`); FAIL/RETRY/ABORT, 59h=53h. #275: **3Fh/40h on an open file** now raise it too — AH=3Eh/3Fh (data area, IGNORE allowed), AL = the file's own drive (NT name → drive letter), FAIL → AX=0005, IGNORE → the call reports the bytes asked for; before #275 a failed ReadFile/WriteFile answered CF=0 (a false success). Where INT 24h cannot be raised — a DPMI client's INT 21h, the nested real-mode loops (0301h/0302h, reflected IRQs), inside the handler — 3Fh/40h answer as FAIL; path calls there keep the raw 19-31 code. ⚠ **Not raised:** DPMI reflection (spec: real-mode INT 24h → the client's PM handler via 0205h, else the RM vector; needs the 0301h nested-V86 run factored out); PRN/AUX device errors (the driver ignores the INT 17h status, AH bit 7 path never built); FCB record I/O (`21h`/`22h`/`27h`/`28h`). ⚠ 3Fh/40h values are from the MS-DOS 4.0 source, **unmeasured on 6.22** | **oracle** for path calls (`p_crit`); `p_crit2` (3Fh/40h + PRN) **awaiting its oracle run**; off-VM `err_test.c` |
+| **Critical errors → INT 24h** | **PART** | #34: a hardware error (DOS 19-31) on a PATH call raises the program's INT 24h from the main V86 loop (`crit_raise`/`crit_return`, `main.c`; detection at the tail of `dos_int21`); FAIL/RETRY/ABORT, 59h=53h. #275: **3Fh/40h on an open file** now raise it too — AH=3Eh/3Fh (data area, IGNORE allowed), AL = the file's own drive (NT name → drive letter), FAIL → AX=0005, IGNORE → the call reports the bytes asked for; before #275 a failed ReadFile/WriteFile answered CF=0 (a false success). Where INT 24h cannot be raised — a DPMI client's INT 21h, the nested real-mode loops (0301h/0302h, reflected IRQs), inside the handler — 3Fh/40h answer as FAIL; path calls there keep the raw 19-31 code. ⚠ **Not raised:** DPMI reflection (spec: real-mode INT 24h → the client's PM handler via 0205h, else the RM vector; needs the 0301h nested-V86 run factored out); PRN/AUX device errors (the driver ignores the INT 17h status, AH bit 7 path never built); FCB record I/O (`21h`/`22h`/`27h`/`28h`). #272 (2026-10-23): DPMI reflection is still not built -- a synchronous call of a client's PM INT 24h from inside a host-served PM INT 21h does not exist (`DpmiDispatchToPmHandler` resumes at sEIP+2, for an INT the client issued), and it would change disk-error handling for krnl386 and every Win16 program; the nested-V86 run it needs is being factored out by #268. ⚠ 3Fh/40h values are from the MS-DOS 4.0 source, **unmeasured on 6.22** | **oracle** for path calls (`p_crit`); `p_crit2` (3Fh/40h + PRN) **awaiting its oracle run**; off-VM `err_test.c` |
 | **INT 28h called while DOS waits** | **MISS** | the `01h`/`07h`/`08h`/`0Ah` retry waits never issue INT 28h, so a TSR that works in the background on INT 28h never runs at a prompt | — |
 | INT 27h terminate and stay resident | **IMPL** | `main.c:29336-29351`; DX in bytes, rounded up | untested |
 | INT 28h, when a guest calls it | **IMPL** | `main.c:29352-29353`, returns at once | — |
@@ -226,6 +226,37 @@ the 82077AA ([fdc.md](fdc.md)); the FDC's head never moves.
 | Fixed disks (`DL=80h`+), B:, and the EDD extensions (`41h`+) | **N/A** | by design: no raw access to the host's disks; answered "not ready" (`AH=80h`) | — |
 | INT 25h / 26h absolute read / write (LBA) | **IMPL** | `:29359-29374`; A: only | provisional (`int25.absread`) |
 | INT 13h drives the FDC chip (DMA channel 2, the head position) | **PART** | the image is read directly; the chip's state never changes, which is why `p_fdc dumpreg` and `p_dma dma.status.idle` differ from the oracles | — |
+| INT 13h on the PHYSICAL drive (Settings > Drives > Floppy = physical, the PC has one) | **IMPL** (#240) | `FloppyImagePath()` (`host_dos.c`) opens `\\.\A:` when no `cfg\FLOPPY.IMG` is present -- the harness's disk still wins; an empty drive is asked again on the next call | **rig owed** (needs a machine with a floppy drive) |
+
+### The image as a DOS drive (#240)
+
+**s101 (user): the image takes the letter Settings names** -- *As Drive* beside the image path,
+listing only letters Windows is not using (`FloppyImageLetter`: 0 = automatic, the first free;
+`DriveLetterPolicyChoose` in `src/host/cdrom_policy.h`). Every Windows drive stays itself: a real
+A: stays the real A:. A stored letter Windows is using when the image mounts falls back to
+automatic, and the log says so. INT 13h drive 0 is the image only when its letter IS A: (a PC with
+no floppy drive, A: chosen); otherwise INT 13h keeps the real drive, or the harness's
+`cfg\FLOPPY.IMG`. The letter's CDS entry is a redirector's (no DPB), written at start-up and on a
+live change. Below, "A:" means the image's letter.
+
+With Settings > Drives > Floppy = **image**, the image's letter at the INT 21h level is the image's FAT12/FAT16
+filesystem (`src/dos/dos_fatimg.c`, read-only, off-VM tested by `tests/unit/fatimg_test.c`;
+`dos_int21.c` "DRIVE A: AS A DISK IMAGE"). The files are read into a private directory and
+every A: path is pointed into it; A: is a virtual current drive with its own directory.
+
+| Unit | Status | Where / what is missing | Verification |
+|---|---|---|---|
+| Open / read / seek / close, FindFirst/Next, 43h get attributes, file times (3Dh, 3Fh, 42h, 3Eh, 4Eh/4Fh, 5700h, 6Ch/716Ch open) | **IMPL** | the extracted copy, through the same Win32 arms as any drive | fatimg_test (reader); **rig owed** |
+| 0Eh select A:, 19h, 3Bh chdir, 47h current directory, 60h/7160h truename -- in A: terms | **IMPL** | `DosImageIsChdir`, the 47h/3Bh image arms, the truename arms; the host directory never reaches the guest | fatimg_test (`FatImageResolvePath`: `.`/`..`/`\`); **rig owed** |
+| 1Bh/1Ch drive info, 36h free space | **IMPL** | from the image's BPB and FAT (media byte included) | **rig owed** |
+| FCB calls on A: (0Fh open, 14h/21h reads, 23h size) | **IMPL** | `DosFcbName` maps them too | **rig owed** |
+| WRITES: 3Ch/5Ah/5Bh create, 41h delete, 56h rename, 39h/3Ah, 43h set, 6Ch create/truncate, 7141h/7143h set, FCB 13h/16h/17h | **write protected** (by design) | error **19** -> the program's INT 24h, as a write-protect tab; FCB calls answer AL=FFh | **rig owed** |
+| 40h write through a handle opened on A: | **write protected** (by design) | opened for reading underneath; the failed write is reported as 19 on drive A: | **rig owed** |
+| An empty drive (image mode, blank path) | **IMPL** | every A: path answers **21** (not ready) -> INT 24h; 36h answers FFFFh; 47h/60h still answer (no disk read, as DOS) | **rig owed** |
+| INT 13h writes the image | **IMPL** | `DiskIo` marks the DOS copy stale; the next A: path reads a fresh one | **rig owed** |
+| Writing through DOS to the image (persisting) | **MISS** | needs a FAT writer and a way to share the file with INT 13h safely | — |
+| 4Eh with only the volume-label attribute on A: | **MISS** | the label is in the image (`FatImageVolumeLabel`), not yet answered | — |
+| FCB writes (15h/22h/28h) on A: report a short write (AL=01h), not INT 24h | **PART** | the FCB arms have no INT 24h path of their own | — |
 
 ---
 
@@ -309,4 +340,5 @@ stay on the test machine.
    — the four pieces of DOS's own machinery that are absent.
 6. The List of Lists' SFT/CDS/DPB chains (`p_sysvar`), which krnl386 walks. (#48,
    2026-10-04: DPB layout, device chain and the first-MCB position done, owed `p_devchn`
-   + MEM /D on the oracle; SFT entries mirroring open handles is what remains.)
+   + MEM /D on the oracle. SFT entries now mirror open handles, #48 2026-10-23; p_sysvar's
+   sft0 row is owed an oracle run.)

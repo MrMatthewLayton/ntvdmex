@@ -920,6 +920,7 @@ static VOID PitInt08(PVOID context, PNTVDD_REGISTERS registers)
 
     (VOID)registers;
     VddPitBiosTick(state, (volatile UINT32 *)(biosData + BIOS_BDA_TICK_COUNT), biosData + BIOS_BDA_MIDNIGHT_FLAG);   /* + #262 witness */
+    VddPitBiosTickHook(state, biosData);                                                                      /* #178: the motors */
 }
 
 /* INT 1Ah -- BIOS time-of-day. AH=00 get tick count (+ clear midnight flag),
@@ -1115,6 +1116,8 @@ VOID VddPitReset(PVOID context)
     INT  (*rtcSet)(VOID *, const PIT_RTC_READING *, INT) = state->RtcSet;
     VOID (*ticksSet)(VOID *, UINT32) = state->TicksSet;
     UINT32 tickWitness = state->TickWitness;    /* 0040:006C is memory, not the chip: kept */
+    VOID (*biosTickHook)(PVOID, volatile BYTE *) = state->BiosTickHook;
+    PVOID biosTickHookContext = state->BiosTickHookContext;
     UINT byteIndex;
     BYTE *stateBytes = (BYTE *)state;
 
@@ -1154,6 +1157,8 @@ VOID VddPitReset(PVOID context)
     state->RtcSet = rtcSet;   /* and so does the clock */
     state->TicksSet = ticksSet;
     state->TickWitness = tickWitness;
+    state->BiosTickHook = biosTickHook;                                     /* #178 */
+    state->BiosTickHookContext = biosTickHookContext;
     /* COUNTER 1 IS FREE-RUNNING BEFORE ANYONE PROGRAMS IT:
      * On a PC the BIOS sets it to mode 2, divisor 18 for DRAM refresh and then
      * leaves it alone forever; its gate is tied high. A guest that simply READS

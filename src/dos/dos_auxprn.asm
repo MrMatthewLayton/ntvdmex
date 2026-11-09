@@ -22,7 +22,7 @@
 ;   DX = 0 (LPT1 / COM1) on every BIOS call. BX, CX, DX, SI come back unchanged.
 ; ⚠ NOT MODELLED: what DOS does with a BIOS error status (busy / time-out ->
 ;   retry, then INT 24h). Our BIOS answers ready; a hook that answers otherwise
-;   is ignored here. (#275, still open.) What is known: MS-DOS 4.0's MSLPT.ASM
+;   is ignored here. (#272 item (b), still open: measure first.) What is known: MS-DOS 4.0's MSLPT.ASM
 ;   (Microsoft's published source) triages INT 17h's AH as I/O error (08h) ->
 ;   9 out of paper (if 20h) else 0Ah write fault; else time-out (01h) -> 2 not
 ;   ready; it retries only a time-out, twice, and lets every other error pass.

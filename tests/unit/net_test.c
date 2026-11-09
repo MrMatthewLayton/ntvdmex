@@ -29,6 +29,23 @@ static BYTE g_LocalSession;
 static BYTE g_NameNumber;
 static WORD g_Length;
 
+static BYTE g_PmNcb[NETB_NCB_SIZE];
+static BYTE g_PmBuffer[64];
+
+/* A pretend DPMI client: selector 0017h holds the NCB at offset 0100h, 001Fh the buffer. */
+static PVOID NetTestMapSelector(PVOID context, WORD selector, DWORD offset)
+{
+    (VOID)context;
+
+    if (selector == 0x0017 && offset == 0x0100)
+        return g_PmNcb;
+
+    if (selector == 0x001F && offset == 0)
+        return g_PmBuffer;
+
+    return NULL;
+}
+
 static BYTE NetTestFakeBackend(PVOID context, PNETBIOS_REQUEST request)
 {
     (VOID)context;
@@ -143,6 +160,38 @@ INT main(VOID)
     g_ReturnCode = NETB_RC_INVALID_COMMAND;
     returnCode = VddNetBiosService(&state, controlBlock, NULL);
     CHECK(returnCode == NETB_RC_INVALID_COMMAND, "no-wait invalid command is refused IMMEDIATELY (03h in AL)");
+
+    /* #315: VddNetBiosCall with a SELECTOR mapper -- what the DPMI dispatcher passes. The
+     * NCB is at 0017h:0100h and its buffer pointer is 001Fh:0000h; neither is a real-mode
+     * address, and both must resolve through the mapper.
+     */
+    {
+        NETBIOS_STATE pmState;
+        NTVDD_REGISTERS pmRegisters;
+        memset(&pmState, 0, sizeof pmState);
+        memset(&pmRegisters, 0, sizeof pmRegisters);
+        VddNetBiosSetBackend(&pmState, NetTestFakeBackend, NULL);
+        memset(g_PmNcb, 0, sizeof g_PmNcb);
+        g_PmNcb[0] = 0x33;                              /* ADAPTER STATUS, wait form */
+        g_PmNcb[4] = 0x00;
+        g_PmNcb[5] = 0x00;           /* buffer offset 0 */
+        g_PmNcb[6] = 0x1F;
+        g_PmNcb[7] = 0x00;           /* buffer selector 001Fh */
+        g_PmNcb[8] = 60;                                 /* length */
+        g_ReturnCode = 0x00;
+        g_Length = 0;
+        pmRegisters.Es = 0x0017;
+        VddNetBiosCall(&pmState, &pmRegisters, VECTOR_NETBIOS, 0x0100, NetTestMapSelector, NULL);
+        CHECK(VddGetAl(&pmRegisters) == 0x00 && g_SeenRequest.Buffer == g_PmBuffer, "PM: NCB and buffer resolved through the selector mapper");
+        pmRegisters.Es = 0x0027;                         /* unknown selector -> no NCB */
+        VddNetBiosCall(&pmState, &pmRegisters, VECTOR_NETBIOS, 0x0100, NetTestMapSelector, NULL);
+        CHECK(VddGetAl(&pmRegisters) == NETB_RC_INVALID_BUFFER, "PM: an NCB the mapper cannot resolve -> 01h");
+        pmRegisters.Eax = 0x0400;                        /* INT 2Ah AH=04h, execute */
+        pmRegisters.Es = 0x0017;
+        g_ReturnCode = 0x05;
+        VddNetBiosCall(&pmState, &pmRegisters, VECTOR_NETWORK, 0x0100, NetTestMapSelector, NULL);
+        CHECK(VddGetAh(&pmRegisters) == 0x01 && VddGetAl(&pmRegisters) == 0x05, "PM: INT 2Ah AH=04h -> AL = retcode, AH = 01h error");
+    }
 
     printf("\n== %d checks, %d failed\n", g_Total, g_Failures);
     return g_Failures ? 1 : 0;

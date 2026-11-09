@@ -45,6 +45,12 @@ INT DpmiAsyncInjectPm(UINT irq, CONTEXT *context);
 WORD DpmiSegmentToDescriptor(WORD segment);
 INT DpmiSelectorDescriptor(WORD selector, UINT32 *accessRights, UINT32 *limit);
 INT DpmiServicePmInt(DOS_MACHINE *machine, volatile BYTE *tib, DWORD vector, UINT steps);
+/* #268: the client jumped to 0306h's protected-to-real entry. 1 = back in PM; 0 = end the session. */
+INT DpmiRawSwitchToRealMode(
+    PSTR *cursorIo,
+    PSTR const base,
+    volatile BYTE *tib,
+    DOS_MACHINE *machine);
 INT DpmiHostIndex(VOID);
 VOID DpmiInstall(INT index);
 VOID DpmiArmFaultTrampoline(volatile BYTE *tib, WORD flag);

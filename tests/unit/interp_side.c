@@ -4,9 +4,9 @@
  * different versions of the header) can be linked into one binary. GH #194.
  *
  * Compiled twice by scripts/interpfuzz.sh (MODE=superset):
- *     -DSIDE=ref_ -DINTERP_H="<HEAD's header>"     and     -DSIDE=new_  (working tree)
+ *     -DSIDE=Reference -DINTERP_H="<HEAD's header>"     and     -DSIDE=Candidate  (working tree)
  * Everything in the header is `static`, so each object has its own interpreter, its own
- * guest memory and its own hooks; the only exported names are the SIDE-prefixed ones
+ * guest memory and its own hooks; the only exported names are the SIDE-prefixed ones (ReferenceStep, CandidateStep, ...)
  * below. tests/unit/interp_superset.c drives both in lockstep.
  *
  *
@@ -20,7 +20,7 @@
 #include "interp_xcpu.h"
 
 #ifndef SIDE
-#error "define SIDE (ref_ or new_)"
+#error "define SIDE (Reference or Candidate)"
 #endif
 #define CAT2(first, second)     first##second
 #define CAT(first, second)      CAT2(first, second)

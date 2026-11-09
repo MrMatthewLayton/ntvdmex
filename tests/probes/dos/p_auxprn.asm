@@ -142,6 +142,34 @@ start:
         call    probe_capture
         EMIT    "int21.4400.h4", "AX,DX,CF"
 
+        ; ---- #272: a DUPLICATE of PRN is still the printer. AH=45h on handle 4, then
+        ; two bytes through the copy: on DOS they reach INT 17h exactly as through 4;
+        ; ours used to print them on the screen. And its 4400h word is PRN's.
+        ; (UNRUN on the oracles when written.)
+        CLRLOG
+        mov     ah, 45h
+        mov     bx, 4
+        int     21h
+        mov     [duph], ax
+        mov     ah, 40h
+        mov     bx, [duph]
+        mov     cx, 2
+        mov     dx, txt_pq
+        int     21h
+        call    probe_capture
+        EMIT    "int21.40.dup4", "AX,CF"
+        EMIT_BUF "int21.40.dup4.int17", log17, 33
+        mov     ax, 4400h
+        mov     bx, [duph]
+        mov     cx, 0C1C1h
+        mov     dx, 0D1D1h
+        int     21h
+        call    probe_capture
+        EMIT    "int21.4400.dup4", "AX,DX,CF"
+        mov     ah, 3Eh
+        mov     bx, [duph]
+        int     21h
+
         ; ---- unhook
         push    ds
         lds     dx, [old14]
@@ -227,6 +255,7 @@ clrlog:
 old14   dd      0
 old17   dd      0
 n17     dw      0
+duph    dw      0                       ; #272: the duplicate of PRN
 n14     dw      0
 log17   times 33 db 0
 log14   times 33 db 0

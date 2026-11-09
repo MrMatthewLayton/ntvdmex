@@ -12,6 +12,8 @@
  */
 
 #include "host_timing.h"
+#include "tsc_clock.h"
+#include "cpu_die.h"
 #include "host_state.h"
 #include "log.h"
 #include "main.h"
@@ -22,17 +24,7 @@
 #include "host_audio.h"
 #include "host_irq.h"
 
-#define MEMDUMP_PATH                OUT_("memdump.bin")
-
-/* PENDING TIMER TICKS, as a saturating COUNT rather than a flag. A boolean coalesces: every
- * tick that falls while the guest has interrupts off -- and Skyroads spends most of its time
- * in exactly that state, CLI'd around its 256-colour palette writes -- was silently thrown
- * away, so the music's tempo wandered with whatever the guest happened to be doing. A real
- * 8259 latches the request and delivers it the moment IF comes back. Saturating at 4 keeps
- * that fidelity without letting a long CLI region accumulate a burst that would then flood
- * the guest with back-to-back timer interrupts.
- */
-#define IRQ0_PENDING_MAX            4
+#define MEMDUMP_PATH                    OUT_("memdump.bin")
 
 /* HOW MANY TIMER TICKS DOES THE PROTECTED-MODE CLIENT ACTUALLY OWE?:
  * Separate from g_Irq0Pending, which SATURATES AT FOUR on purpose (see above) and so
@@ -48,11 +40,11 @@
  * stall this host produces and still short enough that the tempo cannot lurch a
  * visible amount.
  */
-#define PM_TICK_OWED_MAX            64
-#define KEYIRQ_MAX_YIELD            3
+#define PM_TICK_OWED_MAX                64
+#define KEYIRQ_MAX_YIELD                3
 
-#define HOST_LOCK_TRY()             HostLockTry(__LINE__)
-#define PM_HEADLESS_GRACE_MS        3000 /* Grace for a clean wind-down before the hard backstop forces exit */
+#define HOST_LOCK_TRY()                 HostLockTry(__LINE__)
+#define PM_HEADLESS_GRACE_MS            3000 /* Grace for a clean wind-down before the hard backstop forces exit */
 
 /* True when a line's vector still points at one of our own do-nothing stubs (the shared
  * device IRET at DOS_HDLR_SEG:0x66, or the default INT 09h at 0x4C). Those never send an
@@ -87,12 +79,11 @@
  *      short burst; a real PIC latches one. Left as is: our delivery latency is what
  *      the backlog compensates for.
  */
-#define IRQ0_ISR_TIMEOUT_MS         250u
-#define IRQ0_ISR_TIMEOUTS_MAX       3u
+#define IRQ0_ISR_TIMEOUT_MS             250u
+#define IRQ0_ISR_TIMEOUTS_MAX           3u
 
-#define TSC_RESYNC_INTERVAL_ULL     2000ull                 /* ~2 ms of ticks between re-anchors */
-#define IRQ0_NOTE_ASYNC_CS          0xFFFF /* g_Irq0NoteCs: the tick was delivered async, no CS:IP to note */
-#define COURIER_NORMAL_BUDGET_US    300u
+#define IRQ0_NOTE_ASYNC_CS              0xFFFF /* g_Irq0NoteCs: the tick was delivered async, no CS:IP to note */
+#define COURIER_NORMAL_BUDGET_US        300u
 
 /* THE TICK COURIER: A RETRY THAT IS NOT TIED TO THE RAISE CADENCE. (s61) (Importance = 3):
  * MEASURED, in-game, 45 s, Unlimited, synthetic keys (the fair A/B is in
@@ -156,10 +147,10 @@
  * next raise re-arm it -- which is exactly the old behaviour, so the worst case is
  * no worse than today.
  */
-#define COURIER_BUDGET_US           3000u
+#define COURIER_BUDGET_US               3000u
 
-#define CPU_MHZ_UNKNOWN_U           0xFFFFFFFFu             /* HostCpuMhz: not read yet */
-#define CPUSPD_RUN_MIN_US           100ul                   /* #225: shortest spun run slice */
+#define CPU_MHZ_UNKNOWN_U               0xFFFFFFFFu             /* HostCpuMhz: not read yet */
+#define CPUSPD_RUN_MIN_US               100ul                   /* #225: shortest spun run slice */
 
 /* Perform ONE decoded port access on the bus and write an IN result back into
  * the guest's EAX at the right width. Factored out of the three I/O servicers
@@ -208,39 +199,40 @@
  *   CPU affinity set anywhere, a TSC-backed QueryPerformanceCounter can JUMP FORWARD
  *   when a thread migrates cores, which is indistinguishable from a stall in here.
  */
-#define PIT_CATCHUP_MAX             (PIT_INPUT_HZ / 100u)   /* 10 ms: the reporting threshold */
+#define PIT_CATCHUP_MAX                 (PIT_INPUT_HZ / 100u)   /* 10 ms: the reporting threshold */
 
-#define RTIDLE_OFF_FLAG             CFG_("rtidle.off")
-#define RETRACE_IDLE_MIN_US         1500u                   /* Shorter waits are not worth idling for */
+#define RTIDLE_OFF_FLAG                 CFG_("rtidle.off")
+#define RETRACE_IDLE_MIN_US             1500u                   /* Shorter waits are not worth idling for */
+
+/* #183: THE BEAM CLOCK WITHOUT A SYSCALL PER READ. Every 3DAh status read asks this
+ * for the time, and a retrace-wait loop reads 3DAh flat out: s82's profiler put 40%
+ * of Wolf3D's exec-thread samples in ntdll, i.e. QueryPerformanceCounter, which is a
+ * system call on XP, plus a 64-bit divide. Now: the CPU's own time-stamp counter,
+ * interpolated between reference anchors. Per thread, so no lock and no torn shared
+ * state. #416: tsc_clock.h is why a TSC that jumps between dies cannot hurt it.
+ */
+#define HOST_CLOCK_QPC_TSC_HZ           50000000ll /* A QPC this fast is a TSC, not the PM timer or the PIT */
+#define HOST_KUSER_INTERRUPT_TIME       0x7FFE0008u             /* KUSER_SHARED_DATA.InterruptTime, a KSYSTEM_TIME */
+#define HOST_INTERRUPT_TICKS_PER_US     10u                     /* Its unit is 100 ns */
+
+/* #417: KEEP THE WHOLE HOST ON ONE DIE. Not the cpuaff.txt split above, which spans dies on a quad:
+ * every thread goes to the same group, so the guest and the host's threads still have room and
+ * nothing is ever timed across a die boundary. Before any thread exists, and bound by name because
+ * XP before SP3 lacks the export.
+ */
+#define CPU_DIE_CACHE_MAX               64u
 
 enum
 {
     IRQ0_ISR_GAP_RESET_MS = 100
 };   /* Irq0CanDeliver: a stall this long restarts the ISR clock */
 
-enum
-{
-    TSC_RESYNC_MIN_US = 500
-};   /* HostTimeMicroseconds: an interval long enough to re-derive the rate */
-
-/* #183: THE BEAM CLOCK WITHOUT A SYSCALL PER READ. Every 3DAh status read asks this
- * for the time, and a retrace-wait loop reads 3DAh flat out: s82's profiler put 40%
- * of Wolf3D's exec-thread samples in ntdll, i.e. QueryPerformanceCounter, which is a
- * system call on XP, plus a 64-bit divide. Now: the CPU's own time-stamp counter,
- * interpolated between QPC ANCHORS taken at most every ~2 ms, with the divide turned
- * into a multiply. Per thread (__thread), so no lock and no torn shared state; the
- * rate is re-derived at every anchor, so a CPU that changes its clock cannot drift
- * us more than one anchor interval; and it never runs backwards within a thread.
- * Falls back to plain QPC until the first two anchors have given it a rate.
- */
 typedef struct
 {
-    UINT64 TscBase;
-    UINT64 MicrosecondsBase;
-    UINT64 Last;
-    UINT64 Resync;
-    UINT32 Multiplier;
-} HOST_CLOCK;
+    DWORD LowPart;
+    LONG  High1Time;
+    LONG  High2Time;
+} HOST_KSYSTEM_TIME;
 
 enum
 {
@@ -288,6 +280,8 @@ enum
 {
     RETRACE_IDLE_PATTERN_LENGTH = 4, RETRACE_IDLE_BACK_MAX = 3
 };   /* RetraceIdle: test/and al ; jcc back to the IN */
+
+typedef BOOL (WINAPI *PFN_GET_LOGICAL_PROCESSOR_INFORMATION)(PSYSTEM_LOGICAL_PROCESSOR_INFORMATION, PDWORD);
 
 /* Used before their definitions below. */
 static VOID HostPitDeliver(VOID);
@@ -571,6 +565,9 @@ volatile DWORD g_RetraceIp;
 volatile DWORD g_RetraceAl;
 volatile DWORD g_RetraceCx;
 volatile DWORD g_RetraceIdles;
+
+DWORD g_CpuDieMode = CPU_DIE_AUTO;      /* Settings > Machine; cpudie.txt overrides */
+DWORD g_CpuDieMask;                     /* What it chose, 0 = left alone */
 
 static INT   g_AsyncTriedThisSync = 0;   /* see HostIrqSink: one attempt per PIT sync */
 
@@ -925,13 +922,16 @@ INT Irq0CanDeliver(VOID)
          * guest was. Bounded: one line per 50 ms step of an episode, 8 lines per run.
          * cs:ip is the TIB's, i.e. the last V86 exit -- biased, but it is what the
          * heartbeat prints and it has named sites before.
+         * Measured from `now`, not a fresh GetTickCount(): both ends must carry the same
+         * `| 1`, or a tick-even `since` read back in the same tick is one ahead of the
+         * clock and the difference wraps to 4294967295 ms (#290).
          */
         if (since && g_TibDebug)
         {
             static DWORD lines = 0;
             static DWORD episode = 0;
             static DWORD step = 0;
-            DWORD milliseconds = GetTickCount() - since;
+            DWORD milliseconds = now - since;
 
             if (episode != since)
             {
@@ -1024,25 +1024,59 @@ VOID Irq0PmUnclaim(VOID)
  * follow-up). The VDD takes its clock as a hook so it stays pure C and off-VM
  * testable; this is what the host hands it. Monotonic and never reset -- the VDD
  * only ever takes it modulo a frame period, so the origin does not matter.
- * Same source as HostPitSync(): QueryPerformanceCounter, which is why the guest's
- * retrace and its PIT cannot drift against each other.
+ *
+ * #416: THE REFERENCE IS WHATEVER DOES NOT DEPEND ON THE TSC. Where QPC is the PM timer
+ * or the PIT it is that, as the guest's PIT is. Where QPC is itself a TSC it runs at the CPU's
+ * clock (QPF 2,992,520 kHz on the Q9650, runs/s104/tsc) and shares every fault of one, so the
+ * reference is the kernel's interrupt time, in shared memory: no system call, and it ticks at the
+ * 1 ms the host's timeBeginPeriod asks for. The slew in tsc_clock.c smooths that tick.
+ *
+ * [CAUTION]: BUT ONLY WHEN THE HOST IS NOT ON ONE DIE. Each thread has its own clock, and the video
+ * latch compares times from the guest thread and the UI thread. Anchored to a 1 ms tick, the two
+ * disagreed by enough to latch Mario's coarse scroll a frame before its fine scroll: a capture on
+ * the Q9650 stepped -2 -2 -10 +6 pixels, over and over (runs/s105/cap). On one die the TSC behind
+ * QPC is one counter, measured 9 us apart across its two cores (runs/s104/tsc), so QPC is used.
  */
-static UINT64 HostTimeMicrosecondsQpc(VOID)
+static UINT64 HostInterruptTimeMicroseconds(VOID)
+{
+    const volatile HOST_KSYSTEM_TIME *time = (const volatile HOST_KSYSTEM_TIME *)HOST_KUSER_INTERRUPT_TIME;
+    LONG high;
+    DWORD low;
+
+    do
+    {
+        high = time->High1Time;
+        low = time->LowPart;
+    } while (high != time->High2Time);
+
+    return (((UINT64)(DWORD)high << DWORD_SHIFT) | low) / HOST_INTERRUPT_TICKS_PER_US;
+}
+
+static UINT64 HostTimeReferenceMicroseconds(VOID)
 {
     static LARGE_INTEGER frequency;
     static LARGE_INTEGER base;
+    static UINT64 baseMicroseconds;
     LARGE_INTEGER now;
 
     if (!frequency.QuadPart)
     {
         if (!QueryPerformanceFrequency(&frequency) || !frequency.QuadPart)
-            return 0;
+            return HostInterruptTimeMicroseconds();
 
         QueryPerformanceCounter(&base);
+        baseMicroseconds = HostInterruptTimeMicroseconds();
     }
 
+    if (frequency.QuadPart >= HOST_CLOCK_QPC_TSC_HZ && !g_CpuDieMask)
+        return HostInterruptTimeMicroseconds();
+
+    /* From the interrupt time at the same instant, so the one switch, when the die is chosen, moves
+     * the reference by at most a tick. From 0 it fell back by the uptime, and the never-backwards
+     * clamp froze every thread's clock (vbl_edges 0-2, runs/s105/lt1).
+     */
     QueryPerformanceCounter(&now);
-    return (UINT64)(((now.QuadPart - base.QuadPart) * MICROSECONDS_PER_SECOND) / frequency.QuadPart);
+    return baseMicroseconds + (UINT64)(((now.QuadPart - base.QuadPart) * MICROSECONDS_PER_SECOND) / frequency.QuadPart);
 }
 
 UINT64 HostTimeMicroseconds(VOID)
@@ -1050,8 +1084,7 @@ UINT64 HostTimeMicroseconds(VOID)
     UINT32 low;
     UINT32 high;
     UINT64 tsc;
-    UINT64 microseconds;
-    HOST_CLOCK *clock;
+    TSC_CLOCK *clock;
 
     /* Per thread through Win32 TLS (this build has no CRT, so no __thread): the slot
      * is allocated once, and each thread's clock on its first call.
@@ -1061,21 +1094,21 @@ UINT64 HostTimeMicroseconds(VOID)
         DWORD tlsIndex = TlsAlloc();
 
         if (tlsIndex == TLS_OUT_OF_INDEXES)
-            return HostTimeMicrosecondsQpc();
+            return HostTimeReferenceMicroseconds();
 
         if (InterlockedCompareExchange((volatile LONG *)&g_ClockTls, (LONG)tlsIndex,
                                        (LONG)TLS_OUT_OF_INDEXES) != (LONG)TLS_OUT_OF_INDEXES)
             TlsFree(tlsIndex);                            /* another thread won the race */
     }
 
-    clock = (HOST_CLOCK *)TlsGetValue(g_ClockTls);
+    clock = (TSC_CLOCK *)TlsGetValue(g_ClockTls);
 
     if (!clock)
     {
-        clock = (HOST_CLOCK *)HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY, sizeof *clock);
+        clock = (TSC_CLOCK *)HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY, sizeof *clock);
 
         if (!clock)
-            return HostTimeMicrosecondsQpc();
+            return HostTimeReferenceMicroseconds();
 
         TlsSetValue(g_ClockTls, clock);
     }
@@ -1083,47 +1116,10 @@ UINT64 HostTimeMicroseconds(VOID)
     __asm__ __volatile__("rdtsc" : "=a"(low), "=d"(high));
     tsc = ((UINT64)high << DWORD_SHIFT) | low;
 
-    if (!clock->Multiplier || tsc - clock->TscBase >= clock->Resync)
-    {
-        UINT64 qpcMicroseconds = HostTimeMicrosecondsQpc();
+    if (TscClockNeedsAnchor(clock, tsc))
+        return TscClockAnchor(clock, tsc, HostTimeReferenceMicroseconds());
 
-        if (clock->TscBase && qpcMicroseconds > clock->MicrosecondsBase && tsc > clock->TscBase)
-        {
-            UINT64 tscDelta = tsc - clock->TscBase;
-            UINT64 microsecondsDelta = qpcMicroseconds - clock->MicrosecondsBase;
-
-            if (microsecondsDelta >= TSC_RESYNC_MIN_US)                         /* a usable interval: re-derive rate */
-            {
-                UINT64 multiplier = (microsecondsDelta << DWORD_SHIFT) / tscDelta;
-                clock->Multiplier = (UINT32)(multiplier > MAXDWORD ? MAXDWORD : multiplier);
-
-                if (clock->Multiplier)
-                    clock->Resync = (TSC_RESYNC_INTERVAL_ULL << DWORD_SHIFT) / clock->Multiplier;                      /* ~2 ms of ticks */
-            }
-        }
-
-        if (!clock->Multiplier || !clock->TscBase || qpcMicroseconds - clock->MicrosecondsBase >= TSC_RESYNC_MIN_US)
-        {
-            clock->TscBase = tsc;
-            clock->MicrosecondsBase = qpcMicroseconds;
-        }
-
-        if (!clock->Multiplier)
-        {
-            if (qpcMicroseconds > clock->Last)
-                clock->Last = qpcMicroseconds;
-
-            return clock->Last;
-        }
-    }
-
-    microseconds = clock->MicrosecondsBase + (((tsc - clock->TscBase) * (UINT64)clock->Multiplier) >> DWORD_SHIFT);
-
-    if (microseconds < clock->Last)
-        microseconds = clock->Last;                                        /* never backwards within a thread */
-
-    clock->Last = microseconds;
-    return microseconds;
+    return TscClockRead(clock, tsc);
 }
 
 LONGLONG Int15QpcAfterMicroseconds(DWORD microseconds)
@@ -1150,7 +1146,12 @@ static VOID Int15EventPoll(VOID)            /* pacer thread */
         return;
 
     g_Int15EventEnd = 0;
-    *(volatile BYTE *)(ULONG_PTR)g_Int15EventLinear |= BIOS_EVENT_WAIT_POSTED;      /* the caller's flag: time is up */
+    /* #276: a PM client's flag may sit in memory it has freed since (0502h); a real-mode
+     * one is always in the low megabyte. Post only to a byte that is still there.
+     */
+    if (HostWritable((PVOID)(ULONG_PTR)g_Int15EventLinear, 1))
+        *(volatile BYTE *)(ULONG_PTR)g_Int15EventLinear |= BIOS_EVENT_WAIT_POSTED;      /* the caller's flag: time is up */
+
     *(volatile BYTE *)(ULONG_PTR)(BIOS_BDA_BASE + BIOS_BDA_WAIT_ACTIVE) = BIOS_BDA_WAIT_NONE;               /* 40:A0 wait no longer active */
     ++g_Int15Posted;
 }
@@ -1712,6 +1713,45 @@ VOID CpuSpeedRecompute(VOID)
      * arithmetic, which is why the measured round trip is kept separately.
      */
     g_CpuSpeedPeriodMs = 0;
+}
+
+VOID CpuDieApply(VOID)
+{
+    static SYSTEM_LOGICAL_PROCESSOR_INFORMATION records[CPU_DIE_CACHE_MAX];
+    static CPU_DIE_CACHE caches[CPU_DIE_CACHE_MAX];
+    DWORD bytes = sizeof records;
+    DWORD_PTR processMask = 0;
+    DWORD_PTR systemMask = 0;
+    UINT cacheCount = 0;
+    UINT recordIndex;
+    PFN_GET_LOGICAL_PROCESSOR_INFORMATION getInformation;
+
+    if (g_CpuDieMode != CPU_DIE_AUTO || g_CpuAffinityOn)
+        return;
+
+    getInformation = (PFN_GET_LOGICAL_PROCESSOR_INFORMATION)GetProcAddress(
+        GetModuleHandleA(HOST_MODULE_KERNEL32), HOST_EXPORT_GET_LOGICAL_PROCESSOR_INFORMATION);
+
+    if (!getInformation
+        || !getInformation(records, &bytes)
+        || !GetProcessAffinityMask(GetCurrentProcess(), &processMask, &systemMask))
+        return;
+
+    for (recordIndex = 0; recordIndex < bytes / sizeof records[0]; recordIndex++)
+    {
+        if (records[recordIndex].Relationship != RelationCache
+            || records[recordIndex].Cache.Type == CacheInstruction)
+            continue;
+
+        caches[cacheCount].Level = records[recordIndex].Cache.Level;
+        caches[cacheCount].ProcessorMask = (DWORD)records[recordIndex].ProcessorMask;
+        cacheCount++;
+    }
+
+    g_CpuDieMask = CpuDieChooseMask(caches, cacheCount, (DWORD)processMask);
+
+    if (g_CpuDieMask)
+        SetProcessAffinityMask(GetCurrentProcess(), g_CpuDieMask);
 }
 
 static VOID CpuAffinityApply(VOID)

@@ -119,6 +119,8 @@
 #define DPMI_PMRET_OFF          0x0070
 #define DPMI_RAW2PM_OFF         0x005C
 #define DPMI_RAW2RM_OFF         0x0074
+#define DPMI_RAW2PM_BOP         0x58    /* 0306h real -> protected (entered in V86); serviced since #268 */
+#define DPMI_RAW2RM_BOP         0x59    /* 0306h protected -> real (entered in PM) */
 
 /* INT 31h 0305 state save/restore. Both procedures are FAR CALLed with AL=0 save /
  * AL=1 restore, ES:(E)DI = buffer, and MUST PRESERVE ALL REGISTERS. We keep the whole
@@ -128,6 +130,9 @@
  * needs to reach the host at all.
  */
 #define DPMI_SSR_OFF            0x0078
+
+/* #315: the IPX far-call entry INT 2Fh AX=7A00h hands out: BOP 7Ah ; RETF. */
+#define IPX_ENTRY_OFF           0x0084
 
 /* Shared IRET stub for every vector that has no real handler.
  *
@@ -139,16 +144,17 @@
  * IRQ 2-7/8-15, and much worse once #27 started filling every null vector with it.
  *
  * HANDLER SEGMENT MAP -- check this before adding anything:
- *   0x00-0x1F  INT 21h BOP + DBCS(0x18) + EMM name(0x0A)
+ *   0x00       BIOS print-screen status (#317)   0x0A EMM name   0x18 DBCS
  *   0x20,0x28,0x30,0x34,0x3A,0x3C,0x40,0x48,0x4C  INT 10/16/33/08/1C/1A/2F/67/09 stubs
  *   0x44       XMS entry          0x50-0x53  DPMI entry     0x54-0x56  DPMI RMRET
  *   0x58       >>> this stub <<<  0x59 AH=38h case map      0x5C-0x5E  DPMI raw RM->PM
  *   0x60-0x65  opt-in entry trampoline (qimode VIF; empty since the CB slots moved)
  *   0x70-0x72  DPMI PMRET         0x74-0x76  DPMI raw PM->RM     0x78  DPMI 0305 RETF
- *   0x80-0x82  DPMI fault BOP (code selector)
+ *   0x80-0x82  DPMI fault BOP (code selector)   0x84-0x87  IPX entry (#315)
  *   0x90-0xCF  DPMI CB slots (16 x 4; #248 -- were 4 slots at 0x60-0x6F)
  *   0xE0-0xE3  INT 33h event-handler return (MS_CB_RET_OFF)
- *   free:      0x83-0x8F, 0xD0-0xDF, 0xE4-0xFF
+ *   0xE4-0xE7  INT 21h BOP ; IRET (#317: moved off 0x00)
+ *   free:      0x01-0x09, 0x83, 0x88-0x8F, 0xD0-0xDF, 0xE8-0xFF
  */
 #define DOS_IRET_STUB_OFF       0x0058
 
@@ -911,7 +917,7 @@ enum
 };   /* I33TakeMotion's absolute-derived fallback */
 enum
 {
-    MOUSE_CB_WHY_IN_FLIGHT = 0, MOUSE_CB_WHY_NO_EVENTS = 1, MOUSE_CB_WHY_NO_HANDLER = 2, MOUSE_CB_WHY_IN_STUB = 3, MOUSE_CB_WHY_IF_OFF = 4, MOUSE_CB_WHY_STUB_CLOBBERED = 5, MOUSE_CB_WHY_COUNT = 6
+    MOUSE_CB_WHY_IN_FLIGHT = 0, MOUSE_CB_WHY_NO_EVENTS = 1, MOUSE_CB_WHY_NO_HANDLER = 2, MOUSE_CB_WHY_IN_STUB = 3, MOUSE_CB_WHY_IF_OFF = 4, MOUSE_CB_WHY_STUB_CLOBBERED = 5, MOUSE_CB_WHY_GUEST_DRIVER = 6, MOUSE_CB_WHY_COUNT = 7
 };   /* g_MouseCallbackWhy */
 typedef struct
 {
@@ -926,7 +932,7 @@ enum
 };   /* startup limits: instance numbers, knob ranges */
 enum
 {
-    NESTED_V86_ROUNDS_MAX = 128, NESTED_V86_EVENTS_MAX = 4096, PM_INT21_HANDLE_LIMIT = 24, PM_INT21_LOCK_REGION = 0xFF80
+    NESTED_V86_ROUNDS_MAX = 128, NESTED_V86_EVENTS_MAX = 4096, PM_INT21_LOCK_REGION = 0xFF80
 };   /* DpmiServicePmIntBody: 0301h's nested run (waiting passes, all passes), PM INT 21h */
 typedef struct
 {

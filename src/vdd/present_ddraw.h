@@ -29,10 +29,6 @@
 #include "ntvdd.h"
 #include "bmp_format.h"     /* the BMP file format */
 
-/* PresentSnapshotDib: the snapshot's scale. */
-#define PRESENT_SNAPSHOT_1X     0
-#define PRESENT_SNAPSHOT_2X     1
-
 /* Windowed mode presents via GDI StretchDIBits (cursor-friendly, expose-correct);
  * exclusive fullscreen uses DirectDraw. The video blits into the client area
  * above a host-drawn status bar PRESENT_STATUS_HEIGHT pixels tall.

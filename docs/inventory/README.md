@@ -126,12 +126,12 @@ Each surface gets two documents, doing two different jobs:
 
 | Surface | Primary sources | Inventory | Ref |
 |---|---|---|---|
-| **VGA / CRTC / sequencer / graphics / attribute / DAC** | IBM VGA TechRef; FreeVGA | [vga.md](vga.md) — **71 enumerated, measured** (2026-09-22) | ✅ [`ref/vga.md`](../ref/vga.md) |
-| **VESA VBE 2.0 / 3.0** | `docs/ref/vbe20.pdf`, `docs/ref/vbe30.pdf` | [vesa.md](vesa.md) — 171 units: 139 IMPL, 7 PART, 2 STORE, 20 MISS, 3 N/A | [PDFs held](../ref/) |
+| **VGA / CRTC / sequencer / graphics / attribute / DAC** | IBM VGA TechRef; FreeVGA | [vga.md](vga.md) — **71 enumerated, measured** (2026-09-22); #185 (2026-10-23): 3C6, AR12, AR13 (text too), SR3, CR08 (text) in the picture; GR6/GR5 4-6 and the mode-Y heuristics left, with the reason | ✅ [`ref/vga.md`](../ref/vga.md) |
+| **VESA VBE 2.0 / 3.0** | `docs/ref/vbe20.pdf`, `docs/ref/vbe30.pdf` | [vesa.md](vesa.md) — 171 units: 148 IMPL, 7 PART, 2 STORE, 11 MISS, 3 N/A (#326: the planar modes) | [PDFs held](../ref/) |
 | **8254 PIT** | Intel 8254 datasheet | [pit.md](pit.md) — 34 units: 26 IMPL, 4 PART, 1 STORE, 3 N/A (re-cited 2026-10-01) | ✅ [`ref/pit.md`](../ref/pit.md) |
 | 8259A PIC | Intel 8259A datasheet | [pic.md](pic.md) — marked 2026-09-23, group table | ✅ [`ref/pic.md`](../ref/pic.md) |
 | 8237A DMA controller | Intel 8237A datasheet | [dma.md](dma.md) — marked 2026-09-23; status DRQ bits and command bit 2 re-marked 2026-10-01 (#176) | ✅ [`ref/dma.md`](../ref/dma.md) |
-| 8042 keyboard controller | IBM AT TechRef | [kbc.md](kbc.md) — marked 2026-09-23; ⚠ its `vdd_input.c` line numbers predate #188 | ✅ [`ref/kbc.md`](../ref/kbc.md) |
+| 8042 keyboard controller | IBM AT TechRef | [kbc.md](kbc.md) — marked 2026-09-23; `vdd_input.c` citations re-checked 2026-10-23 (#257) | ✅ [`ref/kbc.md`](../ref/kbc.md) |
 | Keyboard device (commands, ACKs, scan code sets) | IBM AT TechRef | [kbc.md](kbc.md) §5 — ACKs MISS | — |
 | PS/2 + serial mouse | Microsoft/Logitech protocol notes | [mouse.md](mouse.md) §3 — **all MISS**: no aux device, no INT 15h `C2h`, no serial mouse | — |
 | Gameport / joystick | IBM Game Control Adapter | [gameport.md](gameport.md) — 22 units (s84) | — |
@@ -164,9 +164,9 @@ Each surface gets two documents, doing two different jobs:
 | MS-DOS INT 21h/2Fh/20h–29h/2Eh | RBIL; *Undocumented DOS* | [dos-services.md](dos-services.md) — 132 units (every INT 21h function): 89 IMPL, 23 PART, 17 MISS, 3 N/A (2026-10-01) | — |
 | INT 33h mouse driver | Microsoft Mouse Programmer's Reference | [mouse.md](mouse.md) — 51 units: 22 IMPL, 2 PART, 3 STORE, 20 MISS, 4 N/A; ⚠ we claim v8.00 and none of `25h`–`34h` exists (2026-10-01) | — |
 | XMS 3.0 / LIM EMS 4.0 / VCPI | XMS + LIM specs | [xms-ems.md](xms-ems.md) — 187 units: 65 IMPL, 17 PART, 88 MISS (EMS 4.0 subfunctions, VCPI), 17 N/A (s84) | — |
-| **DPMI 0.9 / 1.0** | DPMI 0.9 and 1.0 specs | [dpmi.md](dpmi.md) — 64 units: 41 IMPL, 12 PART, 9 MISS, 2 N/A (#247 `0300h`, #248 `0503h`/`0304h`/16 callbacks/`0400h` CL/bad selectors, 2026-10-02); ⚠ the `0303h` callback entry contract is not the spec's | — |
-| DOS extenders: DOS/4GW, DOS16M | Tenberry/Rational docs | — still to write. The host contract they run on is already inventoried: [dpmi.md](dpmi.md) (incl. DOS/16M's INT 21h `FF80h`, §10), VCPI in [xms-ems.md](xms-ems.md) (MISS), INT 15h `87h`/`88h` in [bios-misc.md](bios-misc.md) §4 | — |
-| MSCDEX + CD audio | MSCDEX spec | [mscdex.md](mscdex.md) — 26 units, 22 MISS: data CDs read as files, but `1500h` is passed through (the answer is the caller's own `BX`) and there is no CD audio (2026-10-01) | — |
+| **DPMI 0.9 / 1.0** | DPMI 0.9 and 1.0 specs | [dpmi.md](dpmi.md) — 64 units: 44 IMPL, 9 PART, 9 MISS, 2 N/A (#268 `0006h`-`0009h` values, `0100h` chains, `0500h`, `0306h` raw switch, 2026-10-23; #247 `0300h`, #248 `0503h`/`0304h`/16 callbacks/`0400h` CL/bad selectors, 2026-10-02); ⚠ the `0303h` callback entry contract is not the spec's | — |
+| DOS extenders: DOS/4GW, DOS16M | Tenberry/Rational docs (not held) | [dos-extenders.md](dos-extenders.md) — 58 units: 41 IMPL, 11 PART, 2 MISS, 1 N/A, 3 UNMEASURED (2026-10-23, #257; `0306h` serviced by #268, unmeasured). The host contract underneath: [dpmi.md](dpmi.md) (incl. DOS/16M's INT 21h `FF80h`, §10), VCPI in [xms-ems.md](xms-ems.md) (MISS), INT 15h `87h`/`88h` in [bios-misc.md](bios-misc.md) §4 | — |
+| MSCDEX + CD audio | MSCDEX spec | [mscdex.md](mscdex.md) — 27 units: 12 IMPL, 3 PART, 10 MISS, 2 N/A. An ISO image is an MSCDEX drive (#241, 2026-10-23); in physical mode `15xxh` still passes through, and there is no CD audio | — |
 | Executable formats: `.COM`, MZ, NE, LE, PE | MS format specs | [exe-formats.md](exe-formats.md) — 36 units: 20 IMPL, 2 PART, 10 MISS, 4 N/A; ⚠ EXEC ignores `e_minalloc`/`e_maxalloc` and runs a Windows program's MZ stub (2026-10-01) | — |
 | **Win16 KERNEL / USER / GDI** | Win3.1 SDK; Wine; ReactOS | [win16.md](win16.md) — **deterministic tests now exist**; **[win16-surface.md](win16-surface.md)** (every 16→32 call, all 13 modules, handled / shelf use / test-machine evidence — generated by `tools/ne/wowinventory.py`) + **[win16-messages.md](win16-messages.md)** (every message, by direction); the USER call surface (441 ids, 385 named) | — |
 | WOW32 thunk ABI | *no spec* — ReactOS prior art + stock WOW oracle | the WOW32 call surface, recovered from stock | — |

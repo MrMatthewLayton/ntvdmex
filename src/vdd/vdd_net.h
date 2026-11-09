@@ -63,6 +63,9 @@ typedef struct _NETBIOS_REQUEST
     BYTE Adapter;
 } NETBIOS_REQUEST, *PNETBIOS_REQUEST;
 
+/* #315: a guest far pointer (segment or selector, offset) to host memory, or NULL. */
+typedef PVOID (*PNETBIOS_MAP_ROUTINE)(PVOID context, WORD segment, DWORD offset);
+
 /* The host's NetBIOS. Synchronous; returns the final retcode (also in request->ReturnCode). */
 typedef BYTE (*PNETBIOS_SUBMIT_ROUTINE)(PVOID context, PNETBIOS_REQUEST request);
 
@@ -75,6 +78,8 @@ typedef struct _NETBIOS_STATE
     UINT32 NoWaitCalls;
     UINT32 PostsOwed;
     UINT32 NoBackendCalls;
+    UINT32 ProtectedModeCalls;  /* #315: INT 5Ch/2Ah from a DPMI client */
+    UINT32 PostsSkippedProtectedMode;  /* #315: a PM client's POST, which is not called */
     /* s91: a no-wait command's POST routine, owed to the guest as soon as INT 5Ch
      * returns. The HOST delivers it (it alone can edit the guest's return frame --
      * see v86_bios_bop) and clears IsPostPending; PostsOwed counts the ones that
@@ -102,6 +107,18 @@ BYTE VddNetBiosService(
     _Inout_ PNETBIOS_STATE state,
     _Inout_updates_(NETB_NCB_SIZE) BYTE *ncb,
     _In_opt_ BYTE *buffer);
+
+/* #315: INT 5Ch (vector 5Ch) or INT 2Ah (vector 2Ah) with the NCB at ES:<ncbOffset>, its
+ * pointers resolved through `map`. The V86 claims use a real-mode mapper; the DPMI
+ * dispatcher calls this with one that resolves selectors.
+ */
+VOID VddNetBiosCall(
+    _Inout_ PNETBIOS_STATE state,
+    _Inout_ PNTVDD_REGISTERS registers,
+    _In_ BYTE vector,
+    _In_ DWORD ncbOffset,
+    _In_ PNETBIOS_MAP_ROUTINE map,
+    _In_opt_ PVOID mapContext);
 
 static inline NTVDD_DEVICE VddNetBiosDevice(_In_ PNETBIOS_STATE state)
 { NTVDD_DEVICE device;

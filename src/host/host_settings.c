@@ -23,7 +23,10 @@
 #include "host_input.h"
 #include "host_timing.h"
 #include "capture_video.h"
-#define UITICK_CHOICES          5   /* The Settings combo's entries */
+#include "host_cdrom.h"
+#include "cdrom_policy.h"           /* s101: which letters the image combos offer */
+#include "../dos/dos_sysvars.h"     /* DOS_CDS_FLAG_*: the floppy image's CDS entry */
+#define UITICK_CHOICES      5   /* The Settings combo's entries */
 
 /* fsinteger.flag -- SNAP FULLSCREEN TO WHOLE PIXEL MULTIPLES. OFF BY DEFAULT (Importance = 1):
  * I added whole-multiple scaling to cure blurry fullscreen. It was never the cause
@@ -47,16 +50,17 @@
  * because "every pixel identical" is a legitimate taste, not because anyone must
  * choose.
  */
-#define FSINT_FLAG              CFG_("fsinteger.flag")
+#define FSINT_FLAG          CFG_("fsinteger.flag")
+
+#define FONT_PREVIEW_GREY   0xAA
 
 /* #321: THE TEXT-MODE FONT ROW:
- * The list is every fixed-pitch font installed on this PC plus "(Default)", which
- * stores as the empty string. Choosing one builds the tables it WOULD produce into a
- * private copy -- the machine is untouched until OK/Apply -- and the page shows that
- * copy: a line of text and a line of the DOS graphics characters, plus how many
+ * "Default" (stored as the empty string) or "Font File:" -- a TrueType, OpenType or .fon file
+ * the user supplies, loaded for this process alone (sysfont.h). Choosing one builds the
+ * tables it WOULD produce into a private copy -- the machine is untouched until OK/Apply --
+ * and the page shows that copy: one line of text, DOS graphics and Greek, plus how many
  * characters the font supplied and whether the default itself is degraded.
  */
-#define TEXTFONT_DEFAULT_ITEM   "(Default: Fixedsys and Terminal)"
 
 enum
 {
@@ -70,7 +74,7 @@ enum
 
 enum
 {
-    SETTINGS_COMBO_DROPPED_WIDTH = 130, SETTINGS_FONT_DROPPED_WIDTH = 240, SETTINGS_SLIDER_STEP = 10, SETTINGS_SLIDER_PAGE = 1,SETTINGS_ITEM_HEIGHT = 14, SETTINGS_ITEM_INSET = 3, LOGFONT_PITCH_MASK = 3
+    SETTINGS_COMBO_DROPPED_WIDTH = 130, SETTINGS_SLIDER_STEP = 10, SETTINGS_SLIDER_PAGE = 1,SETTINGS_ITEM_HEIGHT = 14, SETTINGS_ITEM_INSET = 3
 };   /* the Settings dialog */
 
 enum
@@ -80,8 +84,13 @@ enum
 
 enum
 {
-    FONT_PREVIEW_COLUMNS = 64, FONT_PREVIEW_ROWS = 2, FONT_PREVIEW_CELL_WIDTH = 8, FONT_PREVIEW_CELL_HEIGHT = 16, FONT_PREVIEW_WIDTH = 512, FONT_PREVIEW_HEIGHT = 32, FONT_PREVIEW_HIGH_FIRST = 0x80, FONT_PREVIEW_BOX_FIRST = 0xB0, FONT_PREVIEW_BOX_COUNT = 48, FONT_PREVIEW_GREEK_FIRST = 0xE0, FONT_PREVIEW_GREY = 0xAA
-};   /* the Settings font preview: two rows of 8x16 cells */
+    SETTINGS_FONT_DEFAULT = 0, SETTINGS_FONT_OWN = 1
+};   /* #321: the text-mode font radios: the default, or a font file */
+
+enum
+{
+    FONT_PREVIEW_COLUMNS = 64, FONT_PREVIEW_CELL_WIDTH = 8, FONT_PREVIEW_CELL_HEIGHT = 16, FONT_PREVIEW_WIDTH = 512, FONT_PREVIEW_HEIGHT = 16, FONT_PREVIEW_BOX_FIRST = 0xB0, FONT_PREVIEW_BOX_COUNT = 25, FONT_PREVIEW_GREEK_FIRST = 0xE0
+};   /* the Settings font preview: one row of 8x16 cells: text, DOS graphics, Greek */
 
 /* EnableThemeDialogTexture is what stops a page rendering as a grey slab on the
  * tab's themed background. It lives in uxtheme.dll (XP and later), so it is bound by
@@ -148,6 +157,10 @@ static const BYTE g_SettingsLiveIds[] = {
     SET_FIT,                                     /* #325 */
     SET_RESTARTCAPTURE,                          /* #155: read by Capture Video */
     SET_VIDEOCODEC, SET_VIDEOQUALITY, SET_VIDEOKEYFRAMES,   /* #155: read when a recording starts */
+    SET_FSRES,                                   /* #331: read when fullscreen is entered */
+    SET_CDPHYS,                                  /* #241: the ISO-backed CD-ROM (live: HostCdromApply) */
+    SET_FLOPPYLETTER, SET_CDLETTER,              /* s101: each image's drive letter (live) */
+    SET_CPUDIE,                                  /* #417: read at startup */
 };
 
 static PCSTR const g_SettingsTabs[NTVDMEX_PAGE_COUNT] = {
@@ -176,6 +189,14 @@ static HHOOK g_SettingsHook;
  */
 static CAPTURE_VIDEO_CODEC g_SettingsCodecs[CAPTURE_VIDEO_CODECS_MAX];
 static INT g_SettingsCodecCount;
+
+/* #331: FULLSCREEN RESOLUTION -- item 0 is the desktop's mode, item 1 the largest
+ * (Native), item N >= 2 is g_SettingsFullscreenModes[N - 2]: this display's sizes at the
+ * desktop's depth and refresh (FullscreenModeList), largest first. The setting stores the
+ * SIZE, so a stored choice the display no longer offers shows as Desktop.
+ */
+static FULLSCREEN_MODE g_SettingsFullscreenModes[FULLSCREEN_MODES_MAX];
+static INT             g_SettingsFullscreenModeCount;
 
 VOID SettingsNoteOverride(INT settingId, PCSTR source, DWORD value)
 {
@@ -211,28 +232,18 @@ static PCSTR SettingsDeadWhy(INT settingId)
         return "the 1 MB address wrap is not modelled, so the line is always "
                            "enabled -- the gate FLAG follows the guest through 8042 / 92h / XMS";
 
-    case SET_CDPHYS:
-        return "no CD-ROM drive is mounted into DOS yet (#240/#241)";
-
     default:
         return "not used";
     }
 }
 
+/* Every string row is live now (SoundFontPath went live with our SF2 synth, audio_sf2.h);
+ * a row added without a reader would say so here.
+ */
 static PCSTR SettingsDeadWhyText(INT index)
 {
-    switch (index)
-    {
-    case SET_STR_CDROM:
-        return "no CD-ROM drive is mounted into DOS yet (#240/#241)";
-
-    case SET_STR_SOUNDFONT:
-        return "no SoundFont synth in NTVDMEX; MIDI=SoundFont uses a "
-                                   "host SF2 driver, which keeps its own list";
-
-    default:
-        return "not used";
-    }
+    (VOID)index;
+    return "not used";
 }
 
 VOID SettingsLogSources(VOID)
@@ -281,7 +292,7 @@ VOID SettingsLogSources(VOID)
             cursor = LogPut(cursor, " OVERRIDDEN by "); cursor = LogPut(cursor, g_ShellOverride);
         }
 
-        if (index == SET_STR_FLOPPYA || index == SET_STR_SHELL || index == SET_STR_TEXTFONT || index == SET_STR_CAPTURE)
+        if (index == SET_STR_FLOPPYA || index == SET_STR_CDROM || index == SET_STR_SHELL || index == SET_STR_TEXTFONT || index == SET_STR_CAPTURE || index == SET_STR_SOUNDFONT)   /* #241: CdRomImage is live */
             cursor = LogPut(cursor, "\r\n");
         else { cursor = LogPut(cursor, " (stored only -- "); cursor = LogPut(cursor, SettingsDeadWhyText(index));
                cursor = LogPut(cursor, ", GH #136)\r\n"); }
@@ -350,8 +361,41 @@ VOID SettingsApply(HWND window, const NTVDMEX_SETTINGS *settings, INT live)
      * path means an EMPTY drive: NULL falls through to FLOPPY_IMG_PATH, which exists
      * only on the test machine (the harness's disk), so on a user's PC it is simply absent.
      */
-    g_FloppyImage     = ((!settings->Values[SET_FLOPPYPHYS] || !HostHasFloppy()) && settings->Strings[SET_STR_FLOPPYA][0])
-                     ? settings->Strings[SET_STR_FLOPPYA] : NULL;
+    /* #240: ...and the DOS level follows it. The image is a drive when image mode is CHOSEN
+     * (a blank path is then an empty drive), or when it is forced on a PC with no floppy and
+     * an image is named. A PC with no floppy and nothing named keeps its old A: answer.
+     * s101 (user): "always respect the drives that are set up in Windows" -- the image's
+     * LETTER is Settings' (FloppyImageLetter), one Windows is not using, so a real A: stays
+     * A:. INT 13h's drive 0 is the image only when that letter IS A: (a PC with no floppy
+     * drive, A: chosen); otherwise INT 13h keeps the real drive, or the harness's FLOPPY.IMG.
+     */
+    g_FloppyPhysical  = settings->Values[SET_FLOPPYPHYS] && HostHasFloppy();
+    {
+        INT isFloppyImage = !settings->Values[SET_FLOPPYPHYS] || (!g_FloppyPhysical && settings->Strings[SET_STR_FLOPPYA][0]);
+        INT oldDrive = g_FloppyImageDrive;
+        DWORD cdLetter = settings->Values[SET_CDLETTER];
+        DWORD avoid = 0;
+
+        if (HostCdromDrive() >= 0)
+            avoid |= 1u << HostCdromDrive();
+        else if (!settings->Values[SET_CDPHYS] && cdLetter != DRIVE_LETTER_AUTOMATIC)
+            avoid |= 1u << (cdLetter - 1);                    /* the ISO's stored letter, not yet mounted */
+
+        g_FloppyImageDrive = isFloppyImage
+                           ? HostImageDriveLetter(settings->Values[SET_FLOPPYLETTER], avoid, "the floppy image") : -1;
+        g_FloppyImage      = (g_FloppyImageDrive == 0 && settings->Strings[SET_STR_FLOPPYA][0])
+                           ? settings->Strings[SET_STR_FLOPPYA] : NULL;
+        DosInt21SetFloppyImage(g_FloppyImageDrive >= 0, settings->Strings[SET_STR_FLOPPYA], g_FloppyImageDrive);
+
+        if (oldDrive != g_FloppyImageDrive)                    /* live: DOS's drive array follows */
+        {
+            if (oldDrive >= 0 && !(GetLogicalDrives() & (1u << oldDrive)))
+                HostDriveCdsWrite(oldDrive, 0);
+
+            if (g_FloppyImageDrive >= 0)
+                HostDriveCdsWrite(g_FloppyImageDrive, DOS_CDS_FLAG_PHYSICAL | DOS_CDS_FLAG_NETWORK);
+        }
+    }
     g_HostCursorMode   = (INT)settings->Values[SET_HOSTCURSOR];                   /* s84 */
     /* #136: read at start-up only -- see g_DosMemoryTop. */
     g_ConventionalKbWant   = BiosClampConventionalKb((UINT)settings->Values[SET_CONVKB]);
@@ -413,9 +457,8 @@ VOID SettingsApply(HWND window, const NTVDMEX_SETTINGS *settings, INT live)
         }
         else
         {
-            {   static const WORD mpuBases[5] = { 0x300, 0x310, 0x320, 0x330, 0x340 };
-                g_SbConfig.Type = SB_BLASTER_TYPE_SB16;                         /* P follows the MPU's port (#235) */
-                g_SbConfig.MpuBase = mpuBases[settings->Values[SET_MPUADDR] <= ARRAYSIZE(mpuBases) - 1 ? settings->Values[SET_MPUADDR] : MPU_DEFAULT_BASE_CHOICE]; }
+            g_SbConfig.Type = SB_BLASTER_TYPE_SB16;                         /* P follows the MPU's port (#235) */
+            g_SbConfig.MpuBase = VddMpuBaseForChoice(settings->Values[SET_MPUADDR]);
 
             if (!g_SbConfig.Dma16Channel)
                 g_SbConfig.Dma16Channel = SB_DEFAULT_DMA16;
@@ -437,9 +480,10 @@ VOID SettingsApply(HWND window, const NTVDMEX_SETTINGS *settings, INT live)
     /* [CAUTION]: THROTTLE GRANULARITY AND CORE-AFFINITY ARE NO LONGER SETTINGS (session 60).
      * Granularity defaults to AUTO (g_CpuSpeedGranularityMs = 0), which is the behaviour
      * that made a slow speed smooth, so it needs no control; cpugran.txt still
-     * overrides it for the test machine. Affinity defaults OFF and stays a file knob
-     * (cpuaff.txt) because measured it broke the guest's timer -- exposed for a
-     * future re-test, not for a user to find.
+     * overrides it for the test machine. The guest-versus-host split stays a file
+     * knob (cpuaff.txt) because measured it broke the guest's timer -- exposed for a
+     * future re-test, not for a user to find. Keeping the whole host on one die is a
+     * different thing and a setting (#417): SET_CPUDIE, read by CpuDieApply at startup.
      */
     /* The cursor is the one setting with a VISIBLE side effect, so it goes through
      * the same helper the menu item and Ctrl+F8 use rather than poking the flag.
@@ -525,6 +569,7 @@ VOID SettingsApplyLive(HWND window)
 {
     SettingsApply(window, &g_Settings, SETTINGS_APPLY_LIVE);
     SettingsApplyTextFont();
+    HostCdromApply(g_Settings.Strings[SET_STR_CDROM], !g_Settings.Values[SET_CDPHYS], g_Settings.Values[SET_CDLETTER]);    /* #241: live, as the floppy is */
     SettingsApplyPresent(&g_PresentDdraw, &g_Settings);
     /* [CAUTION]: THE ASPECT CHANGES THE BASE SIZE, so it has to re-size too -- picking 16:9
      * while the window is 4:3-shaped and leaving it alone would show the lock as
@@ -559,6 +604,100 @@ static HWND SettingsControl(INT controlId)
     }
 
     return NULL;
+}
+
+/* s101 (user): "always respect the drives that are set up in Windows ... mounting a floppy
+ * should specify an available drive letter, and the same goes for CD/DVD-ROM ISOs." Each
+ * image's "As Drive" combo: Automatic, then the letters DriveLetterPolicyIsOffered allows
+ * (cdrom_policy.h), and the stored letter whatever it is now -- so OK never quietly loses
+ * it. An item's data is the stored form: 0 = automatic, 1..26 = A:..Z:.
+ */
+static VOID SettingsDriveLetterAdd(HWND combo, INT letter)
+{
+    CHAR text[] = SETTINGS_LETTER_TEXT;
+    LRESULT item;
+
+    text[0] = (CHAR)('A' + letter);
+    item = SendMessageA(combo, CB_ADDSTRING, 0, (LPARAM)text);
+
+    if (item >= 0)
+        SendMessageA(combo, CB_SETITEMDATA, (WPARAM)item, (LPARAM)(letter + 1));
+}
+
+static VOID SettingsDriveLetterFill(HWND page, INT controlId, INT isFloppy)
+{
+    HWND combo = GetDlgItem(page, controlId);
+    DWORD present;
+    DWORD own = 0;
+    DWORD avoid = 0;
+    LRESULT item;
+    INT letter;
+
+    if (!combo)
+        return;
+
+    present = GetLogicalDrives();
+
+    if (isFloppy && HostCdromDrive() >= 0)
+        avoid = 1u << HostCdromDrive();                      /* the ISO's mapping */
+
+    if (!isFloppy)
+    {
+        if (HostCdromDrive() >= 0)
+            own = 1u << HostCdromDrive();                    /* its own mapping is a Windows drive */
+
+        if (g_FloppyImageDrive >= 0)
+            avoid = 1u << g_FloppyImageDrive;
+    }
+
+    SendMessageA(combo, CB_RESETCONTENT, 0, 0);
+    item = SendMessageA(combo, CB_ADDSTRING, 0, (LPARAM)SETTINGS_LETTER_AUTOMATIC);
+
+    if (item >= 0)
+        SendMessageA(combo, CB_SETITEMDATA, (WPARAM)item, DRIVE_LETTER_AUTOMATIC);
+
+    for (letter = 0; letter < CDROM_POLICY_LETTERS; ++letter)
+        if (DriveLetterPolicyIsOffered(letter, present, own, avoid, isFloppy))
+            SettingsDriveLetterAdd(combo, letter);
+}
+
+static VOID SettingsDriveLetterSelect(INT controlId, DWORD stored)
+{
+    HWND combo = SettingsControl(controlId);
+    LRESULT count;
+    LRESULT item;
+
+    if (!combo)
+        return;
+
+    count = SendMessageA(combo, CB_GETCOUNT, 0, 0);
+
+    for (item = 0; item < count; ++item)
+        if ((DWORD)SendMessageA(combo, CB_GETITEMDATA, (WPARAM)item, 0) == stored)
+        {
+            SendMessageA(combo, CB_SETCURSEL, (WPARAM)item, 0);
+            return;
+        }
+
+    if (stored >= 1 && stored <= CDROM_POLICY_LETTERS)          /* in use now: still the user's choice */
+    {
+        SettingsDriveLetterAdd(combo, (INT)stored - 1);
+        SendMessageA(combo, CB_SETCURSEL, (WPARAM)count, 0);
+        return;
+    }
+
+    SendMessageA(combo, CB_SETCURSEL, 0, 0);
+}
+
+static DWORD SettingsDriveLetterChosen(INT controlId)
+{
+    HWND combo = SettingsControl(controlId);
+    LRESULT selection = combo ? SendMessageA(combo, CB_GETCURSEL, 0, 0) : CB_ERR;
+
+    if (selection < 0)
+        return DRIVE_LETTER_AUTOMATIC;
+
+    return (DWORD)SendMessageA(combo, CB_GETITEMDATA, (WPARAM)selection, 0);
 }
 
 /* #330 (user, 2026-10-10): A SLIDER MOVES IN WHOLE STEPS OF 10%. The trackbar holds the
@@ -644,7 +783,7 @@ static VOID SettingsShellRadios(INT own)
 }
 
 /* One Open dialog for every path box: the shell, the floppy and ISO images, the
- * SoundFont. The box's current text is where it starts.
+ * SoundFont, the text-mode font. The box's current text is where it starts.
  */
 static VOID SettingsBrowse(HWND page, INT editId, PCSTR filter, PCSTR title)
 {
@@ -722,6 +861,68 @@ static VOID SettingsCodecFill(HWND page)
         SendMessageA(combo, CB_ADDSTRING, 0, (LPARAM)g_SettingsCodecs[index].Name);
 }
 
+static VOID SettingsFullscreenModeFill(HWND page)
+{
+    static FULLSCREEN_MODE allModes[HOST_DISPLAY_MODES_MAX];
+    HWND combo = GetDlgItem(page, IDC_S_FSRES);
+    FULLSCREEN_MODE desktop;
+    CHAR text[SETTINGS_FSRES_TEXT_SIZE];
+    INT count;
+    INT index;
+
+    if (!combo)
+        return;
+
+    count = HostDisplayModes(allModes, HOST_DISPLAY_MODES_MAX, &desktop);
+    g_SettingsFullscreenModeCount = FullscreenModeList(allModes, count, &desktop, g_SettingsFullscreenModes, FULLSCREEN_MODES_MAX);
+    SendMessageA(combo, CB_RESETCONTENT, 0, 0);
+    wsprintfA(text, SETTINGS_FSRES_DESKTOP_FORMAT, desktop.Width, desktop.Height);
+    SendMessageA(combo, CB_ADDSTRING, 0, (LPARAM)text);
+    wsprintfA(text, SETTINGS_FSRES_NATIVE_FORMAT,
+              g_SettingsFullscreenModeCount ? g_SettingsFullscreenModes[0].Width : desktop.Width,
+              g_SettingsFullscreenModeCount ? g_SettingsFullscreenModes[0].Height : desktop.Height);
+    SendMessageA(combo, CB_ADDSTRING, 0, (LPARAM)text);
+
+    for (index = 0; index < g_SettingsFullscreenModeCount; ++index)
+    {
+        wsprintfA(text, SETTINGS_FSRES_MODE_FORMAT, g_SettingsFullscreenModes[index].Width, g_SettingsFullscreenModes[index].Height);
+        SendMessageA(combo, CB_ADDSTRING, 0, (LPARAM)text);
+    }
+}
+
+static VOID SettingsFullscreenModeSelect(DWORD setting)
+{
+    HWND combo = SettingsControl(IDC_S_FSRES);
+    INT selection = 0;
+    INT index;
+
+    if (!combo)
+        return;
+
+    if (setting == FULLSCREEN_RESOLUTION_NATIVE)
+        selection = 1;
+    else
+        for (index = 0; index < g_SettingsFullscreenModeCount; ++index)
+            if (FULLSCREEN_RESOLUTION_PACK(g_SettingsFullscreenModes[index].Width, g_SettingsFullscreenModes[index].Height) == setting)
+                selection = index + 2;
+
+    SendMessageA(combo, CB_SETCURSEL, (WPARAM)selection, 0);
+}
+
+static DWORD SettingsFullscreenModeChosen(VOID)
+{
+    HWND combo = SettingsControl(IDC_S_FSRES);
+    LRESULT selection = combo ? SendMessageA(combo, CB_GETCURSEL, 0, 0) : CB_ERR;
+
+    if (selection == 1)
+        return FULLSCREEN_RESOLUTION_NATIVE;
+
+    if (selection < 2 || selection - 2 >= g_SettingsFullscreenModeCount)
+        return FULLSCREEN_RESOLUTION_DESKTOP;
+
+    return FULLSCREEN_RESOLUTION_PACK(g_SettingsFullscreenModes[selection - 2].Width, g_SettingsFullscreenModes[selection - 2].Height);
+}
+
 /* The chosen codec, or NULL for uncompressed. */
 static PCAPTURE_VIDEO_CODEC SettingsCodecChosen(VOID)
 {
@@ -789,6 +990,7 @@ static VOID SettingsDriveRadios(
     INT imageId,
     INT editId,
     INT browseId,
+    INT letterId,
     INT have,
     INT isPhysical)
 {
@@ -796,6 +998,7 @@ static VOID SettingsDriveRadios(
     HWND image = SettingsControl(imageId);
     HWND edit = SettingsControl(editId);
     HWND browse = SettingsControl(browseId);
+    HWND letter = SettingsControl(letterId);
 
     if (!have)
         isPhysical = 0;
@@ -814,103 +1017,89 @@ static VOID SettingsDriveRadios(
 
     if (browse)
         EnableWindow(browse, !isPhysical);
+
+    if (letter)
+        EnableWindow(letter, !isPhysical);
 }
 
 static VOID SettingsFloppyRadios(INT isPhysical)
 {
     SettingsDriveRadios(IDC_S_FLOPPY_PHYS, IDC_S_FLOPPY_IMG, IDC_S_FLOPPYA,
-                          IDC_S_FLOPPY_BROWSE, HostHasFloppy(), isPhysical);
+                          IDC_S_FLOPPY_BROWSE, IDC_S_FLOPPY_LETTER, HostHasFloppy(), isPhysical);
 }
 
 static VOID SettingsCdRadios(INT isPhysical)
 {
     SettingsDriveRadios(IDC_S_CD_PHYS, IDC_S_CD_IMG, IDC_S_CDROM,
-                          IDC_S_CD_BROWSE, HostHasCdrom(), isPhysical);
+                          IDC_S_CD_BROWSE, IDC_S_CD_LETTER, HostHasCdrom(), isPhysical);
 }
 
-static INT CALLBACK SettingsFontEnum(
-    const LOGFONTA *logFont,
-    const TEXTMETRICA *textMetric,
-    DWORD type,
-    LPARAM lParam)
+/* #321: the font radios; the path box and Browse only live under "Font File". */
+static VOID SettingsTextFontRadios(INT own)
 {
-    HWND control = (HWND)lParam;
+    HWND defaultFont = SettingsControl(IDC_S_TEXTFONT_DEFAULT);
+    HWND ownFont = SettingsControl(IDC_S_TEXTFONT_OWN);
+    HWND edit = SettingsControl(IDC_S_TEXTFONT);
+    HWND browse = SettingsControl(IDC_S_TEXTFONT_BROWSE);
 
-    (VOID)textMetric;
-    (VOID)type;
+    if (defaultFont)
+        SendMessageA(defaultFont, BM_SETCHECK, own ? BST_UNCHECKED : BST_CHECKED, 0);
 
-    if ((logFont->lfPitchAndFamily & LOGFONT_PITCH_MASK) != FIXED_PITCH || logFont->lfFaceName[0] == '@')
-        return 1;
+    if (ownFont)
+        SendMessageA(ownFont, BM_SETCHECK, own ? BST_CHECKED : BST_UNCHECKED, 0);
 
-    if (SendMessageA(control, CB_FINDSTRINGEXACT, (WPARAM)-1, (LPARAM)logFont->lfFaceName) == CB_ERR)
-        SendMessageA(control, CB_ADDSTRING, 0, (LPARAM)logFont->lfFaceName);
+    if (edit)
+        EnableWindow(edit, own);
 
-    return 1;
+    if (browse)
+        EnableWindow(browse, own);
 }
 
-static VOID SettingsTextFontFill(VOID)
-{
-    HWND control = SettingsControl(IDC_S_TEXTFONT);
-    HDC deviceContext;
-    LOGFONTA logFont;
-
-    if (!control)
-        return;
-
-    SendMessageA(control, CB_ADDSTRING, 0, (LPARAM)TEXTFONT_DEFAULT_ITEM);
-    ZeroMemory(&logFont, sizeof logFont);
-    logFont.lfCharSet = DEFAULT_CHARSET;
-    deviceContext = GetDC(NULL);
-
-    if (deviceContext) { EnumFontFamiliesExA(deviceContext, &logFont, (FONTENUMPROCA)SettingsFontEnum, (LPARAM)control, 0);
-              ReleaseDC(NULL, deviceContext); }
-
-    SendMessageA(control, CB_SETDROPPEDWIDTH, SETTINGS_FONT_DROPPED_WIDTH, 0);
-}
-
-/* The selected item as the stored string: "" for the default. */
+/* The stored string: "" under "Default", whatever the greyed box holds; else the box. */
 static VOID SettingsTextFontGet(PSTR out, INT cap)
 {
-    HWND control = SettingsControl(IDC_S_TEXTFONT);
-    LRESULT selector = control ? SendMessageA(control, CB_GETCURSEL, 0, 0) : CB_ERR;
-    CHAR text[NTVDMEX_PATH_MAX];
+    HWND defaultFont = SettingsControl(IDC_S_TEXTFONT_DEFAULT);
+    HWND edit = SettingsControl(IDC_S_TEXTFONT);
 
     out[0] = 0;
 
-    if (selector == CB_ERR)
+    if (!edit || (defaultFont && SendMessageA(defaultFont, BM_GETCHECK, 0, 0) == BST_CHECKED))
         return;
 
-    text[0] = 0;
-    SendMessageA(control, CB_GETLBTEXT, (WPARAM)selector, (LPARAM)text);
-
-    if (lstrcmpA(text, TEXTFONT_DEFAULT_ITEM))
-        lstrcpynA(out, text, cap);
+    GetWindowTextA(edit, out, cap);
 }
 
 static VOID SettingsTextFontPreview(VOID)
 {
-    CHAR face[NTVDMEX_PATH_MAX];
-    CHAR text[200];
+    CHAR setting[NTVDMEX_PATH_MAX];
+    CHAR text[300];
     HWND info = SettingsControl(IDC_S_TEXTFONT_INFO);
     HWND view = SettingsControl(IDC_S_TEXTFONT_VIEW);
+    PCSYSFONT_REPORT report = &g_TextFontPreviewReport;
 
-    SettingsTextFontGet(face, sizeof face);
-    SysFontBuildInto(face, &g_TextFontPreview, &g_TextFontPreviewReport);
+    SettingsTextFontGet(setting, sizeof setting);
+    SysFontBuildInto(setting, &g_TextFontPreview, &g_TextFontPreviewReport);
+    text[0] = 0;
 
-    if (!face[0])
+    if (report->IsUserFile && report->UserFace[0])
+        wsprintfA(text, SETTINGS_FONT_FACE_FORMAT, report->UserFace);
+
+    if (!setting[0])
         lstrcpyA(text, SETTINGS_FONT_DEFAULT_TEXT);
-    else if (g_TextFontPreviewReport.User == SYSFONT_USER_OK && g_TextFontPreviewReport.UserCodePage)
-        wsprintfA(text, SETTINGS_FONT_CODE_PAGE_FORMAT,
-                  g_TextFontPreviewReport.UserCodePage);
-    else if (g_TextFontPreviewReport.User == SYSFONT_USER_OK)
-        wsprintfA(text, SETTINGS_FONT_PARTIAL_FORMAT,
-                  g_TextFontPreviewReport.UserGlyphs[2]);
-    else if (g_TextFontPreviewReport.User == SYSFONT_USER_NOSIZE)
-        lstrcpyA(text, SETTINGS_FONT_NO_8_PIXEL);
+    else if (report->User == SYSFONT_USER_OK && report->UserCodePage)
+        wsprintfA(text + lstrlenA(text), SETTINGS_FONT_CODE_PAGE_FORMAT, report->UserCodePage);
+    else if (report->User == SYSFONT_USER_OK)
+        wsprintfA(text + lstrlenA(text), SETTINGS_FONT_PARTIAL_FORMAT, report->UserGlyphs[2]);
+    else if (report->User == SYSFONT_USER_NOSIZE)
+        lstrcatA(text, SETTINGS_FONT_NO_8_PIXEL);
+    else if (report->User == SYSFONT_USER_NOFILE)
+        lstrcatA(text, SETTINGS_FONT_NO_FILE);
+    else if (report->User == SYSFONT_USER_NOTFONT || report->IsUserFile)
+        lstrcatA(text, SETTINGS_FONT_NOT_FONT);
     else
-        lstrcpyA(text, SETTINGS_FONT_MISSING);
+        lstrcatA(text, SETTINGS_FONT_MISSING);
 
-    if (SysFontIsDefaultDegraded(&g_TextFontPreviewReport))
+    if (SysFontIsDefaultDegraded(report))
         lstrcatA(text, SETTINGS_FONT_437_MISSING);
 
     if (info)
@@ -920,29 +1109,24 @@ static VOID SettingsTextFontPreview(VOID)
         InvalidateRect(view, NULL, TRUE);
 }
 
-static VOID SettingsTextFontSelect(PCSTR face)
+static VOID SettingsTextFontSelect(PCSTR setting)
 {
-    HWND control = SettingsControl(IDC_S_TEXTFONT);
-    LRESULT found;
+    HWND edit = SettingsControl(IDC_S_TEXTFONT);
 
-    if (!control)
-        return;
+    if (edit)
+        SetWindowTextA(edit, setting);
 
-    found = SendMessageA(control, CB_FINDSTRINGEXACT, (WPARAM)-1,
-                     (LPARAM)(face[0] ? face : TEXTFONT_DEFAULT_ITEM));
-
-    if (found == CB_ERR && face[0])              /* stored, but no longer installed: keep it */
-        found = SendMessageA(control, CB_ADDSTRING, 0, (LPARAM)face);
-
-    SendMessageA(control, CB_SETCURSEL, (WPARAM)(found == CB_ERR ? 0 : found), 0);
+    SettingsTextFontRadios(setting[0] != 0);
     SettingsTextFontPreview();
 }
 
-/* Two lines of 64 cells from the previewed 8x16 table, light grey on black, 1:1. */
+/* One line of 64 cells from the previewed 8x16 table, light grey on black, 1:1: the sample
+ * text, then box drawing and blocks from B0h, then Greek and maths from E0h.
+ */
 static VOID SettingsTextFontDraw(const DRAWITEMSTRUCT *drawItem)
 {
     static const CHAR text[] = SETTINGS_FONT_SAMPLE_TEXT;
-    BYTE row[FONT_PREVIEW_ROWS][FONT_PREVIEW_COLUMNS];
+    BYTE row[FONT_PREVIEW_COLUMNS];
     static BYTE pixels[FONT_PREVIEW_HEIGHT][FONT_PREVIEW_COLUMNS];
     struct
     {
@@ -953,17 +1137,22 @@ static VOID SettingsTextFontDraw(const DRAWITEMSTRUCT *drawItem)
     INT pixelRow;
     INT left;
     INT top;
+    INT textLength = (INT)sizeof text - 1;
     RECT rect = drawItem->rcItem;
 
     for (index = 0; index < FONT_PREVIEW_COLUMNS; ++index)
     {
-        row[0][index] = (BYTE)(index < (INT)sizeof text - 1 ? text[index] : FONT_PREVIEW_HIGH_FIRST + (index - (INT)sizeof text + 1));
-        row[1][index] = (BYTE)(index < FONT_PREVIEW_BOX_COUNT ? FONT_PREVIEW_BOX_FIRST + index : FONT_PREVIEW_GREEK_FIRST + (index - FONT_PREVIEW_BOX_COUNT));
+        if (index < textLength)
+            row[index] = (BYTE)text[index];
+        else if (index < textLength + FONT_PREVIEW_BOX_COUNT)
+            row[index] = (BYTE)(FONT_PREVIEW_BOX_FIRST + (index - textLength));
+        else
+            row[index] = (BYTE)(FONT_PREVIEW_GREEK_FIRST + (index - textLength - FONT_PREVIEW_BOX_COUNT));
     }
 
     for (pixelRow = 0; pixelRow < FONT_PREVIEW_HEIGHT; ++pixelRow)
         for (index = 0; index < FONT_PREVIEW_COLUMNS; ++index)
-            pixels[pixelRow][index] = g_TextFontPreview.Table16[row[pixelRow / FONT_PREVIEW_CELL_HEIGHT][index]][pixelRow % FONT_PREVIEW_CELL_HEIGHT];
+            pixels[pixelRow][index] = g_TextFontPreview.Table16[row[index]][pixelRow];
 
     ZeroMemory(&bitmapInfo, sizeof bitmapInfo);
     bitmapInfo.Header.biSize = sizeof bitmapInfo.Header;
@@ -1059,6 +1248,9 @@ static VOID SettingsToDialog(const NTVDMEX_SETTINGS *settings)
     SettingsShellRadios(settings->Strings[SET_STR_SHELL][0] != 0);
     SettingsTextFontSelect(settings->Strings[SET_STR_TEXTFONT]);                 /* #321 */
     SettingsCodecSelect(settings->Values[SET_VIDEOCODEC]);                         /* #155 */
+    SettingsFullscreenModeSelect(settings->Values[SET_FSRES]);                     /* #331 */
+    SettingsDriveLetterSelect(IDC_S_FLOPPY_LETTER, settings->Values[SET_FLOPPYLETTER]);  /* s101 */
+    SettingsDriveLetterSelect(IDC_S_CD_LETTER, settings->Values[SET_CDLETTER]);
     SettingsFloppyRadios(settings->Values[SET_FLOPPYPHYS] != 0);                /* s84 */
     SettingsCdRadios(settings->Values[SET_CDPHYS] != 0);
     /* SAY WHICH VERSION PROGRAMS ACTUALLY SEE. (s80, user: "if I'm in Windows XP's
@@ -1166,7 +1358,7 @@ static VOID SettingsFromDialog(NTVDMEX_SETTINGS *settings)
         SettingsCopyString(settings->Strings[index], text, NTVDMEX_PATH_MAX);
     }
 
-    /* #321: a drop-list's text is its item; the default item stores as "". */
+    /* #321: "Default" means the empty string, whatever the greyed box holds. */
     SettingsTextFontGet(settings->Strings[SET_STR_TEXTFONT], NTVDMEX_PATH_MAX);
     /* #203: "Windows XP's own" means the empty string, whatever the greyed box holds. */
     {   HWND xpShell = SettingsControl(IDC_S_SHELL_XP);
@@ -1181,6 +1373,17 @@ static VOID SettingsFromDialog(NTVDMEX_SETTINGS *settings)
         PCAPTURE_VIDEO_CODEC codec = SettingsCodecChosen();
         settings->Values[SET_VIDEOCODEC] = codec ? codec->Handler : 0;
     }
+
+    /* #331: likewise the fullscreen resolution. */
+    if (SettingsControl(IDC_S_FSRES))
+        settings->Values[SET_FSRES] = SettingsFullscreenModeChosen();
+
+    /* s101: and each image's drive letter. */
+    if (SettingsControl(IDC_S_FLOPPY_LETTER))
+        settings->Values[SET_FLOPPYLETTER] = SettingsDriveLetterChosen(IDC_S_FLOPPY_LETTER);
+
+    if (SettingsControl(IDC_S_CD_LETTER))
+        settings->Values[SET_CDLETTER] = SettingsDriveLetterChosen(IDC_S_CD_LETTER);
 }
 
 /* The Processor page says WHICH processor -- the user's own -- so fill the static
@@ -1264,6 +1467,9 @@ INT_PTR CALLBACK SettingsPageProcedure(HWND dialog, UINT message, WPARAM wParam,
 
         SettingsFillCpuInfo(dialog);            /* no-op on pages without the static */
         SettingsCodecFill(dialog);              /* #155: no-op on pages without it */
+        SettingsFullscreenModeFill(dialog);     /* #331: no-op on pages without it */
+        SettingsDriveLetterFill(dialog, IDC_S_FLOPPY_LETTER, 1);   /* s101: no-op elsewhere */
+        SettingsDriveLetterFill(dialog, IDC_S_CD_LETTER, 0);
         return TRUE;
     }
 
@@ -1308,9 +1514,9 @@ INT_PTR CALLBACK SettingsPageProcedure(HWND dialog, UINT message, WPARAM wParam,
         return TRUE;
     }
 
-    if (message == WM_COMMAND && LOWORD(wParam) == IDC_S_TEXTFONT && HIWORD(wParam) == CBN_SELCHANGE)
+    if (message == WM_COMMAND && LOWORD(wParam) == IDC_S_TEXTFONT && HIWORD(wParam) == EN_KILLFOCUS)
     {
-        SettingsTextFontPreview();
+        SettingsTextFontPreview();                 /* #321: a typed path, once it is finished */
         return TRUE;
     }
 
@@ -1387,6 +1593,21 @@ INT_PTR CALLBACK SettingsPageProcedure(HWND dialog, UINT message, WPARAM wParam,
             if (HIWORD(wParam) == CBN_SELCHANGE)
                 SettingsCodecEnable();
 
+            return TRUE;
+
+        case IDC_S_TEXTFONT_DEFAULT:                 /* #321 */
+            SettingsTextFontRadios(SETTINGS_FONT_DEFAULT);
+            SettingsTextFontPreview();
+            return TRUE;
+
+        case IDC_S_TEXTFONT_OWN:
+            SettingsTextFontRadios(SETTINGS_FONT_OWN);
+            SettingsTextFontPreview();
+            return TRUE;
+
+        case IDC_S_TEXTFONT_BROWSE:
+            SettingsBrowse(dialog, IDC_S_TEXTFONT, SETTINGS_FILTER_TEXTFONT, SETTINGS_TITLE_TEXTFONT);
+            SettingsTextFontPreview();
             return TRUE;
 
         case IDC_S_SF_BROWSE:
@@ -1485,7 +1706,6 @@ INT_PTR CALLBACK SettingsDialogProcedure(HWND dialog, UINT message, WPARAM wPara
         }
 
         SettingsFillCombos();
-        SettingsTextFontFill();                 /* #321: the installed fonts */
         /* [CAUTION]: THE SAVED COPY, NOT THE LIVE ONE. This dialog edits the configuration
          * that persists; showing session overrides here would mean pressing OK
          * after changing an unrelated setting silently made every display

@@ -134,6 +134,43 @@ These go *through* the controller to the keyboard, and the keyboard replies.
 > **Every one of these is acknowledged with `FAh`.** A model that accepts the byte and
 > stays silent leaves a driver polling OBF for an ACK that never comes.
 
+## 6. The auxiliary device — the PS/2 mouse (#199)
+
+`D4h` to `64h` routes the **next** byte written to `60h` to the mouse instead of the
+keyboard. The mouse answers through the same output buffer, with **status bit 5 (AUXB)**
+set beside OBF, and raises **IRQ12** if command-byte bit 1 enables it. Command-byte bit 5
+(also `A7h`/`A8h`) stops the mouse's clock: its bytes wait. `A9h` tests the interface
+(`00h` = no error).
+
+| Cmd | Name | Reply |
+|---|---|---|
+| `FFh` | Reset | `FAh`, `AAh` (self test passed), `00h` (device ID) |
+| `FEh` | Resend | the last byte again |
+| `F6h` | Set defaults | `FAh` — 100 reports/s, 4 counts/mm, 1:1, stream mode, reporting off |
+| `F5h` / `F4h` | Disable / enable reporting | `FAh` |
+| `F3h` | Set sample rate | `FAh`, the rate, `FAh` |
+| `F2h` | Get device ID | `FAh`, `00h` (a standard mouse) |
+| `F0h` / `EAh` | Remote / stream mode | `FAh` |
+| `EEh` / `ECh` | Set / reset wrap (echo) mode | `FAh` |
+| `EBh` | Read data (remote mode) | `FAh`, then one packet |
+| `E9h` | Status request | `FAh`, status (bit 0 right, 1 middle, 2 left, 4 scaling 2:1, 5 reporting, 6 remote), resolution, sample rate |
+| `E8h` | Set resolution | `FAh`, `0`-`3` (1, 2, 4, 8 counts/mm), `FAh` |
+| `E7h` / `E6h` | Scaling 2:1 / 1:1 | `FAh` |
+
+**The packet**, three bytes per report: byte 0 = buttons (bit 0 left, 1 right, 2 middle),
+**bit 3 always 1**, bit 4 X sign, bit 5 Y sign, bit 6 X overflow, bit 7 Y overflow; byte 1
+= X movement, byte 2 = Y movement, each the low 8 bits of a 9-bit two's complement. **Y is
+positive UP**, the opposite of screen coordinates.
+
+**The BIOS interface, INT 15h `AX=C2xxh`:** `C200h` enable (BH=1) / disable, `C201h`
+reset (→ BH = ID, BL = `AAh`), `C202h` sample rate (BH 0-6 = 10, 20, 40, 60, 80, 100,
+200/s), `C203h` resolution (BH 0-3), `C204h` get type (→ BH = ID), `C205h` initialise
+(BH = packet size 1-8), `C206h` extended (BH=0 status → BL/CL/DL as `E9h`; 1/2 scaling),
+`C207h` install the far-call handler (ES:BX). Status in AH, CF on error: `01h` invalid
+function, `02h` invalid input, `05h` no far call installed. The BIOS's IRQ12 handler calls
+the handler once per packet with four words pushed in this order — status, X, Y, Z (0) —
+and pops them itself after the handler's `RETF`.
+
 ---
 
 ## Sources
@@ -142,3 +179,8 @@ These go *through* the controller to the keyboard, and the keyboard replies.
   register, the command byte and output port bit assignments, and the reset line.
 - **Intel 8042 UPI-42 datasheet** — the controller itself.
 - **IBM PS/2 Technical Reference** — System Control Port A (`92h`) and fast A20.
+- **IBM Personal System/2 Hardware Interface Technical Reference**, "Keyboard and
+  Auxiliary Device Controller" and "Pointing Device" — §6's commands, replies, status and
+  packet. **Ralf Brown's Interrupt List**, PORTS.LST `0060h`/`0064h` and INT 15h
+  `AX=C2xxh` — §6's BIOS interface. Neither is held in the repo (cited by name, as
+  [`SOURCES.md`](SOURCES.md) lists them); §6 is **unmeasured** until `p_ps2aux` runs.

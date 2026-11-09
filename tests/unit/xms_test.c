@@ -125,7 +125,7 @@ INT main(VOID)
      * CASE=xms.07.query.a20 SIG=AX,BX AX=0001    (enabled)
      * Ours answered AX=0000. (GH #47)
      */
-    XmsTestCheck(state.IsA20Enabled == TRUE && state.IsHmaAllocated == FALSE,
+    XmsTestCheck(state.IsA20Enabled && !state.IsHmaAllocated,
                  "init: A20 open (as the VDM really is), HMA free");
     DosXmsQueryFreeMemory(&state, &largestKb, &totalFreeKb);
     XmsTestCheck(largestKb == XMS_TEST_POOL_KB && totalFreeKb == XMS_TEST_POOL_KB,

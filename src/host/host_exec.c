@@ -20,9 +20,11 @@
 #include "host_input.h"
 #include "host_io.h"
 #include "host_irq.h"
+#include "host_ipx.h"
 #include "host_mouse.h"
 #include "host_timing.h"
 #include "host_video.h"
+#include "host_vddsvc.h"
 #include "host_window.h"
 
 #define NTVDM_BOP_DOS   0x50                /* XP's COMMAND.COM: 1 site, in its version-refusal path */
@@ -1128,6 +1130,7 @@ static INT V86ServiceTimerBop(volatile BYTE * const tib)
         VddPicEndOfInterrupt(&g_Pic, PIC_IRQ_TIMER);
         HOST_UNLOCK();
         RegistersStore(&registers, tib);
+        HostIpxTick();                                        /* #315: arrived IPX packets */
         VDM_REG(tib, VTIB_EIP) += VDM_BOP_LENGTH;            /* -> CD 1C (chain user timer) */
         {
             return HOST_FLOW_CONTINUE;
@@ -1771,6 +1774,18 @@ static VOID V86DeliverKeyboardIrq(volatile BYTE * const tib)
         else if (cs == DOS_HDLR_SEG && ip >= DOS_HDLR_INT09_STUB_OFF && ip < DOS_HDLR_INT09_STUB_END)
             ++g_Irq1In09;
 
+        /* #180: A MASKED IRQ1 IS NOT DELIVERED. The PIC's mask register was never asked
+         * here (the async path asks VddPicCanDeliver), so a guest that masked IRQ1 to poll
+         * port 60h itself -- p_kbd4, and any driver waiting for a keyboard ACK -- had the
+         * BIOS's INT 09h take the byte first. Only the MASK is honoured: the in-service
+         * rule the async path also applies has never gated this path, and is left alone.
+         */
+        if (g_Pic.Master.Imr & (1u << PIC_IRQ_KEYBOARD))
+        {
+            ++g_Irq1Masked;
+            return;
+        }
+
         if (IfOrVif(flags2) && !(cs == DOS_HDLR_SEG &&
                               ((ip >= DOS_HDLR_INT08_STUB_OFF && ip < DOS_HDLR_INT08_STUB_END) || (ip >= DOS_HDLR_INT09_STUB_OFF && ip < DOS_HDLR_INT09_STUB_END))))
         {
@@ -1924,6 +1939,7 @@ VOID HostRunExecLoop(
         V86DeliverKeyboardIrq(tib);
         V86DeliverDeviceIrq(tib);   /* see the helper: shared with the nested 0301/0302 loop */
         MouseCallbackTry(tib);          /* INT 33h 0Ch events, under the same gate as an IRQ */
+        Ps2MousePump(tib);              /* #199: a program's own PS/2 driver, if it set one up */
         /* Mirror the guest's IF into EFLAGS.VIF before handing the context back. On VME
          * hardware the kernel's deliverability test reads VIF, and VIF is lost every time
          * we synthesise an interrupt frame ourselves -- so a guest that has interrupts
@@ -1959,10 +1975,17 @@ VOID HostRunExecLoop(
                 continue;
         }
 
-        while (g_PauseWant && g_Running) /* #219 */
+        if (g_PauseWant && g_Running)                                               /* #219 */
         {
-            ++g_PauseCooperative;
-            Sleep(PAUSE_POLL_MS);
+            HostVddUserBlock();                                                     /* #11: the VDM is blocked */
+
+            while (g_PauseWant && g_Running)
+            {
+                ++g_PauseCooperative;
+                Sleep(PAUSE_POLL_MS);
+            }
+
+            HostVddUserResume();
         }
 
         CpuSpeedCooperativePark();                                                  /* #225 */
@@ -2267,6 +2290,12 @@ VOID HostRunExecLoop(
 
             if (criticalAction)                                  /* ABORT: end the program, as 4Ch */
             {
+                if (g_ExecDepth == 0 && g_TopIsShell && DosShellAbortResume(machine, tib, &cursor))
+                {
+                    LogAppend(LOG_PATH, base, cursor); cursor = base;
+                    continue;                           /* the shell's own re-entry: a new prompt */
+                }
+
                 if (DosTerminate(machine, tib, &cursor, base))
                     continue;
 

@@ -28,6 +28,7 @@
 #include "main.h"
 #include "host_audio.h"
 #include "audio_dmsynth.h"
+#include "audio_sf2.h"
 #include "host_bios.h"
 #include "host_diag.h"
 #include "host_dos.h"
@@ -337,6 +338,7 @@ static PSTR ReportCpuSpeedGovernor(PSTR cursor)
     cursor = LogPut(cursor, " periods="); cursor = LogHex(cursor, g_CpuSpeedPeriods);
     cursor = LogPut(cursor, " aff="); cursor = LogHex(cursor, (DWORD)g_CpuAffinityOn);
     cursor = LogPut(cursor, " ncpu="); cursor = LogHex(cursor, g_CpuAffinityCpuCount);
+    cursor = LogPut(cursor, " die_mask="); cursor = LogHex(cursor, g_CpuDieMask);
     return cursor;
 }
 
@@ -351,7 +353,7 @@ static PSTR ReportDeliveryLatencies(PSTR cursor)
     cursor = LogPut(cursor, " pm=");    cursor = LogHex(cursor, g_MouseCallbackPm);
     cursor = LogPut(cursor, " active="); cursor = LogHex(cursor, (DWORD)g_MouseCallbackActive);
     cursor = LogPut(cursor, " raised="); cursor = LogHex(cursor, g_MouseEventRaised);
-    cursor = LogPut(cursor, " why[fly,none,nohdl,stub,if]=");
+    cursor = LogPut(cursor, " why[fly,none,nohdl,stub,if,clob,guestdrv]=");
     {
         INT reason;
 
@@ -1348,6 +1350,55 @@ static PSTR ReportDeviceIrqRetriesAndSoundBlocks(
         cursor = LogPut(cursor, "\r\n");
     }
 
+    /* The SoundFont synth (audio_sf2.h): whether the font loaded, what is in it, what playing
+     * it cost, and the step that failed if it did not.
+     */
+    if (g_MidiSoundFont)
+    {
+        static const PCSTR stateNames[] = { "idle (no MIDI played)", "starting", "ready", "FAILED" };
+        PCAUDIO_SF2_STATS fontStats = AudioSf2Stats();
+        LARGE_INTEGER frequency;
+        QueryPerformanceFrequency(&frequency);
+        cursor = LogPut(cursor, "STAGE2: midi soundfont: ");
+        cursor = LogPut(cursor, stateNames[fontStats->State & 3]);
+
+        if (fontStats->FailedStep)
+        {
+            cursor = LogPut(cursor, " at ");
+            cursor = LogPut(cursor, fontStats->FailedStep);
+
+            if (fontStats->FailedDetail)
+            {
+                cursor = LogPut(cursor, " (");
+                cursor = LogPut(cursor, fontStats->FailedDetail);
+                cursor = LogPut(cursor, ")");
+            }
+
+            cursor = LogPut(cursor, " error=");
+            cursor = LogDecimal(cursor, fontStats->FailedError);
+            cursor = LogPut(cursor, " -> MIDI to midiOut");
+        }
+
+        cursor = LogPut(cursor, " file=\"");    cursor = LogPut(cursor, AudioSf2Path());
+        cursor = LogPut(cursor, "\" bytes=");   cursor = LogDecimal(cursor, fontStats->FileBytes);
+        cursor = LogPut(cursor, " presets=");     cursor = LogDecimal(cursor, fontStats->Presets);
+        cursor = LogPut(cursor, " instruments="); cursor = LogDecimal(cursor, fontStats->Instruments);
+        cursor = LogPut(cursor, " samples=");     cursor = LogDecimal(cursor, fontStats->Samples);
+        cursor = LogPut(cursor, " start_ms=");    cursor = LogDecimal(cursor, fontStats->StartMs);
+        cursor = LogPut(cursor, " warm_ms=");     cursor = LogDecimal(cursor, fontStats->WarmMs);
+        cursor = LogPut(cursor, " msgs=");        cursor = LogDecimal(cursor, fontStats->Messages);
+        cursor = LogPut(cursor, " sysex=");       cursor = LogDecimal(cursor, fontStats->SysEx);
+        cursor = LogPut(cursor, " dropped=");     cursor = LogDecimal(cursor, fontStats->Dropped);
+        cursor = LogPut(cursor, " notes=");       cursor = LogDecimal(cursor, fontStats->NotesOn);
+        cursor = LogPut(cursor, " notes_silent=");cursor = LogDecimal(cursor, fontStats->NotesSilent);
+        cursor = LogPut(cursor, " voices_peak="); cursor = LogDecimal(cursor, fontStats->VoicesPeak);
+        cursor = LogPut(cursor, " stolen=");      cursor = LogDecimal(cursor, fontStats->VoicesStolen);
+        cursor = LogPut(cursor, " renders=");     cursor = LogDecimal(cursor, fontStats->RenderCalls);
+        cursor = LogPut(cursor, " render_ms=");   cursor = LogDecimal(cursor, (UINT)(fontStats->RenderTicks * 1000 / frequency.QuadPart));
+        cursor = LogPut(cursor, " worst_us=");    cursor = LogDecimal(cursor, (UINT)(fontStats->RenderTicksWorst * 1000000 / frequency.QuadPart));
+        cursor = LogPut(cursor, "\r\n");
+    }
+
     /* - THE BLOCK-BOUNDARY LEDGER (see the SB_BLOCK_RECORD comment in vdd_sb.h). One line
      * per completed block for the first few: where the capture stood, what the
      * 8237 held, and whether it had wrapped. cap_off is the load-bearing column --
@@ -2151,6 +2202,7 @@ static PSTR ReportModeY(PSTR cursor)
     cursor = LogPut(cursor, " swaps="); cursor = LogHex(cursor, g_ModeYSwaps);
     cursor = LogPut(cursor, " fanouts="); cursor = LogHex(cursor, g_ModeYFanouts);
     cursor = LogPut(cursor, " failed="); cursor = LogHex(cursor, g_ModeYFail);
+    cursor = LogPut(cursor, " map_retries="); cursor = LogHex(cursor, g_ModeYMapRetries);
     /* - ARE THE PLANES COLLAPSED, OR DOES THE RENDER COLLAPSE THEM? The oracle says
      * 62% of the status bar's four-pixel groups hold one value where the reference
      * holds four. That can only come from the four PLANES agreeing, or from the

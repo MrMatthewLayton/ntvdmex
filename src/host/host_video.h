@@ -69,6 +69,9 @@ VOID ModeYRemapReadMap(PVOID context, INT plane);
 VOID ModeYRemapWriteMode(PVOID context, INT writeMode);
 INT ModeYNeedsInterp(VOID);
 INT InterpreterMemoryPageOk(UINT32 linear);
+/* #11: mark pages a VDD answers (memory hooks, claimed ranges), or put them back. */
+VOID HostPageMapHook(UINT32 linear, UINT32 byteCount);
+VOID HostPageMapReset(UINT32 linear, UINT32 byteCount);
 INT ModeYPmNeedsInterp(VOID);
 VOID ModeYPmRun(volatile BYTE *tib);
 UINT32 HostGuestPc(VOID);

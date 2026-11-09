@@ -36,18 +36,13 @@
  * `fdc.cmdwait` is not a register value, it is the loop above, bounded to 65536
  * turns and asked whether it terminated. On both oracles it did.
  *
- * WHAT THIS IS AND IS NOT:
- * This is the CHIP: the register file, the three-phase command protocol, and every
- * command that does not move sector data. That is the whole of what a detection
- * routine asks and the whole of the hang.
- *
- * [WARNING]: THE DATA COMMANDS ARE **PART**, AND DELIBERATELY SO. READ DATA, WRITE DATA,
- * READ TRACK and FORMAT TRACK are recognised, consume their parameters, and
- * terminate with the documented ABNORMAL TERMINATION result (ST0 bits 7:6 = 01,
- * ST1 = no data) rather than pretending to be invalid commands. They need the
- * 8237A wired to the image handle INT 13h already holds, which is the next step
- * and a bigger one. A reported I/O error is not a good answer; it is a
- * *reported* one, which is the entire difference being bought here.
+ * WHAT THIS IS:
+ * The CHIP: the register file, the three-phase command protocol, every command that
+ * does not move sector data -- the whole of what a detection routine asks -- and,
+ * since #178, the data commands too. READ DATA, WRITE DATA, READ TRACK and FORMAT
+ * TRACK run against the image INT 13h already holds (lent by the host through
+ * MediaGeometry/MediaTransfer, so the chip never opens a file), moving the bytes over
+ * the 8237's channel 2, or through 3F5h when SPECIFY asked for non-DMA mode.
  *
  * DORMANT BY DEFAULT:
  * IRQ6 is raised only in response to a command the guest issued, and only when the
@@ -56,7 +51,8 @@
  * change, the same property that made the RTC's IRQ8 safe to add.
  *
  * Pure C, no <windows.h>: nothing here touches a file or a clock, so the whole
- * chip is exercised off-VM by tests/unit/fdc_test.c.
+ * chip -- data path included, against an in-memory image -- is exercised off-VM by
+ * tests/unit/fdc_test.c.
  *
  *
  *
@@ -68,6 +64,7 @@
 #define NTVDMEX_VDD_FDC_H
 
 #include "vdd_bus.h"
+#include "vdd_dma.h"
 
 #define FDC_BASE                0x3F0
 #define FDC_DOR                 0x3F2   /* R/W: motors, DRIVE SEL, /RESET, DMAGATE */
@@ -97,6 +94,34 @@
 #define FDC_DRIVES              4
 #define FDC_DEVICE_NAME         "fdc"
 #define FDC_PHASE_RESULT        1       /* The host is reading a result */
+#define FDC_PHASE_EXECUTION     2       /* #178: non-DMA data moving through 3F5h */
+#define FDC_SECTOR_SIZE         512     /* N = 2, the only size a PC diskette uses */
+#define FDC_SIZE_CODE_512       2       /* N = 2: 512-byte sectors */
+
+/* Result-byte fields (docs/ref/fdc.md 6) the BIOS side reports in 0040:0042 too (#178). */
+#define FDC_ST0_NORMAL          0x00    /* Interrupt code 00: normal termination */
+#define FDC_ST0_ABNORMAL        0x40    /* Interrupt code 01: abnormal termination */
+#define FDC_HEAD_SHIFT          2       /* ST0 / the drive-head byte: the head is bit 2 */
+#define FDC_ST1_NO_DATA         0x04    /* Sector not found */
+#define FDC_ST2_CLEAR           0x00
+#define FDC_DMA_CHANNEL         2       /* Docs/ref/fdc.md 1 */
+#define FDC_ID_BYTES            4       /* FORMAT: C H R N per sector */
+
+/* #178: THE MEDIUM BEHIND THE DRIVE, AS THE HOST HOLDS IT. The chip does not open files;
+ * the host already has the image INT 13h reads, and lends it through these. Both may be
+ * NULL (no medium: a data command ends with ST1 missing-address-mark).
+ */
+typedef struct _FDC_GEOMETRY
+{
+    WORD Cylinders;
+    BYTE Heads;
+    BYTE SectorsPerTrack;
+} FDC_GEOMETRY, *PFDC_GEOMETRY;
+
+/* 1 = a medium is in `drive`, and its shape is in `geometry`. */
+typedef INT (*PFDC_MEDIA_GEOMETRY)(PVOID context, BYTE drive, PFDC_GEOMETRY geometry);
+/* Move one 512-byte sector between the medium and `buffer`. 1 = done. */
+typedef INT (*PFDC_MEDIA_TRANSFER)(PVOID context, BYTE drive, WORD cylinder, BYTE head, BYTE sector, PBYTE buffer, INT isWrite);
 
 typedef struct _FDC_STATE
 {
@@ -141,11 +166,38 @@ typedef struct _FDC_STATE
     BYTE  IsLocked;                /* LOCK: keep CONFIGURE across a s/w reset */
     BYTE  LastEot;              /* the sector count of the last data command */
 
+    /* #178: THE DATA PATH. The medium is the host's (see PFDC_MEDIA_*); the bytes move
+     * over the 8237's channel 2, or -- SPECIFY's ND bit set -- through 3F5h one at a time.
+     */
+    PDMA_STATE Dma;                    /* NULL: no 8237, every DMA transfer overruns */
+    PFDC_MEDIA_GEOMETRY MediaGeometry;
+    PFDC_MEDIA_TRANSFER MediaTransfer;
+    PVOID MediaContext;
+
+    /* The non-DMA execution phase: where the command is, and the sector in flight. */
+    BYTE  ExecOpcode;
+    BYTE  ExecDrive;
+    BYTE  ExecHead;               /* the physical head (the drive/head byte's HDS) */
+    BYTE  ExecCylinder;           /* C, H, R as the command will report them */
+    BYTE  ExecHeadAddress;
+    BYTE  ExecSector;
+    BYTE  ExecSizeCode;
+    BYTE  ExecEot;
+    BYTE  ExecIsMultiTrack;
+    BYTE  ExecFill;               /* FORMAT: the fill byte, and the sectors left */
+    BYTE  ExecSectorsLeft;
+    WORD  ExecPosition;
+    WORD  ExecLength;
+    BYTE  ExecBuffer[FDC_SECTOR_SIZE];
+
     /* Counters a run can report -- the same habit as every other VDD here. */
     UINT32 Commands;
     UINT32 InvalidCommands;
     UINT32 Irqs;
     UINT32 Resets;
+    UINT32 SectorsRead;                /* #178 */
+    UINT32 SectorsWritten;
+    UINT32 TracksFormatted;
 } FDC_STATE, *PFDC_STATE;
 
 typedef const FDC_STATE *PCFDC_STATE;
@@ -159,6 +211,18 @@ VOID VddFdcReset(PVOID context);
 VOID    VddFdcPortOut(_In_ PVOID context, _In_ WORD port, _In_ BYTE width, _In_ UINT32 value);
 VOID    VddFdcPortIn(_In_ PVOID context, _In_ WORD port, _In_ BYTE width, _Out_ UINT32 *value);
 BYTE VddFdcMainStatus(_In_ PCFDC_STATE state);
+
+/* #178: INT 13h MOVES THE SAME HEAD. The BIOS service reads the image directly, but on
+ * the machine it emulates it drives this chip, so the cylinder a read ended on is where
+ * the head is -- and SENSE INTERRUPT, DUMPREG and READ ID must say so.
+ */
+VOID VddFdcSetCylinder(_Inout_ PFDC_STATE state, _In_ BYTE drive, _In_ BYTE cylinder);
+
+/* #178: the BIOS INT 08h's diskette motor countdown, as a PIT BiosTickHook (`context` =
+ * the FDC_STATE). IBM PC/AT Technical Reference, TIMER_INT: 0040:0040 counts down; at
+ * zero the motor bits of 0040:003F clear and DOR goes back to 0Ch.
+ */
+VOID VddFdcBiosMotorTick(_In_ PVOID context, _Inout_ volatile BYTE *biosData);
 
 static inline NTVDD_DEVICE VddFdcDevice(_In_ PFDC_STATE state)
 { NTVDD_DEVICE device;

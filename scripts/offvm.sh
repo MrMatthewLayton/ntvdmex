@@ -34,20 +34,20 @@ INCS=(-I "$ROOT/src/dos" -I "$ROOT/src/vdd" -I "$ROOT/src" -I "$ROOT/src/host" -
 # ⚠ HALF THE BATTERY IS NOT HEADER-ONLY. The vdd tests exercise real device
 #   models (vdd_bus_add, vdd_pic_acknowledge, ...), so the implementation has to
 #   be linked in or they fail at LINK time -- which looks exactly like a broken
-#   test and is how 14 of 30 first appeared here. Three sources genuinely cannot
+#   test and is how 14 of 30 first appeared here. Four sources genuinely cannot
 #   build off-VM (audio_wave.c, present_ddraw.c and audio_dmsynth.c want DirectSound,
-#   DirectDraw and DirectMusic);
+#   DirectDraw and DirectMusic; audio_sf2.c maps its file with Win32);
 #   everything else in src/vdd is portable enough for a native build, which is
 #   what makes an off-VM device battery possible at all.
 # ⚠ AND THE CODE THAT USED TO LIVE IN HEADERS (#335). A header split into declarations and a
 #   .c leaves a test that included it for the code with only the declarations, so these
 #   sources -- portable, no Win32 beyond the shared types -- are linked in on the retry.
-LIBSRC=("$ROOT/src/dos/dos_recovery.c" "$ROOT/src/host/cpuspeed.c" "$ROOT/src/wow/ne.c" "$ROOT/src/host/install.c" "$ROOT/src/host/dpmi_svc.c"
-        "$ROOT/src/dos/dos_disk.c" "$ROOT/src/dos/dos_err.c" "$ROOT/src/host/x86len.c" "$ROOT/src/host/dpmi_rmcs.c"
-        "$ROOT/src/host/i33_driver.c" "$ROOT/src/host/pif.c" "$ROOT/src/host/capture_avi.c")
+LIBSRC=("$ROOT/src/dos/dos_recovery.c" "$ROOT/src/host/cpuspeed.c" "$ROOT/src/host/tsc_clock.c" "$ROOT/src/host/cpu_die.c" "$ROOT/src/wow/ne.c" "$ROOT/src/host/install.c" "$ROOT/src/host/dpmi_svc.c"
+        "$ROOT/src/dos/dos_disk.c" "$ROOT/src/dos/dos_err.c" "$ROOT/src/dos/dos_fatimg.c" "$ROOT/src/dos/dos_iso9660.c" "$ROOT/src/dos/dos_alias.c" "$ROOT/src/host/x86len.c" "$ROOT/src/host/dpmi_rmcs.c"
+        "$ROOT/src/host/i33_driver.c" "$ROOT/src/host/pif.c" "$ROOT/src/host/capture_avi.c" "$ROOT/src/host/capture_scale.c")
 VDDSRC=()
 for v in "$ROOT"/src/vdd/*.c; do
-    case "$(basename "$v")" in audio_wave.c|present_ddraw.c|audio_dmsynth.c) continue;; esac
+    case "$(basename "$v")" in audio_wave.c|present_ddraw.c|audio_dmsynth.c|audio_sf2.c) continue;; esac
     VDDSRC+=("$v")
 done
 

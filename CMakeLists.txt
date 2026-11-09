@@ -130,17 +130,22 @@ add_executable(ntvdmhost
     src/host/host_video.c
     src/host/host_settings.c
     src/host/host_dos.c
+    src/host/host_cdrom.c
     src/host/host_bios.c
     src/host/host_mouse.c
     src/host/host_timing.c
     src/host/host_irq.c
+    src/host/host_ipx.c
     src/host/host_io.c
+    src/host/host_vddsvc.c
     src/host/host_input.c
     src/host/host_audio.c
     src/host/host_install.c
     src/host/install.c
     src/host/dpmi_svc.c
     src/host/cpuspeed.c
+    src/host/tsc_clock.c
+    src/host/cpu_die.c
     src/host/pcspeaker.c
     src/host/settings.c
     src/host/sysfont.c
@@ -157,6 +162,9 @@ add_executable(ntvdmhost
     src/dos/dos_recovery.c
     src/dos/dos_disk.c
     src/dos/dos_err.c
+    src/dos/dos_fatimg.c
+    src/dos/dos_iso9660.c
+    src/dos/dos_alias.c
     src/wow/ne.c
     src/wow/wowsched.c
     src/vdd/vdd_bus.c
@@ -166,6 +174,7 @@ add_executable(ntvdmhost
     src/vdd/vdd_ide.c
     src/vdd/vdd_pic.c
     src/vdd/vdd_dma.c
+    src/vdd/vdd_svc.c
     src/vdd/vdd_opl.c
     src/vdd/vdd_opl_synth.c
     src/vdd/vdd_sb.c
@@ -174,16 +183,23 @@ add_executable(ntvdmhost
     src/vdd/vdd_mpu.c
     src/vdd/vdd_comm.c
     src/vdd/vdd_net.c
+    src/vdd/vdd_ipx.c
     src/vdd/vdd_audio.c
     src/vdd/audio_wave.c
     src/vdd/audio_dmsynth.c
+    src/vdd/audio_sf2.c
+    src/vdd/sf2_font.c
+    src/vdd/sf2_synth.c
     src/host/capture_avi.c
     src/host/capture_video.c
+    src/host/capture_scale.c
     src/vdd/vdd_video.c
     src/vdd/vdd_input.c
+    src/vdd/vdd_aux.c
     src/vdd/vdd_speaker.c
     src/vdd/vdd_joy.c
     src/vdd/present_ddraw.c
+    src/vdd/present_sharp.c
     src/runtime.c
     res/ntvdmhost.rc)
 # The .rc names MAINICON.ico but CMake does not scan .rc includes, so a new icon alone
@@ -234,6 +250,7 @@ if(EXISTS "${CMAKE_SOURCE_DIR}/tools/present_demo/present_demo.c")
 add_executable(present_demo WIN32
     tools/present_demo/present_demo.c
     src/vdd/present_ddraw.c
+    src/vdd/present_sharp.c
     src/vdd/present_scale.c
     src/runtime.c)
 target_include_directories(present_demo PRIVATE src/vdd)

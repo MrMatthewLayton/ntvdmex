@@ -5,7 +5,8 @@
 #            release zip (artifact `release-zip`) -- the one that is tested, then published
 #   battery  the off-machine unit tests (scripts/offvm.sh), built natively
 #   style    scripts/style.sh --check, and the style tool's own tests; the names-and-types
-#            report (scripts/style.sh --names), which does not fail the run yet
+#            check (scripts/style.sh --names), which fails the run on N1-N4 and N7 and
+#            reports N5/N6
 #
 # What CI cannot do is run NTVDMEX: that needs a real Windows XP machine. The maintainer runs
 # that check before merging; see docs/testing.md.
@@ -91,6 +92,7 @@ jobs:
       - name: Every C file is in the house style
         run: ./scripts/style.sh --check
 
-      # Report only, until the tree is clean against it; then it blocks like the rest.
-      - name: Names and types (report)
-        run: ./scripts/style.sh --names --summary
+      # The rules the tree is clean against block (#344); N5 (types) and N6 (width) report only,
+      # until the tree is clean against them too.
+      - name: Names and types
+        run: ./scripts/style.sh --names --summary --block=N1,N2,N3,N4,N7

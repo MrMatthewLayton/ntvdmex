@@ -157,6 +157,15 @@ INT main(VOID)
                      "init_top(DOS_MEM_TOP) is byte-identical to the old init (whole 1 MB)");
     }
 
+    /* #199: THE EQUIPMENT WORD SAYS THERE IS A PS/2 MOUSE (bit 2), whatever else is fitted --
+     * MOUSE.COM 6.24A refuses the PS/2 port without it ("Microsoft Mouse not found").
+     */
+    BdaTestCheck(BiosEquipmentCompose(0, 0, 0, 0) == 0x0025, "equipment: bare machine = floppy + PS/2 mouse + 80x25 colour (0025h)");
+    BdaTestCheck((BiosEquipmentCompose(0, 0, 0, 0) & 0x0004) != 0, "equipment: bit 2 (pointing device) is set");
+    BdaTestCheck(BiosEquipmentCompose(0, 3, 1, 0) == 0xC027, "equipment: 3 printers + FPU = C027h");
+    BdaTestCheck(BiosEquipmentCompose(4, 3, 1, 1) == 0xD827, "equipment: 4 serial + 3 printers + FPU + gameport = D827h");
+    BdaTestCheck(BiosEquipmentCompose(8, 4, 0, 0) == 0x0025, "equipment: counts past their fields are masked, not carried");
+
     printf("\n%d checks, %d failed\n", g_Total, g_Failures);
     return g_Failures ? 1 : 0;
 }

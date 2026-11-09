@@ -561,6 +561,72 @@ INT main(VOID)
         }
     }
 
+    /* #48: AN SFT ENTRY, RBIL's DOS 4.0-6.0 LAYOUT (dos_sysvars.h). */
+    {
+        BYTE block[DOS_SFT_HEADER + 3 * DOS_SFT_ENTSZ];
+        DOS_SFT_FILE file;
+        PBYTE entry;
+        UINT index;
+
+        for (index = 0; index < sizeof block; ++index)
+            block[index] = 0xEE;
+
+        for (index = 0; index < sizeof file; ++index)
+            ((PBYTE)&file)[index] = 0;
+
+        file.References = 2;
+        file.OpenMode = 0x0042;
+        file.Attribute = 0x20;
+        file.DeviceInfo = 0x0002;
+        file.Time = 0x6C21;
+        file.Date = 0x5B57;
+        file.Size = 0x00012345;
+        file.Position = 0x00010002;
+        file.OwnerPsp = 0x1234;
+        DosSftNameFromPath("C:\\games\\lemmings\\russell.dat", file.Name);
+        entry = DosSftEntryAt(block, 1);
+        SysVarsTestExpect("sft: entry 1 starts after the header and entry 0", (LONG)(entry - block), DOS_SFT_HEADER + DOS_SFT_ENTSZ);
+        DosSftEntryBuild(entry, &file);
+        SysVarsTestExpect("sft +00 references", SysVarsTestWordAt(entry + 0x00), 2);
+        SysVarsTestExpect("sft +02 open mode", SysVarsTestWordAt(entry + 0x02), 0x0042);
+        SysVarsTestExpect("sft +04 attribute", entry[0x04], 0x20);
+        SysVarsTestExpect("sft +05 device info", SysVarsTestWordAt(entry + 0x05), 0x0002);
+        SysVarsTestExpect("sft +07 DPB pointer: 0, no FAT behind a host file", SysVarsTestWordAt(entry + 0x07) | SysVarsTestWordAt(entry + 0x09), 0);
+        SysVarsTestExpect("sft +0D time", SysVarsTestWordAt(entry + 0x0D), 0x6C21);
+        SysVarsTestExpect("sft +0F date", SysVarsTestWordAt(entry + 0x0F), 0x5B57);
+        SysVarsTestExpect("sft +11 size, low", SysVarsTestWordAt(entry + 0x11), 0x2345);
+        SysVarsTestExpect("sft +13 size, high", SysVarsTestWordAt(entry + 0x13), 0x0001);
+        SysVarsTestExpect("sft +15 position, low", SysVarsTestWordAt(entry + 0x15), 0x0002);
+        SysVarsTestExpect("sft +17 position, high", SysVarsTestWordAt(entry + 0x17), 0x0001);
+        SysVarsTestExpect("sft +31 owner PSP", SysVarsTestWordAt(entry + 0x31), 0x1234);
+        SysVarsTestExpect("sft +37 IFS pointer: 0, native", SysVarsTestWordAt(entry + 0x37) | SysVarsTestWordAt(entry + 0x39), 0);
+        ++g_Checks;
+
+        if (memcmp(entry + 0x20, "RUSSELL DAT", DOS_SFT_NAME_SIZE) != 0)
+            SysVarsTestFail("sft +20 the last path component, FCB form, upper-case");
+
+        SysVarsTestExpect("sft: the entry ends where the next begins (untouched)", block[DOS_SFT_HEADER + 2 * DOS_SFT_ENTSZ], 0xEE);
+        SysVarsTestExpect("sft: ...and the one before it is untouched too", block[DOS_SFT_HEADER + DOS_SFT_ENTSZ - 1], 0xEE);
+        DosSftEntryClear(entry);
+        SysVarsTestExpect("sft: a cleared entry has no references (free)", SysVarsTestWordAt(entry), 0);
+        ++g_Checks;
+
+        if (memcmp(entry + 0x20, "\0\0\0\0\0\0\0\0\0\0\0", DOS_SFT_NAME_SIZE) != 0)
+            SysVarsTestFail("sft: ...and nothing else left behind");
+
+        DosSftNameFromPath("readme", file.Name);
+        ++g_Checks;
+
+        if (memcmp(file.Name, "README     ", DOS_SFT_NAME_SIZE) != 0)
+            SysVarsTestFail("sft name: no extension, blank-padded");
+
+        DosSftNameFromPath("A:LONGFILENAME.TEXT", file.Name);
+        ++g_Checks;
+
+        if (memcmp(file.Name, "LONGFILETEX", DOS_SFT_NAME_SIZE) != 0)
+            SysVarsTestFail("sft name: drive prefix dropped, 8 and 3 truncated");
+    }
+
     printf("== %d checks, %d failed\n", g_Checks, g_Failures);
     return g_Failures ? 1 : 0;
 }

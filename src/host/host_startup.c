@@ -19,6 +19,7 @@
 #include "main.h"
 #include "host_audio.h"
 #include "audio_dmsynth.h"
+#include "audio_sf2.h"
 #include "capture_video.h"
 #include "host_bios.h"
 #include "host_diag.h"
@@ -35,6 +36,8 @@
 #include "host_video.h"
 #include "host_window.h"
 #include "host_wow.h"
+#include "host_vddsvc.h"
+#include "host_cdrom.h"
 
 /* LOG_PATH now lives in log.h -- see the note there. */
 /* Both are written by the runner and READ by us, so they are cfg, not out. */
@@ -243,6 +246,9 @@
 /* cpuaff.txt = 1 -> pin the guest to a core of its own (see CpuAffinityApply). */
 #define CPUAFF_PATH                 CFG_("cpuaff.txt")
 
+/* cpudie.txt = 0 Auto, 1 Off: overrides SET_CPUDIE, for interleaved A/Bs on the test machine. */
+#define CPUDIE_PATH                 CFG_("cpudie.txt")
+
 #define DOSVER_PATH                 CFG_(KNOB_FILE_DOSVER)
 
 /* INT 21h AH=53h's private AL sub-functions. A knob because the measured values are
@@ -295,9 +301,7 @@
  * safe. NB offset 0x58 is DOS_IRET_STUB_OFF and BOP 0x57 is DPMI_FAULT_BOP; these
  * take the next free slots in both namespaces.
  */
-#define DPMI_RAW2PM_BOP             0x58                                /* Real -> protected (entered in V86) */
-
-#define DPMI_RAW2RM_BOP             0x59                                /* Protected -> real (entered in PM) */
+/* DPMI_RAW2PM_BOP (0x58) and DPMI_RAW2RM_BOP (0x59) are in host_types.h: #268 services them. */
 
 /* EMS (M4): the LIM page frame is a 64KB RAM window in the UMA. VdmMapEmsFrame
  * scans the conventional page-frame segments AFTER VdmInitialize for a free 64KB
@@ -344,6 +348,16 @@
 #define MODEY_GAP_MAX_U             65536u
 
 #define OS_VERSION_NOT_NT_U         0x80000000u /* GetVersion: the high bit is set on Windows 9x */
+
+/* Build DOS's drive tables -- the DPBs and the CDS -- for the drive letters that exist (GetLogicalDrives),
+ * capped at what the reserved space holds, and the device chain from the NUL device.
+ *
+ * [CAUTION]: ITS LOG LINE HAS A BUFFER OF ITS OWN. (s101) It was written from the start of
+ * WinMain's report[], which still held the start-up lines not yet flushed -- so every log
+ * opened with this line written over them, and the lines lost were the ones a rig report
+ * needs (the CD-ROM mount, the settings summary).
+ */
+#define STARTUP_DRIVE_LINE_SIZE     1024
 
 /* The planted code fits its slots in the DOS-resident block (dos_layout.h). */
 typedef CHAR DOS_AUXPRN_FITS[(sizeof(g_DosAuxPrnCode) <= DOS_AUXPRN_LEN) ? 1 : -1];
@@ -613,13 +627,7 @@ static VOID StartupLoadVideoWatch(VOID)
       } }
 }
 
-/* Build DOS's drive tables -- the DPBs and the CDS -- for the drive letters that exist (GetLogicalDrives),
- * capped at what the reserved space holds, and the device chain from the NUL device.
- */
-static VOID StartupBuildDriveTables(
-    CHAR *report,
-    volatile BYTE * const sysVars,
-    DOS_MACHINE *machine)
+static VOID StartupBuildDriveTables(volatile BYTE * const sysVars, DOS_MACHINE *machine)
 {
     /* THE REAL CHAINS: DPB, CDS AND THE DEVICE HEADER. (GH #48) (Importance = 1):
      * Until now everything above +0x20 was deliberately zero, and that choice was
@@ -644,7 +652,8 @@ static VOID StartupBuildDriveTables(
         UINT count = 0;
         UINT slot[DOS_DPBCHAIN_MAX];
         UINT driveCount = 0;
-        PSTR scan = report;
+        CHAR line[STARTUP_DRIVE_LINE_SIZE];
+        PSTR scan = line;
         /* Which drive letters exist, capped at what the reserved space holds.
          * Counted FIRST, because each DPB's `next` pointer has to name the one
          * after it and the last must terminate -- and a chain that does not
@@ -683,6 +692,9 @@ static VOID StartupBuildDriveTables(
             rootText[2] = '\\';
             rootText[3] = 0;
             driveTypes[drive] = GetDriveTypeA(rootText);
+
+            if ((INT)drive == HostCdromDrive())
+                driveTypes[drive] = DRIVE_CDROM;          /* #241: a cache directory underneath, a CD-ROM to DOS */
 
             if (driveTypes[drive] != DRIVE_FIXED && driveTypes[drive] != DRIVE_RAMDISK
                 && driveTypes[drive] != DRIVE_REMOVABLE)
@@ -840,7 +852,8 @@ static VOID StartupBuildDriveTables(
 
                 if (have)
                     flags = DOS_CDS_FLAG_PHYSICAL;
-                else if (driveTypes[di2] == DRIVE_CDROM || driveTypes[di2] == DRIVE_REMOTE)
+                else if (driveTypes[di2] == DRIVE_CDROM || driveTypes[di2] == DRIVE_REMOTE
+                         || (INT)di2 == g_FloppyImageDrive)      /* s101: the floppy image's letter, no DPB */
                     flags = DOS_CDS_FLAG_PHYSICAL | DOS_CDS_FLAG_NETWORK;
 
                 DosCdsBuild(cds, di2, flags, DOS_CTAB_SEG,
@@ -929,7 +942,7 @@ static VOID StartupBuildDriveTables(
 
         scan = LogPut(scan, " (GH #48)\r\n");
         SetErrorMode(previousErrorMode);
-        LogAppend(LOG_PATH, report, scan); SerialOut(report, scan);
+        LogAppend(LOG_PATH, line, scan); SerialOut(line, scan);
     }
 }
 
@@ -3113,6 +3126,16 @@ VOID StartupStartGuest(
      * in place before its first instruction.
      */
     VddLoadThirdParty();
+    {   /* #11: and the VDDs Windows lists in the registry, as NTVDM loads them -- here for the
+         * same two reasons: their claims are in place before the guest runs, and their log
+         * lines survive.
+         */
+        static CHAR registryLine[2048];
+        PSTR registryEnd = HostVddRegistryLoad(registryLine);
+
+        if (registryEnd != registryLine)
+            LogAppend(LOG_PATH, registryLine, registryEnd);
+    }
     StartupReportVectorWiring();
     /* [CAUTION]: AFTER THE **LAST** LogWrite. There are THREE of them in WinMain and every one
      * TRUNCATES. This probe was placed after the first, then after the second, and
@@ -3214,9 +3237,15 @@ VOID StartupConnectDosToHost(DOS_MACHINE *machine)
     machine->ConsoleInNoWait = HostConsoleInNoBlock;                   /* AH=06 DL=FF non-blocking read */
     machine->ConsolePeek = HostConsolePeek;                   /* AH=0B/06 non-blocking status */
     machine->SetTicks = HostSetTicks;               /* AH=2Dh reloads 0040:006C (#250) */
+    machine->CdromDrive = HostCdromDrive();          /* #241: the ISO-backed MSCDEX drive, if any */
+    machine->CdromSectors = HostCdromSectors();
+    HostCdromLabel(machine->CdromLabel);
+    machine->PathPrepare = (machine->CdromDrive >= 0) ? HostCdromPrepare : 0;
+    machine->PathPrepareContext = NULL;
     machine->TicksContext = NULL;
     machine->PrinterOut  = DosPrnOut;                     /* #251: PRN/AUX when not in V86 */
     machine->AuxOut  = DosAuxOut;
+    machine->AuxIn   = DosAuxIn;                          /* #272: AUX input without the driver (PM) */
     machine->DeviceContext = NULL;
 }
 
@@ -3311,6 +3340,19 @@ PSTR StartupStartServices(PSTR cursor)
         }
     }
 
+    /* SOUNDFONT WITH A FILE -- our own SF2 synth, started when a guest enters MPU UART mode.
+     * MidiChoice stays SoundFont, so midiOut still opens what MIDI = SoundFont always found
+     * (a SoundFont driver by name, else device 0): that is where MIDI goes if the font will
+     * not load. With no file, nothing here changes: the driver search alone, as before.
+     */
+    if (g_Wave.MidiChoice == MIDI_ROUTE_SF2 && g_Settings.Strings[SET_STR_SOUNDFONT][0])
+    {
+        g_MidiSoundFont = TRUE;
+        AudioSf2Prepare(SettingsOutputHz(&g_Settings), g_Settings.Strings[SET_STR_SOUNDFONT]);
+        g_Mpu.SysExSink = HostMidiSysEx;
+        g_GusMidi.SysExSink = HostMidiSysEx;
+    }
+
     AudioWaveStart(&g_Wave, SettingsOutputHz(&g_Settings), HostAudioFill, NULL);
 
     /* #155 (user, s97): A HOST NEVER STARTS RECORDING ON ITS OWN. The one exception is the
@@ -3325,7 +3367,7 @@ PSTR StartupStartServices(PSTR cursor)
      */
     if (g_Wave.MidiChoice != MIDI_ROUTE_GM)
     {
-        CHAR midiLine[200];
+        CHAR midiLine[640];             /* the device line, and a SoundFontPath of up to MAX_PATH */
         CHAR *midiCursor = LogPut(midiLine, "STAGE2: MIDI = ");
         midiCursor = LogPut(midiCursor, g_Wave.MidiChoice == MIDI_ROUTE_MT32 ? "MT-32" : "SoundFont");
 
@@ -3351,8 +3393,15 @@ PSTR StartupStartServices(PSTR cursor)
             midiCursor = LogPut(midiCursor, g_Wave.MidiDevice < 0 ? ", would not open)" : ")");
         }
 
-        if (g_Wave.MidiChoice == MIDI_ROUTE_SF2)
-            midiCursor = LogPut(midiCursor, "; SoundFontPath is not passed on -- the driver keeps its own list");
+        if (g_MidiSoundFont)
+        {
+            midiCursor = LogPut(midiCursor, "; SoundFontPath \"");
+            midiCursor = LogPut(midiCursor, AudioSf2Path());
+            midiCursor = LogPut(midiCursor, "\" plays through our SF2 synth in our mixer (loaded at MPU UART mode)"
+                                            " -- that device is only its fallback");
+        }
+        else if (g_Wave.MidiChoice == MIDI_ROUTE_SF2)
+            midiCursor = LogPut(midiCursor, "; no SoundFontPath -- the driver keeps its own list");
 
         midiCursor = LogPut(midiCursor, " (#136)\r\n"); LogAppend(LOG_PATH, midiLine, midiCursor);
     }
@@ -3707,6 +3756,25 @@ VOID StartupLoadTuningKnobs(VOID)
           if (bytesRead && (text[0] == '0' || text[0] == '1'))
               g_CpuAffinityOn = (text[0] == '1');
       } }
+
+    /* #417: every thread after this inherits it, so before the first CreateThread. */
+    g_CpuDieMode = g_Settings.Values[SET_CPUDIE];
+
+    { HANDLE cpuDieFile = CreateFileA(CPUDIE_PATH, GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE,
+                          NULL, OPEN_EXISTING, 0, NULL);
+
+      if (cpuDieFile != INVALID_HANDLE_VALUE)
+      {
+          CHAR text[8];
+          DWORD bytesRead = 0;
+          ReadFile(cpuDieFile, text, sizeof text, &bytesRead, NULL);
+          CloseHandle(cpuDieFile);
+
+          if (bytesRead && (text[0] == '0' || text[0] == '1'))
+              g_CpuDieMode = (DWORD)(text[0] - '0');
+      } }
+
+    CpuDieApply();
 }
 
 /* Put the machine on the bus: the host lock; the PIC and the PIT with its clock hooks; CMOS, FDC, IDE and video; the system font; the keyboard; the serial ports, declared in the BIOS data area, which is then initialised; NetBIOS, the speaker, the gameport, DMA, OPL, Sound Blaster, MPU-401, GUS and AWE32; the WOW callbacks; then the mixer, which also drives the SB's DMA. */
@@ -3775,6 +3843,16 @@ PSTR StartupAttachDevices(PSTR cursor)
      * both gates it through DOR bit 3 and unmasks it at the PIC, which starts
      * at 0xFC. See src/vdd/vdd_fdc.h.
      */
+    /* #178: AND NOW IT MOVES SECTORS. The data commands read and write the image INT 13h
+     * already holds (lent, never opened twice) over the 8237's channel 2; the BIOS tick
+     * counts its motors down, as the IBM BIOS's INT 08h does.
+     */
+    g_Fdc.Dma = &g_Dma;
+    g_Fdc.MediaGeometry = HostFdcGeometry;
+    g_Fdc.MediaTransfer = HostFdcTransfer;
+    g_Fdc.MediaContext = NULL;
+    g_Pit.BiosTickHook = VddFdcBiosMotorTick;
+    g_Pit.BiosTickHookContext = &g_Fdc;
     g_FdcDevice = VddFdcDevice(&g_Fdc);
     VddBusAdd(&g_Bus, &g_FdcDevice);            /* 82077AA: 3F2h-3F5h, 3F7h */
     /* THE IDE ADAPTER, FITTED, BOTH CHANNELS EMPTY. (GH #179):
@@ -3892,8 +3970,12 @@ PSTR StartupAttachDevices(PSTR cursor)
       g_Comm.Ports[3].BasePort = COMM_COM4_BASE;
       g_Comm.Ports[3].Irq = COMM_COM2_IRQ;
       g_Comm.Ports[3].IsFitted = 1;
-      g_Comm.Printers[0].BasePort = LPT_DEFAULT_BASE;
-      g_Comm.Printers[0].IsFitted = 1;   /* LPT1 data/strobe */
+      g_Comm.Printers[0].BasePort = LPT1_BASE;          /* #311: stock's three, LPT1 at 3BCh */
+      g_Comm.Printers[0].IsFitted = 1;
+      g_Comm.Printers[1].BasePort = LPT2_BASE;
+      g_Comm.Printers[1].IsFitted = 1;
+      g_Comm.Printers[2].BasePort = LPT3_BASE;
+      g_Comm.Printers[2].IsFitted = 1;
       g_Comm.Sink = ComTransmitSink;
       g_Comm.SinkContext = NULL;
       g_Comm.PrinterSink = LptTransmitSink;
@@ -3923,9 +4005,12 @@ PSTR StartupAttachDevices(PSTR cursor)
         for (callbackIndex = 0; callbackIndex < BIOS_BDA_COM_PORTS; ++callbackIndex)
             biosDataArea[callbackIndex] = (WORD)(VddCommIsFitted(&g_Comm, callbackIndex) ? g_Comm.Ports[callbackIndex].BasePort : 0); }
 
-      biosDataArea[BIOS_BDA_LPT_BASES / X86_WORD_SIZE] = (WORD)(VddLptIsFitted(&g_Comm, 0) ? LPT_DEFAULT_BASE : 0);   /* LPT1 */
-      biosDataArea[BIOS_BDA_LPT_BASES / X86_WORD_SIZE + 1] = 0;
-      biosDataArea[BIOS_BDA_LPT_BASES / X86_WORD_SIZE + 2] = 0; }                         /* LPT2..LPT3: none fitted */
+      { INT printerIndex;                                                          /* #311: LPT1-LPT3 from the slots */
+
+        for (printerIndex = 0; printerIndex < BIOS_BDA_LPT_PORTS; ++printerIndex)
+            biosDataArea[BIOS_BDA_LPT_BASES / X86_WORD_SIZE + printerIndex] =
+                (WORD)(VddLptIsFitted(&g_Comm, printerIndex) ? g_Comm.Printers[printerIndex].BasePort : 0); } }
+
     /* 000E, 0010, 0013 AND THE EBDA, FROM THE FUNCTIONS INT 11h/12h CALL. (#253)
      * 0040:000E is LPT4 on a PC and the EBDA segment on an AT and later; this block
      * used to zero it as "LPT4: none", which on an AT reads as "no EBDA" -- while
@@ -3984,8 +4069,7 @@ PSTR StartupAttachDevices(PSTR cursor)
     VddBusAdd(&g_Bus, &g_SbDevice);             /* Sound Blaster 16: 0x220-0x22F */
     g_Mpu.Sink = HostMidiSink;
     g_Mpu.UartHook = HostMidiUartMode;      /* #155: start the built-in synth early */
-    {   static const WORD mpuBases[5] = { 0x300, 0x310, 0x320, 0x330, 0x340 };   /* #235 */
-        g_Mpu.BasePort = mpuBases[g_Settings.Values[SET_MPUADDR] <= ARRAYSIZE(mpuBases) - 1 ? g_Settings.Values[SET_MPUADDR] : MPU_DEFAULT_BASE_CHOICE]; }
+    g_Mpu.BasePort = VddMpuBaseForChoice(g_Settings.Values[SET_MPUADDR]);           /* #235, #342 */
     g_MpuDevice = VddMpuDevice(&g_Mpu);
     VddBusAdd(&g_Bus, &g_MpuDevice);            /* MPU-401 MIDI: 0x330/0x331 */
     /* The Gravis UltraSound: 240h-24Fh and 340h-347h, IRQ 11, DMA 3 (docs/ref/gus.md).
@@ -4046,8 +4130,7 @@ VOID StartupBuildDos(
     DOS_IMAGE *image,
     CHAR *programPathBuffer,
     CHAR *args,
-    DOS_MACHINE *machine,
-    CHAR *report)
+    DOS_MACHINE *machine)
 {
     PSTR cursor = *cursorIo;
     volatile BYTE * handlerArea;
@@ -4093,6 +4176,7 @@ VOID StartupBuildDos(
         handlerArea[DOS_HDLR_INT21_STUB_OFF + index] = bop[index];
 
     *(volatile WORD *)IVT_OFFSET_ADDRESS(VECTOR_DOS) = DOS_HDLR_INT21_STUB_OFF;                        /* IVT[0x21].offset */
+    *(volatile BYTE *)(ULONG_PTR)BIOS_PRINT_SCREEN_STATUS_LINEAR = BIOS_PRINT_SCREEN_STATUS_OK;      /* #317: 0050:0000 is the BIOS's */
     *(volatile WORD *)IVT_SEGMENT_ADDRESS(VECTOR_DOS) = DOS_HDLR_SEG;                  /* IVT[0x21].segment */
     handlerArea[DOS_DBCS_OFF] = 0;
     handlerArea[DOS_DBCS_OFF + 1] = 0;     /* empty DBCS table */
@@ -4180,6 +4264,11 @@ VOID StartupBuildDos(
 
     for (index = 0; index < sizeof(xmsBopStub); ++index)
         handlerArea[XMS_ENTRY_OFF + index] = xmsBopStub[index];                                                   /* XMS far-call entry */
+
+    {   static const BYTE ipxBopStub[] = { VDM_BOP0, VDM_BOP1, DOS_BOP_IPX_ENTRY, X86_OP_RETF };   /* #315 */
+
+        for (index = 0; index < sizeof(ipxBopStub); ++index)
+            handlerArea[IPX_ENTRY_OFF + index] = ipxBopStub[index]; }
 
     /* [CAUTION]: GH #47: a non-zero word at XMS_ENTRY_OFF+0x45 WAS TRIED AND REFUTED.
      * MEM.EXE skips its whole extended-memory report on a zero word at +0x45 of
@@ -4512,7 +4601,7 @@ VOID StartupBuildDos(
     sysVars[DOS_SYSVARS_OFF + DOS_SYSVARS_LASTDRIVE] = DOS_LASTDRIVE;          /* LASTDRIVE */
     machine->SysvarsSegment = DOS_SYSVARS_SEG;
     machine->SysvarsOffset = DOS_SYSVARS_OFF;
-    StartupBuildDriveTables(report, sysVars, machine);
+    StartupBuildDriveTables(sysVars, machine);
     /* GH #128: and the WOW extension krnl386 reads before it does anything else. */
     DosWowPublish(handlerArea, (volatile BYTE *)(DOS_CTAB_SEG << PARAGRAPH_SHIFT), DOS_DRIVE_C);
     DosXmsInitialize(&g_Xms, XMS_POOL_KB, XmsHostAllocate, XmsHostFree, NULL);  /* M4: XMS pool */
@@ -5003,6 +5092,10 @@ INT StartupConfigure(PSTR *cursorIo, CHAR *report, INT *exitCodeOut)
     SettingsLoad(&g_Settings);
     g_SettingsDisk = g_Settings;          /* nothing has overridden anything yet */
     SettingsApply(NULL, &g_Settings, SETTINGS_APPLY_STARTUP);
+    /* #241: an ISO image as the CD-ROM. Before the drive tables are built, so the letter
+     * it takes is one of the drives they describe.
+     */
+    HostCdromMount(&cursor, g_Settings.Strings[SET_STR_CDROM], !g_Settings.Values[SET_CDPHYS], g_Settings.Values[SET_CDLETTER]);
     /* Log only the LIVE settings -- the ones the SettingsApply* functions actually
      * push into the machine. The stored-but-not-yet-honoured ones would make this
      * line four times longer and every value in it would be a claim the run cannot

@@ -15,6 +15,7 @@
 #include <commctrl.h>
 #include "host_state.h"
 #include "audio_dmsynth.h"
+#include "audio_sf2.h"
 #include "host_audio.h"
 #include "capture_video.h"
 #include "log.h"
@@ -37,6 +38,7 @@
 #include "host_settings.h"
 #include "host_timing.h"
 #include "host_video.h"
+#include "host_cdrom.h"
 
 /* dwExtraInfo tag on keystrokes WE synthesise with SendInput (the Start-menu
  * suppression Ctrl tap), so our own WM_KEYDOWN/UP handlers recognise and drop them
@@ -308,6 +310,7 @@ DWORD g_UiTimerPresents;
 /* Which of the three exits from the cooperative IRQ1 gate fires. See its call site. */
 DWORD g_Irq1Checks;
 DWORD g_Irq1NoIf;
+DWORD g_Irq1Masked;      /* #180: IRQ1 pending while the guest had it masked at the PIC */
 DWORD g_Irq1In08;
 DWORD g_Irq1In09;
 DWORD    g_Irq1AsyncRetry;
@@ -414,6 +417,7 @@ const INT g_SettingsPages[NTVDMEX_PAGE_COUNT] = {
 };
 static DWORD  g_SpeakerRealHz;   /* sampled under the lock, applied outside it */
 static volatile LONG g_UiPresentPending;                /* one WM_APP_PRESENT in flight */
+static HANDLE g_UiPresentEvent;                         /* UiPresentPostThread's wake, set once g_Window is */
 static int      g_UiForced;                              /* this body run was raised by the hook; stays int: INT here moves the compiled code */
 static DWORD    g_UiInputFirst;                         /* input served ahead of a queued present */
 /* The menu bar while FULLSCREEN has it detached. There used to be a second
@@ -624,6 +628,27 @@ static INT             g_FullscreenSaved;
  * Graphics only waits for it, Never does nothing.
  */
 static INT g_AutoFullscreenDone = 0;
+
+/* Undo everything the fullscreen entry changed. Separate because BOTH the normal exit
+ * and the "DirectDraw refused" path need it, and a chromeless window that is not
+ * fullscreen is a worse state than either end of the toggle.
+ */
+/* #331: FULLSCREEN AT ANOTHER DISPLAY MODE (Settings > Video > Fullscreen Resolution).
+ * The mode changes on the way in, BEFORE the window is sized to the screen -- so the
+ * borderless window, GetSystemMetrics and exclusive DirectDraw's GetDisplayMode all see the
+ * new size, and the whole-pixel fit is computed against it -- and changes back on the way
+ * out, BEFORE the window is put back, so the window is restored onto the desktop it left.
+ *
+ * [CAUTION]: CDS_FULLSCREEN, SO THE CHANGE IS TEMPORARY: it is never written to the registry, so
+ * a logoff or a reboot always finds the user's desktop, whatever happened to us. Every exit we
+ * control restores it explicitly as well: leaving fullscreen, WM_DESTROY and the panic path
+ * (HostPanicRelease), the fatal dump and the watchdog's TerminateProcess.
+ *
+ * [CAUTION]: THE REFRESH RATE NEVER CHANGES. The mode keeps the desktop's depth and frequency
+ * (fullscreen_mode.h); a refresh change is what put the test machine's monitor into
+ * standby (s83).
+ */
+static volatile LONG g_FullscreenModeChanged;
 
 /* Async-preemption probe driver (session 11, QIMODE_PATH bit 2). Raises IRQ 5 from a
  * thread that is NOT the exec thread -- exactly how the audio thread raises the Sound
@@ -1162,18 +1187,33 @@ static HMENU BuildMenu(VOID)
     return menuBar;
 }
 
-/* Runs on the GUEST thread inside status_in, under the device lock: post and leave.
+/* #418: A POST CAN BLOCK, SO THE GUEST NEVER MAKES ONE. PostMessageA from the guest thread, under the
+ * device lock, was the host's worst lock hold to the microsecond: 62,537 us of a 62,541 us hold with
+ * Sharp, 29,378 of 29,380 with Nearest (runs/s105/sk3, a timer around the call). Why the call waits
+ * was not measured. SetEvent does not wait, so this thread makes the post.
+ */
+static DWORD WINAPI UiPresentPostThread(LPVOID argument)
+{
+    (VOID)argument;
+
+    while (WaitForSingleObject(g_UiPresentEvent, INFINITE) == WAIT_OBJECT_0)
+        PostMessageA(g_Window, WM_APP_PRESENT, 0, 0);
+
+    return 0;
+}
+
+/* Runs on the GUEST thread inside status_in, under the device lock: signal and leave.
  * One in flight at a time so a fast poller cannot flood the queue.
  */
 VOID HostPresentHook(PVOID context)
 {
     (VOID)context;
 
-    if (g_UiTickMinimumMs != UITICK_AUTO || !g_Window)
+    if (g_UiTickMinimumMs != UITICK_AUTO || !g_UiPresentEvent)
         return;
 
     if (InterlockedCompareExchange(&g_UiPresentPending, 1, 0) == 0)
-        PostMessageA(g_Window, WM_APP_PRESENT, 0, 0);
+        SetEvent(g_UiPresentEvent);
 }
 
 static VOID TrayAdd(HINSTANCE instance, HWND window)
@@ -2546,6 +2586,8 @@ static VOID MenuRecentFill(VOID)
 VOID HostPanicRelease(VOID)
 {
     ClipCursor(NULL);
+    HostFullscreenDisplayRestore();                              /* #331: the user's display mode */
+    HostCdromUnmount();                    /* #241: the drive mapping outlives the process otherwise */
 
     if (g_LowLevelKeyboard)
     {
@@ -2691,10 +2733,103 @@ static VOID CursorIdleTick(HWND window)
     HostCursorRefresh(window);
 }
 
-/* Undo everything the fullscreen entry changed. Separate because BOTH the normal exit
- * and the "DirectDraw refused" path need it, and a chromeless window that is not
- * fullscreen is a worse state than either end of the toggle.
- */
+INT HostDisplayModes(PFULLSCREEN_MODE modes, INT capacity, PFULLSCREEN_MODE desktop)
+{
+    DEVMODEA mode;
+    INT count = 0;
+    DWORD index;
+
+    ZeroMemory(desktop, sizeof *desktop);
+    ZeroMemory(&mode, sizeof mode);
+    mode.dmSize = sizeof mode;
+
+    if (!EnumDisplaySettingsA(NULL, ENUM_CURRENT_SETTINGS, &mode))
+        return 0;
+
+    desktop->Width = mode.dmPelsWidth;
+    desktop->Height = mode.dmPelsHeight;
+    desktop->BitsPerPixel = mode.dmBitsPerPel;
+    desktop->Frequency = mode.dmDisplayFrequency;
+
+    for (index = 0; count < capacity; ++index)
+    {
+        ZeroMemory(&mode, sizeof mode);
+        mode.dmSize = sizeof mode;
+
+        if (!EnumDisplaySettingsA(NULL, index, &mode))
+            break;
+
+        modes[count].Width = mode.dmPelsWidth;
+        modes[count].Height = mode.dmPelsHeight;
+        modes[count].BitsPerPixel = mode.dmBitsPerPel;
+        modes[count].Frequency = mode.dmDisplayFrequency;
+        ++count;
+    }
+
+    return count;
+}
+
+/* Switch to the mode the setting asks for, if it asks for one. Logs what it did either way. */
+static VOID HostFullscreenDisplayEnter(VOID)
+{
+    static FULLSCREEN_MODE allModes[HOST_DISPLAY_MODES_MAX];
+    DWORD setting = g_Settings.Values[SET_FSRES];
+    FULLSCREEN_MODE desktop;
+    FULLSCREEN_MODE chosen;
+    DEVMODEA mode;
+    LONG result;
+    INT count;
+    CHAR lineBuffer[192];
+    CHAR *lineCursor = lineBuffer;
+
+    if (setting == FULLSCREEN_RESOLUTION_DESKTOP || g_FullscreenModeChanged)
+        return;
+
+    count = HostDisplayModes(allModes, HOST_DISPLAY_MODES_MAX, &desktop);
+    lineCursor = LogPut(lineCursor, "FULLSCREEN-MODE: setting=0x"); lineCursor = LogHex(lineCursor, setting);
+    lineCursor = LogPut(lineCursor, " desktop="); lineCursor = LogDecimal(lineCursor, desktop.Width);
+    lineCursor = LogPut(lineCursor, "x"); lineCursor = LogDecimal(lineCursor, desktop.Height);
+    lineCursor = LogPut(lineCursor, "@"); lineCursor = LogDecimal(lineCursor, desktop.Frequency);
+
+    if (!count || !FullscreenModeChoose(allModes, count, &desktop, setting, &chosen))
+    {
+        lineCursor = LogPut(lineCursor, " -> stays on the desktop's mode\r\n");
+        LogAppend(LOG_PATH, lineBuffer, lineCursor);
+        return;
+    }
+
+    ZeroMemory(&mode, sizeof mode);
+    mode.dmSize = sizeof mode;
+    mode.dmPelsWidth = chosen.Width;
+    mode.dmPelsHeight = chosen.Height;
+    mode.dmBitsPerPel = chosen.BitsPerPixel;
+    mode.dmDisplayFrequency = chosen.Frequency;
+    mode.dmFields = DM_PELSWIDTH | DM_PELSHEIGHT | DM_BITSPERPEL | DM_DISPLAYFREQUENCY;
+    result = ChangeDisplaySettingsA(&mode, CDS_FULLSCREEN);
+
+    if (result == DISP_CHANGE_SUCCESSFUL)
+        InterlockedExchange(&g_FullscreenModeChanged, 1);
+
+    lineCursor = LogPut(lineCursor, " -> "); lineCursor = LogDecimal(lineCursor, chosen.Width);
+    lineCursor = LogPut(lineCursor, "x"); lineCursor = LogDecimal(lineCursor, chosen.Height);
+    lineCursor = LogPut(lineCursor, result == DISP_CHANGE_SUCCESSFUL ? " (switched)" : " REFUSED, stays on the desktop's (");
+
+    if (result != DISP_CHANGE_SUCCESSFUL)
+    {
+        lineCursor = LogHex(lineCursor, (DWORD)result);
+        lineCursor = LogPut(lineCursor, ")");
+    }
+
+    lineCursor = LogPut(lineCursor, "\r\n");
+    LogAppend(LOG_PATH, lineBuffer, lineCursor);
+}
+
+VOID HostFullscreenDisplayRestore(VOID)
+{
+    if (InterlockedExchange(&g_FullscreenModeChanged, 0))
+        ChangeDisplaySettingsA(NULL, 0);                         /* back to the registry's mode */
+}
+
 static VOID HostFullscreenToggleRestore(HWND window)
 {
     if (g_Status) { ShowWindow(g_Status, SW_SHOW);
@@ -2759,6 +2894,7 @@ static VOID HostFullscreenToggle(HWND window)
         if (g_Status)
             ShowWindow(g_Status, SW_HIDE);
 
+        HostFullscreenDisplayEnter();                              /* #331: before the size is read */
         SetWindowPos(window, HWND_TOP, 0, 0,
                      GetSystemMetrics(SM_CXSCREEN), GetSystemMetrics(SM_CYSCREEN),
                      SWP_FRAMECHANGED | SWP_NOACTIVATE);
@@ -2768,6 +2904,7 @@ static VOID HostFullscreenToggle(HWND window)
             /* No DirectDraw, or it refused. Do not leave the user in a chromeless
              * window that is not fullscreen either -- put it all back.
              */
+            HostFullscreenDisplayRestore();                        /* #331 */
             HostFullscreenToggleRestore(window);
             return;
         }
@@ -2778,6 +2915,7 @@ static VOID HostFullscreenToggle(HWND window)
     else
     {
         PresentDdrawSetFullscreen(&g_PresentDdraw, FALSE);
+        HostFullscreenDisplayRestore();                            /* #331: before the window goes back */
         HostFullscreenToggleRestore(window);
     }
 
@@ -3441,6 +3579,7 @@ static LRESULT CALLBACK HostWindowProcedure(HWND window, UINT message, WPARAM wP
                 keyCursor = LogPut(keyCursor, " in_first="); keyCursor = LogHex(keyCursor, g_UiInputFirst);
                 keyCursor = LogPut(keyCursor, " || IRQ1GATE checks="); keyCursor = LogHex(keyCursor, g_Irq1Checks);
                 keyCursor = LogPut(keyCursor, " no_if=");   keyCursor = LogHex(keyCursor, g_Irq1NoIf);
+                keyCursor = LogPut(keyCursor, " masked=");  keyCursor = LogHex(keyCursor, g_Irq1Masked);
                 keyCursor = LogPut(keyCursor, " in_08h=");  keyCursor = LogHex(keyCursor, g_Irq1In08);
                 keyCursor = LogPut(keyCursor, " in_09h=");  keyCursor = LogHex(keyCursor, g_Irq1In09);
                 keyCursor = LogPut(keyCursor, " injected="); keyCursor = LogHex(keyCursor, g_Irq1Injected);
@@ -3466,7 +3605,7 @@ static LRESULT CALLBACK HostWindowProcedure(HWND window, UINT message, WPARAM wP
 
             if (g_MouseI33SiteCount && (DWORD)(nowTicks - lastMouseDump) >= HOST_DUMP_INTERVAL_MS)
             {
-                CHAR mouseLine[768];
+                CHAR mouseLine[1024];                   /* s101: 751 used before the ps2_ fields */
                 CHAR *mouseCursor = mouseLine;
                 UINT index;
                 lastMouseDump = nowTicks;
@@ -3488,6 +3627,13 @@ static LRESULT CALLBACK HostWindowProcedure(HWND window, UINT message, WPARAM wP
                 mouseCursor = LogPut(mouseCursor, " autocap_want="); mouseCursor = LogHex(mouseCursor, (DWORD)g_MouseWantCapture);
                 mouseCursor = LogPut(mouseCursor, " fired="); mouseCursor = LogHex(mouseCursor, g_MouseAutoCaptureFired);
                 mouseCursor = LogPut(mouseCursor, " captured="); mouseCursor = LogHex(mouseCursor, (DWORD)g_Captured);
+                /* #199 (s101): a guest's own driver -- C2xxh calls, whether it owns the mouse
+                 * now, its handler calls and the packets queued at the 8042.
+                 */
+                mouseCursor = LogPut(mouseCursor, " ps2_bios="); mouseCursor = LogHex(mouseCursor, Ps2BiosCalls());
+                mouseCursor = LogPut(mouseCursor, " ps2_owns="); mouseCursor = LogHex(mouseCursor, (DWORD)Ps2GuestOwnsMouse());
+                mouseCursor = LogPut(mouseCursor, " ps2_calls="); mouseCursor = LogHex(mouseCursor, g_Ps2Calls);
+                mouseCursor = LogPut(mouseCursor, " ps2_packets="); mouseCursor = LogHex(mouseCursor, g_Ps2Packets);
                 /* THE s64 EVIDENCE, AND EACH FIELD ANSWERS ONE QUESTION (Importance = 1):
                  * edges  -- did the HOST see any button transitions at all? 0 with
                  *         a user who was clicking means the fault is above INT
@@ -3680,8 +3826,12 @@ static LRESULT CALLBACK HostWindowProcedure(HWND window, UINT message, WPARAM wP
                  * buffer every present, so this one may be drawn into the frame.
                  */
                 INT msText = (g_Video.ModeKind == VIDEO_KIND_TEXT && !g_Video.IsVesa);
+                /* s101: a guest driver (MOUSE.COM) draws its own pointer into video memory;
+                 * ours, frozen where the program last showed it to US, was a second one.
+                 */
+                INT isOurPointer = !Ps2GuestOwnsMouse();
 
-                if (g_MouseHidden == 0 && msText && g_Video.Frame.BitsPerPixel == VIDEO_BPP_INDEXED && g_Video.Frame.Pixels)
+                if (g_MouseHidden == 0 && isOurPointer && msText && g_Video.Frame.BitsPerPixel == VIDEO_BPP_INDEXED && g_Video.Frame.Pixels)
                 {
                     INT clientHeight = g_Video.CellHeight ? g_Video.CellHeight : VIDEO_CELL_HEIGHT;
                     VddVideoTextCursor(&g_Video, (INT)(g_MouseX / VIDEO_CELL_WIDTH), (INT)(g_MouseY / clientHeight),
@@ -3715,7 +3865,7 @@ static LRESULT CALLBACK HostWindowProcedure(HWND window, UINT message, WPARAM wP
                  *   measures whether the oracles' drivers write VRAM, so the gap is
                  *   recorded rather than assumed (docs/inventory/mouse.md, 09h).
                  */
-                if (g_MouseHidden == 0 && !msText && g_PresentDdraw.IsSnapshotValid && g_PresentDdraw.SnapshotBpp == VIDEO_BPP_INDEXED)
+                if (g_MouseHidden == 0 && isOurPointer && !msText && g_PresentDdraw.IsSnapshotValid && g_PresentDdraw.SnapshotBpp == VIDEO_BPP_INDEXED)
                     MouseDrawGraphicsCursor(g_PresentDdraw.Snapshot, g_PresentDdraw.SnapshotWidth, g_PresentDdraw.SnapshotHeight, g_PresentDdraw.SnapshotWidth);
 
                 HOST_UNLOCK();
@@ -4580,6 +4730,8 @@ static LRESULT CALLBACK HostWindowProcedure(HWND window, UINT message, WPARAM wP
 
             InterlockedExchangeAdd(&g_MouseDx, (LONG)rawInput.data.mouse.lLastX);
             InterlockedExchangeAdd(&g_MouseDy, (LONG)rawInput.data.mouse.lLastY);
+            InterlockedExchangeAdd(&g_Ps2Dx, (LONG)rawInput.data.mouse.lLastX);     /* #199: the PS/2 device's own */
+            InterlockedExchangeAdd(&g_Ps2Dy, (LONG)rawInput.data.mouse.lLastY);
             /* While captured the pointer is clipped, so WM_MOUSEMOVE stops telling the
              * truth about position -- drive the driver cursor from the deltas instead,
              * so INT 33h 03h still reports somewhere sensible.
@@ -4917,6 +5069,7 @@ static LRESULT CALLBACK HostWindowProcedure(HWND window, UINT message, WPARAM wP
         HostRecordFinish();       /* before the device stops feeding it */
         AudioWaveStop(&g_Wave);
         AudioDmSynthStop();       /* #155: after the fill has stopped calling Render */
+        AudioSf2Stop();
         /* [CAUTION]: AND THE OTHER SPEAKER, WHICH IS NOT OURS TO LEAVE RUNNING. Beep.sys
          * keeps sounding after the process that started it exits -- the note
          * under the cursor would outlive the host and only a reboot would clear
@@ -4984,6 +5137,11 @@ DWORD WINAPI UiThread(LPVOID argument)
 
     if (!g_Window)
         return 1;
+
+    {   HANDLE presentEvent = CreateEventA(NULL, FALSE, FALSE, NULL);
+
+        if (presentEvent && CreateThread(NULL, 0, UiPresentPostThread, NULL, 0, NULL))
+            g_UiPresentEvent = presentEvent; }
 
     {   RAWINPUTDEVICE rawInputDevice;              /* generic desktop / mouse */
         rawInputDevice.usUsagePage = HID_USAGE_PAGE_GENERIC_DESKTOP;

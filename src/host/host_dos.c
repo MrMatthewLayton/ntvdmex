@@ -22,6 +22,7 @@
 #include "host_mouse.h"
 #include "host_timing.h"
 #include "host_video.h"
+#include "host_vddsvc.h"
 #define HMA_ERROR_PROTECTED         0xE1                /* g_HmaError: committed but not accessible */
 
 /* INT 21h AH=4Bh EXEC.  GH #30:
@@ -237,6 +238,10 @@ PCSTR g_FloppyImage = NULL;
  *   turned four sessions of hypotheses into one located bug.
  */
 HANDLE g_Stdio = INVALID_HANDLE_VALUE;
+
+/* #240: Settings > Drives > Floppy = the PHYSICAL drive, and this PC has one. */
+INT g_FloppyPhysical = 0;
+INT g_FloppyImageDrive = -1;
 static struct
 {
     DWORD Eax;
@@ -360,6 +365,7 @@ static INT g_ConsoleInPending = -1;                /* scancode owed to the next 
 static CHAR g_TypeIn[TYPEIN_CAP];
 static INT g_TypeInHead;
 static INT g_TypeInTail;
+static const CHAR g_FloppyDevicePath[] = HOST_FLOPPY_A_DEVICE;
 
 /* THE COMPILER VARIABLES REACH THE GUEST, WITHOUT MOVING THE MEMORY MAP. (s73) (Importance = 1):
  * A DOS build tool is configured through its environment -- LIB and INCLUDE for the
@@ -1017,6 +1023,7 @@ PSTR ExecBegin(DOS_MACHINE *machine, volatile BYTE *tib, PSTR cursor)
     DosJftExec(machine, child);    /* s91: JFT edits the parent made directly (COMMAND.COM's `>`) */
     ++g_ExecDepth;
     machine->PspSegment = child;
+    HostVddUserCreate((WORD)child);                     /* #11: a VDD's user hook, the new program's PDB */
     machine->DtaSegment = child;
     machine->DtaOffset = DOS_PSP_DEFAULT_DTA;        /* DOS resets the DTA to PSP:80 */
     VDM_REG(tib, VTIB_CS)  = image.CodeSegment;
@@ -1214,7 +1221,7 @@ INT PmRwHardwareFail(
 INT DosPrnOut(PVOID context, BYTE character)
 {
     (VOID)context;
-    return LptSpoolPut(character);
+    return LptSpoolPut(0, character);                     /* PRN is LPT1 */
 }
 
 VOID DosAuxOut(PVOID context, BYTE character)
@@ -1229,6 +1236,30 @@ VOID DosAuxOut(PVOID context, BYTE character)
     HOST_LOCK();
     VddBusDeliverInterrupt(&g_Bus, VECTOR_SERIAL, &registers);
     HOST_UNLOCK();
+}
+
+/* #272: one byte of AUX input for a caller that cannot run DOS's driver code -- a DPMI
+ * client's INT 21h. INT 14h AH=02h on COM1 through the bus, the call the driver makes
+ * (p_auxprn); AH bit 7 (time-out) means nothing is waiting, and the answer is 0.
+ */
+INT DosAuxIn(PVOID context, PBYTE character)
+{
+    NTVDD_REGISTERS registers;
+
+    (VOID)context;
+    registers.Eax = BIOS_SERIAL_RECEIVE << BYTE_SHIFT;                                    /* INT 14h AH=02h, COM1 (DX=0) */
+    registers.Ebx = registers.Ecx = registers.Edx = registers.Esi = registers.Edi = registers.Ebp = 0;
+    registers.Ds = registers.Es = 0;
+    registers.CarryFlag = registers.ZeroFlag = 0;
+    HOST_LOCK();
+    VddBusDeliverInterrupt(&g_Bus, VECTOR_SERIAL, &registers);
+    HOST_UNLOCK();
+
+    if ((registers.Eax >> BYTE_SHIFT) & BIOS_SERIAL_TIMEOUT)
+        return 0;
+
+    *character = (BYTE)(registers.Eax & BYTE_MASK);
+    return 1;
 }
 
 /* A GUEST ASKED TO TERMINATE. FOUR DOORS, ONE ANSWER. (GH #134):
@@ -1250,6 +1281,7 @@ INT DosTerminate(DOS_MACHINE *machine, PVOID tib, PSTR *logCursor, PSTR base)
     PSTR cursor = *logCursor;
 
     (VOID)cursor;
+    HostVddUserTerminate((WORD)machine->PspSegment);   /* #11: a VDD's user hook, while its PDB is current */
 
             if (g_ExecDepth > 0)
             {
@@ -1471,9 +1503,52 @@ INT DosTerminate(DOS_MACHINE *machine, PVOID tib, PSTR *logCursor, PSTR base)
     return 0;                        /* top-level program: the run is over */
 }
 
+/* INT 24h ABORT WHILE THE PERMANENT SHELL ITSELF IS RUNNING. (s101 rig report: `DIR D:\`
+ * on an empty drive, A at "Abort, Retry, Fail?", and the whole session ended.)
+ * Abort terminates the current process; when that is the shell, which is its own parent,
+ * DOS resumes it at its own terminate address (DosPspSelfTerminateAddress) -- COMMAND.COM's
+ * re-entry -- and it prints a new prompt. The INT 21h call's frame is dropped, as DOS's
+ * exit unwinds it; AH=4Dh then reports 02h (ended by a critical-error abort).
+ * Returns 1 if the shell was resumed, 0 if this is not that case (the run ends, as before).
+ */
+INT DosShellAbortResume(DOS_MACHINE *machine, PVOID tibPointer, PSTR *logCursor)
+{
+    volatile BYTE *tib = (volatile BYTE *)tibPointer;
+    DWORD resume = DosPspSelfTerminateAddress(NULL, (WORD)machine->PspSegment);
+    volatile WORD *frame;
+
+    if (!resume)
+        return 0;
+
+    frame = (volatile WORD *)((VDM_REG16(tib, VTIB_SS) << PARAGRAPH_SHIFT) + (VDM_REG16(tib, VTIB_ESP) & WORD_MASK));
+    DosPspRestoreVectors(NULL, (WORD)machine->PspSegment);
+    VDM_REG(tib, VTIB_EFLAGS) = (VDM_REG(tib, VTIB_EFLAGS) & HIGH_WORD_MASK_U) | frame[X86_FRAME16_FLAGS_WORD];
+    VDM_SET16(tib, VTIB_ESP, (WORD)(VDM_REG16(tib, VTIB_ESP) + X86_IRET16_SIZE));
+    VDM_SET16(tib, VTIB_CS, (WORD)(resume >> WORD_SHIFT));
+    VDM_REG(tib, VTIB_EIP) = resume & WORD_MASK;
+    machine->ChildReturnCode = (WORD)(((WORD)DOS_TERM_CRITICAL_ABORT << BYTE_SHIFT) | (machine->ExitCode & BYTE_MASK));
+    machine->TermType = DOS_TERM_NORMAL;
+    machine->ExitCode = 0;
+    *logCursor = LogPut(*logCursor, "  INT24 ABORT on the permanent shell -> its terminate address 0x");
+    *logCursor = LogHex(*logCursor, resume >> WORD_SHIFT);
+    *logCursor = LogPut(*logCursor, ":0x");
+    *logCursor = LogHex(*logCursor, resume & WORD_MASK);
+    *logCursor = LogPut(*logCursor, " (a new prompt, not the end of the session)\r\n");
+    return 1;
+}
+
+/* What INT 13h drive 0 opens: the mounted image; else the harness's disk if it is there;
+ * else, in physical mode, the host's own drive (#240) -- \\.\A:, sector for sector.
+ */
 static PCSTR FloppyImagePath(VOID)
 {
-    return g_FloppyImage ? g_FloppyImage : FLOPPY_IMG_PATH;
+    if (g_FloppyImage)
+        return g_FloppyImage;
+
+    if (g_FloppyPhysical && GetFileAttributesA(FLOPPY_IMG_PATH) == INVALID_FILE_ATTRIBUTES)
+        return g_FloppyDevicePath;
+
+    return FLOPPY_IMG_PATH;
 }
 
 /* s84 (user): DOES THIS PC HAVE THE PHYSICAL DRIVE AT ALL?:
@@ -1512,6 +1587,7 @@ PDOS_DISK_GEOMETRY DiskFor(UINT drive)
     DWORD got = 0;
     DWORD size;
     UINT oldErrorMode;
+    INT isPhysical;
 
     if (drive != 0)
         return NULL;                             /* only A: is backed today */
@@ -1522,17 +1598,29 @@ PDOS_DISK_GEOMETRY DiskFor(UINT drive)
     if (g_DiskTried[0])
         return NULL;
 
-    g_DiskTried[0] = 1;
+    /* #240: a PHYSICAL drive is asked again next time -- a disk can be put in it -- while
+     * an image that would not open is given up on for the run, as before.
+     */
+    isPhysical = (FloppyImagePath() == g_FloppyDevicePath);
+    g_DiskTried[0] = !isPhysical;
     oldErrorMode = SetErrorMode(SEM_FAILCRITICALERRORS | SEM_NOOPENFILEERRORBOX);
     g_DiskHandle[0] = CreateFileA(FloppyImagePath(), GENERIC_READ | GENERIC_WRITE,
-                              FILE_SHARE_READ, NULL, OPEN_EXISTING,
+                              FILE_SHARE_READ | (isPhysical ? FILE_SHARE_WRITE : 0), NULL, OPEN_EXISTING,
                               FILE_ATTRIBUTE_NORMAL, NULL);
+
+    if (g_DiskHandle[0] == INVALID_HANDLE_VALUE && isPhysical)     /* a write-protected disk */
+        g_DiskHandle[0] = CreateFileA(FloppyImagePath(), GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE, NULL,
+                                      OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
+
     SetErrorMode(oldErrorMode);
 
     if (g_DiskHandle[0] == INVALID_HANDLE_VALUE)
         return NULL;
 
-    size = GetFileSize(g_DiskHandle[0], NULL);
+    /* A device has no file size; its BPB says how big it is (DosDiskGeometryFromBpb
+     * checks the size only as a ceiling).
+     */
+    size = isPhysical ? INVALID_FILE_SIZE : GetFileSize(g_DiskHandle[0], NULL);
 
     if (!ReadFile(g_DiskHandle[0], boot, DOS_SECTOR_SIZE, &got, NULL) || got != DOS_SECTOR_SIZE
         || !DosDiskGeometryFromBpb(boot, size, &g_DiskGeometry[0]))
@@ -1543,9 +1631,14 @@ PDOS_DISK_GEOMETRY DiskFor(UINT drive)
          */
         CHAR lineBuffer[160];
         CHAR *lineCursor = lineBuffer;
-        lineCursor = LogPut(lineCursor, "  INT13 image present but its BPB is not usable -- "
-                      "treating drive 0 as ABSENT (GH #44)\r\n");
-        LogAppend(LOG_PATH, lineBuffer, lineCursor); SerialOut(lineBuffer, lineCursor);
+
+        if (!isPhysical)                               /* an empty physical drive is asked every time: no log */
+        {
+            lineCursor = LogPut(lineCursor, "  INT13 image present but its BPB is not usable -- "
+                          "treating drive 0 as ABSENT (GH #44)\r\n");
+            LogAppend(LOG_PATH, lineBuffer, lineCursor); SerialOut(lineBuffer, lineCursor);
+        }
+
         CloseHandle(g_DiskHandle[0]);
         g_DiskHandle[0] = INVALID_HANDLE_VALUE;
         return NULL;
@@ -1584,6 +1677,9 @@ INT DiskIo(UINT drive, UINT32 lba, UINT count, BYTE *guest, INT write)
             return 0;
 
         FlushFileBuffers(g_DiskHandle[0]);
+
+        if (g_FloppyImageDrive == 0)                   /* only when INT 13h's drive 0 IS the image */
+            DosInt21FloppyChanged();                   /* #240: the DOS-level copy of A: is stale */
     }
     else
     {
@@ -1592,6 +1688,44 @@ INT DiskIo(UINT drive, UINT32 lba, UINT count, BYTE *guest, INT write)
     }
 
     return moved == want;
+}
+
+/* #178: THE SAME IMAGE, LENT TO THE 82077AA. A guest that drives the controller itself
+ * reads the very bytes INT 13h reads; the chip asks through these and never sees a handle.
+ */
+INT HostFdcGeometry(PVOID context, BYTE drive, PFDC_GEOMETRY geometry)
+{
+    PDOS_DISK_GEOMETRY disk = DiskFor(drive);
+
+    (VOID)context;
+
+    if (!disk)
+        return 0;
+
+    geometry->Cylinders = disk->Cylinders;
+    geometry->Heads = (BYTE)disk->Heads;
+    geometry->SectorsPerTrack = (BYTE)disk->SectorsPerTrack;
+    return 1;
+}
+
+INT HostFdcTransfer(
+    PVOID context,
+    BYTE drive,
+    WORD cylinder,
+    BYTE head,
+    BYTE sector,
+    PBYTE buffer,
+    INT isWrite)
+{
+    PDOS_DISK_GEOMETRY disk = DiskFor(drive);
+    DWORD lba = 0;
+
+    (VOID)context;
+
+    if (!disk || !DosDiskChsToLba(disk, cylinder, head, sector, &lba))
+        return 0;
+
+    return DiskIo(drive, lba, 1, buffer, isWrite);
 }
 
 VOID StdioFlush(VOID)
@@ -2114,7 +2248,7 @@ VOID HostConsoleOut(PVOID context, BYTE ch)
 {
     (VOID)context;
     HOST_LOCK();
-    VddVideoPutChar(&g_Video, ch);
+    VddVideoConsoleChar(&g_Video, ch);
 
     if (g_Stdio != INVALID_HANDLE_VALUE)
     {

@@ -111,10 +111,18 @@ BYTE VddNetBiosService(PNETBIOS_STATE state, BYTE *ncb, BYTE *buffer)
     return returnCode;
 }
 
-static VOID VddNetBiosInt5C(PVOID context, PNTVDD_REGISTERS registers)
+/* INT 5Ch: the NCB at ES:<ncbOffset> and the buffer its far pointer names, both resolved
+ * through `map` -- a real-mode segment:offset for a V86 caller, a selector:offset for a
+ * DPMI client (#315). AL = the immediate return code.
+ */
+static VOID VddNetBiosExecute(
+    PNETBIOS_STATE state,
+    PNTVDD_REGISTERS registers,
+    DWORD ncbOffset,
+    PNETBIOS_MAP_ROUTINE map,
+    PVOID mapContext)
 {
-    PNETBIOS_STATE state = (PNETBIOS_STATE)context;
-    BYTE *ncb = (BYTE *)VddMapFlat(state->Bus, registers->Es, VddGetBx(registers));
+    BYTE *ncb = (BYTE *)map(mapContext, registers->Es, ncbOffset);
     BYTE *buffer = NULL;
     WORD bufferOffset;
     WORD bufferSegment;
@@ -129,9 +137,24 @@ static VOID VddNetBiosInt5C(PVOID context, PNTVDD_REGISTERS registers)
     bufferSegment = (WORD)(ncb[NETB_NCB_BUFFER_SEGMENT] | (ncb[NETB_NCB_BUFFER_SEGMENT + NETB_HIGH_BYTE] << BYTE_SHIFT));
 
     if (bufferOffset | bufferSegment)
-        buffer = (BYTE *)VddMapFlat(state->Bus, bufferSegment, bufferOffset);
+        buffer = (BYTE *)map(mapContext, bufferSegment, bufferOffset);
 
     VddSetAl(registers, VddNetBiosService(state, ncb, buffer));
+}
+
+/* A real-mode segment:offset, the V86 caller's addressing. */
+static PVOID VddNetBiosMapReal(PVOID context, WORD segment, DWORD offset)
+{
+    PNETBIOS_STATE state = (PNETBIOS_STATE)context;
+
+    return VddMapFlat(state->Bus, segment, (WORD)offset);
+}
+
+static VOID VddNetBiosInt5C(PVOID context, PNTVDD_REGISTERS registers)
+{
+    PNETBIOS_STATE state = (PNETBIOS_STATE)context;
+
+    VddNetBiosExecute(state, registers, VddGetBx(registers), VddNetBiosMapReal, state);
 }
 
 /* INT 2Ah, the network/critical-section interface (Microsoft Networks):
@@ -142,10 +165,13 @@ static VOID VddNetBiosInt5C(PVOID context, PNTVDD_REGISTERS registers)
  *   AH=80h/81h/82h begin/end critical section, end all: nothing to serialise here
  * Anything else returns with the registers as they came.
  */
-static VOID VddNetBiosInt2A(PVOID context, PNTVDD_REGISTERS registers)
+static VOID VddNetBiosInt2AWith(
+    PNETBIOS_STATE state,
+    PNTVDD_REGISTERS registers,
+    DWORD ncbOffset,
+    PNETBIOS_MAP_ROUTINE map,
+    PVOID mapContext)
 {
-    PNETBIOS_STATE state = (PNETBIOS_STATE)context;
-
     switch (VddGetAh(registers))
     {
     case NETB_2A_INSTALLATION_CHECK:
@@ -156,7 +182,7 @@ static VOID VddNetBiosInt2A(PVOID context, PNTVDD_REGISTERS registers)
     case NETB_2A_EXECUTE:
     {
         BYTE returnCode;
-        VddNetBiosInt5C(context, registers);
+        VddNetBiosExecute(state, registers, ncbOffset, map, mapContext);
         returnCode = VddGetAl(registers);
         VddSetAh(registers, returnCode ? NETB_2A_ERROR : NETB_2A_SUCCESS);
         break; }
@@ -164,6 +190,27 @@ static VOID VddNetBiosInt2A(PVOID context, PNTVDD_REGISTERS registers)
     default:
         break;
     }
+}
+
+static VOID VddNetBiosInt2A(PVOID context, PNTVDD_REGISTERS registers)
+{
+    PNETBIOS_STATE state = (PNETBIOS_STATE)context;
+
+    VddNetBiosInt2AWith(state, registers, VddGetBx(registers), VddNetBiosMapReal, state);
+}
+
+VOID VddNetBiosCall(
+    PNETBIOS_STATE state,
+    PNTVDD_REGISTERS registers,
+    BYTE vector,
+    DWORD ncbOffset,
+    PNETBIOS_MAP_ROUTINE map,
+    PVOID mapContext)
+{
+    if (vector == VECTOR_NETBIOS)
+        VddNetBiosExecute(state, registers, ncbOffset, map, mapContext);
+    else if (vector == VECTOR_NETWORK)
+        VddNetBiosInt2AWith(state, registers, ncbOffset, map, mapContext);
 }
 
 INT VddNetBiosInitialize(PVDD_BUS bus, PVOID context)

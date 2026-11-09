@@ -122,6 +122,33 @@ static inline VOID BiosWriteWord(_Out_ volatile BYTE *field, _In_ WORD value)
     field[1] = (BYTE)(value >> BYTE_SHIFT);
 }
 
+/* THE EQUIPMENT WORD, FROM WHAT THE MACHINE HAS. INT 11h and 0040:0010 both answer this.
+ * Always: a floppy, 80x25 colour, and (#199) a PS/2 pointing device -- the 8042's AUX
+ * port always has the mouse behind it (vdd_aux.c), and a program that brings its own
+ * driver asks bit 2 before it asks INT 15h C2xxh. Microsoft's MOUSE.COM 6.24A does
+ * exactly that: INT 15h C0h model FAh/FCh/F8h, DOS 3+, then INT 11h bit 2, and with the
+ * bit clear it says "Driver not installed -- Microsoft Mouse not found".
+ */
+static inline WORD BiosEquipmentCompose(
+    _In_ INT serialPortCount,
+    _In_ INT parallelPortCount,
+    _In_ INT isFpuPresent,
+    _In_ INT isGameportFitted)
+{
+    WORD equipment = BIOS_EQUIPMENT_FLOPPY | BIOS_EQUIPMENT_VIDEO_80X25_COLOUR | BIOS_EQUIPMENT_POINTING_DEVICE;
+
+    equipment = (WORD)(equipment | (((DWORD)serialPortCount & BIOS_EQUIPMENT_SERIAL_COUNT_MASK) << BIOS_EQUIPMENT_SERIAL_SHIFT));
+    equipment = (WORD)(equipment | (((DWORD)parallelPortCount & BIOS_EQUIPMENT_PARALLEL_COUNT_MASK) << BIOS_EQUIPMENT_PARALLEL_SHIFT));
+
+    if (isFpuPresent)
+        equipment |= BIOS_EQUIPMENT_FPU;
+
+    if (isGameportFitted)
+        equipment |= BIOS_EQUIPMENT_GAMEPORT;
+
+    return equipment;
+}
+
 /* 0040:0010 only -- the live half, for a setting (the joystick type) that changes the
  * equipment word while the guest runs. Same function INT 11h calls; see BiosBdaInitialize.
  */

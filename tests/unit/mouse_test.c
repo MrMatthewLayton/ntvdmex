@@ -50,6 +50,11 @@ INT main(VOID)
     /* 09h, one bit per pixel: AND then XOR, bit 15 leftmost: */
     memset(row, 0xA5, sizeof row);
     I33GraphicsCursorRow(row, 40, 8, 0xFFFF, 0x0000, 0x0F, NULL);
+    /* #192: what counts as the mouse driver's own function on INT 33h. */
+    CHECK(I33IsDriverFunction(0x0000) && I33IsDriverFunction(0x0034) && I33IsDriverFunction(0x004D)
+          && I33IsDriverFunction(0x006D) && I33IsDriverFunction(0x53C1), "i33: 0000h-0034h, 004Dh, 006Dh, 53C1h are the driver's");
+    CHECK(!I33IsDriverFunction(0xD021) && !I33IsDriverFunction(0x0035) && !I33IsDriverFunction(0x4300),
+          "i33: Fusion's D021h (and anything else) is not -- a hooked client gets it");
     CHECK(MouseTestAllEqual(row, 40, 0xA5), "screen FFFF / cursor 0000: transparent, the row untouched");
     I33GraphicsCursorRow(row, 40, 8, 0x0000, 0x0000, 0x0F, NULL);
     CHECK(MouseTestAllEqual(row + 8, 16, 0x00) && MouseTestAllEqual(row, 8, 0xA5) && MouseTestAllEqual(row + 24, 16, 0xA5),

@@ -35,11 +35,21 @@
         else      { printf("  FAIL  %s\n", (message)); g_Failures++; }  \
     } while (0)
 
+/* #178: AN IN-MEMORY DISKETTE, lent to the chip the way the host lends its image.
+ * Small on purpose -- 2 cylinders x 2 heads x 18 sectors -- and every byte names its
+ * own sector, so a transfer that lands on the wrong one cannot pass.
+ */
+#define FDC_TEST_CYLINDERS  2
+#define FDC_TEST_HEADS      2
+#define FDC_TEST_SECTORS    18
+
 static INT g_Total = 0;
 static INT g_Failures = 0;
 
-static BYTE g_GuestMemory[0x1000];
+static BYTE g_GuestMemory[0x10000];
 static INT g_Irq6Count;
+static BYTE g_Image[FDC_TEST_CYLINDERS * FDC_TEST_HEADS * FDC_TEST_SECTORS][FDC_SECTOR_SIZE];
+static INT g_IsMediumIn;
 
 /* THE DRIVER'S OWN SEND LOOP, BOUNDED. Returns 0 if it would have hung:
  *
@@ -54,6 +64,76 @@ static INT g_Irq6Count;
  * the whole stack repeats.)
  */
 static INT g_SendFailures;
+
+static INT FdcTestGeometry(PVOID context, BYTE drive, PFDC_GEOMETRY geometry)
+{
+    (VOID)context;
+
+    if (!g_IsMediumIn || drive != 0)
+        return 0;
+
+    geometry->Cylinders = FDC_TEST_CYLINDERS;
+    geometry->Heads = FDC_TEST_HEADS;
+    geometry->SectorsPerTrack = FDC_TEST_SECTORS;
+    return 1;
+}
+
+static INT FdcTestTransfer(
+    PVOID context,
+    BYTE drive,
+    WORD cylinder,
+    BYTE head,
+    BYTE sector,
+    PBYTE buffer,
+    INT isWrite)
+{
+    UINT index = ((UINT)cylinder * FDC_TEST_HEADS + head) * FDC_TEST_SECTORS + (sector - 1u);
+
+    (VOID)context;
+
+    if (!g_IsMediumIn || drive != 0 || cylinder >= FDC_TEST_CYLINDERS || head >= FDC_TEST_HEADS
+        || sector < 1 || sector > FDC_TEST_SECTORS)
+        return 0;
+
+    if (isWrite)
+        memcpy(g_Image[index], buffer, FDC_SECTOR_SIZE);
+    else
+        memcpy(buffer, g_Image[index], FDC_SECTOR_SIZE);
+
+    return 1;
+}
+
+/* The pattern a sector holds: its own C/H/R in every byte, offset by the position. */
+static BYTE FdcTestPattern(UINT cylinder, UINT head, UINT sector, UINT position)
+{
+    return (BYTE)((cylinder * 0x40) ^ (head * 0x20) ^ sector ^ position);
+}
+
+static VOID FdcTestFillImage(VOID)
+{
+    UINT cylinder;
+    UINT head;
+    UINT sector;
+    UINT position;
+
+    for (cylinder = 0; cylinder < FDC_TEST_CYLINDERS; ++cylinder)
+        for (head = 0; head < FDC_TEST_HEADS; ++head)
+            for (sector = 1; sector <= FDC_TEST_SECTORS; ++sector)
+                for (position = 0; position < FDC_SECTOR_SIZE; ++position)
+                    g_Image[(cylinder * FDC_TEST_HEADS + head) * FDC_TEST_SECTORS + sector - 1][position]
+                        = FdcTestPattern(cylinder, head, sector, position);
+}
+
+static INT FdcTestSectorIs(PCBYTE bytes, UINT cylinder, UINT head, UINT sector)
+{
+    UINT position;
+
+    for (position = 0; position < FDC_SECTOR_SIZE; ++position)
+        if (bytes[position] != FdcTestPattern(cylinder, head, sector, position))
+            return 0;
+
+    return 1;
+}
 
 static VOID FdcTestIrqSink(PVOID context, BYTE irq)
 {
@@ -114,6 +194,221 @@ static INT FdcTestDriverDrain(PVDD_BUS bus, PBYTE output, INT maximum)
     }
 
     return count;
+}
+
+/* Program the 8237's channel 2 the way the BIOS does: mask, mode, flip-flop, address,
+ * page, count (bytes - 1), unmask. `mode` 46h = write to memory (an FDC READ), 4Ah =
+ * read from memory (WRITE, FORMAT).
+ */
+static VOID FdcTestDmaSetup(PVDD_BUS bus, BYTE mode, UINT32 physical, UINT bytes)
+{
+    FdcTestWrite(bus, 0x0A, 0x06);                          /* mask channel 2 */
+    FdcTestWrite(bus, 0x0B, mode);
+    FdcTestWrite(bus, 0x0C, 0x00);                          /* clear the flip-flop */
+    FdcTestWrite(bus, 0x04, (BYTE)physical);
+    FdcTestWrite(bus, 0x04, (BYTE)(physical >> 8));
+    FdcTestWrite(bus, 0x81, (BYTE)(physical >> 16));
+    FdcTestWrite(bus, 0x05, (BYTE)(bytes - 1));
+    FdcTestWrite(bus, 0x05, (BYTE)((bytes - 1) >> 8));
+    FdcTestWrite(bus, 0x0A, 0x02);                          /* unmask channel 2 */
+}
+
+/* A data command's nine bytes, through the driver's own send loop. */
+static VOID FdcTestDataCommand(
+    PVDD_BUS bus,
+    BYTE opcode,
+    BYTE headDrive,
+    BYTE cylinder,
+    BYTE headAddress,
+    BYTE sector,
+    BYTE endOfTrack)
+{
+    FdcTestDriverSend(bus, opcode);
+    FdcTestDriverSend(bus, headDrive);
+    FdcTestDriverSend(bus, cylinder);
+    FdcTestDriverSend(bus, headAddress);
+    FdcTestDriverSend(bus, sector);
+    FdcTestDriverSend(bus, FDC_SIZE_CODE_512);
+    FdcTestDriverSend(bus, endOfTrack);
+    FdcTestDriverSend(bus, 0x1B);                           /* GPL */
+    FdcTestDriverSend(bus, 0xFF);                           /* DTL */
+}
+
+static VOID FdcTestSeek(PVDD_BUS bus, BYTE headDrive, BYTE cylinder)
+{
+    BYTE result[16];
+
+    FdcTestDriverSend(bus, 0x0F);
+    FdcTestDriverSend(bus, headDrive);
+    FdcTestDriverSend(bus, cylinder);
+    FdcTestDriverSend(bus, 0x08);                           /* sense: collect the seek */
+    FdcTestDriverDrain(bus, result, 16);
+}
+
+static VOID FdcTestSpecify(PVDD_BUS bus, INT isNonDma)
+{
+    FdcTestDriverSend(bus, 0x03);
+    FdcTestDriverSend(bus, 0xDF);
+    FdcTestDriverSend(bus, (BYTE)(0x02 | (isNonDma ? 1 : 0)));
+}
+
+/* #178: THE DATA PATH, end to end -- the chip, the 8237's channel 2 and guest memory. */
+static VOID FdcTestDataPath(PVDD_BUS bus, PFDC_STATE fdc)
+{
+    DMA_STATE dma;
+    NTVDD_DEVICE dmaDevice;
+    BYTE result[16];
+    INT count;
+    INT irqsBefore;
+    INT index;
+
+    printf("== #178: the data commands ==\n");
+    memset(&dma, 0, sizeof dma);
+    dmaDevice = VddDmaDevice(&dma);
+    CHECK(VddBusAdd(bus, &dmaDevice) == 0, "data: the 8237 is on the bus too");
+    fdc->Dma = &dma;
+    fdc->MediaGeometry = FdcTestGeometry;
+    fdc->MediaTransfer = FdcTestTransfer;
+    fdc->MediaContext = NULL;
+    g_IsMediumIn = 1;
+    FdcTestFillImage();
+    FdcTestWrite(bus, FDC_DOR, 0x1C);                       /* motor 0 on, DMAGATE, out of reset */
+    FdcTestSpecify(bus, FALSE);
+    FdcTestSeek(bus, 0x00, 1);
+
+    /* READ DATA, MT, from C1 H0 R17: the DMA count says two sectors, so it reads R17,
+     * R18, stops at TC -- and with MT the next sector is side 1, sector 1.
+     */
+    memset(g_GuestMemory + 0x2000, 0, 2 * FDC_SECTOR_SIZE);
+    FdcTestDmaSetup(bus, 0x46, 0x2000, 2 * FDC_SECTOR_SIZE);
+    irqsBefore = g_Irq6Count;
+    g_SendFailures = 0;
+    FdcTestDataCommand(bus, 0xC6, 0x00, 1, 0, 17, 18);
+    count = FdcTestDriverDrain(bus, result, 16);
+    CHECK(g_SendFailures == 0 && count == 7, "read: nine bytes in, seven result bytes out");
+    CHECK(result[0] == 0x04 && result[1] == 0x00 && result[2] == 0x00, "read: normal termination at TC (ST0 says side 1, where it ended)");
+    CHECK(result[3] == 1 && result[4] == 1 && result[5] == 1 && result[6] == 2,
+          "read: C H R N = 1 1 1 2 -- with MT, the sector after side 0's last is side 1's first");
+    CHECK(FdcTestSectorIs(g_GuestMemory + 0x2000, 1, 0, 17) && FdcTestSectorIs(g_GuestMemory + 0x2200, 1, 0, 18),
+          "read: C1 H0 R17 and R18 are in guest memory, in order, over channel 2");
+    CHECK(g_Irq6Count == irqsBefore + 1, "read: IRQ6 once, at the end");
+    CHECK(fdc->SectorsRead == 2, "read: two sectors counted");
+
+    /* ...across the side: R18 of side 0 and R1 of side 1 in one MT read. */
+    FdcTestDmaSetup(bus, 0x46, 0x3000, 2 * FDC_SECTOR_SIZE);
+    FdcTestDataCommand(bus, 0xC6, 0x00, 1, 0, 18, 18);
+    count = FdcTestDriverDrain(bus, result, 16);
+    CHECK(count == 7 && result[0] == 0x04 && result[3] == 1 && result[4] == 1 && result[5] == 2,
+          "read MT: ends on side 1 (ST0 head bit), C1 H1 R2");
+    CHECK(FdcTestSectorIs(g_GuestMemory + 0x3000, 1, 0, 18) && FdcTestSectorIs(g_GuestMemory + 0x3200, 1, 1, 1),
+          "read MT: side 0's last sector, then side 1's first");
+
+    /* WRITE DATA: one sector out of guest memory, onto C1 H0 R5. */
+    for (index = 0; index < FDC_SECTOR_SIZE; ++index)
+        g_GuestMemory[0x4000 + index] = (BYTE)(0xA5 ^ index);
+
+    FdcTestDmaSetup(bus, 0x4A, 0x4000, FDC_SECTOR_SIZE);
+    FdcTestDataCommand(bus, 0x45, 0x00, 1, 0, 5, 18);
+    count = FdcTestDriverDrain(bus, result, 16);
+    CHECK(count == 7 && result[0] == 0x00 && result[5] == 6, "write: normal at TC, and R moves on to 6");
+    CHECK(memcmp(g_Image[(1 * 2 + 0) * 18 + 4], g_GuestMemory + 0x4000, FDC_SECTOR_SIZE) == 0,
+          "write: the image now holds what guest memory held");
+    CHECK(FdcTestSectorIs(g_Image[(1 * 2 + 0) * 18 + 5], 1, 0, 6), "write: the next sector is untouched");
+
+    /* EOT REACHED WITHOUT TC: the DMA count is four sectors, the track ends after one. */
+    FdcTestDmaSetup(bus, 0x46, 0x5000, 4 * FDC_SECTOR_SIZE);
+    FdcTestDataCommand(bus, 0x46, 0x00, 1, 0, 18, 18);              /* no MT */
+    count = FdcTestDriverDrain(bus, result, 16);
+    CHECK(count == 7 && (result[0] & 0xC0) == 0x40 && result[1] == 0x80,
+          "read past EOT with no TC: abnormal, ST1 end of cylinder (the datasheet's EN)");
+    CHECK(result[3] == 2 && result[5] == 1, "...and C H R moves on to C+1, R1");
+
+    /* THE ID SEARCH: the head is on cylinder 1, the command names 0. */
+    FdcTestDmaSetup(bus, 0x46, 0x5000, FDC_SECTOR_SIZE);
+    FdcTestDataCommand(bus, 0x46, 0x00, 0, 0, 1, 18);
+    count = FdcTestDriverDrain(bus, result, 16);
+    CHECK(count == 7 && (result[0] & 0xC0) == 0x40 && result[1] == 0x04 && result[2] == 0x10,
+          "wrong cylinder: abnormal, no data, ST2 wrong cylinder -- nothing read from elsewhere");
+
+    FdcTestDataCommand(bus, 0x46, 0x00, 1, 0, 19, 19);              /* no sector 19 */
+    count = FdcTestDriverDrain(bus, result, 16);
+    CHECK(count == 7 && (result[0] & 0xC0) == 0x40 && result[1] == 0x04, "a sector past the track's last: no data");
+
+    /* CHANNEL 2 MASKED: the request is never answered, so the transfer overruns. */
+    FdcTestWrite(bus, 0x0A, 0x06);
+    FdcTestDataCommand(bus, 0x46, 0x00, 1, 0, 1, 18);
+    count = FdcTestDriverDrain(bus, result, 16);
+    CHECK(count == 7 && (result[0] & 0xC0) == 0x40 && result[1] == 0x10, "dma masked: abnormal, overrun");
+
+    /* NO MEDIUM: nothing on the track at all. */
+    g_IsMediumIn = 0;
+    FdcTestDmaSetup(bus, 0x46, 0x5000, FDC_SECTOR_SIZE);
+    FdcTestDataCommand(bus, 0x46, 0x00, 1, 0, 1, 18);
+    count = FdcTestDriverDrain(bus, result, 16);
+    CHECK(count == 7 && (result[0] & 0xC0) == 0x40 && result[1] == 0x01, "no medium: abnormal, missing address mark");
+    g_IsMediumIn = 1;
+
+    /* FORMAT TRACK over DMA: two IDs, fill E5h. */
+    {   BYTE identities[] = { 1, 0, 3, 2,   1, 0, 4, 2 };
+        memcpy(g_GuestMemory + 0x6000, identities, sizeof identities);
+        FdcTestDmaSetup(bus, 0x4A, 0x6000, sizeof identities);
+        FdcTestDriverSend(bus, 0x4D);                           /* FORMAT, MFM */
+        FdcTestDriverSend(bus, 0x00);
+        FdcTestDriverSend(bus, FDC_SIZE_CODE_512);
+        FdcTestDriverSend(bus, 2);                              /* SC */
+        FdcTestDriverSend(bus, 0x54);                           /* GPL */
+        FdcTestDriverSend(bus, 0xE5);                           /* D */
+        count = FdcTestDriverDrain(bus, result, 16);
+        CHECK(count == 7 && result[0] == 0x00 && fdc->TracksFormatted == 1, "format: normal termination, one track");
+        CHECK(g_Image[(1 * 2) * 18 + 2][0] == 0xE5 && g_Image[(1 * 2) * 18 + 3][511] == 0xE5
+              && FdcTestSectorIs(g_Image[(1 * 2) * 18 + 6], 1, 0, 7),
+              "format: R3 and R4 filled with E5h, R7 untouched"); }
+
+    /* NON-DMA: SPECIFY's ND bit. The data comes through 3F5h, MSR bit 5 up. */
+    FdcTestSpecify(bus, TRUE);
+    FdcTestDataCommand(bus, 0x46, 0x04, 1, 1, 7, 7);
+    CHECK((FdcTestRead(bus, FDC_MSR) & 0xF0) == 0xF0, "non-dma read: MSR = RQM DIO NDMA CB");
+    {   BYTE sector[FDC_SECTOR_SIZE];
+
+        for (index = 0; index < FDC_SECTOR_SIZE; ++index)
+            sector[index] = FdcTestRead(bus, FDC_FIFO);
+
+        CHECK(FdcTestSectorIs(sector, 1, 1, 7), "non-dma read: C1 H1 R7 through 3F5h, byte by byte"); }
+    count = FdcTestDriverDrain(bus, result, 16);
+    CHECK(count == 7 && (result[0] & 0xC0) == 0x40 && result[1] == 0x80,
+          "non-dma read: no TC without the 8237, so it ends at EOT with EN");
+
+    FdcTestDataCommand(bus, 0x45, 0x04, 1, 1, 9, 9);
+    CHECK((FdcTestRead(bus, FDC_MSR) & 0xF0) == 0xB0, "non-dma write: MSR = RQM NDMA CB, DIO clear");
+
+    for (index = 0; index < FDC_SECTOR_SIZE; ++index)
+        FdcTestWrite(bus, FDC_FIFO, (BYTE)(0x3C ^ index));
+
+    count = FdcTestDriverDrain(bus, result, 16);
+    CHECK(count == 7 && g_Image[(1 * 2 + 1) * 18 + 8][0] == 0x3C && g_Image[(1 * 2 + 1) * 18 + 8][1] == 0x3D,
+          "non-dma write: 3F5h's 512 bytes land on C1 H1 R9");
+    FdcTestSpecify(bus, FALSE);
+
+    /* INT 13h MOVES THE SAME HEAD: what the BIOS side sets, DUMPREG reports. */
+    VddFdcSetCylinder(fdc, 0, 0x4F);
+    FdcTestDriverSend(bus, 0x0E);
+    count = FdcTestDriverDrain(bus, result, 16);
+    CHECK(count == 10 && result[0] == 0x4F, "VddFdcSetCylinder: DUMPREG's PCN 0 follows INT 13h");
+
+    /* THE BIOS's MOTOR COUNTDOWN (as a PIT BiosTickHook). */
+    {   BYTE bda[0x100];
+        memset(bda, 0, sizeof bda);
+        bda[0x3F] = 0x81;
+        bda[0x40] = 2;
+        VddFdcBiosMotorTick(fdc, bda);
+        CHECK(bda[0x40] == 1 && (bda[0x3F] & 0x0F) == 0x01, "motor: one tick down, still on");
+        VddFdcBiosMotorTick(fdc, bda);
+        CHECK(bda[0x40] == 0 && (bda[0x3F] & 0x0F) == 0 && FdcTestRead(bus, FDC_DOR) == 0x0C,
+              "motor: at zero the motor bits clear and DOR goes back to 0Ch");
+        VddFdcBiosMotorTick(fdc, bda);
+        CHECK(bda[0x40] == 0 && FdcTestRead(bus, FDC_DOR) == 0x0C, "motor: a count of zero stays zero"); }
+
+    fdc->Dma = NULL;
 }
 
 INT main(VOID)
@@ -308,13 +603,13 @@ INT main(VOID)
     CHECK(count == 10 && result[8] == 0x2F && result[9] == 0x05,
           "lock: CONFIGURE survives a software reset while locked");
 
-    /* ==== 14. THE DATA COMMANDS ARE **PART**, AND FAIL THE WAY THE CHIP DOES.
-     * READ DATA has no data path yet. It must NOT answer "invalid command" --
-     * that would be a chip contradicting the 90h it just gave for VERSION. It
-     * terminates the way a real controller terminates over an unformatted
-     * track: ST0 interrupt code 01 (abnormal), ST1 bit 2 (no data), seven
-     * bytes. [CAUTION] THIS CHECK ASSERTS A KNOWN GAP. It changes when the DMA path
-     * lands, and it is here so that landing cannot be silent.
+    /* ==== 14. WITH NO MEDIUM, A DATA COMMAND FAILS THE WAY THE CHIP DOES.
+     * It must NOT answer "invalid command" -- that would be a chip contradicting
+     * the 90h it just gave for VERSION. Nothing is lent to this chip yet (no
+     * MediaGeometry), so there is no track to find: ST0 interrupt code 01
+     * (abnormal), ST1 bit 0 (missing address mark), seven bytes. (Until #178 this
+     * case asserted the data-path GAP -- ST1 "no data" -- so that landing it could
+     * not be silent; it did not.)
      */
     g_SendFailures = 0;
     FdcTestDriverSend(&bus, 0xE6);                          /* READ DATA, MT+MFM+SK */
@@ -329,8 +624,8 @@ INT main(VOID)
     count = FdcTestDriverDrain(&bus, result, 16);
     CHECK(g_SendFailures == 0 && count == 7,
           "read data: all nine bytes accepted, seven result bytes back");
-    CHECK((result[0] & 0xC0) == 0x40 && (result[1] & 0x04),
-          "read data: abnormal termination + no data -- NOT 'invalid command'");
+    CHECK((result[0] & 0xC0) == 0x40 && (result[1] & 0x01),
+          "read data, no medium: abnormal termination + missing address mark -- NOT 'invalid command'");
 
     /* 15. THE COMMAND LENGTH TABLE IS A FRAMING DECISION:
      *
@@ -378,6 +673,8 @@ INT main(VOID)
     FdcTestDriverSend(&bus, 0x10);
     count = FdcTestDriverDrain(&bus, result, 16);
     CHECK(count == 1 && result[0] == 0x90, "invalid opcodes leave the chip in frame");
+
+    FdcTestDataPath(&bus, &fdc);
 
     printf("\n%d checks, %d failed\n", g_Total, g_Failures);
     return g_Failures ? 1 : 0;

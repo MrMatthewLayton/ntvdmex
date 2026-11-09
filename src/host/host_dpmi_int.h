@@ -27,6 +27,7 @@ extern DWORD g_WowPmBase[WOW_PMBASE_MAX];
 extern BYTE g_BreakpointDone[DPMI_BP_MAX];
 extern WORD g_DpmiDosBlock[DPMI_DOSBLK_MAX];
 extern INT g_DpmiDosBlockCount;
+extern BYTE g_DpmiDosBlockChain[DPMI_DOSBLK_MAX];
 extern DWORD g_LeCodeSize[DPMI_LE_MAX];
 extern WORD g_PmAppTimerSelector;
 extern DWORD g_PmAppTimerOffset;
