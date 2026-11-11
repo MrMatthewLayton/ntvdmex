@@ -39,6 +39,17 @@ LONG VdmSetupMemory(VOID);
  */
 LONG VdmRegisterWithKernel(VOID);
 
+/* TRUE when this Windows has Windows 7's VDM interface (see vdm_version.h). */
+BOOL VdmHostIsNt61OrLater(VOID);
+
+/* WINDOWS 7 ONLY: commit C0000-FFFFF as ordinary memory, between VdmSetupMemory and
+ * VdmRegisterWithKernel. On the Win7-32 rig VdmInitialize returned STATUS_ACCESS_VIOLATION
+ * while that range was only reserved, and succeeded once it was committed (s106). Never
+ * on XP, whose kernel claims the range itself during VdmInitialize (see VdmMapEmsFrame).
+ * Returns the NTSTATUS of the commit.
+ */
+LONG VdmCommitUpperMemory(VOID);
+
 /* Find a free 64KB UMA hole and map the EMS page frame there as V86 RAM. Must run
  * AFTER VdmRegisterWithKernel(): pre-mapping a section view in the UMA makes
  * VdmInitialize fail with STATUS_UNABLE_TO_FREE_VM (it requires that range free during

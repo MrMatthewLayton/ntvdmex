@@ -48,7 +48,7 @@
  * internals -- it gets declarations only. Same rule as the rest of the WOW
  * layer.
  */
-#define WOWCOMM_MAX             4           /* #245: COM1-COM4, as the equipment word now says */
+#define WOWCOMM_MAX             4                   /* #245: COM1-COM4, as the equipment word now says */
 
 /* The PM->V86 transfer buffer for pointer-taking INT 21h calls; allocated in
  * WowPlaceV86 and used by PmInt21Transfer. Declared here because the allocation
@@ -83,10 +83,10 @@
  * died at PM step 0x0d with no error -- precisely the failure the note above predicts,
  * walked into one release after writing it down. Leave the slack.
  */
-#define WOW_HOSTPOOL_PARAS      0x400       /* 16 KB: SFT 0x1d9, handler table 0x40 */
-#define WOW_PSP_BLOCK_PARAS     0x40        /* A WOW launch keeps only the PSP's block */
+#define WOW_HOSTPOOL_PARAS      0x400               /* 16 KB: SFT 0x1d9, handler table 0x40 */
+#define WOW_PSP_BLOCK_PARAS     0x40                /* A WOW launch keeps only the PSP's block */
 
-#define WOW_ENTRY_CX_FULL_U     0xF880u     /* krnl386's entry CX: its 64 KB selector less our header image */
+#define WOW_ENTRY_CX_FULL_U     0xF880u             /* krnl386's entry CX: its 64 KB selector less our header image */
 
 /* ANSWER AN UNIMPLEMENTED WOW32 CALL DIFFERENTLY, WITHOUT CLAIMING TO KNOW
  * WHAT IT MEANS. (GH #128, session 37) ------------------------------------------
@@ -157,6 +157,7 @@
  * file on the share and its absence costs nothing. See src/wow/wowcall.h.
  */
 #define WOWCALL_PATH            CFG_("wowcall.txt")
+#define WOW_KRNL386_LEAF        "\\krnl386.exe"     /* Appended to the system directory when `-a` is absent */
 
 enum
 {
@@ -302,6 +303,7 @@ static WORD      g_WowPoolNext = 0;     /* paragraphs handed out so far */
  * it back out of the DOS environment block to find its own file -- see WowPlaceV86.
  */
 static CHAR      g_WowKernelPath[512];
+
 /* THE WAY BACK OUT OF 16-BIT CODE. (GH #128, session 40) (Importance = 1):
  * One paragraph holding `C4 C4 57`, and a 16-bit CODE selector over it. It is the
  * far return address every host-made call to a Win16 procedure is given, and it is
@@ -1024,9 +1026,23 @@ VOID WowProbeLoad(PCSTR command)
 
     if (WowArgumentA(command, path, sizeof path) != 0)
     {
-        cursor = message; cursor = LogPut(cursor, "WOWTRY: no -a argument on the command line\r\n");
+        /* NO `-a` ON WINDOWS 7. (s106) Measured on the Win7-32 rig: a Win16 launch there
+         * arrives as `ntvdm.exe -i1 -w`, with no `-a <krnl386>`. krnl386.exe is still in the
+         * system directory, which is where XP's `-a` points, so look for it there.
+         */
+        UINT length = GetSystemDirectoryA(path, sizeof path - sizeof WOW_KRNL386_LEAF);
+
+        if (!length || length >= sizeof path - sizeof WOW_KRNL386_LEAF)
+        {
+            cursor = message; cursor = LogPut(cursor, "WOWTRY: no -a argument on the command line\r\n");
+            LogAppend(LOG_PATH, message, cursor);
+            return;
+        }
+
+        lstrcatA(path, WOW_KRNL386_LEAF);
+        cursor = message; cursor = LogPut(cursor, "WOWTRY: no -a argument -> the system directory's [");
+        cursor = LogPut(cursor, path); cursor = LogPut(cursor, "]\r\n");
         LogAppend(LOG_PATH, message, cursor);
-        return;
     }
 
     {   INT length = 0;                       /* keep it: krnl386 needs its own path */

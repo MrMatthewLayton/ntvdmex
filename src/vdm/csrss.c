@@ -9,7 +9,7 @@
  */
 
 #include "csrss.h"
-#include "csrss_version.h"
+#include "v86.h"
 
 #define CSRSS_KERNEL32_NAME         "kernel32.dll"
 #define CSRSS_REGISTER_CONSOLE_VDM  "RegisterConsoleVDM"
@@ -96,7 +96,6 @@ BOOL CsrssRegisterConsole(VOID)
     PVOID seventhOut = NULL;
     PVOID ninthOut = NULL;
     PVOID eleventhOut = NULL;
-    DWORD windowsVersion;
 
     if (!registerConsoleVdm)
         return FALSE;
@@ -108,9 +107,7 @@ BOOL CsrssRegisterConsole(VOID)
     /* [CAUTION]: the two forms differ in argument COUNT, and the call is stdcall: the
      * wrong one leaves the stack unbalanced and the host returns to garbage (s106).
      */
-    windowsVersion = GetVersion();
-
-    if (CsrssUsesNineArgumentRegister(LOBYTE(LOWORD(windowsVersion)), HIBYTE(LOWORD(windowsVersion))))
+    if (VdmHostIsNt61OrLater())
     {
         return ((PFN_RegisterConsoleVDM61)registerConsoleVdm)(
             CSRSS_CONSOLE_VDM_DOS, startEvent, endEvent, errorEvent, CSRSS_NO_VIDEO_STATE,
