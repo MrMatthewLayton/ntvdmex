@@ -9,6 +9,7 @@
  */
 
 #include "csrss.h"
+#include "csrss_version.h"
 
 #define CSRSS_KERNEL32_NAME         "kernel32.dll"
 #define CSRSS_REGISTER_CONSOLE_VDM  "RegisterConsoleVDM"
@@ -86,26 +87,40 @@ ULONG CsrssParseTaskId(PCSTR commandLine)
 
 BOOL CsrssRegisterConsole(VOID)
 {
-    PFN_RegisterConsoleVDM RegisterConsoleVDM =
-        (PFN_RegisterConsoleVDM)GetProcAddress(
-            GetModuleHandleA(CSRSS_KERNEL32_NAME), CSRSS_REGISTER_CONSOLE_VDM);
+    FARPROC registerConsoleVdm = GetProcAddress(GetModuleHandleA(CSRSS_KERNEL32_NAME), CSRSS_REGISTER_CONSOLE_VDM);
     HANDLE startEvent;
     HANDLE endEvent;
     HANDLE errorEvent;
     DWORD sixthOut = 0;
     DWORD tenthOut = 0;
     PVOID seventhOut = NULL;
+    PVOID ninthOut = NULL;
     PVOID eleventhOut = NULL;
+    DWORD windowsVersion;
 
-    if (!RegisterConsoleVDM)
+    if (!registerConsoleVdm)
         return FALSE;
 
     startEvent = CreateEventA(NULL, TRUE, FALSE, NULL);
     endEvent   = CreateEventA(NULL, TRUE, FALSE, NULL);
     errorEvent = CreateEventA(NULL, TRUE, FALSE, NULL);
+
+    /* [CAUTION]: the two forms differ in argument COUNT, and the call is stdcall: the
+     * wrong one leaves the stack unbalanced and the host returns to garbage (s106).
+     */
+    windowsVersion = GetVersion();
+
+    if (CsrssUsesNineArgumentRegister(LOBYTE(LOWORD(windowsVersion)), HIBYTE(LOWORD(windowsVersion))))
+    {
+        return ((PFN_RegisterConsoleVDM61)registerConsoleVdm)(
+            CSRSS_CONSOLE_VDM_DOS, startEvent, endEvent, errorEvent, CSRSS_NO_VIDEO_STATE,
+            &sixthOut, &seventhOut, CSRSS_NO_VIDEO_STATE, &ninthOut);
+    }
+
     /* DOS path: flag 1, no video-state buffer/size (args 8,9 = 0). */
-    return RegisterConsoleVDM(CSRSS_CONSOLE_VDM_DOS, startEvent, endEvent, errorEvent, CSRSS_NO_VIDEO_STATE,
-                              &sixthOut, &seventhOut, CSRSS_NO_VIDEO_STATE, CSRSS_NO_VIDEO_STATE, &tenthOut, &eleventhOut);
+    return ((PFN_RegisterConsoleVDM)registerConsoleVdm)(
+        CSRSS_CONSOLE_VDM_DOS, startEvent, endEvent, errorEvent, CSRSS_NO_VIDEO_STATE,
+        &sixthOut, &seventhOut, CSRSS_NO_VIDEO_STATE, CSRSS_NO_VIDEO_STATE, &tenthOut, &eleventhOut);
 }
 
 BOOL CsrssGetCommand(VDM_COMMAND_INFO *commandInfo, DWORD *lastError)
