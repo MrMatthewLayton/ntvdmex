@@ -4925,6 +4925,17 @@ INT StartupRegisterVdm(
 
     /* V86 address space, then register as a VDM with the kernel (order matters). */
     VdmSetupMemory();
+
+    /* Windows 7 only: VdmInitialize there needs the UMA committed first (see v86.h). */
+    if (VdmHostIsNt61OrLater())
+    {
+        LONG upperStatus = VdmCommitUpperMemory();
+
+        cursor = LogPut(cursor, "STAGE1: Windows 7 VDM interface -- UMA C0000-FFFFF committed, NTSTATUS=0x");
+        cursor = LogHex(cursor, (UINT)upperStatus);
+        cursor = LogPut(cursor, "\r\n");
+    }
+
     vdmStatus = VdmRegisterWithKernel();
     cursor = LogPut(cursor, "STAGE1: v86_init NTSTATUS=0x"); cursor = LogHex(cursor, (UINT)vdmStatus); cursor = LogPut(cursor, "\r\n");
     cursor = StartupCheckInheritedVdmState(cursor);
