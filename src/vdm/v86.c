@@ -133,6 +133,8 @@ static DWORD g_IcaUndelayIrq;
 static DWORD g_IcaDelayIret;
 static DWORD g_IcaIretHooked;
 static DWORD g_IcaNinth;
+static DWORD g_IcaTenth;
+static DWORD g_IcaEleventh;
 static VDMICAUSERDATA     g_IcaUserData;
 static VDM_INITIALIZE_DATA g_InitializeData;
 
@@ -359,6 +361,8 @@ LONG VdmRegisterWithKernel(VOID)
     g_IcaUserData.pIretHooked = &g_IcaIretHooked;
     g_IcaUserData.pAddrIretBopTable = g_IcaBopTable;
     g_IcaUserData.p9 = &g_IcaNinth;
+    g_IcaUserData.p10 = &g_IcaTenth;
+    g_IcaUserData.p11 = &g_IcaEleventh;
     g_InitializeData.TrapcHandler = (PVOID)&DpmiTrapContinue;
     g_InitializeData.IcaUserData  = &g_IcaUserData;
 

@@ -328,7 +328,15 @@ typedef struct
 
 typedef BOOL (WINAPI *PFN_GetNextVDMCommand)(VDM_COMMAND_INFO *);
 
-typedef struct              /* VDMICAUSERDATA -- 9 pointers (XP ntvdm fills 9) */
+/* VDMICAUSERDATA: 9 pointers on XP, 11 on Windows 7 (interoperability study, s106). The
+ * two extra come after p9; their meaning is not yet known, so both point at zeroed DWORDs.
+ *
+ * [CAUTION]: supplying them did NOT by itself make VdmInitialize succeed on the Win7-32
+ * rig -- it still returns STATUS_ACCESS_VIOLATION there (s106).
+ * XP's own NTVDM supplies only 9, so XP's kernel cannot need more; the longer block is
+ * harmless there (Skyroads and Notepad run on XP with it, s106).
+ */
+typedef struct
 {
     PVOID pIcaLock;
     PVOID pIcaMaster;
@@ -339,6 +347,8 @@ typedef struct              /* VDMICAUSERDATA -- 9 pointers (XP ntvdm fills 9) *
     PVOID pIretHooked;
     PVOID pAddrIretBopTable;
     PVOID p9;
+    PVOID p10;
+    PVOID p11;
 } VDMICAUSERDATA;
 
 typedef struct              /* VDM_INITIALIZE_DATA */
@@ -355,6 +365,16 @@ typedef LONG (WINAPI *PFN_NtVdmControl)(ULONG Service, PVOID ServiceData);
  */
 typedef BOOL (WINAPI *PFN_RegisterConsoleVDM)(DWORD, HANDLE, HANDLE, HANDLE,
             DWORD, PVOID, PVOID, PVOID, DWORD, PVOID, PVOID);
+
+/* RegisterConsoleVDM on Windows 7 (NT 6.1) takes NINE arguments, not eleven. (s106)
+ * Seen at run time on the Win7-32 SP1 rig: called with XP's eleven, it returned with
+ * 8 bytes still on our stack and the host's next return went to 0x00000001. Its
+ * outputs are arguments 6, 7 and 9 (pointers); 5 and 8 are passed as 0. Called with
+ * XP's arguments, the 9th (0) was taken as an output pointer and linear 0 -- the
+ * guest's interrupt vector table -- was written.
+ */
+typedef BOOL (WINAPI *PFN_RegisterConsoleVDM61)(DWORD, HANDLE, HANDLE, HANDLE,
+            DWORD, PVOID, PVOID, PVOID, PVOID);
 
 /* ===========================================================================
  * V86 low-memory address space (set up right before VdmInitialize -- without it
